@@ -132,16 +132,18 @@ sub_optional: false,
 
 static PKG_SUBS: &[SubSpec] = &[
     SubSpec {
-        name:   "init",
-        about:  "initialise a project",
-        spec:   &INIT_SPEC,
-        hidden: false,
+        name:    "init",
+        aliases: &[],
+        about:   "initialise a project",
+        spec:    &INIT_SPEC,
+        hidden:  false,
     },
     SubSpec {
-        name:   "add",
-        about:  "add a pin",
-        spec:   &ADD_SPEC,
-        hidden: false,
+        name:    "add",
+        aliases: &[],
+        about:   "add a pin",
+        spec:    &ADD_SPEC,
+        hidden:  false,
     },
 ];
 static PKG_SPEC: CommandSpec = CommandSpec {

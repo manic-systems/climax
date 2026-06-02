@@ -111,8 +111,7 @@ pub trait Parse: Sized {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let mut matches = parse::parse_spec(Self::SPEC, args)?;
-        parse::apply_defaults(Self::SPEC, &mut matches);
+        let matches = parse::parse_spec(Self::SPEC, args)?;
         Self::from_matches(Self::SPEC, &matches)
     }
 

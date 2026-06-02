@@ -65,8 +65,10 @@ struct Plan {
     multi:      bool,
     group:      Option<String>,
     default:    Option<String>,
+    env:        Option<String>,
     value_name: String,
     help:       String,
+    aliases:    Vec<String>,
     conflicts_with: Vec<String>,
     hidden:     bool,
     card:       Card,
@@ -190,12 +192,14 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 sub_optional: #sub_optional,
             };
         });
+        let valias = &vattr.aliases;
         sub_specs.push(quote! {
             ::pound::SubSpec {
-                name:   #sub_name,
-                about:  #sub_about,
-                spec:   &#ck,
-                hidden: #hidden,
+                name:    #sub_name,
+                aliases: &[ #(#valias),* ],
+                about:   #sub_about,
+                spec:    &#ck,
+                hidden:  #hidden,
             }
         });
 
@@ -403,8 +407,10 @@ fn plan_field(field: &NamedField) -> Plan {
         multi: card == Card::Many,
         group: a.group,
         default: a.default,
+        env: a.env,
         value_name: a.value_name.unwrap_or(fname),
         help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
+        aliases: a.aliases,
         conflicts_with: a.conflicts_with,
         hidden: a.hidden,
         card,
@@ -463,6 +469,13 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     if let Some(d) = &p.default {
         e = quote! { #e.default(#d) };
+    }
+    if let Some(ev) = &p.env {
+        e = quote! { #e.env(#ev) };
+    }
+    if !p.aliases.is_empty() {
+        let al = &p.aliases;
+        e = quote! { #e.aliases(&[ #(#al),* ]) };
     }
     let vn = &p.value_name;
     e = quote! { #e.value_name(#vn) };

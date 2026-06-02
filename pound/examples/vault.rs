@@ -115,7 +115,7 @@ enum Cmd {
         /// tag for grouping (repeatable)
         #[pound(short, long)]
         tag:   Vec<String>,
-        /// expire after this long, e.g. 30m, 2h, 7d (custom FromArg)
+        /// expire after this long, e.g. 30m, 2h, 7d (custom `FromArg`)
         #[pound(long)]
         ttl:   Option<Ttl>,
         /// mark as read-only
@@ -146,7 +146,8 @@ enum Cmd {
         #[pound(long)]
         show: bool,
     },
-    /// delete a secret
+    /// delete a secret (also reachable as `delete`)
+    #[pound(alias = "delete")]
     Rm {
         key: String,
         #[pound(short, long)]
@@ -154,7 +155,7 @@ enum Cmd {
     },
     /// import secrets from a file
     Import {
-        /// file to read (explicit positional, shown as <PATH> via value_name)
+        /// file to read (explicit positional, shown as `<PATH>` via `value_name`)
         #[pound(positional, value_name = "PATH")]
         file: String,
         #[pound(short, long)]
@@ -213,12 +214,12 @@ struct Cli {
     #[pound(long, group = "auth")]
     key_file: Option<String>,
 
-    /// active namespace
-    #[pound(short, long, default = "default")]
+    /// active namespace (also accepts --ns)
+    #[pound(short, long, alias = "ns", default = "default")]
     namespace: String,
 
     /// this doc line is replaced by the `help =` override in --help output
-    #[pound(short = 'D', long = "database", help = "path to the vault database file")]
+    #[pound(short = 'D', long = "database", env = "VAULT_DB", help = "path to the vault database file")]
     db: Option<String>,
 
     /// increase verbosity

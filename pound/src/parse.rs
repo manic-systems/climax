@@ -5,7 +5,10 @@
 //! three typed readers at the bottom that forward to [`FromArg`], the rest is
 //! monomorphisation-free so it compiles once however many commands you define.
 
-use alloc::vec::IntoIter;
+use alloc::{
+    borrow::Cow,
+    vec::IntoIter,
+};
 
 #[cfg(not(feature = "std"))]
 use crate::alloc_prelude::*;
@@ -77,29 +80,55 @@ impl<'a> Matches<'a> {
         self.sub.as_ref().map(|(i, m)| (*i, m.as_ref()))
     }
 
-    /// read a required value as `T`, for bare `T` fields.
+    /// read a required value as `T`, for bare `T` fields. the command line wins,
+    /// then [`fallback`] (env, then default), else a missing-arg error.
     pub fn required<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<T, Error> {
-        match self.raw(i) {
-            Some(s) => parse_into(spec, i, s),
+        if let Some(s) = self.raw(i) {
+            return parse_into(spec, i, s);
+        }
+        match fallback(spec, i) {
+            Some(c) => parse_into(spec, i, &c),
             None => Err(Error::MissingRequired(spec.args[i].display_name())),
         }
     }
 
-    /// read an optional value as `T`, for `Option<T>` fields.
+    /// read an optional value as `T`, for `Option<T>` fields. same resolution as
+    /// [`Self::required`], but absence is `None` rather than an error.
     pub fn optional<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Option<T>, Error> {
-        match self.raw(i) {
-            Some(s) => Ok(Some(parse_into(spec, i, s)?)),
+        if let Some(s) = self.raw(i) {
+            return Ok(Some(parse_into(spec, i, s)?));
+        }
+        match fallback(spec, i) {
+            Some(c) => Ok(Some(parse_into(spec, i, &c)?)),
             None => Ok(None),
         }
     }
 
-    /// read every value as `T`, for `Vec<T>` fields.
+    /// read every value as `T`, for `Vec<T>` fields. user values win; otherwise
+    /// [`fallback`] supplies a single element.
     pub fn many<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Vec<T>, Error> {
-        self.raws(i)
-            .iter()
-            .map(|&s| parse_into(spec, i, s))
-            .collect()
+        let raws = self.raws(i);
+        if !raws.is_empty() {
+            return raws.iter().map(|&s| parse_into(spec, i, s)).collect();
+        }
+        match fallback(spec, i) {
+            Some(c) => Ok(vec![parse_into(spec, i, &c)?]),
+            None => Ok(Vec::new()),
+        }
     }
+}
+
+/// the value to use when an arg was not given on the command line: its `env`
+/// variable if set, otherwise its `default`. owned for env, borrowed for the
+/// `&'static` default. always falls through to the default under `no_std`.
+fn fallback(spec: &CommandSpec, i: usize) -> Option<Cow<'static, str>> {
+    #[cfg(feature = "std")]
+    if let Some(var) = spec.args[i].env
+        && let Ok(val) = std::env::var(var)
+    {
+        return Some(Cow::Owned(val));
+    }
+    spec.args[i].default.map(Cow::Borrowed)
 }
 
 fn parse_into<T: FromArg>(spec: &CommandSpec, i: usize, s: &str) -> Result<T, Error> {
@@ -304,8 +333,10 @@ fn positional<'a>(
 /// by `apply_defaults`, so a defaulted arg never counts as missing here.
 fn finalize(spec: &CommandSpec, m: &Matches) -> Result<(), Error> {
     for (i, a) in spec.args.iter().enumerate() {
+        // a `default` or `env` fallback is resolved later by the typed readers,
+        // so it counts as present here.
         let present = m.slots[i].count > 0 || !m.slots[i].values.is_empty();
-        if !present && a.default.is_none() && a.required {
+        if !present && a.default.is_none() && a.env.is_none() && a.required {
             return Err(Error::MissingRequired(a.display_name()));
         }
     }
@@ -373,23 +404,6 @@ fn builtin_short(spec: &CommandSpec, ch: char) -> Option<Error> {
         'h' if spec.find_short('h').is_none() => Some(Error::Help(help::render(spec))),
         'V' if spec.find_short('V').is_none() => Some(Error::Version(help::version_line(spec))),
         _ => None,
-    }
-}
-
-/// inject spec defaults into the matches so the typed readers see them. run by
-/// [`crate::Parse`] before `from_matches`.
-pub(crate) fn apply_defaults(spec: &CommandSpec, m: &mut Matches<'_>) {
-    for (i, a) in spec.args.iter().enumerate() {
-        if m.slots[i].values.is_empty()
-            && m.slots[i].count == 0
-            && let Some(def) = a.default
-        {
-            // `def: &'static str` coerces into the `'a` value slot for free.
-            m.slots[i].values.push(def);
-        }
-    }
-    if let Some((sidx, sub)) = &mut m.sub {
-        apply_defaults(spec.subs[*sidx].spec, sub);
     }
 }
 
@@ -492,7 +506,7 @@ sub_optional: false,
     }
 
     #[test]
-    fn defaults_are_injected() {
+    fn defaults_resolve_in_readers() {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("level").default("info")];
         const SPEC: CommandSpec = CommandSpec {
             name:    "d",
@@ -504,13 +518,12 @@ sub_optional: false,
             subs:    &[],
 sub_optional: false,
         };
-        let mut m = parse(&SPEC, &[]).unwrap();
-        apply_defaults(&SPEC, &mut m);
-        assert_eq!(m.raw(0), Some("info"));
+        // unset: the reader falls back to the default
+        let m = parse(&SPEC, &[]).unwrap();
+        assert_eq!(m.optional::<String>(&SPEC, 0).unwrap().as_deref(), Some("info"));
         // a user value overrides the default
-        let mut m = parse(&SPEC, &["--level", "debug"]).unwrap();
-        apply_defaults(&SPEC, &mut m);
-        assert_eq!(m.raw(0), Some("debug"));
+        let m = parse(&SPEC, &["--level", "debug"]).unwrap();
+        assert_eq!(m.optional::<String>(&SPEC, 0).unwrap().as_deref(), Some("debug"));
     }
 
     #[test]
@@ -577,10 +590,11 @@ sub_optional: false,
 sub_optional: false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
-        name:   "add",
-        about:  "add a pin",
-        spec:   &ADD,
-        hidden: false,
+        name:    "add",
+        aliases: &[],
+        about:   "add a pin",
+        spec:    &ADD,
+        hidden:  false,
     }];
     const ROOT: CommandSpec = CommandSpec {
         name:    "prog",

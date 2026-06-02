@@ -30,6 +30,7 @@ pub struct Pound {
     pub hidden:     bool,
     pub group:      Option<String>,
     pub default:    Option<String>,
+    pub env:        Option<String>,
     pub value_name: Option<String>,
     pub help:       Option<String>,
     pub name:       Option<String>,
@@ -38,6 +39,8 @@ pub struct Pound {
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
     pub conflicts_with:  Vec<String>,
+    /// extra long names (fields) or command names (variants) that also match
+    pub aliases:         Vec<String>,
 }
 
 impl Pound {
@@ -99,6 +102,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "hidden" => out.hidden = true,
             "group" => out.group = value,
             "default" => out.default = value,
+            "env" => out.env = value,
             "value_name" => out.value_name = value,
             "help" => out.help = value,
             "name" => out.name = value,
@@ -110,14 +114,22 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             },
             "conflicts_with" => {
                 if let Some(v) = value {
-                    out.conflicts_with.extend(
-                        v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()),
-                    );
+                    out.conflicts_with.extend(csv(&v));
+                }
+            },
+            "alias" => {
+                if let Some(v) = value {
+                    out.aliases.extend(csv(&v));
                 }
             },
             _ => {},
         }
     }
+}
+
+/// split a comma list value into trimmed, non-empty names.
+fn csv(v: &str) -> impl Iterator<Item = String> + '_ {
+    v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
 /// split a flat token list on top-level commas.

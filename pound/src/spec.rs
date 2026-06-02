@@ -45,6 +45,8 @@ pub enum Kind {
 #[derive(Clone, Copy, Debug)]
 pub struct ArgSpec {
     pub long:       Option<&'static str>,
+    /// extra long names that also match this arg, kept out of help
+    pub aliases:    &'static [&'static str],
     pub short:      Option<char>,
     pub kind:       Kind,
     pub required:   bool,
@@ -52,6 +54,9 @@ pub struct ArgSpec {
     pub multi:      bool,
     pub group:      Option<&'static str>,
     pub default:    Option<&'static str>,
+    /// name of an environment variable to fall back to when the arg is not
+    /// given on the command line. read only with the `std` feature on.
+    pub env:        Option<&'static str>,
     pub value_name: &'static str,
     pub help:       &'static str,
     pub possible:   Option<&'static [&'static str]>,
@@ -64,12 +69,14 @@ impl ArgSpec {
     pub const fn new(kind: Kind) -> Self {
         Self {
             long: None,
+            aliases: &[],
             short: None,
             kind,
             required: false,
             multi: false,
             group: None,
             default: None,
+            env: None,
             value_name: "",
             help: "",
             possible: None,
@@ -80,6 +87,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn long(mut self, long: &'static str) -> Self {
         self.long = Some(long);
+        self
+    }
+
+    #[must_use]
+    pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.aliases = aliases;
         self
     }
 
@@ -110,6 +123,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn default(mut self, default: &'static str) -> Self {
         self.default = Some(default);
+        self
+    }
+
+    #[must_use]
+    pub const fn env(mut self, env: &'static str) -> Self {
+        self.env = Some(env);
         self
     }
 
@@ -200,6 +219,8 @@ impl GroupSpec {
 #[derive(Clone, Copy, Debug)]
 pub struct SubSpec {
     pub name:  &'static str,
+    /// extra names that also select this subcommand, kept out of help
+    pub aliases: &'static [&'static str],
     pub about: &'static str,
     pub spec:  &'static CommandSpec,
     /// kept out of help output, still selectable on the command line
@@ -230,8 +251,13 @@ impl CommandSpec {
 
     /// index of the arg with this long name.
     #[must_use]
+    // `contains(&name)` will not type-check: `aliases` holds `&'static str` and
+    // `name` is a borrowed `&str`, so the membership test is spelled by hand.
+    #[allow(clippy::manual_contains)]
     pub fn find_long(&self, name: &str) -> Option<usize> {
-        self.args.iter().position(|a| a.long == Some(name))
+        self.args
+            .iter()
+            .position(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
     }
 
     #[must_use]
@@ -240,7 +266,10 @@ impl CommandSpec {
     }
 
     #[must_use]
+    #[allow(clippy::manual_contains)]
     pub fn find_sub(&self, name: &str) -> Option<usize> {
-        self.subs.iter().position(|s| s.name == name)
+        self.subs
+            .iter()
+            .position(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
     }
 }
