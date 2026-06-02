@@ -33,8 +33,8 @@
 //! let add = Add::parse(); // exits on -h/--help or a parse error
 //! ```
 //!
-//! until the derive lands, hand-build a [`spec::CommandSpec`] and impl
-//! [`Parse`] yourself, as the test suite does.
+//! you can also hand-build a [`spec::CommandSpec`] and impl [`Parse`] yourself,
+//! as the test suite does.
 
 mod error;
 mod help;

@@ -1,78 +1,265 @@
 # pound
 
-a low footprint, derive-first cli parser for rust. the derive emits a flat `&'static`
-description of your command line and a single non-generic engine interprets it,
-so derive ergonomics stay familiar while adding almost nothing to your binary
-and dragging in nothing at runtime.
+a low-footprint, derive-first cli parser for rust.
 
-## status
+the derive emits a flat `&'static` description of your command and one non-generic
+engine interprets it — so you get familiar derive ergonomics, almost no compile-time
+overhead, and nothing pulled in at runtime.
 
-working: tokenizer (long, short, `-abc` bundling, `--opt=val`, `--`),
-subcommands (top-level, as a struct field, and nested), mutually-exclusive
-groups (optional or required), pairwise conflicts, counts, defaults, hidden
-args/commands, gnu-style help, auto help/version, and a `FromArg` trait for
-custom value types, all behind the `#[derive(Parse)]` / `#[derive(ValueEnum)]`
-macros. you can also hand-build a `CommandSpec` and impl `Parse`, see
-`pound/tests/cli.rs`.
+## install
 
-## model
+```toml
+[dependencies]
+pound = "0.1"
+```
 
-field shapes carry meaning, so most fields need no attribute:
+## the basics
 
-| shape       | meaning                |
-|-------------|------------------------|
-| `bool`      | flag, presence is true |
-| `T`         | required positional    |
-| `Option<T>` | optional positional    |
-| `Vec<T>`    | variadic / repeatable  |
+field shape carries meaning, so most fields need no attribute:
 
-`#[pound(short)]` / `#[pound(long)]` promote any of these to a named option. the
-annotated thing is the switch, values stay bare.
+| field type  | meaning                   |
+|-------------|---------------------------|
+| `bool`      | flag — present means true |
+| `T`         | required positional       |
+| `Option<T>` | optional positional       |
+| `Vec<T>`    | repeatable / variadic     |
 
-field attributes: `short`, `long` (bare or `= "name"` / `= 'c'`), `positional`,
-`trailing` (everything after `--`), `count` (`-vvv` into a `uN`), `default =`,
-`value_name =`, `help =`, `group = "name"` (mutually exclusive set),
-`conflicts_with = "field"`, `hidden` (omit from help), and `subcommand` (the
-field's type, itself a `Parse` enum, supplies the commands; `Option<T>` makes the
-subcommand optional). item attributes: `name =`, `version =`,
-`required_group = "name"` (exactly one of the group must be set), and `hidden` on
-an enum variant to hide that command. an enum derives a subcommand tree, one
-variant per command. `#[derive(ValueEnum)]` makes a unit enum a `FromArg` choice
-type with kebab-cased values, and its choices are listed automatically in help
-and in invalid-value errors.
+`#[pound(short)]` and `#[pound(long)]` promote any of these to a named option.
 
 ```rust,ignore
 use pound::Parse;
 
+/// fetch urls to disk
 #[derive(Parse)]
-struct Add {
-    name: String,                          // required positional
-    url:  String,                          // required positional
-    #[pound(long)] unpack:  Option<String>,
-    #[pound(long)] follows: Vec<String>,   // repeatable --follows
-    #[pound(short, long)] force: bool,      // -f / --force
+#[pound(name = "grab", version = "0.1.0")]
+struct Grab {
+    url: Vec<String>,                    // variadic positional
+
+    /// write downloads here
+    #[pound(short, long)]
+    output: Option<String>,              // -o / --output <path>
+
+    /// overwrite existing files
+    #[pound(short, long)]
+    force: bool,                         // -f / --force
+
+    /// increase verbosity, pass multiple times
+    #[pound(short, long, count)]
+    verbose: u8,                         // -v / -vvv / --verbose
+
+    /// parallel jobs
+    #[pound(short, long, default = "4")]
+    jobs: u32,                           // --jobs <n>  (default: 4)
 }
 
-let add = Add::parse(); // exits on -h/--help or a parse error
+fn main() {
+    let grab = Grab::parse(); // exits and prints help on -h/--help or a parse error
+    println!("{grab:?}");
+}
 ```
 
-a struct can carry global options and delegate the rest to a subcommand enum:
+## subcommands
+
+### enum as the top-level command
+
+derive `Parse` on an enum and each variant becomes a subcommand. struct variants
+carry the subcommand's own flags and positionals:
+
+```rust,ignore
+use pound::Parse;
+
+/// a small package manager
+#[derive(Parse)]
+#[pound(name = "pkg", version = "1.0.0")]
+enum Pkg {
+    /// initialise a project
+    Init {
+        #[pound(short, long)]
+        force: bool,
+    },
+    /// add a dependency
+    Add {
+        name: String,            // required positional
+        url:  String,            // required positional
+        #[pound(short, long)]
+        force: bool,
+    },
+}
+
+fn main() {
+    match Pkg::parse() {
+        Pkg::Init { force }         => { /* ... */ }
+        Pkg::Add { name, url, force } => { /* ... */ }
+    }
+}
+```
+
+```
+pkg init --force
+pkg add serde https://crates.io/crates/serde -f
+```
+
+### global options + subcommand field
+
+a struct can carry global flags and delegate the rest of the command line to a
+subcommand enum via `#[pound(subcommand)]`:
 
 ```rust,ignore
 #[derive(Parse)]
 enum Action {
     Build { #[pound(short, long)] release: bool },
     Clean,
+    Test,
 }
 
 #[derive(Parse)]
+#[pound(name = "tool", version = "0.1.0")]
 struct Cli {
-    #[pound(short, long)] verbose: bool, // a global, before the subcommand
-    #[pound(subcommand)] action: Action, // tool build --release | tool clean
+    #[pound(short, long)]
+    verbose: bool,
+
+    #[pound(long, default = "info")]
+    log: String,
+
+    #[pound(subcommand)]
+    action: Action,         // required — shows help if absent
+}
+
+fn main() {
+    let cli = Cli::parse();
 }
 ```
 
-custom value types implement `FromArg`:
+```
+tool --verbose build --release
+tool --log debug clean
+```
+
+make the subcommand optional with `Option<T>`:
+
+```rust,ignore
+#[derive(Parse)]
+#[pound(name = "maybe")]
+struct Cli {
+    #[pound(short, long)]
+    force: bool,
+    #[pound(subcommand)]
+    action: Option<Action>,   // ok to omit entirely
+}
+```
+
+### nested subcommands
+
+enum variants can themselves carry a `#[pound(subcommand)]` field, nesting as
+deep as you need:
+
+```rust,ignore
+#[derive(Parse)]
+enum LeaseAction { Open, Close }
+
+#[derive(Parse)]
+#[pound(name = "cade")]
+enum Cade {
+    Lease {
+        #[pound(subcommand)]
+        action: LeaseAction,   // cade lease open | cade lease close
+    },
+    Status,
+}
+```
+
+### hidden subcommands
+
+annotate a variant with `#[pound(hidden)]` to accept it without listing it in help:
+
+```rust,ignore
+#[derive(Parse)]
+#[pound(name = "svc")]
+enum Svc {
+    Run,
+    #[pound(hidden)]
+    Internal,   // parses fine, invisible in --help
+}
+```
+
+## value enums
+
+`#[derive(ValueEnum)]` turns a unit enum into a `FromArg` type. variants are
+accepted as kebab-case strings and the valid choices appear automatically in help
+text and error messages:
+
+```rust,ignore
+use pound::{Parse, ValueEnum};
+
+#[derive(ValueEnum)]
+enum Level { Quiet, Normal, Trace }
+
+#[derive(Parse)]
+#[pound(name = "run")]
+struct Run {
+    #[pound(long)]
+    level: Level,   // --level quiet|normal|trace
+}
+```
+
+```
+$ run --level bogus
+error: invalid value 'bogus' for --level [possible values: quiet, normal, trace]
+```
+
+## mutually exclusive options
+
+`group = "name"` puts flags into a named set. by default the group is optional
+(at most one). add `required_group = "name"` at the item level to require exactly one:
+
+```rust,ignore
+#[derive(Parse)]
+#[pound(name = "pick", required_group = "speed")]
+struct Pick {
+    #[pound(long, group = "speed")] fast: bool,
+    #[pound(long, group = "speed")] slow: bool,
+}
+```
+
+```
+pick --fast          ✓
+pick                 ✗  error: one of --fast / --slow is required
+pick --fast --slow   ✗  error: --fast conflicts with --slow
+```
+
+## pairwise conflicts
+
+for a one-off conflict without a named group, use `conflicts_with = "field"`:
+
+```rust,ignore
+#[derive(Parse)]
+#[pound(name = "log")]
+struct Log {
+    #[pound(long)]
+    quiet: bool,
+    #[pound(long, conflicts_with = "quiet")]
+    verbose: bool,
+}
+```
+
+## trailing arguments
+
+`#[pound(trailing)]` collects everything after `--` into a `Vec<String>`:
+
+```rust,ignore
+#[derive(Parse)]
+#[pound(name = "sandbox")]
+struct Sandbox {
+    #[pound(short, long)]
+    sockets: bool,
+    #[pound(trailing)]
+    exec: Vec<String>,   // sandbox -- ls -la
+}
+```
+
+## custom value types
+
+implement `FromArg` for any type you want to parse directly from the command line:
 
 ```rust,ignore
 use pound::{FromArg, ValueError};
@@ -92,11 +279,54 @@ impl FromArg for Rgb {
 }
 ```
 
+## attribute reference
+
+### item attributes (struct or enum)
+
+| attribute              | meaning                                                                    |
+|------------------------|----------------------------------------------------------------------------|
+| `name = "str"`         | command name in help/usage (defaults to the type name, lowercased)         |
+| `version = "str"`      | version shown by `-V` / `--version`                                        |
+| `required_group = "g"` | exactly one flag in group `g` must be provided                             |
+
+### field attributes
+
+| attribute              | meaning                                                                    |
+|------------------------|----------------------------------------------------------------------------|
+| `short`                | short flag (`-f` from field name, or `= 'x'` to override)                 |
+| `long`                 | long flag (`--field-name`, or `= "name"` to override)                     |
+| `positional`           | force positional parsing (usually inferred from the type)                  |
+| `trailing`             | collect everything after `--` into a `Vec<String>`                         |
+| `count`                | count repeated flags into a `uN` (`-vvv` → `3`)                           |
+| `default = "str"`      | default value, parsed the same way as a user-supplied string               |
+| `value_name = "str"`   | placeholder shown in usage (`<PATH>` instead of `<output>`)               |
+| `help = "str"`         | override the doc comment for this field's help line                        |
+| `group = "name"`       | add to a named mutually-exclusive group                                    |
+| `conflicts_with = "f"` | this flag may not appear alongside field `f`                               |
+| `hidden`               | accept the flag/argument but omit it from help                             |
+| `subcommand`           | delegate remaining args to this field's `Parse` enum                       |
+
+### enum variant attributes
+
+| attribute      | meaning                                  |
+|----------------|------------------------------------------|
+| `name = "str"` | override the subcommand name             |
+| `hidden`       | accept the command but hide it from help |
+
+## going without the derive
+
+you can hand-build a `CommandSpec` and impl `Parse` yourself — useful for
+dynamic or programmatic command trees. see `pound/tests/cli.rs` for a full
+worked example.
+
 ## features
 
-- `help` (default): bake doc-comment help into the binary and enable the
-  formatter. build with `default-features = false` for the leanest binary, help
-  degrades to a one-line usage string.
+| feature  | default | description                                                                      |
+|----------|---------|----------------------------------------------------------------------------------|
+| `derive` | yes     | enables `#[derive(Parse)]` and `#[derive(ValueEnum)]`                            |
+| `help`   | yes     | bakes doc-comment help text in and enables the formatter; without it, `-h` shows a bare usage line |
+
+disable both with `default-features = false` for the leanest possible binary.
 
 ## dev
 
