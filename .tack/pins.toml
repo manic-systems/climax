@@ -1,0 +1,26 @@
+# tack pins. edit by hand or with tack add / rm / alias
+# nix reads pins.lock.json; this file drives tack update
+
+# shorturl schemes. scheme:rest expands rest into {path}
+[shorturls]
+# gh = "github:{path}"
+
+# all_follow: input name -> top-level pin it follows wherever it appears
+# opt out per-input with exclude_follow
+[all_follow]
+nixpkgs = "nixpkgs"
+
+# [inputs.<name>] fields
+#   url             required, shorturl ok; ?rev=<sha> pins an exact commit
+#   flake           default true; false exposes the source path
+#   follows         { child = "pin" } override map
+#   exclude_follow  all_follow names to skip
+#   dir             subdir holding flake.nix
+#   submodules      fetch git submodules
+[inputs]
+
+[inputs.nixpkgs]
+url = "github:NixOS/nixpkgs/nixos-unstable-small"
+
+[inputs.fenix]
+url = "github:nix-community/fenix"
