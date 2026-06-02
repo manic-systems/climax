@@ -33,5 +33,9 @@ trybuild = "1"
 name              = "grab"
 required-features = [ "derive" ]
 
+[[example]]
+name              = "vault"
+required-features = [ "derive" ]
+
 [lints]
 workspace = true
