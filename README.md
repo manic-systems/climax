@@ -299,19 +299,22 @@ impl FromArg for Rgb {
 | `trailing`             | collect everything after `--` into a `Vec<String>`                         |
 | `count`                | count repeated flags into a `uN` (`-vvv` → `3`)                           |
 | `default = "str"`      | default value, parsed the same way as a user-supplied string               |
+| `env = "VAR"`          | fall back to environment variable `VAR` (cli > env > default; `std` only)  |
 | `value_name = "str"`   | placeholder shown in usage (`<PATH>` instead of `<output>`)               |
 | `help = "str"`         | override the doc comment for this field's help line                        |
 | `group = "name"`       | add to a named mutually-exclusive group                                    |
 | `conflicts_with = "f"` | this flag may not appear alongside field `f`                               |
+| `alias = "a,b"`        | extra long names that also match, kept out of help                         |
 | `hidden`               | accept the flag/argument but omit it from help                             |
 | `subcommand`           | delegate remaining args to this field's `Parse` enum                       |
 
 ### enum variant attributes
 
-| attribute      | meaning                                  |
-|----------------|------------------------------------------|
-| `name = "str"` | override the subcommand name             |
-| `hidden`       | accept the command but hide it from help |
+| attribute       | meaning                                  |
+|-----------------|------------------------------------------|
+| `name = "str"`  | override the subcommand name             |
+| `alias = "a,b"` | extra names that also select the command, kept out of help |
+| `hidden`        | accept the command but hide it from help |
 
 ## going without the derive
 
@@ -377,6 +380,33 @@ pub extern "C" fn main(argc: c_int, argv: *const *const c_char) -> c_int {
 ```
 
 the yielded `&str`s borrow straight from `argv`, so parsing stays zero-copy.
+
+## pound vs clap
+
+the same CLI built both ways (root flags, three subcommands, a value enum, a
+repeatable option, defaults), release profile `opt-level = "s"`, `lto = "fat"`,
+stripped, on one machine.
+
+### size
+
+| parser    | stripped binary | over a no-parser baseline |
+|-----------|-----------------|---------------------------|
+| **pound** | 345 KiB         | +60 KiB                   |
+| **clap**  | 517 KiB         | +232 KiB                  |
+
+### build time
+
+| parser    | cold debug | cold release | incremental |
+|-----------|------------|--------------|-------------|
+| **pound** | 2.1 s      | 4.9 s        | 0.13 s      |
+| **clap**  | 4.1 s      | 9.3 s        | 0.22 s      |
+
+### parse speed
+
+| parser    | per parse (`try_parse_from`) |
+|-----------|------------------------------|
+| **pound** | ~52 ns                       |
+| **clap**  | ~8.4 µs                      |
 
 ## dev
 
