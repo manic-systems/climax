@@ -3,7 +3,7 @@
 a low-footprint, derive-first cli parser for rust.
 
 the derive emits a flat `&'static` description of your command and one non-generic
-engine interprets it — so you get familiar derive ergonomics, almost no compile-time
+engine interprets it, so you get familiar derive ergonomics, almost no compile-time
 overhead, and nothing pulled in at runtime.
 
 ## install
@@ -19,7 +19,7 @@ field shape carries meaning, so most fields need no attribute:
 
 | field type  | meaning                   |
 |-------------|---------------------------|
-| `bool`      | flag — present means true |
+| `bool`      | flag, present means true  |
 | `T`         | required positional       |
 | `Option<T>` | optional positional       |
 | `Vec<T>`    | repeatable / variadic     |
@@ -122,7 +122,7 @@ struct Cli {
     log: String,
 
     #[pound(subcommand)]
-    action: Action,         // required — shows help if absent
+    action: Action,         // required, shows help if absent
 }
 
 fn main() {
@@ -315,7 +315,7 @@ impl FromArg for Rgb {
 
 ## going without the derive
 
-you can hand-build a `CommandSpec` and impl `Parse` yourself — useful for
+you can hand-build a `CommandSpec` and impl `Parse` yourself, which is handy for
 dynamic or programmatic command trees. see `pound/tests/cli.rs` for a full
 worked example.
 
@@ -323,10 +323,60 @@ worked example.
 
 | feature  | default | description                                                                      |
 |----------|---------|----------------------------------------------------------------------------------|
+| `std`    | yes     | the std-only conveniences: `parse()` / `try_parse()` (read argv), `Error::exit()`, and the `PathBuf` value impl. turn it off for `#![no_std]` against `alloc` (see below) |
 | `derive` | yes     | enables `#[derive(Parse)]` and `#[derive(ValueEnum)]`                            |
 | `help`   | yes     | bakes doc-comment help text in and enables the formatter; without it, `-h` shows a bare usage line |
 
-disable both with `default-features = false` for the leanest possible binary.
+disable all three with `default-features = false` for the leanest possible binary.
+
+## no_std
+
+pound is `#![no_std]` when you turn the `std` feature off. it still needs an
+allocator (matched values, the help formatter, and error messages use `alloc`),
+but nothing from `std`:
+
+```toml
+[dependencies]
+pound = { version = "0.1", default-features = false, features = ["derive", "help"] }
+```
+
+what you give up without `std`, and what to use instead:
+
+| std convenience            | no_std replacement                                              |
+|----------------------------|----------------------------------------------------------------|
+| `Parse::parse()` (reads argv) | feed args to `Parse::try_parse_from(args)` yourself          |
+| `Error::exit()`            | match on the returned `Error` and decide how to bail            |
+| `FromArg for PathBuf`      | impl `FromArg` for your own path type                          |
+
+### borrowed arguments
+
+`try_parse_from` takes an `IntoIterator<Item = &str>`, and the parser never
+copies an argument into an owned `String`. matched values borrow straight from
+the input; only the fields you declare as `String` allocate, when they're read
+out. the input just has to outlive the call, which always holds, since `Self`
+owns whatever it keeps.
+
+### sourcing argv on no_std
+
+pound can't portably *fetch* argv; that's an OS detail `std` normally handles.
+but if your program owns its libc entry point, it can hand pound the
+`(argc, argv)` it already holds via `args_from_raw`:
+
+```rust,ignore
+use core::ffi::{c_char, c_int};
+
+#[unsafe(no_mangle)]
+pub extern "C" fn main(argc: c_int, argv: *const *const c_char) -> c_int {
+    // SAFETY: argc/argv are the unmodified parameters libc passed `main`.
+    let args = unsafe { pound::args_from_raw(argc, argv) }.skip(1);
+    match MyCommand::try_parse_from(args) {
+        Ok(cmd) => { /* ... */ 0 }
+        Err(e)  => { /* render e */ 2 }
+    }
+}
+```
+
+the yielded `&str`s borrow straight from `argv`, so parsing stays zero-copy.
 
 ## dev
 
