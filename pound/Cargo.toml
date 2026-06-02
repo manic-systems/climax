@@ -1,0 +1,32 @@
+[package]
+name                 = "pound"
+version              = "0.1.0"
+description          = "low footprint, derive-first CLI parser"
+keywords             = [ "cli", "args", "argparse", "derive", "command-line" ]
+categories           = [ "command-line-interface" ]
+readme               = "../README.md"
+authors.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[features]
+default = [ "help", "derive" ]
+# `help` bakes doc-comment help text into the binary and enables the formatter.
+# turn it off (`default-features = false`) for the leanest possible build.
+help = [ "pound-derive?/help" ]
+# `derive` brings in the #[derive(Parse)] / #[derive(ValueEnum)] macros.
+derive = [ "dep:pound-derive" ]
+
+[dependencies]
+pound-derive = { version = "0.1.0", path = "../pound-derive", optional = true }
+
+[dev-dependencies]
+trybuild = "1"
+
+[[example]]
+name              = "grab"
+required-features = [ "derive" ]
+
+[lints]
+workspace = true
