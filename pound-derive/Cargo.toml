@@ -1,0 +1,27 @@
+[package]
+name        = "pound-derive"
+version     = "0.1.0"
+description = "derive macros for pound"
+keywords    = [ "cli", "args", "derive" ]
+categories  = [ "command-line-interface" ]
+readme      = "../README.md"
+authors.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[features]
+# forwarded from pound's `help` feature, see pound/Cargo.toml. when off, the
+# derive bakes empty help strings so they never reach the binary.
+help = []
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote       = "1"
+venial      = "0.6"
+
+[lints]
+workspace = true
