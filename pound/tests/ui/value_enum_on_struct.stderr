@@ -1,0 +1,7 @@
+error: pound: ValueEnum can only derive on an enum
+ --> tests/ui/value_enum_on_struct.rs:3:10
+  |
+3 | #[derive(ValueEnum)]
+  |          ^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `ValueEnum` (in Nightly builds, run with -Z macro-backtrace for more info)

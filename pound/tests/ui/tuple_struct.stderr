@@ -1,0 +1,7 @@
+error: pound: tuple fields are not supported, use named fields
+ --> tests/ui/tuple_struct.rs:3:10
+  |
+3 | #[derive(Parse)]
+  |          ^^^^^
+  |
+  = note: this error originates in the derive macro `Parse` (in Nightly builds, run with -Z macro-backtrace for more info)
