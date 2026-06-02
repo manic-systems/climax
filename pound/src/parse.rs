@@ -5,8 +5,10 @@
 //! three typed readers at the bottom that forward to [`FromArg`], the rest is
 //! monomorphisation-free so it compiles once however many commands you define.
 
-use std::vec::IntoIter;
+use alloc::vec::IntoIter;
 
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
 use crate::{
     error::Error,
     help,
@@ -18,25 +20,26 @@ use crate::{
     value::FromArg,
 };
 
-/// what a single arg collected during a parse.
+/// what a single arg collected during a parse. values borrow the input tokens
+/// for `'a` rather than owning copies.
 #[derive(Default, Clone, Debug)]
-struct Slot {
+struct Slot<'a> {
     /// times the user supplied it (flags 0/1, counts n). defaults do not bump
     /// this, so group/required logic can tell user input apart.
     count:  u32,
-    /// raw values, in order
-    values: Vec<String>,
+    /// raw values, in order, borrowed from the parsed input
+    values: Vec<&'a str>,
 }
 
 /// a successful parse: each spec entry's state, plus an optional chosen
-/// subcommand and its nested matches.
+/// subcommand and its nested matches. raw values borrow the input for `'a`.
 #[derive(Debug)]
-pub struct Matches {
-    slots: Vec<Slot>,
+pub struct Matches<'a> {
+    slots: Vec<Slot<'a>>,
     sub:   Option<(usize, Box<Self>)>,
 }
 
-impl Matches {
+impl<'a> Matches<'a> {
     fn new(len: usize) -> Self {
         Self {
             slots: vec![Slot::default(); len],
@@ -58,13 +61,13 @@ impl Matches {
 
     /// first raw value (or injected default), if any.
     #[must_use]
-    pub fn raw(&self, i: usize) -> Option<&str> {
-        self.slots[i].values.first().map(String::as_str)
+    pub fn raw(&self, i: usize) -> Option<&'a str> {
+        self.slots[i].values.first().copied()
     }
 
     /// all raw values, in order.
     #[must_use]
-    pub fn raws(&self, i: usize) -> &[String] {
+    pub fn raws(&self, i: usize) -> &[&'a str] {
         &self.slots[i].values
     }
 
@@ -94,7 +97,7 @@ impl Matches {
     pub fn many<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Vec<T>, Error> {
         self.raws(i)
             .iter()
-            .map(|s| parse_into(spec, i, s))
+            .map(|&s| parse_into(spec, i, s))
             .collect()
     }
 }
@@ -116,15 +119,15 @@ fn parse_into<T: FromArg>(spec: &CommandSpec, i: usize, s: &str) -> Result<T, Er
 }
 
 /// entry point: parse `args` (already minus `argv[0]`) against `spec`.
-pub(crate) fn parse_spec(
+pub(crate) fn parse_spec<'a>(
     spec: &CommandSpec,
-    args: impl IntoIterator<Item = String>,
-) -> Result<Matches, Error> {
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     parse_cmd(spec, &mut it)
 }
 
-fn parse_cmd(spec: &CommandSpec, it: &mut IntoIter<String>) -> Result<Matches, Error> {
+fn parse_cmd<'a>(spec: &CommandSpec, it: &mut IntoIter<&'a str>) -> Result<Matches<'a>, Error> {
     let mut m = Matches::new(spec.args.len());
 
     let positionals: Vec<usize> = spec
@@ -147,7 +150,7 @@ fn parse_cmd(spec: &CommandSpec, it: &mut IntoIter<String>) -> Result<Matches, E
             only_positional = true;
         } else if let Some(long) = tok.strip_prefix("--") {
             let (name, inline) = match long.split_once('=') {
-                Some((n, v)) => (n, Some(v.to_owned())),
+                Some((n, v)) => (n, Some(v)),
                 None => (long, None),
             };
             if let Some(sig) = builtin_long(spec, name) {
@@ -168,8 +171,8 @@ fn parse_cmd(spec: &CommandSpec, it: &mut IntoIter<String>) -> Result<Matches, E
             }
         } else if spec.has_subs() && positionals.is_empty() {
             let sidx = spec
-                .find_sub(&tok)
-                .ok_or_else(|| Error::UnknownSubcommand(tok.clone()))?;
+                .find_sub(tok)
+                .ok_or_else(|| Error::UnknownSubcommand(tok.to_owned()))?;
             let sub_m = parse_cmd(spec.subs[sidx].spec, it)?;
             m.sub = Some((sidx, Box::new(sub_m)));
             break; // subcommand owns the rest
@@ -183,12 +186,12 @@ fn parse_cmd(spec: &CommandSpec, it: &mut IntoIter<String>) -> Result<Matches, E
 }
 
 /// apply a long option once resolved to a spec index.
-fn apply_named(
+fn apply_named<'a>(
     spec: &CommandSpec,
-    m: &mut Matches,
+    m: &mut Matches<'a>,
     idx: usize,
-    inline: Option<String>,
-    it: &mut IntoIter<String>,
+    inline: Option<&'a str>,
+    it: &mut IntoIter<&'a str>,
 ) -> Result<(), Error> {
     let a = spec.args[idx];
     match a.kind {
@@ -220,16 +223,15 @@ fn apply_named(
 }
 
 /// apply a short cluster, e.g. `-vvf` or `-ofile`.
-fn shorts(
+fn shorts<'a>(
     spec: &CommandSpec,
-    m: &mut Matches,
-    cluster: &str,
-    it: &mut IntoIter<String>,
+    m: &mut Matches<'a>,
+    cluster: &'a str,
+    it: &mut IntoIter<&'a str>,
 ) -> Result<(), Error> {
-    let chars: Vec<char> = cluster.chars().collect();
-    let mut ci = 0;
-    while ci < chars.len() {
-        let ch = chars[ci];
+    // `char_indices` keeps byte offsets so an attached value can be borrowed as
+    // a sub-slice of `cluster` rather than rebuilt into an owned `String`.
+    for (off, ch) in cluster.char_indices() {
         if let Some(sig) = builtin_short(spec, ch) {
             return Err(sig);
         }
@@ -241,7 +243,7 @@ fn shorts(
             Kind::Flag => m.slots[idx].count = 1,
             Kind::Count => m.slots[idx].count += 1,
             Kind::Opt => {
-                let rest: String = chars[ci + 1..].iter().collect();
+                let rest = &cluster[off + ch.len_utf8()..];
                 let value = if rest.is_empty() {
                     it.next()
                         .ok_or_else(|| Error::MissingValue(a.display_name()))?
@@ -255,12 +257,11 @@ fn shorts(
                 return Err(Error::Unknown(format!("-{ch}")));
             },
         }
-        ci += 1;
     }
     Ok(())
 }
 
-fn push_value(a: &ArgSpec, slot: &mut Slot, value: String) {
+fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
     if !a.multi {
         slot.values.clear(); // last wins for single-valued opts
     }
@@ -269,12 +270,12 @@ fn push_value(a: &ArgSpec, slot: &mut Slot, value: String) {
 }
 
 /// assign a bare token to the next positional, or a trailing/variadic sink.
-fn positional(
+fn positional<'a>(
     spec: &CommandSpec,
-    m: &mut Matches,
+    m: &mut Matches<'a>,
     positionals: &[usize],
     cursor: &mut usize,
-    tok: String,
+    tok: &'a str,
 ) -> Result<(), Error> {
     let idx = if *cursor < positionals.len() {
         positionals[*cursor]
@@ -283,10 +284,10 @@ fn positional(
         if a.multi || a.kind == Kind::Trailing {
             last // overflow lands in the variadic tail
         } else {
-            return Err(Error::UnexpectedPositional(tok));
+            return Err(Error::UnexpectedPositional(tok.to_owned()));
         }
     } else {
-        return Err(Error::UnexpectedPositional(tok));
+        return Err(Error::UnexpectedPositional(tok.to_owned()));
     };
 
     let a = spec.args[idx];
@@ -377,13 +378,14 @@ fn builtin_short(spec: &CommandSpec, ch: char) -> Option<Error> {
 
 /// inject spec defaults into the matches so the typed readers see them. run by
 /// [`crate::Parse`] before `from_matches`.
-pub(crate) fn apply_defaults(spec: &CommandSpec, m: &mut Matches) {
+pub(crate) fn apply_defaults(spec: &CommandSpec, m: &mut Matches<'_>) {
     for (i, a) in spec.args.iter().enumerate() {
         if m.slots[i].values.is_empty()
             && m.slots[i].count == 0
             && let Some(def) = a.default
         {
-            m.slots[i].values.push(def.to_owned());
+            // `def: &'static str` coerces into the `'a` value slot for free.
+            m.slots[i].values.push(def);
         }
     }
     if let Some((sidx, sub)) = &mut m.sub {
@@ -399,8 +401,8 @@ mod tests {
         SubSpec,
     };
 
-    fn argv(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| (*s).to_owned()).collect()
+    fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
+        a.to_vec()
     }
 
     // flat command: flags, an option (long+short), a count, a required
@@ -426,7 +428,7 @@ mod tests {
 sub_optional: false,
     };
 
-    fn parse(spec: &CommandSpec, a: &[&str]) -> Result<Matches, Error> {
+    fn parse<'a>(spec: &CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, Error> {
         parse_spec(spec, argv(a))
     }
 

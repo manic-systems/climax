@@ -11,7 +11,12 @@ license.workspace    = true
 repository.workspace = true
 
 [features]
-default = [ "help", "derive" ]
+default = [ "std", "help", "derive" ]
+# `std` wires up the std-only conveniences: `parse()`/`try_parse()` (read argv),
+# `Error::exit()` (print + process::exit), and the `PathBuf` value impl. turn it
+# off (`default-features = false`) to build `#![no_std]` against `alloc`; drive
+# the parser through `try_parse_from` and match `Error` yourself.
+std = []
 # `help` bakes doc-comment help text into the binary and enables the formatter.
 # turn it off (`default-features = false`) for the leanest possible build.
 help = [ "pound-derive?/help" ]

@@ -5,6 +5,9 @@
 
 use core::fmt;
 
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
+
 /// anything a parse attempt can produce.
 ///
 /// [`Self::Help`] and [`Self::Version`] are not failures, they carry rendered
@@ -55,6 +58,7 @@ impl Error {
 
     /// print to the right stream and exit: help/version to stdout with 0, real
     /// errors to stderr with 2.
+    #[cfg(feature = "std")]
     pub fn exit(self) -> ! {
         match self {
             Self::Help(text) | Self::Version(text) => {
@@ -101,4 +105,4 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}

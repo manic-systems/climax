@@ -23,6 +23,9 @@
 //! ];
 //! ```
 
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
+
 /// what shape of argument a spec entry describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {

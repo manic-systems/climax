@@ -16,8 +16,8 @@ use pound::{
     ValueError,
 };
 
-fn argv(a: &[&str]) -> Vec<String> {
-    a.iter().map(|s| (*s).to_owned()).collect()
+fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
+    a.to_vec()
 }
 
 // a flat command: flags, a repeatable option, and a trailing exec

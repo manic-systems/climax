@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 //! pound: a low footprint, derive-first cli parser.
 //!
 //! the derive emits a flat `&'static` [`spec::CommandSpec`] and one non-generic
@@ -35,6 +37,27 @@
 //!
 //! you can also hand-build a [`spec::CommandSpec`] and impl [`Parse`] yourself,
 //! as the test suite does.
+
+extern crate alloc;
+
+/// the `alloc` items the modules lean on, in one place. populated only under
+/// `no_std` (the `std` prelude already provides them), so every module can
+/// `use crate::alloc_prelude::*` without repeating `cfg`-gated import lists —
+/// and adding a `String`/`format!`/`Vec` anywhere just works in both builds.
+mod alloc_prelude {
+    #[cfg(not(feature = "std"))]
+    pub(crate) use alloc::{
+        borrow::ToOwned,
+        boxed::Box,
+        format,
+        string::{
+            String,
+            ToString,
+        },
+        vec,
+        vec::Vec,
+    };
+}
 
 mod error;
 mod help;
@@ -77,12 +100,16 @@ pub trait Parse: Sized {
     /// build `Self` from matches against `spec`. `spec` is passed in (not read
     /// from [`Self::SPEC`]) so the same method works for a subcommand reading
     /// against its own spec.
-    fn from_matches(spec: &'static CommandSpec, matches: &Matches) -> Result<Self, Error>;
+    fn from_matches(spec: &'static CommandSpec, matches: &Matches<'_>) -> Result<Self, Error>;
 
     /// parse the given args, returning the typed value or an [`Error`].
-    fn try_parse_from<I>(args: I) -> Result<Self, Error>
+    ///
+    /// args are borrowed (`&str`), so matched values point straight into them;
+    /// the iterator's items must outlive the call (which is fine, `Self` owns
+    /// any field it keeps). this is the `no_std` entry point.
+    fn try_parse_from<'a, I>(args: I) -> Result<Self, Error>
     where
-        I: IntoIterator<Item = String>,
+        I: IntoIterator<Item = &'a str>,
     {
         let mut matches = parse::parse_spec(Self::SPEC, args)?;
         parse::apply_defaults(Self::SPEC, &mut matches);
@@ -90,11 +117,16 @@ pub trait Parse: Sized {
     }
 
     /// parse `std::env::args()` minus the program name.
+    #[cfg(feature = "std")]
     fn try_parse() -> Result<Self, Error> {
-        Self::try_parse_from(std::env::args().skip(1))
+        // env yields owned `String`s; hold them in a buffer the borrowed parse
+        // reads from, then return the owned `Self`.
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        Self::try_parse_from(args.iter().map(String::as_str))
     }
 
     /// parse argv, printing help/version or errors and exiting.
+    #[cfg(feature = "std")]
     #[must_use]
     fn parse() -> Self {
         match Self::try_parse() {
@@ -104,14 +136,61 @@ pub trait Parse: Sized {
     }
 
     /// parse the given args, printing help/version or errors and exiting.
+    #[cfg(feature = "std")]
     #[must_use]
-    fn parse_from<I>(args: I) -> Self
+    fn parse_from<'a, I>(args: I) -> Self
     where
-        I: IntoIterator<Item = String>,
+        I: IntoIterator<Item = &'a str>,
     {
         match Self::try_parse_from(args) {
             Ok(value) => value,
             Err(err) => err.exit(),
         }
     }
+}
+
+/// build a borrowed argument iterator from a raw libc `main(argc, argv)`.
+///
+/// for a `#![no_std]` program that owns its entry point: pairs with
+/// [`Parse::try_parse_from`] once you `skip(1)` the program name.
+///
+/// the yielded `&str`s borrow directly from `argv` — no allocation — and any
+/// non-UTF-8 argument is skipped. pound cannot *source* argv portably (that is
+/// the OS boundary `std` exists to cross), but it can bridge the pointers you
+/// already hold.
+///
+/// ```no_run
+/// use core::ffi::{c_char, c_int};
+///
+/// // call this from your `#![no_main]` libc entry point, forwarding its args:
+/// fn run(argc: c_int, argv: *const *const c_char) {
+///     // SAFETY: argc/argv are the unmodified parameters libc passed `main`.
+///     let args = unsafe { pound::args_from_raw(argc, argv) }.skip(1);
+///     // let cmd = MyCommand::try_parse_from(args)?;
+///     let _ = args.count();
+/// }
+/// ```
+///
+/// # Safety
+///
+/// `argv` must point to `argc` consecutive, valid, NUL-terminated C strings
+/// that stay alive and immutable for `'a` — exactly the contract a libc runtime
+/// upholds for `main`'s parameters. A negative `argc` is treated as zero.
+// argc/argv are the libc contract names; keeping them reads clearer than any
+// rename clippy's `similar_names` would prefer.
+#[allow(clippy::similar_names)]
+pub unsafe fn args_from_raw<'a>(
+    argc: core::ffi::c_int,
+    argv: *const *const core::ffi::c_char,
+) -> impl Iterator<Item = &'a str> {
+    let count = usize::try_from(argc).unwrap_or(0); // a negative argc reads as empty
+    (0..count).filter_map(move |i| {
+        // SAFETY: `i < count <= argc`, so `argv.add(i)` is in bounds and points
+        // at a valid C string per the documented contract.
+        let ptr = unsafe { *argv.add(i) };
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe { core::ffi::CStr::from_ptr(ptr) }.to_str().ok()
+    })
 }

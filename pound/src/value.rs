@@ -10,6 +10,9 @@
 
 use core::fmt;
 
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
+
 /// a value that would not parse, plus context for the message. the parser wraps
 /// it into [`crate::Error::Value`] once it knows which arg it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,9 +99,15 @@ from_str! {
     i8, i16, i32, i64, i128, isize,
     u8, u16, u32, u64, u128, usize,
     f32, f64,
+    core::net::IpAddr,
+    core::net::Ipv4Addr,
+    core::net::Ipv6Addr,
+    core::net::SocketAddr,
+}
+
+// `PathBuf` lives in `std` (it wraps `OsString`), so its value impl is the one
+// scalar that cannot ride along in a `no_std` build.
+#[cfg(feature = "std")]
+from_str! {
     std::path::PathBuf,
-    std::net::IpAddr,
-    std::net::Ipv4Addr,
-    std::net::Ipv6Addr,
-    std::net::SocketAddr,
 }

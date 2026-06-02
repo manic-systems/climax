@@ -11,8 +11,8 @@ use pound::{
     ValueEnum,
 };
 
-fn argv(a: &[&str]) -> Vec<String> {
-    a.iter().map(|s| (*s).to_owned()).collect()
+fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
+    a.to_vec()
 }
 
 // sandbox: flat command, flags + repeatable option + trailing exec
