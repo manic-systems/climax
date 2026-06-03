@@ -1,6 +1,6 @@
 [package]
 name                 = "pound"
-version              = "0.1.4"
+version              = "0.1.5"
 description          = "low footprint, derive-first CLI parser"
 keywords             = [ "cli", "args", "argparse", "derive", "command-line" ]
 categories           = [ "command-line-interface" ]
