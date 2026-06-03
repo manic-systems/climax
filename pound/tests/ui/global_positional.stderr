@@ -1,0 +1,7 @@
+error: pound: #[pound(global)] needs a flag or option (short/long), not a positional (`name`)
+ --> tests/ui/global_positional.rs:4:10
+  |
+4 | #[derive(Parse)]
+  |          ^^^^^
+  |
+  = note: this error originates in the derive macro `Parse` (in Nightly builds, run with -Z macro-backtrace for more info)

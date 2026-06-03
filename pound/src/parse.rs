@@ -42,6 +42,13 @@ pub struct Matches<'a> {
     sub:   Option<(usize, Box<Self>)>,
 }
 
+/// a global flag/option seen in a descendant, deferred until the ancestor that
+/// owns it can apply it. matched back to its owner by pointer identity.
+struct GlobalHit<'a> {
+    arg:   &'static ArgSpec,
+    value: Option<&'a str>,
+}
+
 impl<'a> Matches<'a> {
     fn new(len: usize) -> Self {
         Self {
@@ -153,10 +160,18 @@ pub(crate) fn parse_spec<'a>(
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
-    parse_cmd(spec, &mut it)
+    let mut hits = Vec::new();
+    parse_cmd(spec, &mut it, &[], &mut hits)
 }
 
-fn parse_cmd<'a>(spec: &CommandSpec, it: &mut IntoIter<&'a str>) -> Result<Matches<'a>, Error> {
+/// `globals` are ancestors' global args (for arity and help); `hits` collects
+/// global options seen at this level or deeper for the owning ancestor to drain.
+fn parse_cmd<'a>(
+    spec: &CommandSpec,
+    it: &mut IntoIter<&'a str>,
+    globals: &[&'static ArgSpec],
+    hits: &mut Vec<GlobalHit<'a>>,
+) -> Result<Matches<'a>, Error> {
     let mut m = Matches::new(spec.args.len());
 
     let positionals: Vec<usize> = spec
@@ -182,18 +197,23 @@ fn parse_cmd<'a>(spec: &CommandSpec, it: &mut IntoIter<&'a str>) -> Result<Match
                 Some((n, v)) => (n, Some(v)),
                 None => (long, None),
             };
-            if let Some(sig) = builtin_long(spec, name) {
+            if let Some(sig) = builtin_long(spec, name, globals) {
                 return Err(sig);
             }
-            let idx = spec
-                .find_long(name)
-                .ok_or_else(|| Error::Unknown(format!("--{name}")))?;
-            apply_named(spec, &mut m, idx, inline, it)?;
+            if let Some(idx) = spec.find_long(name) {
+                apply_named(spec, &mut m, idx, inline, it)?;
+            } else if let Some(g) = find_global_long(globals, name) {
+                record_global(g, inline, it, hits)?;
+            } else {
+                return Err(Error::Unknown(format!("--{name}")));
+            }
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             let first = rest.chars().next().unwrap_or('-');
-            let known = spec.find_short(first).is_some() || builtin_short(spec, first).is_some();
+            let known = spec.find_short(first).is_some()
+                || builtin_short(spec, first, globals).is_some()
+                || find_global_short(globals, first).is_some();
             if known {
-                shorts(spec, &mut m, rest, it)?;
+                shorts(spec, &mut m, rest, it, globals, hits)?;
             } else {
                 // not an option (negative numbers, lone values) -> positional
                 positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
@@ -202,7 +222,9 @@ fn parse_cmd<'a>(spec: &CommandSpec, it: &mut IntoIter<&'a str>) -> Result<Match
             let sidx = spec
                 .find_sub(tok)
                 .ok_or_else(|| Error::UnknownSubcommand(tok.to_owned()))?;
-            let sub_m = parse_cmd(spec.subs[sidx].spec, it)?;
+            let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
+            child_globals.extend(spec.args.iter().filter(|a| a.global));
+            let sub_m = parse_cmd(spec.subs[sidx].spec, it, &child_globals, hits)?;
             m.sub = Some((sidx, Box::new(sub_m)));
             break; // subcommand owns the rest
         } else {
@@ -210,7 +232,9 @@ fn parse_cmd<'a>(spec: &CommandSpec, it: &mut IntoIter<&'a str>) -> Result<Match
         }
     }
 
-    finalize(spec, &m)?;
+    // must run before finalize so owned globals count toward required/group checks
+    apply_global_hits(spec, &mut m, hits);
+    finalize(spec, &m, globals)?;
     Ok(m)
 }
 
@@ -257,37 +281,65 @@ fn shorts<'a>(
     m: &mut Matches<'a>,
     cluster: &'a str,
     it: &mut IntoIter<&'a str>,
+    globals: &[&'static ArgSpec],
+    hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), Error> {
     // `char_indices` keeps byte offsets so an attached value can be borrowed as
     // a sub-slice of `cluster` rather than rebuilt into an owned `String`.
     for (off, ch) in cluster.char_indices() {
-        if let Some(sig) = builtin_short(spec, ch) {
+        if let Some(sig) = builtin_short(spec, ch, globals) {
             return Err(sig);
         }
-        let idx = spec
-            .find_short(ch)
-            .ok_or_else(|| Error::Unknown(format!("-{ch}")))?;
-        let a = spec.args[idx];
-        match a.kind {
-            Kind::Flag => m.slots[idx].count = 1,
-            Kind::Count => m.slots[idx].count += 1,
-            Kind::Opt => {
-                let rest = &cluster[off + ch.len_utf8()..];
-                let value = if rest.is_empty() {
-                    it.next()
-                        .ok_or_else(|| Error::MissingValue(a.display_name()))?
-                } else {
-                    rest
-                };
-                push_value(&a, &mut m.slots[idx], value);
-                return Ok(()); // option swallowed the cluster tail
-            },
-            Kind::Positional | Kind::Trailing => {
-                return Err(Error::Unknown(format!("-{ch}")));
-            },
+        if let Some(idx) = spec.find_short(ch) {
+            let a = spec.args[idx];
+            match a.kind {
+                Kind::Flag => m.slots[idx].count = 1,
+                Kind::Count => m.slots[idx].count += 1,
+                Kind::Opt => {
+                    let value = cluster_value(cluster, off, ch, it, &a)?;
+                    push_value(&a, &mut m.slots[idx], value);
+                    return Ok(()); // option swallowed the cluster tail
+                },
+                Kind::Positional | Kind::Trailing => {
+                    return Err(Error::Unknown(format!("-{ch}")));
+                },
+            }
+        } else if let Some(g) = find_global_short(globals, ch) {
+            match g.kind {
+                Kind::Flag | Kind::Count => hits.push(GlobalHit { arg: g, value: None }),
+                Kind::Opt => {
+                    let value = cluster_value(cluster, off, ch, it, g)?;
+                    hits.push(GlobalHit {
+                        arg:   g,
+                        value: Some(value),
+                    });
+                    return Ok(());
+                },
+                Kind::Positional | Kind::Trailing => {
+                    return Err(Error::Unknown(format!("-{ch}")));
+                },
+            }
+        } else {
+            return Err(Error::Unknown(format!("-{ch}")));
         }
     }
     Ok(())
+}
+
+/// a short option's value: the attached cluster tail (`-ofile`), else next token.
+fn cluster_value<'a>(
+    cluster: &'a str,
+    off: usize,
+    ch: char,
+    it: &mut IntoIter<&'a str>,
+    a: &ArgSpec,
+) -> Result<&'a str, Error> {
+    let rest = &cluster[off + ch.len_utf8()..];
+    if rest.is_empty() {
+        it.next().ok_or_else(|| Error::MissingValue(a.display_name()))
+    } else {
+        Ok(rest)
+    }
 }
 
 fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
@@ -296,6 +348,72 @@ fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
     }
     slot.values.push(value);
     slot.count += 1;
+}
+
+// `contains(&name)` will not type-check: `aliases` holds `&'static str` against a
+// borrowed `&str`, so the membership test is spelled by hand (as in `find_long`).
+#[allow(clippy::manual_contains)]
+fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
+    globals
+        .iter()
+        .copied()
+        .find(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
+}
+
+fn find_global_short(globals: &[&'static ArgSpec], ch: char) -> Option<&'static ArgSpec> {
+    globals.iter().copied().find(|a| a.short == Some(ch))
+}
+
+fn record_global<'a>(
+    g: &'static ArgSpec,
+    inline: Option<&'a str>,
+    it: &mut IntoIter<&'a str>,
+    hits: &mut Vec<GlobalHit<'a>>,
+) -> Result<(), Error> {
+    match g.kind {
+        Kind::Flag | Kind::Count => {
+            if inline.is_some() {
+                return Err(Error::UnexpectedValue(g.display_name()));
+            }
+            hits.push(GlobalHit {
+                arg:   g,
+                value: None,
+            });
+        },
+        Kind::Opt => {
+            let value = match inline {
+                Some(v) => v,
+                None => it.next().ok_or_else(|| Error::MissingValue(g.display_name()))?,
+            };
+            hits.push(GlobalHit {
+                arg:   g,
+                value: Some(value),
+            });
+        },
+        Kind::Positional | Kind::Trailing => return Err(Error::Unknown(g.display_name())),
+    }
+    Ok(())
+}
+
+/// apply the hits this `spec` owns into its slots, leaving the rest to bubble up.
+fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec<GlobalHit<'a>>) {
+    hits.retain(|h| {
+        let Some(idx) = spec.args.iter().position(|a| core::ptr::eq(a, h.arg)) else {
+            return true;
+        };
+        let a = spec.args[idx];
+        match a.kind {
+            Kind::Flag => m.slots[idx].count = 1,
+            Kind::Count => m.slots[idx].count += 1,
+            Kind::Opt => {
+                if let Some(v) = h.value {
+                    push_value(&a, &mut m.slots[idx], v);
+                }
+            },
+            Kind::Positional | Kind::Trailing => {},
+        }
+        false
+    });
 }
 
 /// assign a bare token to the next positional, or a trailing/variadic sink.
@@ -331,7 +449,7 @@ fn positional<'a>(
 
 /// enforce `required` and group constraints. defaults are injected separately
 /// by `apply_defaults`, so a defaulted arg never counts as missing here.
-fn finalize(spec: &CommandSpec, m: &Matches) -> Result<(), Error> {
+fn finalize(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Result<(), Error> {
     for (i, a) in spec.args.iter().enumerate() {
         // a `default` or `env` fallback is resolved later by the typed readers,
         // so it counts as present here.
@@ -383,15 +501,17 @@ fn finalize(spec: &CommandSpec, m: &Matches) -> Result<(), Error> {
 
     if spec.has_subs() && m.sub.is_none() && !spec.sub_optional {
         // empty/sub-less invocation shows help rather than a bare error
-        return Err(Error::Help(help::render(spec)));
+        return Err(Error::Help(help::render(spec, globals)));
     }
 
     Ok(())
 }
 
-fn builtin_long(spec: &CommandSpec, name: &str) -> Option<Error> {
+fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) -> Option<Error> {
     match name {
-        "help" if spec.find_long("help").is_none() => Some(Error::Help(help::render(spec))),
+        "help" if spec.find_long("help").is_none() => {
+            Some(Error::Help(help::render(spec, globals)))
+        },
         "version" if spec.find_long("version").is_none() => {
             Some(Error::Version(help::version_line(spec)))
         },
@@ -399,9 +519,9 @@ fn builtin_long(spec: &CommandSpec, name: &str) -> Option<Error> {
     }
 }
 
-fn builtin_short(spec: &CommandSpec, ch: char) -> Option<Error> {
+fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> Option<Error> {
     match ch {
-        'h' if spec.find_short('h').is_none() => Some(Error::Help(help::render(spec))),
+        'h' if spec.find_short('h').is_none() => Some(Error::Help(help::render(spec, globals))),
         'V' if spec.find_short('V').is_none() => Some(Error::Version(help::version_line(spec))),
         _ => None,
     }

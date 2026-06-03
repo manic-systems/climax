@@ -56,6 +56,7 @@ enum Card {
 }
 
 // the resolved plan for one field.
+#[allow(clippy::struct_excessive_bools)]
 struct Plan {
     ident:      proc_macro2::Ident,
     kind:       &'static str,
@@ -71,6 +72,7 @@ struct Plan {
     aliases:    Vec<String>,
     conflicts_with: Vec<String>,
     hidden:     bool,
+    global:     bool,
     card:       Card,
     inner_ty:   TokenStream2,
     full_ty:    TokenStream2,
@@ -91,6 +93,9 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let item = attr::pound(&s.attributes);
     let name = &s.name;
 
+    if let Err(e) = validate_globals(&plans) {
+        return err(&e);
+    }
     let conflicts = match conflict_pairs(&plans) {
         Ok(c) => c,
         Err(e) => return err(&e),
@@ -165,6 +170,9 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         let sub_about = help_lit(&attr::doc(&variant.attributes));
         let hidden = vattr.hidden;
 
+        if let Err(msg) = validate_globals(&plans) {
+            return err(&msg);
+        }
         let conflicts = match conflict_pairs(&plans) {
             Ok(c) => c,
             Err(msg) => return err(&msg),
@@ -413,6 +421,7 @@ fn plan_field(field: &NamedField) -> Plan {
         aliases: a.aliases,
         conflicts_with: a.conflicts_with,
         hidden: a.hidden,
+        global: a.global,
         card,
         inner_ty,
         full_ty,
@@ -487,6 +496,9 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     if p.hidden {
         e = quote! { #e.hidden() };
     }
+    if p.global {
+        e = quote! { #e.global() };
+    }
     let help = help_lit(&p.help);
     quote! { #e.help(#help) }
 }
@@ -533,6 +545,20 @@ fn group_exprs(plans: &[Plan], required: &[String]) -> Vec<TokenStream2> {
             }
         })
         .collect()
+}
+
+// `global` only makes sense on a named flag/option, never a positional.
+fn validate_globals(plans: &[Plan]) -> Result<(), String> {
+    for p in plans {
+        if p.global && !matches!(p.kind, "Flag" | "Count" | "Opt") {
+            return Err(format!(
+                "pound: #[pound(global)] needs a flag or option (short/long), not a positional \
+                 (`{}`)",
+                p.ident
+            ));
+        }
+    }
+    Ok(())
 }
 
 // resolve field-level conflicts_with names to normalised, deduped index pairs.

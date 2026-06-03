@@ -28,6 +28,8 @@ pub struct Pound {
     pub subcommand: bool,
     /// keep this arg/variant out of help output
     pub hidden:     bool,
+    /// named flag/option that descendant subcommands also accept
+    pub global:     bool,
     pub group:      Option<String>,
     pub default:    Option<String>,
     pub env:        Option<String>,
@@ -100,6 +102,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "count" => out.count = true,
             "subcommand" => out.subcommand = true,
             "hidden" => out.hidden = true,
+            "global" => out.global = true,
             "group" => out.group = value,
             "default" => out.default = value,
             "env" => out.env = value,

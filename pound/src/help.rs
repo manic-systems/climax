@@ -11,10 +11,12 @@ use core::fmt::Write as _;
 
 #[cfg(not(feature = "std"))]
 use crate::alloc_prelude::*;
-use crate::spec::CommandSpec;
-#[cfg(feature = "help")]
 use crate::spec::{
     ArgSpec,
+    CommandSpec,
+};
+#[cfg(feature = "help")]
+use crate::spec::{
     Kind,
     SubSpec,
 };
@@ -112,7 +114,7 @@ fn help_text(a: &ArgSpec) -> String {
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn render(spec: &CommandSpec) -> String {
+pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     let mut out = String::new();
 
     if !spec.about.is_empty() {
@@ -126,7 +128,7 @@ pub(crate) fn render(spec: &CommandSpec) -> String {
     // usage line
     out.push_str("Usage: ");
     out.push_str(spec.name);
-    if visible_args.iter().any(|a| !a.is_positional()) {
+    if visible_args.iter().any(|a| !a.is_positional()) || !globals.is_empty() {
         out.push_str(" [OPTION]...");
     }
     for a in visible_args.iter().filter(|a| a.is_positional()) {
@@ -179,6 +181,16 @@ pub(crate) fn render(spec: &CommandSpec) -> String {
     }
     push_rows(&mut out, &rows);
 
+    let grows: Vec<(String, String)> = globals
+        .iter()
+        .filter(|a| !a.hidden)
+        .map(|&a| (invocation(a), help_text(a)))
+        .collect();
+    if !grows.is_empty() {
+        out.push_str("\nGlobal options:\n");
+        push_rows(&mut out, &grows);
+    }
+
     out.truncate(out.trim_end().len());
     out
 }
@@ -196,7 +208,7 @@ fn push_rows(out: &mut String, rows: &[(String, String)]) {
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn render(spec: &CommandSpec) -> String {
+pub(crate) fn render(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
     let mut out = format!("Usage: {}", spec.name);
     if spec.has_subs() {
         out.push_str(" COMMAND");

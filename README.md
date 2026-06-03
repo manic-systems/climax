@@ -99,9 +99,9 @@ pkg init --force
 pkg add serde https://crates.io/crates/serde -f
 ```
 
-### global options + subcommand field
+### parent options + subcommand field
 
-a struct can carry global flags and delegate the rest of the command line to a
+a struct can carry its own flags and delegate the rest of the command line to a
 subcommand enum via `#[pound(subcommand)]`:
 
 ```rust,ignore
@@ -115,7 +115,7 @@ enum Action {
 #[derive(Parse)]
 #[pound(name = "tool", version = "0.1.0")]
 struct Cli {
-    #[pound(short, long)]
+    #[pound(short, long, global)]
     verbose: bool,
 
     #[pound(long, default = "info")]
@@ -130,10 +130,18 @@ fn main() {
 }
 ```
 
+a plain parent flag must appear *before* the subcommand. mark it
+`#[pound(global)]` and it is also accepted *after*, at any subcommand depth,
+landing on the parent field either way:
+
 ```
-tool --verbose build --release
-tool --log debug clean
+tool --verbose build --release     # before the subcommand
+tool build --release --verbose     # after it — only because verbose is global
+tool --log debug clean             # log is not global, so it must come first
 ```
+
+`global` only applies to named flags/options (`short`/`long`), never
+positionals, and shows up in each subcommand's `--help` under `Global options:`.
 
 make the subcommand optional with `Option<T>`:
 
@@ -306,6 +314,7 @@ impl FromArg for Rgb {
 | `conflicts_with = "f"` | this flag may not appear alongside field `f`                               |
 | `alias = "a,b"`        | extra long names that also match, kept out of help                         |
 | `hidden`               | accept the flag/argument but omit it from help                             |
+| `global`               | named flag/option also accepted after the subcommand, at any depth         |
 | `subcommand`           | delegate remaining args to this field's `Parse` enum                       |
 
 ### enum variant attributes

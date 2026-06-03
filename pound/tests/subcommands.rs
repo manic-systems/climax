@@ -145,6 +145,93 @@ fn hidden_arg() {
     }
 }
 
+// global options: a parent flag marked `global` is also accepted after the
+// subcommand, at any depth
+
+#[derive(Parse, Debug, PartialEq, Eq)]
+enum Gact {
+    Build {
+        #[pound(short, long)]
+        release: bool,
+    },
+    // nested, to exercise globals two levels deep
+    Deep {
+        #[pound(subcommand)]
+        inner: LeaseAction,
+    },
+}
+
+#[derive(Parse, Debug)]
+#[pound(name = "gtool")]
+struct Gtool {
+    #[pound(short, long, global)]
+    verbose: bool,
+    #[pound(long, global)]
+    color:   Option<String>,
+    #[pound(subcommand)]
+    action:  Gact,
+}
+
+#[test]
+fn global_flag_after_subcommand() {
+    let g = Gtool::parse_from(argv(&["build", "--release", "--verbose"]));
+    assert!(g.verbose);
+    assert_eq!(g.action, Gact::Build { release: true });
+
+    // still works before the subcommand too
+    let g = Gtool::parse_from(argv(&["--verbose", "build"]));
+    assert!(g.verbose);
+    assert_eq!(g.action, Gact::Build { release: false });
+}
+
+#[test]
+fn global_option_value_after_subcommand() {
+    let g = Gtool::parse_from(argv(&["build", "--color", "red"]));
+    assert_eq!(g.color.as_deref(), Some("red"));
+    assert_eq!(g.action, Gact::Build { release: false });
+
+    let g = Gtool::parse_from(argv(&["build", "--color=blue"]));
+    assert_eq!(g.color.as_deref(), Some("blue"));
+}
+
+#[test]
+fn global_short_after_subcommand() {
+    let g = Gtool::parse_from(argv(&["build", "-v"]));
+    assert!(g.verbose);
+
+    // mixed cluster: -r is local to `build`, -v is the inherited global
+    let g = Gtool::parse_from(argv(&["build", "-rv"]));
+    assert!(g.verbose);
+    assert_eq!(g.action, Gact::Build { release: true });
+}
+
+#[test]
+fn global_two_levels_deep() {
+    let g = Gtool::parse_from(argv(&["deep", "open", "--verbose", "--color", "x"]));
+    assert!(g.verbose);
+    assert_eq!(g.color.as_deref(), Some("x"));
+    assert_eq!(g.action, Gact::Deep { inner: LeaseAction::Open });
+}
+
+#[test]
+fn unknown_after_subcommand_still_errors() {
+    assert!(matches!(
+        Gtool::try_parse_from(argv(&["build", "--nope"])),
+        Err(Error::Unknown(_))
+    ));
+}
+
+#[test]
+#[cfg(feature = "help")]
+fn subcommand_help_lists_globals() {
+    let Err(Error::Help(text)) = Gtool::try_parse_from(argv(&["build", "--help"])) else {
+        panic!("expected help");
+    };
+    assert!(text.contains("Global options:"), "help was:\n{text}");
+    assert!(text.contains("--verbose"), "help was:\n{text}");
+    assert!(text.contains("--color"), "help was:\n{text}");
+}
+
 // value-enum field auto-lists its choices in errors and help
 #[derive(ValueEnum, Debug, PartialEq, Eq)]
 enum Level {

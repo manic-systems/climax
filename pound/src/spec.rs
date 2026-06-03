@@ -42,6 +42,8 @@ pub enum Kind {
 }
 
 /// one argument's full description.
+// independent attribute flags, not a state machine, so the bool-count lint is off
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
 pub struct ArgSpec {
     pub long:       Option<&'static str>,
@@ -62,6 +64,8 @@ pub struct ArgSpec {
     pub possible:   Option<&'static [&'static str]>,
     /// kept out of help output, still accepted by the parser
     pub hidden:     bool,
+    /// named flag/option that descendant subcommands also accept
+    pub global:     bool,
 }
 
 impl ArgSpec {
@@ -81,6 +85,7 @@ impl ArgSpec {
             help: "",
             possible: None,
             hidden: false,
+            global: false,
         }
     }
 
@@ -161,6 +166,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn hidden(mut self) -> Self {
         self.hidden = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn global(mut self) -> Self {
+        self.global = true;
         self
     }
 
