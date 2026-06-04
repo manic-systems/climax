@@ -48,8 +48,16 @@ struct Grab {
     verbose: u8,                         // -v / -vvv / --verbose
 
     /// parallel jobs
-    #[pound(short, long, default = "4")]
-    jobs: u32,                           // --jobs <n>  (default: 4)
+    #[pound(short, long, default = "4", min = "1", max = "64", validate = "power_of_two")]
+    jobs: u32,                           // --jobs <n>  (default: 4, power of two)
+}
+
+fn power_of_two(value: &u32) -> Result<(), &'static str> {
+    if value.is_power_of_two() {
+        Ok(())
+    } else {
+        Err("must be a power of two")
+    }
 }
 
 fn main() {
@@ -213,6 +221,38 @@ struct Run {
 ```
 $ run --level bogus
 error: invalid value 'bogus' for --level [possible values: quiet, normal, trace]
+```
+
+## value validation
+
+add `min` / `max` to an ordered value field, `max_len` to reject raw values over
+a character limit, or `validate = "path"` to call your own parsed-value checker.
+the checks compose with required fields, `Option<T>`, `Vec<T>`, defaults, and
+environment fallbacks:
+
+```rust,ignore
+use pound::Parse;
+
+#[derive(Parse)]
+#[pound(name = "limit")]
+struct Limit {
+    #[pound(long, min = "5", max = "20")]
+    count: u64,       // --count must parse as 5..=20
+
+    #[pound(long, max_len = "9")]
+    name: String,     // --name must be 9 chars or shorter
+
+    #[pound(long, validate = "even")]
+    shard: u64,       // custom parsed-value validation
+}
+
+fn even(value: &u64) -> Result<(), &'static str> {
+    if value % 2 == 0 {
+        Ok(())
+    } else {
+        Err("must be even")
+    }
+}
 ```
 
 ## mutually exclusive options

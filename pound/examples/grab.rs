@@ -21,8 +21,21 @@ struct Grab {
     #[pound(short, long, count)]
     verbose: u8,
     /// number of parallel jobs
-    #[pound(short, long, default = "4")]
+    #[pound(short, long, default = "4", min = "1", max = "64", validate = "power_of_two")]
     jobs: u32,
+}
+
+#[allow(
+    clippy::missing_const_for_fn,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "validator hooks receive the parsed field by reference"
+)]
+fn power_of_two(value: &u32) -> Result<(), &'static str> {
+    if value.is_power_of_two() {
+        Ok(())
+    } else {
+        Err("must be a power of two")
+    }
 }
 
 fn main() {
