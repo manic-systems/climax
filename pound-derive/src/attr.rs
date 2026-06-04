@@ -37,6 +37,14 @@ pub struct Pound {
     pub help:       Option<String>,
     pub name:       Option<String>,
     pub version:    Option<String>,
+    /// field-level: minimum accepted parsed value
+    pub min:        Option<String>,
+    /// field-level: maximum accepted parsed value
+    pub max:        Option<String>,
+    /// field-level: maximum accepted raw character count
+    pub max_len:    Option<String>,
+    /// field-level: custom parsed-value validation function
+    pub validate:   Option<String>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
@@ -110,6 +118,10 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "help" => out.help = value,
             "name" => out.name = value,
             "version" => out.version = value,
+            "min" => out.min = value,
+            "max" => out.max = value,
+            "max_len" => out.max_len = value,
+            "validate" => out.validate = value,
             "required_group" => {
                 if let Some(v) = value {
                     out.required_groups.push(v);

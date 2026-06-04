@@ -66,7 +66,10 @@ pub mod spec;
 mod value;
 
 pub use error::Error;
-pub use parse::Matches;
+pub use parse::{
+    Matches,
+    Validator,
+};
 pub use spec::{
     ArgSpec,
     CommandSpec,

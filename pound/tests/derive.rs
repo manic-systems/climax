@@ -164,3 +164,101 @@ fn conflicts_with() {
         Err(Error::Conflict { .. })
     ));
 }
+
+#[derive(Parse, Debug, PartialEq, Eq)]
+#[pound(name = "limit")]
+struct Limit {
+    #[pound(long, min = "5", max = "20")]
+    count: u64,
+    #[pound(long, max_len = "9")]
+    name:  String,
+    #[pound(long, validate = "even")]
+    shard: u64,
+}
+
+#[allow(
+    clippy::missing_const_for_fn,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "validator hooks receive the parsed field by reference"
+)]
+fn even(value: &u64) -> Result<(), &'static str> {
+    if value.is_multiple_of(2) {
+        Ok(())
+    } else {
+        Err("must be even")
+    }
+}
+
+#[test]
+fn validated_values() {
+    let parsed = Limit::parse_from(argv(&[
+        "--count", "12", "--name", "short", "--shard", "2",
+    ]));
+    assert_eq!(parsed.count, 12);
+    assert_eq!(parsed.name, "short");
+    assert_eq!(parsed.shard, 2);
+
+    match Limit::try_parse_from(argv(&[
+        "--count", "4", "--name", "short", "--shard", "2",
+    ])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "4");
+            assert_eq!(msg, "must be at least 5");
+        },
+        other => panic!("expected lower bound value error, got {other:?}"),
+    }
+
+    match Limit::try_parse_from(argv(&[
+        "--count", "21", "--name", "short", "--shard", "2",
+    ])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "21");
+            assert_eq!(msg, "must be at most 20");
+        },
+        other => panic!("expected upper bound value error, got {other:?}"),
+    }
+
+    match Limit::try_parse_from(argv(&[
+        "--count",
+        "12",
+        "--name",
+        "very-long-name",
+        "--shard",
+        "2",
+    ])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "very-long-name");
+            assert_eq!(msg, "must be at most 9 chars");
+        },
+        other => panic!("expected length value error, got {other:?}"),
+    }
+
+    match Limit::try_parse_from(argv(&[
+        "--count", "12", "--name", "short", "--shard", "3",
+    ])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "3");
+            assert_eq!(msg, "must be even");
+        },
+        other => panic!("expected custom validation error, got {other:?}"),
+    }
+}
+
+#[derive(Parse)]
+#[pound(name = "batch")]
+struct Batch {
+    #[pound(long, min = "5", max = "20")]
+    counts: Vec<u64>,
+}
+
+#[test]
+fn validated_repeatable_values() {
+    assert_eq!(
+        Batch::parse_from(argv(&["--counts", "5", "--counts", "20"])).counts,
+        [5, 20]
+    );
+    assert!(matches!(
+        Batch::try_parse_from(argv(&["--counts", "5", "--counts", "40"])),
+        Err(Error::Value { value, .. }) if value == "40"
+    ));
+}

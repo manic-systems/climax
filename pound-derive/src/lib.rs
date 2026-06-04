@@ -8,6 +8,7 @@
 mod attr;
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use proc_macro::TokenStream;
 use proc_macro2::{
@@ -47,6 +48,7 @@ pub fn derive_value_enum(input: TokenStream) -> TokenStream {
     }
 }
 
+
 // how many values a field carries.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Card {
@@ -71,6 +73,10 @@ struct Plan {
     help:       String,
     aliases:    Vec<String>,
     conflicts_with: Vec<String>,
+    min:        Option<String>,
+    max:        Option<String>,
+    max_len:    Option<String>,
+    validate:   Option<String>,
     hidden:     bool,
     global:     bool,
     card:       Card,
@@ -420,6 +426,10 @@ fn plan_field(field: &NamedField) -> Plan {
         help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
         aliases: a.aliases,
         conflicts_with: a.conflicts_with,
+        min: a.min,
+        max: a.max,
+        max_len: a.max_len,
+        validate: a.validate,
         hidden: a.hidden,
         global: a.global,
         card,
@@ -515,14 +525,91 @@ fn reader(p: &Plan, i: usize, m: &TokenStream2, spec: &TokenStream2) -> TokenStr
         },
         _ => {
             let inner = &p.inner_ty;
-            match p.card {
-                Card::One => quote! { #m.required::<#inner>(#spec, #i)? },
-                Card::Opt => quote! { #m.optional::<#inner>(#spec, #i)? },
-                Card::Many => quote! { #m.many::<#inner>(#spec, #i)? },
+            let min = opt_str_expr(p.min.as_deref());
+            let max = opt_str_expr(p.max.as_deref());
+            let max_len = opt_usize_expr(p.max_len.as_deref());
+            let validate = opt_validate_expr(p.validate.as_deref());
+            match (p.has_order_bounds(), p.has_validation(), p.card) {
+                (true, _, Card::One) => {
+                    quote! {
+                        #m.required_validated_ordered::<#inner>(
+                            #spec, #i, #min, #max, #max_len, #validate
+                        )?
+                    }
+                },
+                (true, _, Card::Opt) => {
+                    quote! {
+                        #m.optional_validated_ordered::<#inner>(
+                            #spec, #i, #min, #max, #max_len, #validate
+                        )?
+                    }
+                },
+                (true, _, Card::Many) => {
+                    quote! {
+                        #m.many_validated_ordered::<#inner>(
+                            #spec, #i, #min, #max, #max_len, #validate
+                        )?
+                    }
+                },
+                (false, true, Card::One) => {
+                    quote! { #m.required_validated::<#inner>(#spec, #i, #max_len, #validate)? }
+                },
+                (false, true, Card::Opt) => {
+                    quote! { #m.optional_validated::<#inner>(#spec, #i, #max_len, #validate)? }
+                },
+                (false, true, Card::Many) => {
+                    quote! { #m.many_validated::<#inner>(#spec, #i, #max_len, #validate)? }
+                },
+                (false, false, Card::One) => quote! { #m.required::<#inner>(#spec, #i)? },
+                (false, false, Card::Opt) => quote! { #m.optional::<#inner>(#spec, #i)? },
+                (false, false, Card::Many) => quote! { #m.many::<#inner>(#spec, #i)? },
             }
         },
     };
     quote! { #fname: #body }
+}
+
+impl Plan {
+    const fn has_order_bounds(&self) -> bool {
+        self.min.is_some() || self.max.is_some()
+    }
+
+    const fn has_validation(&self) -> bool {
+        self.max_len.is_some() || self.validate.is_some()
+    }
+}
+
+fn opt_str_expr(value: Option<&str>) -> TokenStream2 {
+    value.map_or_else(
+        || quote! { ::core::option::Option::None },
+        |v| quote! { ::core::option::Option::Some(#v) },
+    )
+}
+
+fn opt_usize_expr(value: Option<&str>) -> TokenStream2 {
+    value.map_or_else(
+        || quote! { ::core::option::Option::None },
+        |v| {
+            if let Ok(expr) = TokenStream2::from_str(v) {
+                quote! { ::core::option::Option::Some(#expr) }
+            } else {
+                quote! { ::core::compile_error!("pound: invalid max_len bound") }
+            }
+        },
+    )
+}
+
+fn opt_validate_expr(value: Option<&str>) -> TokenStream2 {
+    value.map_or_else(
+        || quote! { ::core::option::Option::None },
+        |v| {
+            if let Ok(path) = TokenStream2::from_str(v) {
+                quote! { ::core::option::Option::Some(#path) }
+            } else {
+                quote! { ::core::compile_error!("pound: invalid validate function path") }
+            }
+        },
+    )
 }
 
 // distinct group names in first-seen order, marked required where listed.
