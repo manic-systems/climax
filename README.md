@@ -223,12 +223,38 @@ $ run --level bogus
 error: invalid value 'bogus' for --level [possible values: quiet, normal, trace]
 ```
 
-## value validation
+## custom parsing and validation
 
-add `min` / `max` to an ordered value field, `max_len` to reject raw values over
-a character limit, or `validate = "path"` to call your own parsed-value checker.
-the checks compose with required fields, `Option<T>`, `Vec<T>`, defaults, and
-environment fallbacks:
+add `parse = "path"` to parse a field with your own function. this works for
+custom types that do not implement `FromArg`; the parser takes the raw token and
+returns the field value:
+
+```rust,ignore
+use pound::Parse;
+
+#[derive(Debug)]
+struct HexByte(u8);
+
+fn hex_byte(value: &str) -> Result<HexByte, &'static str> {
+    let value = value.strip_prefix("0x").ok_or("expected 0xNN")?;
+    u8::from_str_radix(value, 16)
+        .map(HexByte)
+        .map_err(|_| "expected two hex digits")
+}
+
+#[derive(Parse)]
+#[pound(name = "hex")]
+struct Hex {
+    #[pound(long, parse = "hex_byte")]
+    byte: HexByte,
+}
+```
+
+for normal `FromArg` value fields, add `min` / `max` to an ordered field or
+`max_len` to reject raw values over a character limit. `validate = "path"` calls
+your own parsed-value checker and can be combined with either built-in parsing
+or `parse = "path"`. the checks compose with required fields, `Option<T>`,
+`Vec<T>`, defaults, and environment fallbacks:
 
 ```rust,ignore
 use pound::Parse;
@@ -254,6 +280,10 @@ fn even(value: &u64) -> Result<(), &'static str> {
     }
 }
 ```
+
+`parse = "path"` is for value fields only and cannot be combined with `min`,
+`max`, or `max_len`; use a custom `validate = "path"` check for custom parsed
+types.
 
 ## mutually exclusive options
 
@@ -348,6 +378,11 @@ impl FromArg for Rgb {
 | `count`                | count repeated flags into a `uN` (`-vvv` → `3`)                           |
 | `default = "str"`      | default value, parsed the same way as a user-supplied string               |
 | `env = "VAR"`          | fall back to environment variable `VAR` (cli > env > default; `std` only)  |
+| `min = "str"`          | reject parsed `FromArg + PartialOrd` values below this bound               |
+| `max = "str"`          | reject parsed `FromArg + PartialOrd` values above this bound               |
+| `max_len = "n"`        | reject raw value strings longer than `n` characters                        |
+| `parse = "path"`       | parse a value field with `fn(&str) -> Result<T, &'static str>`             |
+| `validate = "path"`    | validate a parsed value with `fn(&T) -> Result<(), &'static str>`          |
 | `value_name = "str"`   | placeholder shown in usage (`<PATH>` instead of `<output>`)               |
 | `help = "str"`         | override the doc comment for this field's help line                        |
 | `group = "name"`       | add to a named mutually-exclusive group                                    |

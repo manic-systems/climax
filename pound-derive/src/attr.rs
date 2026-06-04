@@ -43,6 +43,8 @@ pub struct Pound {
     pub max:        Option<String>,
     /// field-level: maximum accepted raw character count
     pub max_len:    Option<String>,
+    /// field-level: custom raw-value parser function
+    pub parse:      Option<String>,
     /// field-level: custom parsed-value validation function
     pub validate:   Option<String>,
     /// item-level: groups that must have exactly one member set
@@ -121,6 +123,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "min" => out.min = value,
             "max" => out.max = value,
             "max_len" => out.max_len = value,
+            "parse" => out.parse = value,
             "validate" => out.validate = value,
             "required_group" => {
                 if let Some(v) = value {

@@ -176,6 +176,15 @@ struct Limit {
     shard: u64,
 }
 
+#[derive(Parse, Debug, PartialEq, Eq)]
+#[pound(name = "fallback-limit")]
+struct FallbackLimit {
+    #[pound(long, default = "8", min = "5", max = "20", validate = "even")]
+    count: u64,
+    #[pound(long, max_len = "4")]
+    label: Option<String>,
+}
+
 #[allow(
     clippy::missing_const_for_fn,
     clippy::trivially_copy_pass_by_ref,
@@ -244,6 +253,32 @@ fn validated_values() {
     }
 }
 
+#[test]
+fn validation_runs_for_defaults_and_options() {
+    let parsed = FallbackLimit::parse_from(argv(&[]));
+    assert_eq!(parsed.count, 8);
+    assert_eq!(parsed.label, None);
+
+    let parsed = FallbackLimit::parse_from(argv(&["--label", "mini"]));
+    assert_eq!(parsed.label.as_deref(), Some("mini"));
+
+    match FallbackLimit::try_parse_from(argv(&["--count", "3"])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "3");
+            assert_eq!(msg, "must be at least 5");
+        },
+        other => panic!("expected defaulted field validation error, got {other:?}"),
+    }
+
+    match FallbackLimit::try_parse_from(argv(&["--label", "large"])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "large");
+            assert_eq!(msg, "must be at most 4 chars");
+        },
+        other => panic!("expected optional field length error, got {other:?}"),
+    }
+}
+
 #[derive(Parse)]
 #[pound(name = "batch")]
 struct Batch {
@@ -261,4 +296,71 @@ fn validated_repeatable_values() {
         Batch::try_parse_from(argv(&["--counts", "5", "--counts", "40"])),
         Err(Error::Value { value, .. }) if value == "40"
     ));
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct HexByte(u8);
+
+fn hex_byte(value: &str) -> Result<HexByte, &'static str> {
+    let value = value.strip_prefix("0x").ok_or("expected 0xNN")?;
+    u8::from_str_radix(value, 16)
+        .map(HexByte)
+        .map_err(|_| "expected two hex digits")
+}
+
+const fn non_zero_hex(value: &HexByte) -> Result<(), &'static str> {
+    if value.0 == 0 {
+        Err("must not be zero")
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Parse, Debug, PartialEq, Eq)]
+#[pound(name = "hex")]
+struct Hex {
+    #[pound(long, parse = "hex_byte", validate = "non_zero_hex")]
+    byte: HexByte,
+    #[pound(long, parse = "hex_byte")]
+    many: Vec<HexByte>,
+    #[pound(long, parse = "hex_byte")]
+    maybe: Option<HexByte>,
+    #[pound(long, default = "0x10", parse = "hex_byte")]
+    defaulted: HexByte,
+}
+
+#[test]
+fn custom_parsers() {
+    let parsed = Hex::parse_from(argv(&["--byte", "0x2a", "--many", "0x01", "--many", "0xff"]));
+    assert_eq!(parsed.byte, HexByte(42));
+    assert_eq!(parsed.many, [HexByte(1), HexByte(255)]);
+    assert_eq!(parsed.maybe, None);
+    assert_eq!(parsed.defaulted, HexByte(16));
+
+    let parsed = Hex::parse_from(argv(&[
+        "--byte",
+        "0x2a",
+        "--maybe",
+        "0x03",
+        "--defaulted",
+        "0x04",
+    ]));
+    assert_eq!(parsed.maybe, Some(HexByte(3)));
+    assert_eq!(parsed.defaulted, HexByte(4));
+
+    match Hex::try_parse_from(argv(&["--byte", "2a"])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "2a");
+            assert_eq!(msg, "expected 0xNN");
+        },
+        other => panic!("expected custom parser error, got {other:?}"),
+    }
+
+    match Hex::try_parse_from(argv(&["--byte", "0x00"])) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "0x00");
+            assert_eq!(msg, "must not be zero");
+        },
+        other => panic!("expected custom parser validation error, got {other:?}"),
+    }
 }

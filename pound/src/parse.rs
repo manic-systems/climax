@@ -20,11 +20,11 @@ use crate::{
         CommandSpec,
         Kind,
     },
-    value::FromArg,
+    value::{
+        FromArg,
+        ValueError,
+    },
 };
-
-/// a parsed-value validation hook used by the derive for `validate = "path"`.
-pub type Validator<T> = fn(&T) -> Result<(), &'static str>;
 
 /// what a single arg collected during a parse. values borrow the input tokens
 /// for `'a` rather than owning copies.
@@ -93,158 +93,66 @@ impl<'a> Matches<'a> {
     /// read a required value as `T`, for bare `T` fields. the command line wins,
     /// then [`fallback`] (env, then default), else a missing-arg error.
     pub fn required<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<T, Error> {
-        if let Some(s) = self.raw(i) {
-            return parse_into(spec, i, s);
-        }
-        match fallback(spec, i) {
-            Some(c) => parse_into(spec, i, &c),
-            None => Err(Error::MissingRequired(spec.args[i].display_name())),
-        }
+        self.required_map(spec, i, T::from_arg)
     }
 
     /// read an optional value as `T`, for `Option<T>` fields. same resolution as
     /// [`Self::required`], but absence is `None` rather than an error.
     pub fn optional<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Option<T>, Error> {
-        if let Some(s) = self.raw(i) {
-            return Ok(Some(parse_into(spec, i, s)?));
-        }
-        match fallback(spec, i) {
-            Some(c) => Ok(Some(parse_into(spec, i, &c)?)),
-            None => Ok(None),
-        }
+        self.optional_map(spec, i, T::from_arg)
     }
 
     /// read every value as `T`, for `Vec<T>` fields. user values win; otherwise
     /// [`fallback`] supplies a single element.
     pub fn many<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Vec<T>, Error> {
-        let raws = self.raws(i);
-        if !raws.is_empty() {
-            return raws.iter().map(|&s| parse_into(spec, i, s)).collect();
-        }
-        match fallback(spec, i) {
-            Some(c) => Ok(vec![parse_into(spec, i, &c)?]),
-            None => Ok(Vec::new()),
-        }
+        self.many_map(spec, i, T::from_arg)
     }
 
-    /// read a required value and apply validation checks.
-    pub fn required_validated<T: FromArg>(
+    /// read a required value with a caller-supplied raw-token conversion.
+    pub fn required_map<T>(
         &self,
         spec: &CommandSpec,
         i: usize,
-        max_len: Option<usize>,
-        validate: Option<Validator<T>>,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<T, Error> {
         if let Some(s) = self.raw(i) {
-            return parse_into_validated(spec, i, s, max_len, validate);
+            return parse_with(spec, i, s, &convert);
         }
         match fallback(spec, i) {
-            Some(c) => parse_into_validated(spec, i, &c, max_len, validate),
+            Some(c) => parse_with(spec, i, &c, &convert),
             None => Err(Error::MissingRequired(spec.args[i].display_name())),
         }
     }
 
-    /// read an optional value and apply validation checks.
-    pub fn optional_validated<T: FromArg>(
+    /// read an optional value with a caller-supplied raw-token conversion.
+    pub fn optional_map<T>(
         &self,
         spec: &CommandSpec,
         i: usize,
-        max_len: Option<usize>,
-        validate: Option<Validator<T>>,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Option<T>, Error> {
         if let Some(s) = self.raw(i) {
-            return Ok(Some(parse_into_validated(spec, i, s, max_len, validate)?));
+            return Ok(Some(parse_with(spec, i, s, &convert)?));
         }
         match fallback(spec, i) {
-            Some(c) => Ok(Some(parse_into_validated(spec, i, &c, max_len, validate)?)),
+            Some(c) => Ok(Some(parse_with(spec, i, &c, &convert)?)),
             None => Ok(None),
         }
     }
 
-    /// read every value and apply validation checks.
-    pub fn many_validated<T: FromArg>(
+    /// read every value with a caller-supplied raw-token conversion.
+    pub fn many_map<T>(
         &self,
         spec: &CommandSpec,
         i: usize,
-        max_len: Option<usize>,
-        validate: Option<Validator<T>>,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Vec<T>, Error> {
         let raws = self.raws(i);
         if !raws.is_empty() {
-            return raws
-                .iter()
-                .map(|&s| parse_into_validated(spec, i, s, max_len, validate))
-                .collect();
+            return raws.iter().map(|&s| parse_with(spec, i, s, &convert)).collect();
         }
         match fallback(spec, i) {
-            Some(c) => Ok(vec![parse_into_validated(spec, i, &c, max_len, validate)?]),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    /// read a required ordered value and apply validation checks.
-    pub fn required_validated_ordered<T: FromArg + PartialOrd>(
-        &self,
-        spec: &CommandSpec,
-        i: usize,
-        min: Option<&str>,
-        max: Option<&str>,
-        max_len: Option<usize>,
-        validate: Option<Validator<T>>,
-    ) -> Result<T, Error> {
-        if let Some(s) = self.raw(i) {
-            return parse_into_validated_ordered(spec, i, s, min, max, max_len, validate);
-        }
-        match fallback(spec, i) {
-            Some(c) => parse_into_validated_ordered(spec, i, &c, min, max, max_len, validate),
-            None => Err(Error::MissingRequired(spec.args[i].display_name())),
-        }
-    }
-
-    /// read an optional ordered value and apply validation checks.
-    pub fn optional_validated_ordered<T: FromArg + PartialOrd>(
-        &self,
-        spec: &CommandSpec,
-        i: usize,
-        min: Option<&str>,
-        max: Option<&str>,
-        max_len: Option<usize>,
-        validate: Option<Validator<T>>,
-    ) -> Result<Option<T>, Error> {
-        if let Some(s) = self.raw(i) {
-            return Ok(Some(parse_into_validated_ordered(
-                spec, i, s, min, max, max_len, validate,
-            )?));
-        }
-        match fallback(spec, i) {
-            Some(c) => Ok(Some(parse_into_validated_ordered(
-                spec, i, &c, min, max, max_len, validate,
-            )?)),
-            None => Ok(None),
-        }
-    }
-
-    /// read every ordered value and apply validation checks.
-    pub fn many_validated_ordered<T: FromArg + PartialOrd>(
-        &self,
-        spec: &CommandSpec,
-        i: usize,
-        min: Option<&str>,
-        max: Option<&str>,
-        max_len: Option<usize>,
-        validate: Option<Validator<T>>,
-    ) -> Result<Vec<T>, Error> {
-        let raws = self.raws(i);
-        if !raws.is_empty() {
-            return raws
-                .iter()
-                .map(|&s| parse_into_validated_ordered(spec, i, s, min, max, max_len, validate))
-                .collect();
-        }
-        match fallback(spec, i) {
-            Some(c) => Ok(vec![parse_into_validated_ordered(
-                spec, i, &c, min, max, max_len, validate,
-            )?]),
+            Some(c) => Ok(vec![parse_with(spec, i, &c, &convert)?]),
             None => Ok(Vec::new()),
         }
     }
@@ -263,8 +171,13 @@ fn fallback(spec: &CommandSpec, i: usize) -> Option<Cow<'static, str>> {
     spec.args[i].default.map(Cow::Borrowed)
 }
 
-fn parse_into<T: FromArg>(spec: &CommandSpec, i: usize, s: &str) -> Result<T, Error> {
-    T::from_arg(s).map_err(|e| {
+fn parse_with<T>(
+    spec: &CommandSpec,
+    i: usize,
+    s: &str,
+    convert: &impl Fn(&str) -> Result<T, ValueError>,
+) -> Result<T, Error> {
+    convert(s).map_err(|e| {
         let mut msg = e.msg;
         if let Some(values) = spec.args[i].possible
             && !values.is_empty()
@@ -277,92 +190,6 @@ fn parse_into<T: FromArg>(spec: &CommandSpec, i: usize, s: &str) -> Result<T, Er
             msg,
         }
     })
-}
-
-fn parse_into_validated<T: FromArg>(
-    spec: &CommandSpec,
-    i: usize,
-    s: &str,
-    max_len: Option<usize>,
-    validate: Option<Validator<T>>,
-) -> Result<T, Error> {
-    check_len(spec, i, s, max_len)?;
-    let value = parse_into(spec, i, s)?;
-    validate_value(spec, i, s, &value, validate)?;
-    Ok(value)
-}
-
-fn parse_into_validated_ordered<T: FromArg + PartialOrd>(
-    spec: &CommandSpec,
-    i: usize,
-    s: &str,
-    min: Option<&str>,
-    max: Option<&str>,
-    max_len: Option<usize>,
-    validate: Option<Validator<T>>,
-) -> Result<T, Error> {
-    check_len(spec, i, s, max_len)?;
-    let value = parse_into(spec, i, s)?;
-    if let Some(bound) = min {
-        let min_value = parse_bound::<T>(spec, i, bound, "min")?;
-        if value < min_value {
-            return Err(bound_error(spec, i, s, format!("must be at least {bound}")));
-        }
-    }
-    if let Some(bound) = max {
-        let max_value = parse_bound::<T>(spec, i, bound, "max")?;
-        if value > max_value {
-            return Err(bound_error(spec, i, s, format!("must be at most {bound}")));
-        }
-    }
-    validate_value(spec, i, s, &value, validate)?;
-    Ok(value)
-}
-
-fn check_len(
-    spec: &CommandSpec,
-    i: usize,
-    s: &str,
-    max_len: Option<usize>,
-) -> Result<(), Error> {
-    if let Some(max) = max_len
-        && s.chars().count() > max
-    {
-        return Err(bound_error(spec, i, s, format!("must be at most {max} chars")));
-    }
-    Ok(())
-}
-
-fn parse_bound<T: FromArg>(
-    spec: &CommandSpec,
-    i: usize,
-    bound: &str,
-    name: &str,
-) -> Result<T, Error> {
-    T::from_arg(bound).map_err(|e| bound_error(spec, i, bound, format!("invalid {name}: {}", e.msg)))
-}
-
-fn validate_value<T>(
-    spec: &CommandSpec,
-    i: usize,
-    raw: &str,
-    value: &T,
-    validate: Option<Validator<T>>,
-) -> Result<(), Error> {
-    if let Some(check) = validate
-        && let Err(msg) = check(value)
-    {
-        return Err(bound_error(spec, i, raw, msg.to_owned()));
-    }
-    Ok(())
-}
-
-fn bound_error(spec: &CommandSpec, i: usize, value: &str, msg: String) -> Error {
-    Error::Value {
-        arg: spec.args[i].display_name(),
-        value: value.to_owned(),
-        msg,
-    }
 }
 
 /// entry point: parse `args` (already minus `argv[0]`) against `spec`.

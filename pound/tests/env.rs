@@ -4,7 +4,10 @@
 //! `default`. env is resolved by the typed readers, so it never enters the
 //! borrowed `Matches`.
 
-use pound::Parse;
+use pound::{
+    Error,
+    Parse,
+};
 
 #[derive(Parse)]
 #[pound(name = "app")]
@@ -20,6 +23,13 @@ struct Cli {
 struct Req {
     #[pound(long, env = "POUND_REQ")]
     req: String,
+}
+
+#[derive(Parse, Debug)]
+#[pound(name = "bounded")]
+struct Bounded {
+    #[pound(long, env = "POUND_BOUNDED", max_len = "3")]
+    value: String,
 }
 
 fn set(k: &str, v: &str) {
@@ -38,6 +48,7 @@ fn env_fallback_precedence() {
     clear("POUND_TOKEN");
     clear("POUND_LEVEL");
     clear("POUND_REQ");
+    clear("POUND_BOUNDED");
 
     // nothing set: the optional is None, the bare field uses its default
     let c = Cli::try_parse_from(no_args()).unwrap();
@@ -61,7 +72,22 @@ fn env_fallback_precedence() {
     set("POUND_REQ", "ok");
     assert_eq!(Req::try_parse_from(no_args()).unwrap().req, "ok");
 
+    // env fallback still goes through field validation
+    set("POUND_BOUNDED", "toolong");
+    match Bounded::try_parse_from(no_args()) {
+        Err(Error::Value { value, msg, .. }) => {
+            assert_eq!(value, "toolong");
+            assert_eq!(msg, "must be at most 3 chars");
+        },
+        other => panic!("expected env validation error, got {other:?}"),
+    }
+    assert_eq!(
+        Bounded::try_parse_from(["--value", "cli"]).unwrap().value,
+        "cli"
+    );
+
     clear("POUND_TOKEN");
     clear("POUND_LEVEL");
     clear("POUND_REQ");
+    clear("POUND_BOUNDED");
 }

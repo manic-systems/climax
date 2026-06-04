@@ -57,6 +57,21 @@ enum Card {
     Many,
 }
 
+// how one raw value becomes the field's inner type.
+enum Conversion {
+    FromArg,
+    CheckedFromArg {
+        min:      Option<String>,
+        max:      Option<String>,
+        max_len:  Option<String>,
+        validate: Option<String>,
+    },
+    CustomParse {
+        parse:    String,
+        validate: Option<String>,
+    },
+}
+
 // the resolved plan for one field.
 #[allow(clippy::struct_excessive_bools)]
 struct Plan {
@@ -73,13 +88,10 @@ struct Plan {
     help:       String,
     aliases:    Vec<String>,
     conflicts_with: Vec<String>,
-    min:        Option<String>,
-    max:        Option<String>,
-    max_len:    Option<String>,
-    validate:   Option<String>,
     hidden:     bool,
     global:     bool,
     card:       Card,
+    conversion: Option<Conversion>,
     inner_ty:   TokenStream2,
     full_ty:    TokenStream2,
 }
@@ -327,7 +339,7 @@ fn analyze(fields: &Fields) -> Result<(Vec<Plan>, Option<SubField>), String> {
             }
             sub = Some(sub_field(field)?);
         } else {
-            args.push(plan_field(field));
+            args.push(plan_field(field)?);
         }
     }
     Ok((args, sub))
@@ -376,7 +388,7 @@ fn sub_reader(sf: &SubField, m: &TokenStream2) -> TokenStream2 {
     }
 }
 
-fn plan_field(field: &NamedField) -> Plan {
+fn plan_field(field: &NamedField) -> Result<Plan, String> {
     let a = attr::pound(&field.attributes);
     let (is_bool, card, inner_ty) = classify(&field.ty);
     let full_ty: TokenStream2 = field.ty.tokens.iter().cloned().collect();
@@ -411,8 +423,20 @@ fn plan_field(field: &NamedField) -> Plan {
     let required = matches!(kind, "Opt" | "Positional" | "Trailing")
         && card == Card::One
         && a.default.is_none();
+    let value_field = matches!(kind, "Opt" | "Positional" | "Trailing");
+    let conversion = if value_field {
+        Some(conversion_for(&a, &field.name)?)
+    } else {
+        if a.parse.is_some() {
+            return Err(format!(
+                "pound: #[pound(parse = \"...\")] needs a value field (`{}`)",
+                field.name
+            ));
+        }
+        None
+    };
 
-    Plan {
+    Ok(Plan {
         ident: field.name.clone(),
         kind,
         long,
@@ -426,16 +450,37 @@ fn plan_field(field: &NamedField) -> Plan {
         help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
         aliases: a.aliases,
         conflicts_with: a.conflicts_with,
-        min: a.min,
-        max: a.max,
-        max_len: a.max_len,
-        validate: a.validate,
         hidden: a.hidden,
         global: a.global,
         card,
+        conversion,
         inner_ty,
         full_ty,
+    })
+}
+
+fn conversion_for(a: &Pound, ident: &proc_macro2::Ident) -> Result<Conversion, String> {
+    if let Some(parse) = &a.parse {
+        if a.min.is_some() || a.max.is_some() || a.max_len.is_some() {
+            return Err(format!(
+                "pound: #[pound(parse = \"...\")] cannot be combined with min, max, or max_len \
+                 (`{ident}`); use validate instead"
+            ));
+        }
+        return Ok(Conversion::CustomParse {
+            parse:    parse.clone(),
+            validate: a.validate.clone(),
+        });
     }
+    if a.min.is_some() || a.max.is_some() || a.max_len.is_some() || a.validate.is_some() {
+        return Ok(Conversion::CheckedFromArg {
+            min:      a.min.clone(),
+            max:      a.max.clone(),
+            max_len:  a.max_len.clone(),
+            validate: a.validate.clone(),
+        });
+    }
+    Ok(Conversion::FromArg)
 }
 
 // (is_bool, cardinality, inner type to parse with FromArg)
@@ -498,8 +543,12 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     let vn = &p.value_name;
     e = quote! { #e.value_name(#vn) };
-    // valued kinds pull a possible-value list from a value enum (None otherwise)
-    if matches!(p.kind, "Opt" | "Positional" | "Trailing") {
+    // valued kinds pull a possible-value list from a value enum (None otherwise).
+    // custom parsers may target types without FromArg, so they cannot expose one.
+    if matches!(
+        &p.conversion,
+        Some(Conversion::FromArg | Conversion::CheckedFromArg { .. })
+    ) {
         let inner = &p.inner_ty;
         e = quote! { #e.possible_opt(<#inner as ::pound::FromArg>::POSSIBLE) };
     }
@@ -525,91 +574,120 @@ fn reader(p: &Plan, i: usize, m: &TokenStream2, spec: &TokenStream2) -> TokenStr
         },
         _ => {
             let inner = &p.inner_ty;
-            let min = opt_str_expr(p.min.as_deref());
-            let max = opt_str_expr(p.max.as_deref());
-            let max_len = opt_usize_expr(p.max_len.as_deref());
-            let validate = opt_validate_expr(p.validate.as_deref());
-            match (p.has_order_bounds(), p.has_validation(), p.card) {
-                (true, _, Card::One) => {
-                    quote! {
-                        #m.required_validated_ordered::<#inner>(
-                            #spec, #i, #min, #max, #max_len, #validate
-                        )?
-                    }
-                },
-                (true, _, Card::Opt) => {
-                    quote! {
-                        #m.optional_validated_ordered::<#inner>(
-                            #spec, #i, #min, #max, #max_len, #validate
-                        )?
-                    }
-                },
-                (true, _, Card::Many) => {
-                    quote! {
-                        #m.many_validated_ordered::<#inner>(
-                            #spec, #i, #min, #max, #max_len, #validate
-                        )?
-                    }
-                },
-                (false, true, Card::One) => {
-                    quote! { #m.required_validated::<#inner>(#spec, #i, #max_len, #validate)? }
-                },
-                (false, true, Card::Opt) => {
-                    quote! { #m.optional_validated::<#inner>(#spec, #i, #max_len, #validate)? }
-                },
-                (false, true, Card::Many) => {
-                    quote! { #m.many_validated::<#inner>(#spec, #i, #max_len, #validate)? }
-                },
-                (false, false, Card::One) => quote! { #m.required::<#inner>(#spec, #i)? },
-                (false, false, Card::Opt) => quote! { #m.optional::<#inner>(#spec, #i)? },
-                (false, false, Card::Many) => quote! { #m.many::<#inner>(#spec, #i)? },
+            if let Some(conversion) = &p.conversion {
+                let convert = conversion_closure(conversion, inner);
+                match p.card {
+                    Card::One => quote! { #m.required_map::<#inner>(#spec, #i, #convert)? },
+                    Card::Opt => quote! { #m.optional_map::<#inner>(#spec, #i, #convert)? },
+                    Card::Many => quote! { #m.many_map::<#inner>(#spec, #i, #convert)? },
+                }
+            } else {
+                match p.card {
+                    Card::One => quote! { #m.required::<#inner>(#spec, #i)? },
+                    Card::Opt => quote! { #m.optional::<#inner>(#spec, #i)? },
+                    Card::Many => quote! { #m.many::<#inner>(#spec, #i)? },
+                }
             }
         },
     };
     quote! { #fname: #body }
 }
 
-impl Plan {
-    const fn has_order_bounds(&self) -> bool {
-        self.min.is_some() || self.max.is_some()
-    }
-
-    const fn has_validation(&self) -> bool {
-        self.max_len.is_some() || self.validate.is_some()
+fn conversion_closure(conversion: &Conversion, inner: &TokenStream2) -> TokenStream2 {
+    let parse = parse_value_expr(conversion, inner);
+    let max_len = match conversion {
+        Conversion::CheckedFromArg { max_len, .. } => max_len.as_deref().map(max_len_check),
+        Conversion::FromArg | Conversion::CustomParse { .. } => None,
+    };
+    let min = match conversion {
+        Conversion::CheckedFromArg { min, .. } => min.as_deref().map(|v| bound_check(inner, "min", v)),
+        Conversion::FromArg | Conversion::CustomParse { .. } => None,
+    };
+    let max = match conversion {
+        Conversion::CheckedFromArg { max, .. } => max.as_deref().map(|v| bound_check(inner, "max", v)),
+        Conversion::FromArg | Conversion::CustomParse { .. } => None,
+    };
+    let validate = match conversion {
+        Conversion::CheckedFromArg { validate, .. } | Conversion::CustomParse { validate, .. } => {
+            validate.as_deref().map(validate_check)
+        },
+        Conversion::FromArg => None,
+    };
+    quote! {
+        |__s: &str| -> ::core::result::Result<#inner, ::pound::ValueError> {
+            #max_len
+            let __value = #parse;
+            #min
+            #max
+            #validate
+            ::core::result::Result::Ok(__value)
+        }
     }
 }
 
-fn opt_str_expr(value: Option<&str>) -> TokenStream2 {
-    value.map_or_else(
-        || quote! { ::core::option::Option::None },
-        |v| quote! { ::core::option::Option::Some(#v) },
-    )
-}
-
-fn opt_usize_expr(value: Option<&str>) -> TokenStream2 {
-    value.map_or_else(
-        || quote! { ::core::option::Option::None },
-        |v| {
-            if let Ok(expr) = TokenStream2::from_str(v) {
-                quote! { ::core::option::Option::Some(#expr) }
+fn parse_value_expr(conversion: &Conversion, inner: &TokenStream2) -> TokenStream2 {
+    match conversion {
+        Conversion::FromArg | Conversion::CheckedFromArg { .. } => {
+            quote! { <#inner as ::pound::FromArg>::from_arg(__s)? }
+        },
+        Conversion::CustomParse { parse, .. } => {
+            if let Ok(path) = TokenStream2::from_str(parse) {
+                quote! {
+                    #path(__s).map_err(|__msg| ::pound::ValueError::new(__s, __msg))?
+                }
             } else {
-                quote! { ::core::compile_error!("pound: invalid max_len bound") }
+                quote! { ::core::compile_error!("pound: invalid parse function path") }
             }
         },
-    )
+    }
 }
 
-fn opt_validate_expr(value: Option<&str>) -> TokenStream2 {
-    value.map_or_else(
-        || quote! { ::core::option::Option::None },
-        |v| {
-            if let Ok(path) = TokenStream2::from_str(v) {
-                quote! { ::core::option::Option::Some(#path) }
-            } else {
-                quote! { ::core::compile_error!("pound: invalid validate function path") }
+fn max_len_check(value: &str) -> TokenStream2 {
+    if let Ok(max) = TokenStream2::from_str(value) {
+        quote! {
+            if __s.chars().count() > (#max) {
+                return ::core::result::Result::Err(::pound::ValueError::new(
+                    __s,
+                    ::core::concat!("must be at most ", ::core::stringify!(#max), " chars"),
+                ));
             }
-        },
-    )
+        }
+    } else {
+        quote! { ::core::compile_error!("pound: invalid max_len bound") }
+    }
+}
+
+fn bound_check(inner: &TokenStream2, kind: &str, value: &str) -> TokenStream2 {
+    let op = if kind == "min" { quote!(<) } else { quote!(>) };
+    let msg = if kind == "min" {
+        quote! { ::core::concat!("must be at least ", #value) }
+    } else {
+        quote! { ::core::concat!("must be at most ", #value) }
+    };
+    let invalid = if kind == "min" {
+        quote! { ::core::concat!("invalid min: ", #value) }
+    } else {
+        quote! { ::core::concat!("invalid max: ", #value) }
+    };
+    quote! {
+        let __bound = <#inner as ::pound::FromArg>::from_arg(#value)
+            .map_err(|_| ::pound::ValueError::new(__s, #invalid))?;
+        if __value #op __bound {
+            return ::core::result::Result::Err(::pound::ValueError::new(__s, #msg));
+        }
+    }
+}
+
+fn validate_check(value: &str) -> TokenStream2 {
+    if let Ok(path) = TokenStream2::from_str(value) {
+        quote! {
+            if let ::core::result::Result::Err(__msg) = #path(&__value) {
+                return ::core::result::Result::Err(::pound::ValueError::new(__s, __msg));
+            }
+        }
+    } else {
+        quote! { ::core::compile_error!("pound: invalid validate function path") }
+    }
 }
 
 // distinct group names in first-seen order, marked required where listed.
