@@ -285,6 +285,38 @@ fn even(value: &u64) -> Result<(), &'static str> {
 `max`, or `max_len`; use a custom `validate = "path"` check for custom parsed
 types.
 
+## optional-value options
+
+`default_missing = "str"` lets an `Option<T>` named option take its value
+optionally: the flag may appear bare or with a value. it is the "use the
+default, or name one" pattern — `grab -o` writes to the current directory,
+`grab -o dl` to a named one:
+
+```rust,ignore
+use pound::Parse;
+
+#[derive(Parse)]
+#[pound(name = "grab")]
+struct Grab {
+    url: Vec<String>,
+    #[pound(short, long, default_missing = ".")]
+    output: Option<String>,
+}
+```
+
+| invocation       | `output`        |
+|------------------|-----------------|
+| `grab`           | `None`          |
+| `grab -o`        | `Some(".")`     |
+| `grab -o dl`     | `Some("dl")`    |
+
+"no value" means the next token opens another option (`-x`, `--long`), is the
+`--` separator, or input ends; a bare `-` or an ordinary positional binds as the
+value. the `default_missing` string runs through the same `FromArg` / `validate`
+/ `env` path as a typed value, so it composes with the other field attributes. it
+is only valid on an `Option<T>` named option — a positional, `bool`, count,
+`Vec<T>`, or required `T` is a compile error.
+
 ## mutually exclusive options
 
 `group = "name"` puts flags into a named set. by default the group is optional
@@ -377,6 +409,7 @@ impl FromArg for Rgb {
 | `trailing`             | collect everything after `--` into a `Vec<String>`                         |
 | `count`                | count repeated flags into a `uN` (`-vvv` → `3`)                           |
 | `default = "str"`      | default value, parsed the same way as a user-supplied string               |
+| `default_missing = "str"` | `Option<T>` named option may appear bare; this value is used when it does |
 | `env = "VAR"`          | fall back to environment variable `VAR` (cli > env > default; `std` only)  |
 | `min = "str"`          | reject parsed `FromArg + PartialOrd` values below this bound               |
 | `max = "str"`          | reject parsed `FromArg + PartialOrd` values above this bound               |
