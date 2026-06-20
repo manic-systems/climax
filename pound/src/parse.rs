@@ -301,10 +301,7 @@ fn apply_named<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => {
-                    it.next()
-                        .ok_or_else(|| Error::MissingValue(a.display_name()))?
-                },
+                None => detached_value(&a, it)?,
             };
             push_value(&a, &mut m.slots[idx], value);
         },
@@ -374,10 +371,31 @@ fn cluster_value<'a>(
 ) -> Result<&'a str, Error> {
     let rest = &cluster[off + ch.len_utf8()..];
     if rest.is_empty() {
-        it.next().ok_or_else(|| Error::MissingValue(a.display_name()))
+        detached_value(a, it)
     } else {
         Ok(rest)
     }
+}
+
+/// an option's value when none is attached inline: the next token, or — for an
+/// optional-value option (`default_missing`) — that static fallback when the
+/// next token is not a value. without `default_missing` a value is mandatory.
+fn detached_value<'a>(a: &ArgSpec, it: &mut IntoIter<&'a str>) -> Result<&'a str, Error> {
+    if let Some(missing) = a.default_missing {
+        // peek, not next: a value-shaped token binds, anything that opens the
+        // next option leaves the fallback for it to consume.
+        return Ok(match it.as_slice().first() {
+            Some(&next) if value_shaped(next) => it.next().unwrap_or(missing),
+            _ => missing,
+        });
+    }
+    it.next().ok_or_else(|| Error::MissingValue(a.display_name()))
+}
+
+/// whether a token binds as an optional option's value. a bare `-` and ordinary
+/// positionals bind; `--` and any `-x`/`--long` switch do not.
+fn value_shaped(tok: &str) -> bool {
+    tok == "-" || !tok.starts_with('-')
 }
 
 fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
@@ -421,7 +439,7 @@ fn record_global<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => it.next().ok_or_else(|| Error::MissingValue(g.display_name()))?,
+                None => detached_value(g, it)?,
             };
             hits.push(GlobalHit {
                 arg:   g,

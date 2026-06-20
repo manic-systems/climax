@@ -83,6 +83,7 @@ struct Plan {
     multi:      bool,
     group:      Option<String>,
     default:    Option<String>,
+    default_missing: Option<String>,
     env:        Option<String>,
     value_name: String,
     help:       String,
@@ -423,6 +424,15 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
     let required = matches!(kind, "Opt" | "Positional" | "Trailing")
         && card == Card::One
         && a.default.is_none();
+    // `default_missing` only makes sense on an `Option<T>` named option: a switch
+    // to attach to, a slot that tolerates the present-without-value state.
+    if a.default_missing.is_some() && !(kind == "Opt" && card == Card::Opt) {
+        return Err(format!(
+            "pound: #[pound(default_missing = \"...\")] needs an `Option<T>` named option \
+             (short/long), not a positional, bool, count, `Vec<T>`, or required value (`{fname}`)"
+        ));
+    }
+
     let value_field = matches!(kind, "Opt" | "Positional" | "Trailing");
     let conversion = if value_field {
         Some(conversion_for(&a, &field.name)?)
@@ -445,6 +455,7 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         multi: card == Card::Many,
         group: a.group,
         default: a.default,
+        default_missing: a.default_missing,
         env: a.env,
         value_name: a.value_name.unwrap_or(fname),
         help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
@@ -533,6 +544,9 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     if let Some(d) = &p.default {
         e = quote! { #e.default(#d) };
+    }
+    if let Some(dm) = &p.default_missing {
+        e = quote! { #e.default_missing(#dm) };
     }
     if let Some(ev) = &p.env {
         e = quote! { #e.env(#ev) };

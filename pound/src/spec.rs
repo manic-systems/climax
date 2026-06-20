@@ -56,6 +56,7 @@ pub struct ArgSpec {
     pub multi:      bool,
     pub group:      Option<&'static str>,
     pub default:    Option<&'static str>,
+    pub default_missing: Option<&'static str>,
     /// name of an environment variable to fall back to when the arg is not
     /// given on the command line. read only with the `std` feature on.
     pub env:        Option<&'static str>,
@@ -80,6 +81,7 @@ impl ArgSpec {
             multi: false,
             group: None,
             default: None,
+            default_missing: None,
             env: None,
             value_name: "",
             help: "",
@@ -128,6 +130,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn default(mut self, default: &'static str) -> Self {
         self.default = Some(default);
+        self
+    }
+
+    #[must_use]
+    pub const fn default_missing(mut self, default_missing: &'static str) -> Self {
+        self.default_missing = Some(default_missing);
         self
     }
 

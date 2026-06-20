@@ -32,6 +32,8 @@ pub struct Pound {
     pub global:     bool,
     pub group:      Option<String>,
     pub default:    Option<String>,
+    /// field-level: value parsed when an optional-value option is present bare
+    pub default_missing: Option<String>,
     pub env:        Option<String>,
     pub value_name: Option<String>,
     pub help:       Option<String>,
@@ -115,6 +117,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "global" => out.global = true,
             "group" => out.group = value,
             "default" => out.default = value,
+            "default_missing" => out.default_missing = value,
             "env" => out.env = value,
             "value_name" => out.value_name = value,
             "help" => out.help = value,
