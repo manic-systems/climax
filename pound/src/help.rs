@@ -72,16 +72,14 @@ fn invocation(a: &ArgSpec) -> String {
             s.push_str(", --");
             s.push_str(l);
             if takes_value {
-                s.push('=');
-                s.push_str(&metavar(a));
+                s.push_str(&attached_meta(a));
             }
         },
         (Some(c), None) => {
             s.push('-');
             s.push(c);
             if takes_value {
-                s.push(' ');
-                s.push_str(&metavar(a));
+                s.push_str(&detached_meta(a));
             }
         },
         (None, Some(l)) => {
@@ -89,13 +87,34 @@ fn invocation(a: &ArgSpec) -> String {
             s.push_str("    --");
             s.push_str(l);
             if takes_value {
-                s.push('=');
-                s.push_str(&metavar(a));
+                s.push_str(&attached_meta(a));
             }
         },
         (None, None) => s.push_str(&metavar(a)),
     }
     s
+}
+
+// an optional-value option brackets its metavar to show the value may be left
+// off: `=VAL` becomes `[=VAL]`, ` VAL` becomes ` [VAL]`.
+#[cfg(feature = "help")]
+fn attached_meta(a: &ArgSpec) -> String {
+    let meta = metavar(a);
+    if a.default_missing.is_some() {
+        format!("[={meta}]")
+    } else {
+        format!("={meta}")
+    }
+}
+
+#[cfg(feature = "help")]
+fn detached_meta(a: &ArgSpec) -> String {
+    let meta = metavar(a);
+    if a.default_missing.is_some() {
+        format!(" [{meta}]")
+    } else {
+        format!(" {meta}")
+    }
 }
 
 /// the description column for an arg: its help, then a possible-value list.
