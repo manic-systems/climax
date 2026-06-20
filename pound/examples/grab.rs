@@ -11,8 +11,8 @@ use pound::Parse;
 struct Grab {
     /// urls to fetch
     url: Vec<String>,
-    /// write downloads under this directory
-    #[pound(short, long)]
+    /// write downloads under this directory (bare `-o` uses the current one)
+    #[pound(short, long, default_missing = ".")]
     output: Option<String>,
     /// overwrite existing files
     #[pound(short, long)]
