@@ -1,0 +1,18 @@
+[package]
+name                 = "bang-terminal"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface" ]
+description          = "bang input event decoding"
+edition.workspace    = true
+keywords             = [ "cli", "input", "terminal", "ansi" ]
+license.workspace    = true
+readme               = "../../README.md"
+repository.workspace = true
+
+[dependencies]
+bang-core = { path = "../bang-core", version = "0.0.1" }
+libc      = "0.2"
+
+[lints]
+workspace = true

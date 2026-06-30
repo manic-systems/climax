@@ -1,0 +1,21 @@
+[package]
+name                 = "bang-screw-pty"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface" ]
+description          = "PTY overlay runtime for bang widgets rendered with screw"
+edition.workspace    = true
+keywords             = [ "cli", "input", "terminal", "pty", "renderer" ]
+license.workspace    = true
+readme               = "README.md"
+repository.workspace = true
+
+[dependencies]
+bang-core     = { path = "../bang-core", version = "0.0.1" }
+bang-screw    = { path = "../bang-screw", version = "0.0.1" }
+bang-terminal = { path = "../bang-terminal", version = "0.0.1" }
+screw         = { path = "../screw", version = "0.0.1" }
+screw-pty     = { path = "../screw-pty", version = "0.0.1" }
+
+[lints]
+workspace = true

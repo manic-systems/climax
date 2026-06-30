@@ -1,0 +1,14 @@
+[package]
+name                 = "bang-core"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface" ]
+description          = "widgets and state for bang"
+edition.workspace    = true
+keywords             = [ "cli", "input", "terminal", "widgets" ]
+license.workspace    = true
+readme               = "../../README.md"
+repository.workspace = true
+
+[lints]
+workspace = true

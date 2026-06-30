@@ -1,0 +1,22 @@
+[package]
+name                 = "bang-screw"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface" ]
+description          = "screw render adapter for bang widgets"
+edition.workspace    = true
+keywords             = [ "cli", "input", "terminal", "renderer" ]
+license.workspace    = true
+readme               = "../../README.md"
+repository.workspace = true
+
+[dependencies]
+bang-core     = { path = "../bang-core", version = "0.0.1" }
+bang-terminal = { path = "../bang-terminal", version = "0.0.1" }
+screw         = { path = "../screw", version = "0.0.1" }
+unicode-width = "0.2.2"
+
+[dev-dependencies]
+
+[lints]
+workspace = true
