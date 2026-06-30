@@ -10,19 +10,26 @@ use pound::Parse;
 #[allow(dead_code, reason = "demo just prints the parsed struct")]
 struct Grab {
     /// urls to fetch
-    url: Vec<String>,
+    url:     Vec<String>,
     /// write downloads under this directory
     #[pound(short, long)]
-    output: Option<String>,
+    output:  Option<String>,
     /// overwrite existing files
     #[pound(short, long)]
-    force: bool,
+    force:   bool,
     /// increase verbosity, repeatable
     #[pound(short, long, count)]
     verbose: u8,
     /// number of parallel jobs
-    #[pound(short, long, default = "4", min = "1", max = "64", validate = "power_of_two")]
-    jobs: u32,
+    #[pound(
+        short,
+        long,
+        default = "4",
+        min = "1",
+        max = "64",
+        validate = "power_of_two"
+    )]
+    jobs:    u32,
 }
 
 #[allow(

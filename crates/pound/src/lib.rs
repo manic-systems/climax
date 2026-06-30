@@ -67,6 +67,13 @@ mod value;
 
 pub use error::Error;
 pub use parse::Matches;
+// the derive macros share names with the `Parse` trait and `FromArg`, which is
+// fine: macros and types live in separate namespaces (same trick serde uses).
+#[cfg(feature = "derive")]
+pub use pound_derive::{
+    Parse,
+    ValueEnum,
+};
 pub use spec::{
     ArgSpec,
     CommandSpec,
@@ -77,14 +84,6 @@ pub use spec::{
 pub use value::{
     FromArg,
     ValueError,
-};
-
-// the derive macros share names with the `Parse` trait and `FromArg`, which is
-// fine: macros and types live in separate namespaces (same trick serde uses).
-#[cfg(feature = "derive")]
-pub use pound_derive::{
-    Parse,
-    ValueEnum,
 };
 
 /// the trait the derive targets, also implementable by hand.
@@ -159,7 +158,10 @@ pub trait Parse: Sized {
 /// already hold.
 ///
 /// ```no_run
-/// use core::ffi::{c_char, c_int};
+/// use core::ffi::{
+///     c_char,
+///     c_int,
+/// };
 ///
 /// // call this from your `#![no_main]` libc entry point, forwarding its args:
 /// fn run(argc: c_int, argv: *const *const c_char) {

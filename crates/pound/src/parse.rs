@@ -10,8 +10,7 @@ use alloc::{
     vec::IntoIter,
 };
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
     error::Error,
     help,
@@ -90,14 +89,15 @@ impl<'a> Matches<'a> {
         self.sub.as_ref().map(|(i, m)| (*i, m.as_ref()))
     }
 
-    /// read a required value as `T`, for bare `T` fields. the command line wins,
-    /// then [`fallback`] (env, then default), else a missing-arg error.
+    /// read a required value as `T`, for bare `T` fields. the command line
+    /// wins, then [`fallback`] (env, then default), else a missing-arg
+    /// error.
     pub fn required<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<T, Error> {
         self.required_map(spec, i, T::from_arg)
     }
 
-    /// read an optional value as `T`, for `Option<T>` fields. same resolution as
-    /// [`Self::required`], but absence is `None` rather than an error.
+    /// read an optional value as `T`, for `Option<T>` fields. same resolution
+    /// as [`Self::required`], but absence is `None` rather than an error.
     pub fn optional<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Option<T>, Error> {
         self.optional_map(spec, i, T::from_arg)
     }
@@ -149,7 +149,10 @@ impl<'a> Matches<'a> {
     ) -> Result<Vec<T>, Error> {
         let raws = self.raws(i);
         if !raws.is_empty() {
-            return raws.iter().map(|&s| parse_with(spec, i, s, &convert)).collect();
+            return raws
+                .iter()
+                .map(|&s| parse_with(spec, i, s, &convert))
+                .collect();
         }
         match fallback(spec, i) {
             Some(c) => Ok(vec![parse_with(spec, i, &c, &convert)?]),
@@ -185,7 +188,7 @@ fn parse_with<T>(
             msg = format!("{msg} (possible values: {})", values.join(", "));
         }
         Error::Value {
-            arg:   spec.args[i].display_name(),
+            arg: spec.args[i].display_name(),
             value: e.value,
             msg,
         }
@@ -203,7 +206,8 @@ pub(crate) fn parse_spec<'a>(
 }
 
 /// `globals` are ancestors' global args (for arity and help); `hits` collects
-/// global options seen at this level or deeper for the owning ancestor to drain.
+/// global options seen at this level or deeper for the owning ancestor to
+/// drain.
 fn parse_cmd<'a>(
     spec: &CommandSpec,
     it: &mut IntoIter<&'a str>,
@@ -344,7 +348,12 @@ fn shorts<'a>(
             }
         } else if let Some(g) = find_global_short(globals, ch) {
             match g.kind {
-                Kind::Flag | Kind::Count => hits.push(GlobalHit { arg: g, value: None }),
+                Kind::Flag | Kind::Count => {
+                    hits.push(GlobalHit {
+                        arg:   g,
+                        value: None,
+                    })
+                },
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
                     hits.push(GlobalHit {
@@ -364,7 +373,8 @@ fn shorts<'a>(
     Ok(())
 }
 
-/// a short option's value: the attached cluster tail (`-ofile`), else next token.
+/// a short option's value: the attached cluster tail (`-ofile`), else next
+/// token.
 fn cluster_value<'a>(
     cluster: &'a str,
     off: usize,
@@ -374,7 +384,8 @@ fn cluster_value<'a>(
 ) -> Result<&'a str, Error> {
     let rest = &cluster[off + ch.len_utf8()..];
     if rest.is_empty() {
-        it.next().ok_or_else(|| Error::MissingValue(a.display_name()))
+        it.next()
+            .ok_or_else(|| Error::MissingValue(a.display_name()))
     } else {
         Ok(rest)
     }
@@ -388,8 +399,9 @@ fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
     slot.count += 1;
 }
 
-// `contains(&name)` will not type-check: `aliases` holds `&'static str` against a
-// borrowed `&str`, so the membership test is spelled by hand (as in `find_long`).
+// `contains(&name)` will not type-check: `aliases` holds `&'static str` against
+// a borrowed `&str`, so the membership test is spelled by hand (as in
+// `find_long`).
 #[allow(clippy::manual_contains)]
 fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
     globals
@@ -421,7 +433,10 @@ fn record_global<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => it.next().ok_or_else(|| Error::MissingValue(g.display_name()))?,
+                None => {
+                    it.next()
+                        .ok_or_else(|| Error::MissingValue(g.display_name()))?
+                },
             };
             hits.push(GlobalHit {
                 arg:   g,
@@ -433,7 +448,8 @@ fn record_global<'a>(
     Ok(())
 }
 
-/// apply the hits this `spec` owns into its slots, leaving the rest to bubble up.
+/// apply the hits this `spec` owns into its slots, leaving the rest to bubble
+/// up.
 fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec<GlobalHit<'a>>) {
     hits.retain(|h| {
         let Some(idx) = spec.args.iter().position(|a| core::ptr::eq(a, h.arg)) else {
@@ -550,7 +566,7 @@ fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) ->
         "help" if spec.find_long("help").is_none() => {
             Some(Error::Help(help::render(spec, globals)))
         },
-        "version" if spec.find_long("version").is_none() => {
+        "version" if spec.has_version_info() && spec.find_long("version").is_none() => {
             Some(Error::Version(help::version_line(spec)))
         },
         _ => None,
@@ -560,7 +576,9 @@ fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) ->
 fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> Option<Error> {
     match ch {
         'h' if spec.find_short('h').is_none() => Some(Error::Help(help::render(spec, globals))),
-        'V' if spec.find_short('V').is_none() => Some(Error::Version(help::version_line(spec))),
+        'V' if spec.has_version_info() && spec.find_short('V').is_none() => {
+            Some(Error::Version(help::version_line(spec)))
+        },
         _ => None,
     }
 }
@@ -590,14 +608,15 @@ mod tests {
         ArgSpec::new(Kind::Positional).value_name("rest").multi(), // 4
     ];
     const FLAT: CommandSpec = CommandSpec {
-        name:    "flat",
-        version: "0.1.0",
-        about:   "a flat command",
-        args:    FLAT_ARGS,
-        groups:  &[],
-        conflicts: &[],
-        subs:    &[],
-sub_optional: false,
+        name:         "flat",
+        version:      "0.1.0",
+        hash:         None,
+        about:        "a flat command",
+        args:         FLAT_ARGS,
+        groups:       &[],
+        conflicts:    &[],
+        subs:         &[],
+        sub_optional: false,
     };
 
     fn parse<'a>(spec: &CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, Error> {
@@ -661,27 +680,46 @@ sub_optional: false,
             Err(Error::Version(v)) => assert_eq!(v, "flat 0.1.0"),
             other => panic!("expected version, got {other:?}"),
         }
+
+        const HASHED: CommandSpec = CommandSpec::new("flat").version("0.1.0").hash("abc123");
+        match parse(&HASHED, &["--version"]) {
+            Err(Error::Version(v)) => assert_eq!(v, "flat 0.1.0 (abc123)"),
+            other => panic!("expected version, got {other:?}"),
+        }
+
+        const HASH_ONLY: CommandSpec = CommandSpec::new("flat").hash("abc123");
+        match parse(&HASH_ONLY, &["-V"]) {
+            Err(Error::Version(v)) => assert_eq!(v, "flat (abc123)"),
+            other => panic!("expected version, got {other:?}"),
+        }
     }
 
     #[test]
     fn defaults_resolve_in_readers() {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("level").default("info")];
         const SPEC: CommandSpec = CommandSpec {
-            name:    "d",
-            version: "",
-            about:   "",
-            args:    ARGS,
-            groups:  &[],
-            conflicts: &[],
-            subs:    &[],
-sub_optional: false,
+            name:         "d",
+            version:      "",
+            hash:         None,
+            about:        "",
+            args:         ARGS,
+            groups:       &[],
+            conflicts:    &[],
+            subs:         &[],
+            sub_optional: false,
         };
         // unset: the reader falls back to the default
         let m = parse(&SPEC, &[]).unwrap();
-        assert_eq!(m.optional::<String>(&SPEC, 0).unwrap().as_deref(), Some("info"));
+        assert_eq!(
+            m.optional::<String>(&SPEC, 0).unwrap().as_deref(),
+            Some("info")
+        );
         // a user value overrides the default
         let m = parse(&SPEC, &["--level", "debug"]).unwrap();
-        assert_eq!(m.optional::<String>(&SPEC, 0).unwrap().as_deref(), Some("debug"));
+        assert_eq!(
+            m.optional::<String>(&SPEC, 0).unwrap().as_deref(),
+            Some("debug")
+        );
     }
 
     #[test]
@@ -691,14 +729,15 @@ sub_optional: false,
             ArgSpec::new(Kind::Flag).long("fetch").group("mode"),
         ];
         const OPT: CommandSpec = CommandSpec {
-            name:    "g",
-            version: "",
-            about:   "",
-            args:    ARGS,
-            groups:  &[GroupSpec::new("mode")],
-            conflicts: &[],
-            subs:    &[],
-sub_optional: false,
+            name:         "g",
+            version:      "",
+            hash:         None,
+            about:        "",
+            args:         ARGS,
+            groups:       &[GroupSpec::new("mode")],
+            conflicts:    &[],
+            subs:         &[],
+            sub_optional: false,
         };
         const REQ: CommandSpec = CommandSpec {
             groups: &[GroupSpec::new("mode").required()],
@@ -715,20 +754,26 @@ sub_optional: false,
 
     #[test]
     fn conflict_pairs() {
-        const ARGS: &[ArgSpec] =
-            &[ArgSpec::new(Kind::Flag).long("a"), ArgSpec::new(Kind::Flag).long("b")];
+        const ARGS: &[ArgSpec] = &[
+            ArgSpec::new(Kind::Flag).long("a"),
+            ArgSpec::new(Kind::Flag).long("b"),
+        ];
         const SPEC: CommandSpec = CommandSpec {
-            name:      "c",
-            version:   "",
-            about:     "",
-            args:      ARGS,
-            groups:    &[],
-            conflicts: &[(0, 1)],
-            subs:      &[],
-sub_optional: false,
+            name:         "c",
+            version:      "",
+            hash:         None,
+            about:        "",
+            args:         ARGS,
+            groups:       &[],
+            conflicts:    &[(0, 1)],
+            subs:         &[],
+            sub_optional: false,
         };
         assert!(parse(&SPEC, &["--a"]).is_ok());
-        assert!(matches!(parse(&SPEC, &["--a", "--b"]), Err(Error::Conflict { .. })));
+        assert!(matches!(
+            parse(&SPEC, &["--a", "--b"]),
+            Err(Error::Conflict { .. })
+        ));
     }
 
     // a subcommand tree: `prog add <name> <url> [--force]`
@@ -738,14 +783,15 @@ sub_optional: false,
         ArgSpec::new(Kind::Flag).long("force").short('f'),
     ];
     const ADD: CommandSpec = CommandSpec {
-        name:    "add",
-        version: "",
-        about:   "add a pin",
-        args:    ADD_ARGS,
-        groups:  &[],
-        conflicts: &[],
-        subs:    &[],
-sub_optional: false,
+        name:         "add",
+        version:      "",
+        hash:         None,
+        about:        "add a pin",
+        args:         ADD_ARGS,
+        groups:       &[],
+        conflicts:    &[],
+        subs:         &[],
+        sub_optional: false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
         name:    "add",
@@ -755,14 +801,15 @@ sub_optional: false,
         hidden:  false,
     }];
     const ROOT: CommandSpec = CommandSpec {
-        name:    "prog",
-        version: "1.0.0",
-        about:   "demo",
-        args:    &[],
-        groups:  &[],
-        conflicts: &[],
-        subs:    ROOT_SUBS,
-sub_optional: false,
+        name:         "prog",
+        version:      "1.0.0",
+        hash:         None,
+        about:        "demo",
+        args:         &[],
+        groups:       &[],
+        conflicts:    &[],
+        subs:         ROOT_SUBS,
+        sub_optional: false,
     };
 
     #[test]

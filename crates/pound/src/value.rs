@@ -10,8 +10,7 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// a value that would not parse, plus context for the message. the parser wraps
 /// it into [`crate::Error::Value`] once it knows which arg it came from.
@@ -55,7 +54,8 @@ impl ValueError {
 pub trait FromArg: Sized {
     /// the closed set of accepted values, if any. powers choice listings in
     /// help and value errors. set by the `ValueEnum` derive, `None` otherwise.
-    /// being a const lets the `Parse` derive wire it into a spec at compile time.
+    /// being a const lets the `Parse` derive wire it into a spec at compile
+    /// time.
     const POSSIBLE: Option<&'static [&'static str]> = None;
 
     /// attempt the conversion.

@@ -5,8 +5,7 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// anything a parse attempt can produce.
 ///

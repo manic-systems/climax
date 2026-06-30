@@ -57,16 +57,10 @@ static CMD_ARGS: &[ArgSpec] = &[
     ArgSpec::new(Kind::Flag).long("loud").short('l'),
     ArgSpec::new(Kind::Positional).value_name("name").required(),
 ];
-static CMD_SPEC: CommandSpec = CommandSpec {
-    name:    "cmd",
-    version: "0.1.0",
-    about:   "raw-argv demo",
-    args:    CMD_ARGS,
-    groups:  &[],
-    conflicts: &[],
-    subs:    &[],
-    sub_optional: false,
-};
+static CMD_SPEC: CommandSpec = CommandSpec::new("cmd")
+    .version("0.1.0")
+    .about("raw-argv demo")
+    .args(CMD_ARGS);
 
 impl Parse for Cmd {
     const SPEC: &'static CommandSpec = &CMD_SPEC;

@@ -7,8 +7,11 @@
 
 mod attr;
 
-use std::collections::HashMap;
-use std::str::FromStr;
+use std::{
+    collections::HashMap,
+    process::Command,
+    str::FromStr,
+};
 
 use proc_macro::TokenStream;
 use proc_macro2::{
@@ -48,7 +51,6 @@ pub fn derive_value_enum(input: TokenStream) -> TokenStream {
     }
 }
 
-
 // how many values a field carries.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Card {
@@ -75,25 +77,25 @@ enum Conversion {
 // the resolved plan for one field.
 #[allow(clippy::struct_excessive_bools)]
 struct Plan {
-    ident:      proc_macro2::Ident,
-    kind:       &'static str,
-    long:       Option<String>,
-    short:      Option<char>,
-    required:   bool,
-    multi:      bool,
-    group:      Option<String>,
-    default:    Option<String>,
-    env:        Option<String>,
-    value_name: String,
-    help:       String,
-    aliases:    Vec<String>,
+    ident:          proc_macro2::Ident,
+    kind:           &'static str,
+    long:           Option<String>,
+    short:          Option<char>,
+    required:       bool,
+    multi:          bool,
+    group:          Option<String>,
+    default:        Option<String>,
+    env:            Option<String>,
+    value_name:     String,
+    help:           String,
+    aliases:        Vec<String>,
     conflicts_with: Vec<String>,
-    hidden:     bool,
-    global:     bool,
-    card:       Card,
-    conversion: Option<Conversion>,
-    inner_ty:   TokenStream2,
-    full_ty:    TokenStream2,
+    hidden:         bool,
+    global:         bool,
+    card:           Card,
+    conversion:     Option<Conversion>,
+    inner_ty:       TokenStream2,
+    full_ty:        TokenStream2,
 }
 
 // a field that delegates to its type's subcommand tree.
@@ -124,6 +126,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let (subs, sub_optional) = sub_parts(sub.as_ref());
     let name_expr = name_expr(&item);
     let version_expr = version_expr(&item);
+    let hash_call = git_hash_call();
     let about = help_lit(&attr::doc(&s.attributes));
 
     let m = quote!(m);
@@ -132,8 +135,23 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let sub_reader = sub.as_ref().map(|sf| sub_reader(sf, &m));
 
     // avoid unused-param warnings when a command carries only a subcommand.
-    let spec_param = if plans.is_empty() { quote!(_spec) } else { quote!(spec) };
-    let m_param = if plans.is_empty() && sub.is_none() { quote!(_m) } else { quote!(m) };
+    let spec_param = if plans.is_empty() {
+        quote!(_spec)
+    } else {
+        quote!(spec)
+    };
+    let m_param = if plans.is_empty() && sub.is_none() {
+        quote!(_m)
+    } else {
+        quote!(m)
+    };
+
+    // parameterless builder, so only chain it when the flag is actually set.
+    let sub_optional_call = if sub_optional {
+        quote!(.sub_optional())
+    } else {
+        quote!()
+    };
 
     quote! {
         impl ::pound::Parse for #name {
@@ -141,16 +159,15 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                 const ARGS: &[::pound::ArgSpec] = &[ #(#args),* ];
                 const GROUPS: &[::pound::GroupSpec] = &[ #(#groups),* ];
                 const CONFLICTS: &[(usize, usize)] = #conflicts;
-                const CMD: ::pound::CommandSpec = ::pound::CommandSpec {
-                    name:         #name_expr,
-                    version:      #version_expr,
-                    about:        #about,
-                    args:         ARGS,
-                    groups:       GROUPS,
-                    conflicts:    CONFLICTS,
-                    subs:         #subs,
-                    sub_optional: #sub_optional,
-                };
+                const CMD: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
+                    .version(#version_expr)
+                    #hash_call
+                    .about(#about)
+                    .args(ARGS)
+                    .groups(GROUPS)
+                    .conflicts(CONFLICTS)
+                    .subs(#subs)
+                    #sub_optional_call;
                 &CMD
             };
 
@@ -164,12 +181,16 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     .into()
 }
 
-#[allow(clippy::too_many_lines, reason = "one cohesive codegen pass reads best whole")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one cohesive codegen pass reads best whole"
+)]
 fn parse_enum(e: &venial::Enum) -> TokenStream {
     let item = attr::pound(&e.attributes);
     let name = &e.name;
     let name_expr = name_expr(&item);
     let version_expr = version_expr(&item);
+    let hash_call = git_hash_call();
     let about = help_lit(&attr::doc(&e.attributes));
 
     let mut sub_consts = Vec::new();
@@ -184,7 +205,10 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         };
         let vattr = attr::pound(&variant.attributes);
         let vname = &variant.name;
-        let sub_name = vattr.name.clone().unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
+        let sub_name = vattr
+            .name
+            .clone()
+            .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
         let sub_about = help_lit(&attr::doc(&variant.attributes));
         let hidden = vattr.hidden;
 
@@ -203,30 +227,31 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         let gk = format_ident!("GROUPS{}", idx);
         let xk = format_ident!("CONFLICTS{}", idx);
         let ck = format_ident!("CMD{}", idx);
+        // parameterless builders, so only chain them when the flag is set.
+        let sub_optional_call = if sub_optional {
+            quote!(.sub_optional())
+        } else {
+            quote!()
+        };
+        let hidden_call = if hidden { quote!(.hidden()) } else { quote!() };
         sub_consts.push(quote! {
             const #ak: &[::pound::ArgSpec] = &[ #(#args),* ];
             const #gk: &[::pound::GroupSpec] = &[ #(#groups),* ];
             const #xk: &[(usize, usize)] = #conflicts;
-            const #ck: ::pound::CommandSpec = ::pound::CommandSpec {
-                name:         #sub_name,
-                version:      "",
-                about:        #sub_about,
-                args:         #ak,
-                groups:       #gk,
-                conflicts:    #xk,
-                subs:         #subs,
-                sub_optional: #sub_optional,
-            };
+            const #ck: ::pound::CommandSpec = ::pound::CommandSpec::new(#sub_name)
+                .about(#sub_about)
+                .args(#ak)
+                .groups(#gk)
+                .conflicts(#xk)
+                .subs(#subs)
+                #sub_optional_call;
         });
         let valias = &vattr.aliases;
         sub_specs.push(quote! {
-            ::pound::SubSpec {
-                name:    #sub_name,
-                aliases: &[ #(#valias),* ],
-                about:   #sub_about,
-                spec:    &#ck,
-                hidden:  #hidden,
-            }
+            ::pound::SubSpec::new(#sub_name, &#ck)
+                .aliases(&[ #(#valias),* ])
+                .about(#sub_about)
+                #hidden_call
         });
 
         let m = quote!(__sm);
@@ -252,23 +277,22 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     }
 
     // `spec` is only read when some variant has its own args
-    let spec_param = if uses_spec { quote!(spec) } else { quote!(_spec) };
+    let spec_param = if uses_spec {
+        quote!(spec)
+    } else {
+        quote!(_spec)
+    };
 
     quote! {
         impl ::pound::Parse for #name {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#sub_consts)*
                 const SUBS: &[::pound::SubSpec] = &[ #(#sub_specs),* ];
-                const ROOT: ::pound::CommandSpec = ::pound::CommandSpec {
-                    name:         #name_expr,
-                    version:      #version_expr,
-                    about:        #about,
-                    args:         &[],
-                    groups:       &[],
-                    conflicts:    &[],
-                    subs:         SUBS,
-                    sub_optional: false,
-                };
+                const ROOT: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
+                    .version(#version_expr)
+                    #hash_call
+                    .about(#about)
+                    .subs(SUBS);
                 &ROOT
             };
 
@@ -295,7 +319,9 @@ fn value_enum(e: &venial::Enum) -> TokenStream {
         }
         let vname = &variant.name;
         let vattr = attr::pound(&variant.attributes);
-        let label = vattr.name.unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
+        let label = vattr
+            .name
+            .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
         arms.push(quote! { #label => ::core::result::Result::Ok(Self::#vname), });
         names.push(label);
     }
@@ -562,8 +588,6 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     quote! { #e.help(#help) }
 }
 
-
-
 fn reader(p: &Plan, i: usize, m: &TokenStream2, spec: &TokenStream2) -> TokenStream2 {
     let fname = &p.ident;
     let body = match p.kind {
@@ -600,11 +624,15 @@ fn conversion_closure(conversion: &Conversion, inner: &TokenStream2) -> TokenStr
         Conversion::FromArg | Conversion::CustomParse { .. } => None,
     };
     let min = match conversion {
-        Conversion::CheckedFromArg { min, .. } => min.as_deref().map(|v| bound_check(inner, "min", v)),
+        Conversion::CheckedFromArg { min, .. } => {
+            min.as_deref().map(|v| bound_check(inner, "min", v))
+        },
         Conversion::FromArg | Conversion::CustomParse { .. } => None,
     };
     let max = match conversion {
-        Conversion::CheckedFromArg { max, .. } => max.as_deref().map(|v| bound_check(inner, "max", v)),
+        Conversion::CheckedFromArg { max, .. } => {
+            max.as_deref().map(|v| bound_check(inner, "max", v))
+        },
         Conversion::FromArg | Conversion::CustomParse { .. } => None,
     };
     let validate = match conversion {
@@ -728,8 +756,11 @@ fn validate_globals(plans: &[Plan]) -> Result<(), String> {
 
 // resolve field-level conflicts_with names to normalised, deduped index pairs.
 fn conflict_pairs(plans: &[Plan]) -> Result<Vec<(usize, usize)>, String> {
-    let index: HashMap<String, usize> =
-        plans.iter().enumerate().map(|(i, p)| (p.ident.to_string(), i)).collect();
+    let index: HashMap<String, usize> = plans
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.ident.to_string(), i))
+        .collect();
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     for (i, p) in plans.iter().enumerate() {
         for name in &p.conflicts_with {
@@ -766,6 +797,25 @@ fn version_expr(item: &Pound) -> TokenStream2 {
         || quote! { ::core::env!("CARGO_PKG_VERSION") },
         |v| quote! { #v },
     )
+}
+
+fn git_hash_call() -> TokenStream2 {
+    git_hash().map_or_else(TokenStream2::new, |hash| quote! { .hash(#hash) })
+}
+
+fn git_hash() -> Option<String> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let output = Command::new("git")
+        .args(["-C", &manifest_dir, "rev-parse", "--short=12", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let hash = String::from_utf8(output.stdout).ok()?;
+    let hash = hash.trim();
+    (!hash.is_empty() && hash.chars().all(|ch| ch.is_ascii_hexdigit())).then(|| hash.to_owned())
 }
 
 // bake the help string only when the feature is on, otherwise emit "".

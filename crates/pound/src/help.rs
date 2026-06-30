@@ -6,11 +6,9 @@
 //! from the [`CommandSpec`]. with it off, help strings are not stored and
 //! [`render`] degrades to a one-line usage string.
 
-#[cfg(feature = "help")]
-use core::fmt::Write as _;
+#[cfg(feature = "help")] use core::fmt::Write as _;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::spec::{
     ArgSpec,
     CommandSpec,
@@ -21,13 +19,19 @@ use crate::spec::{
     SubSpec,
 };
 
-/// `name x.y.z`, or just `name` when no version is set.
+/// `name x.y.z (hash)`, omitting any part that is not set.
 pub(crate) fn version_line(spec: &CommandSpec) -> String {
-    if spec.version.is_empty() {
-        spec.name.to_owned()
-    } else {
-        format!("{} {}", spec.name, spec.version)
+    let mut out = spec.name.to_owned();
+    if !spec.version.is_empty() {
+        out.push(' ');
+        out.push_str(spec.version);
     }
+    if let Some(hash) = spec.hash {
+        out.push_str(" (");
+        out.push_str(hash);
+        out.push(')');
+    }
+    out
 }
 
 /// uppercase metavar for an arg, gnu style: `value_name`, else the long name,
@@ -168,9 +172,12 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         .map(|&a| (invocation(a), help_text(a)))
         .collect();
     if spec.find_short('h').is_none() && spec.find_long("help").is_none() {
-        rows.push(("-h, --help".to_owned(), "display this help and exit".to_owned()));
+        rows.push((
+            "-h, --help".to_owned(),
+            "display this help and exit".to_owned(),
+        ));
     }
-    if !spec.version.is_empty()
+    if spec.has_version_info()
         && spec.find_short('V').is_none()
         && spec.find_long("version").is_none()
     {

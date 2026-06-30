@@ -8,7 +8,9 @@ use pound::Parse;
 #[derive(Parse)]
 enum Cmd {
     #[pound(alias = "rm,del")]
-    Remove { name: String },
+    Remove {
+        name: String,
+    },
     Status,
 }
 
@@ -18,7 +20,7 @@ struct Cli {
     #[pound(long, alias = "colour")]
     color: Option<String>,
     #[pound(subcommand)]
-    cmd: Cmd,
+    cmd:   Cmd,
 }
 
 #[test]

@@ -17,10 +17,12 @@ use pound::{
     ValueError,
 };
 
-// ── a custom value type ───────────────────────────────────────────────────────
+// ── a custom value type
+// ───────────────────────────────────────────────────────
 
 /// a time-to-live like `30s`, `15m`, `2h`, `7d`, parsed into a `Duration`.
-/// hand-implementing `FromArg` is all it takes to use a bespoke type as a field.
+/// hand-implementing `FromArg` is all it takes to use a bespoke type as a
+/// field.
 #[derive(Debug)]
 struct Ttl(Duration);
 
@@ -37,7 +39,10 @@ impl FromArg for Ttl {
             "h" => n * 3_600,
             "d" => n * 86_400,
             other => {
-                return Err(ValueError::new(s, format!("unknown unit '{other}', use s/m/h/d")));
+                return Err(ValueError::new(
+                    s,
+                    format!("unknown unit '{other}', use s/m/h/d"),
+                ));
             },
         };
         Ok(Self(Duration::from_secs(secs)))
@@ -72,7 +77,8 @@ enum OnConflict {
     Fail,
 }
 
-// ── nested subcommand tree ────────────────────────────────────────────────────
+// ── nested subcommand tree
+// ────────────────────────────────────────────────────
 
 /// namespace management
 #[derive(Parse, Debug)]
@@ -92,7 +98,7 @@ enum NsCmd {
     },
     /// remove a namespace and all its secrets
     Rm {
-        name: String,
+        name:  String,
         #[pound(short, long)]
         force: bool,
     },
@@ -100,7 +106,8 @@ enum NsCmd {
     Rename { from: String, to: String },
 }
 
-// ── top-level subcommands ─────────────────────────────────────────────────────
+// ── top-level subcommands
+// ─────────────────────────────────────────────────────
 
 /// the top-level subcommand
 #[derive(Parse, Debug)]
@@ -124,7 +131,7 @@ enum Cmd {
     },
     /// retrieve a secret
     Get {
-        key: String,
+        key:    String,
         /// print in this format
         #[pound(short, long)]
         format: Option<Format>,
@@ -136,30 +143,31 @@ enum Cmd {
     List {
         /// filter by tag
         #[pound(short, long)]
-        tag: Option<String>,
+        tag:    Option<String>,
         /// filter by kind
         #[pound(short, long)]
-        kind: Option<Kind>,
+        kind:   Option<Kind>,
         #[pound(short, long)]
         format: Option<Format>,
         /// show values (hidden by default)
         #[pound(long)]
-        show: bool,
+        show:   bool,
     },
     /// delete a secret (also reachable as `delete`)
     #[pound(alias = "delete")]
     Rm {
-        key: String,
+        key:   String,
         #[pound(short, long)]
         force: bool,
     },
     /// import secrets from a file
     Import {
-        /// file to read (explicit positional, shown as `<PATH>` via `value_name`)
+        /// file to read (explicit positional, shown as `<PATH>` via
+        /// `value_name`)
         #[pound(positional, value_name = "PATH")]
-        file: String,
+        file:        String,
         #[pound(short, long)]
-        format: Option<Format>,
+        format:      Option<Format>,
         /// how to handle existing keys
         #[pound(long, default = "skip")]
         on_conflict: OnConflict,
@@ -167,16 +175,16 @@ enum Cmd {
     /// export secrets to a file or stdout (pick at most one destination)
     Export {
         #[pound(short, long)]
-        format: Option<Format>,
+        format:         Option<Format>,
         /// write to this file
         #[pound(short, long, group = "dest")]
-        output: Option<String>,
+        output:         Option<String>,
         /// write to stdout
         #[pound(long, group = "dest")]
-        stdout: bool,
+        stdout:         bool,
         /// filter by tag
         #[pound(short, long)]
-        tag: Option<String>,
+        tag:            Option<String>,
         /// include locked secrets
         #[pound(long)]
         include_locked: bool,
@@ -219,7 +227,12 @@ struct Cli {
     namespace: String,
 
     /// this doc line is replaced by the `help =` override in --help output
-    #[pound(short = 'D', long = "database", env = "VAULT_DB", help = "path to the vault database file")]
+    #[pound(
+        short = 'D',
+        long = "database",
+        env = "VAULT_DB",
+        help = "path to the vault database file"
+    )]
     db: Option<String>,
 
     /// increase verbosity

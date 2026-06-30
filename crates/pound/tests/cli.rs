@@ -43,16 +43,10 @@ static SANDBOX_ARGS: &[ArgSpec] = &[
         .value_name("command")
         .help("program to run"),
 ];
-static SANDBOX_SPEC: CommandSpec = CommandSpec {
-    name:    "sandbox",
-    version: "0.1.0",
-    about:   "simple sandboxer",
-    args:    SANDBOX_ARGS,
-    groups:  &[],
-    conflicts: &[],
-    subs:    &[],
-sub_optional: false,
-};
+static SANDBOX_SPEC: CommandSpec = CommandSpec::new("sandbox")
+    .version("0.1.0")
+    .about("simple sandboxer")
+    .args(SANDBOX_ARGS);
 
 impl Parse for Sandbox {
     const SPEC: &'static CommandSpec = &SANDBOX_SPEC;
@@ -94,16 +88,9 @@ static INIT_ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Flag)
     .long("force")
     .short('f')
     .help("overwrite config")];
-static INIT_SPEC: CommandSpec = CommandSpec {
-    name:    "init",
-    version: "",
-    about:   "initialise a project",
-    args:    INIT_ARGS,
-    groups:  &[],
-    conflicts: &[],
-    subs:    &[],
-sub_optional: false,
-};
+static INIT_SPEC: CommandSpec = CommandSpec::new("init")
+    .about("initialise a project")
+    .args(INIT_ARGS);
 
 static ADD_ARGS: &[ArgSpec] = &[
     ArgSpec::new(Kind::Positional)
@@ -119,43 +106,16 @@ static ADD_ARGS: &[ArgSpec] = &[
         .short('f')
         .help("overwrite existing"),
 ];
-static ADD_SPEC: CommandSpec = CommandSpec {
-    name:    "add",
-    version: "",
-    about:   "add a pin",
-    args:    ADD_ARGS,
-    groups:  &[],
-    conflicts: &[],
-    subs:    &[],
-sub_optional: false,
-};
+static ADD_SPEC: CommandSpec = CommandSpec::new("add").about("add a pin").args(ADD_ARGS);
 
 static PKG_SUBS: &[SubSpec] = &[
-    SubSpec {
-        name:    "init",
-        aliases: &[],
-        about:   "initialise a project",
-        spec:    &INIT_SPEC,
-        hidden:  false,
-    },
-    SubSpec {
-        name:    "add",
-        aliases: &[],
-        about:   "add a pin",
-        spec:    &ADD_SPEC,
-        hidden:  false,
-    },
+    SubSpec::new("init", &INIT_SPEC).about("initialise a project"),
+    SubSpec::new("add", &ADD_SPEC).about("add a pin"),
 ];
-static PKG_SPEC: CommandSpec = CommandSpec {
-    name:    "pkg",
-    version: "1.0.0",
-    about:   "a small package manager",
-    args:    &[],
-    groups:  &[],
-    conflicts: &[],
-    subs:    PKG_SUBS,
-sub_optional: false,
-};
+static PKG_SPEC: CommandSpec = CommandSpec::new("pkg")
+    .version("1.0.0")
+    .about("a small package manager")
+    .subs(PKG_SUBS);
 
 impl Parse for Pkg {
     const SPEC: &'static CommandSpec = &PKG_SPEC;
@@ -242,16 +202,7 @@ static RUN_ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt)
     .required()
     .value_name("mode")
     .possible(&["fast", "slow"])];
-static RUN_SPEC: CommandSpec = CommandSpec {
-    name:    "run",
-    version: "",
-    about:   "",
-    args:    RUN_ARGS,
-    groups:  &[],
-    conflicts: &[],
-    subs:    &[],
-sub_optional: false,
-};
+static RUN_SPEC: CommandSpec = CommandSpec::new("run").args(RUN_ARGS);
 
 impl Parse for Run {
     const SPEC: &'static CommandSpec = &RUN_SPEC;

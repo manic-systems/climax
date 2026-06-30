@@ -32,7 +32,9 @@ struct Sandbox {
 
 #[test]
 fn sandbox_flat() {
-    let y = Sandbox::parse_from(argv(&["-s", "--env", "A=1", "-e", "B=2", "--", "ls", "-la"]));
+    let y = Sandbox::parse_from(argv(&[
+        "-s", "--env", "A=1", "-e", "B=2", "--", "ls", "-la",
+    ]));
     assert!(y.sockets);
     assert_eq!(y.env, ["A=1", "B=2"]);
     assert_eq!(y.exec, ["ls", "-la"]);
@@ -42,7 +44,7 @@ fn sandbox_flat() {
 #[derive(Parse)]
 #[pound(name = "build")]
 struct Build {
-    target: Option<String>,
+    target:  Option<String>,
     #[pound(short, long, count)]
     verbose: u8,
 }
@@ -78,10 +80,16 @@ enum Pkg {
 
 #[test]
 fn pkg_subcommands() {
-    assert_eq!(Pkg::parse_from(argv(&["init", "--force"])), Pkg::Init { force: true });
+    assert_eq!(Pkg::parse_from(argv(&["init", "--force"])), Pkg::Init {
+        force: true,
+    });
     assert_eq!(
         Pkg::parse_from(argv(&["add", "serde", "https://x", "-f"])),
-        Pkg::Add { name: "serde".into(), url: "https://x".into(), force: true }
+        Pkg::Add {
+            name:  "serde".into(),
+            url:   "https://x".into(),
+            force: true,
+        }
     );
 }
 
@@ -116,7 +124,10 @@ struct Run {
 fn derived_value_enum() {
     assert_eq!(Run::parse_from(argv(&["--mode", "fast"])).mode, Mode::Fast);
     // camelCase variant becomes kebab-case
-    assert_eq!(Run::parse_from(argv(&["--mode", "double-speed"])).mode, Mode::DoubleSpeed);
+    assert_eq!(
+        Run::parse_from(argv(&["--mode", "double-speed"])).mode,
+        Mode::DoubleSpeed
+    );
     match Run::try_parse_from(argv(&["--mode", "warp"])) {
         Err(Error::Value { value, .. }) => assert_eq!(value, "warp"),
         _ => panic!("expected a value error"),
@@ -137,7 +148,10 @@ struct Pick {
 #[test]
 fn required_group() {
     assert!(Pick::try_parse_from(argv(&["--fast"])).is_ok());
-    assert!(matches!(Pick::try_parse_from(argv(&[])), Err(Error::MissingGroup { .. })));
+    assert!(matches!(
+        Pick::try_parse_from(argv(&[])),
+        Err(Error::MissingGroup { .. })
+    ));
     assert!(matches!(
         Pick::try_parse_from(argv(&["--fast", "--slow"])),
         Err(Error::Conflict { .. })
@@ -200,16 +214,12 @@ fn even(value: &u64) -> Result<(), &'static str> {
 
 #[test]
 fn validated_values() {
-    let parsed = Limit::parse_from(argv(&[
-        "--count", "12", "--name", "short", "--shard", "2",
-    ]));
+    let parsed = Limit::parse_from(argv(&["--count", "12", "--name", "short", "--shard", "2"]));
     assert_eq!(parsed.count, 12);
     assert_eq!(parsed.name, "short");
     assert_eq!(parsed.shard, 2);
 
-    match Limit::try_parse_from(argv(&[
-        "--count", "4", "--name", "short", "--shard", "2",
-    ])) {
+    match Limit::try_parse_from(argv(&["--count", "4", "--name", "short", "--shard", "2"])) {
         Err(Error::Value { value, msg, .. }) => {
             assert_eq!(value, "4");
             assert_eq!(msg, "must be at least 5");
@@ -217,9 +227,7 @@ fn validated_values() {
         other => panic!("expected lower bound value error, got {other:?}"),
     }
 
-    match Limit::try_parse_from(argv(&[
-        "--count", "21", "--name", "short", "--shard", "2",
-    ])) {
+    match Limit::try_parse_from(argv(&["--count", "21", "--name", "short", "--shard", "2"])) {
         Err(Error::Value { value, msg, .. }) => {
             assert_eq!(value, "21");
             assert_eq!(msg, "must be at most 20");
@@ -242,9 +250,7 @@ fn validated_values() {
         other => panic!("expected length value error, got {other:?}"),
     }
 
-    match Limit::try_parse_from(argv(&[
-        "--count", "12", "--name", "short", "--shard", "3",
-    ])) {
+    match Limit::try_parse_from(argv(&["--count", "12", "--name", "short", "--shard", "3"])) {
         Err(Error::Value { value, msg, .. }) => {
             assert_eq!(value, "3");
             assert_eq!(msg, "must be even");
@@ -320,18 +326,20 @@ const fn non_zero_hex(value: &HexByte) -> Result<(), &'static str> {
 #[pound(name = "hex")]
 struct Hex {
     #[pound(long, parse = "hex_byte", validate = "non_zero_hex")]
-    byte: HexByte,
+    byte:      HexByte,
     #[pound(long, parse = "hex_byte")]
-    many: Vec<HexByte>,
+    many:      Vec<HexByte>,
     #[pound(long, parse = "hex_byte")]
-    maybe: Option<HexByte>,
+    maybe:     Option<HexByte>,
     #[pound(long, default = "0x10", parse = "hex_byte")]
     defaulted: HexByte,
 }
 
 #[test]
 fn custom_parsers() {
-    let parsed = Hex::parse_from(argv(&["--byte", "0x2a", "--many", "0x01", "--many", "0xff"]));
+    let parsed = Hex::parse_from(argv(&[
+        "--byte", "0x2a", "--many", "0x01", "--many", "0xff",
+    ]));
     assert_eq!(parsed.byte, HexByte(42));
     assert_eq!(parsed.many, [HexByte(1), HexByte(255)]);
     assert_eq!(parsed.maybe, None);

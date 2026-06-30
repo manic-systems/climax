@@ -50,7 +50,10 @@ fn struct_with_subcommand() {
     assert_eq!(t.action, Action::Clean);
 
     // a bare invocation still shows help (subcommand required)
-    assert!(matches!(Tool::try_parse_from(argv(&[])), Err(Error::Help(_))));
+    assert!(matches!(
+        Tool::try_parse_from(argv(&[])),
+        Err(Error::Help(_))
+    ));
 }
 
 // an optional subcommand: None when absent
@@ -92,10 +95,9 @@ enum Cade {
 
 #[test]
 fn nested_subcommands() {
-    assert_eq!(
-        Cade::parse_from(argv(&["lease", "open"])),
-        Cade::Lease { action: LeaseAction::Open }
-    );
+    assert_eq!(Cade::parse_from(argv(&["lease", "open"])), Cade::Lease {
+        action: LeaseAction::Open,
+    });
     assert_eq!(Cade::parse_from(argv(&["status"])), Cade::Status);
 }
 
@@ -124,7 +126,10 @@ fn hidden_subcommand() {
 // hidden arg: parses but absent from help
 #[derive(Parse)]
 #[pound(name = "hid")]
-#[allow(dead_code, reason = "only the parse outcome and help text are asserted")]
+#[allow(
+    dead_code,
+    reason = "only the parse outcome and help text are asserted"
+)]
 struct Hid {
     #[pound(long)]
     normal: bool,
@@ -210,7 +215,9 @@ fn global_two_levels_deep() {
     let g = Gtool::parse_from(argv(&["deep", "open", "--verbose", "--color", "x"]));
     assert!(g.verbose);
     assert_eq!(g.color.as_deref(), Some("x"));
-    assert_eq!(g.action, Gact::Deep { inner: LeaseAction::Open });
+    assert_eq!(g.action, Gact::Deep {
+        inner: LeaseAction::Open,
+    });
 }
 
 #[test]
@@ -242,7 +249,10 @@ enum Level {
 
 #[derive(Parse)]
 #[pound(name = "vb")]
-#[allow(dead_code, reason = "only the parse outcome, error, and help are asserted")]
+#[allow(
+    dead_code,
+    reason = "only the parse outcome, error, and help are asserted"
+)]
 struct Vb {
     #[pound(long)]
     level: Level,
@@ -262,6 +272,9 @@ fn value_enum_possible_listed() {
         let Err(Error::Help(text)) = Vb::try_parse_from(argv(&["--help"])) else {
             panic!("expected help");
         };
-        assert!(text.contains("[possible values: quiet, normal, trace]"), "help was:\n{text}");
+        assert!(
+            text.contains("[possible values: quiet, normal, trace]"),
+            "help was:\n{text}"
+        );
     }
 }
