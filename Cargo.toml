@@ -1,5 +1,5 @@
 [workspace]
-members  = [ "pound", "pound-derive" ]
+members = ["crates/pound", "crates/pound-derive"]
 resolver = "3"
 
 [workspace.package]
