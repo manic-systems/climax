@@ -8,11 +8,9 @@
     "type": "github"
   },
   "nixpkgs": {
-    "lastModified": 1780295093,
-    "narHash": "sha256-jOk5Okw2rm5GcUMydJaZlPfTLcFs0qeC+qO7MhGhnyw=",
-    "owner": "NixOS",
-    "repo": "nixpkgs",
-    "rev": "e12fdeef28ee6a54ba30be3a9389bd3ab90c38ac",
-    "type": "github"
+    "type": "tarball",
+    "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1017464.567a49d1913c/nixexprs.tar.xz",
+    "rev": "567a49d1913ce81ac6e9582e3553dd90a955875f",
+    "narHash": "sha256-rcUHdUtJEvMdNEl2Wq+YpHraHKfcer3KsBscpZEF2Yg="
   }
 }

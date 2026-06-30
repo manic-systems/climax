@@ -1,12 +1,23 @@
 [workspace]
-members = ["crates/pound", "crates/pound-derive"]
+members = [
+  "crates/bang-cli",
+  "crates/bang-core",
+  "crates/bang-screw",
+  "crates/bang-screw-pty",
+  "crates/bang-terminal",
+  "crates/climax",
+  "crates/pound",
+  "crates/pound-derive",
+  "crates/screw",
+  "crates/screw-pty",
+]
 resolver = "3"
 
 [workspace.package]
 authors    = [ "atagen" ]
 edition    = "2024"
 license    = "EUPL-1.2"
-repository = "https://github.com/manic-systems/pound"
+repository = "https://github.com/manic-systems/climax"
 
 [workspace.lints.clippy]
 cargo    = { level = "warn", priority = -1 }
@@ -24,6 +35,7 @@ missing_errors_doc             = "allow"
 missing_inline_in_public_items = "allow"
 mod_module_files               = "allow"
 module_name_repetitions        = "allow"
+must_use_candidate             = "allow"
 option_if_let_else             = "allow"
 question_mark_used             = "allow"
 redundant_pub_crate            = "allow"
