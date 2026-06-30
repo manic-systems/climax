@@ -1,0 +1,17 @@
+[package]
+name                 = "screw-pty"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface" ]
+description          = "PTY screen adapter for screw surfaces"
+edition.workspace    = true
+keywords             = [ "terminal", "pty", "renderer", "tui" ]
+license.workspace    = true
+readme               = "README.md"
+repository.workspace = true
+
+[dependencies]
+screw = { path = "../screw", version = "0.0.1" }
+
+[lints]
+workspace = true
