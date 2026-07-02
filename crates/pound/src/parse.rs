@@ -1,53 +1,36 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! the one parser. walks `argv` against a [`CommandSpec`] and produces
-//! [`Matches`], a positional record of what was seen. the only generics are the
-//! three typed readers at the bottom that forward to [`FromArg`], the rest is
-//! monomorphisation-free so it compiles once however many commands you define.
+//! walks `argv` against a [`CommandSpec`] and produces [`Matches`]
 
-use alloc::{
-    borrow::Cow,
-    vec::IntoIter,
-};
+use alloc::{borrow::Cow, vec::IntoIter};
 
-#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
 use crate::{
     error::Error,
     help,
-    spec::{
-        ArgSpec,
-        CommandSpec,
-        Kind,
-    },
-    value::{
-        FromArg,
-        ValueError,
-    },
+    spec::{ArgSpec, CommandSpec, Kind},
+    value::{FromArg, ValueError},
 };
 
-/// what a single arg collected during a parse. values borrow the input tokens
-/// for `'a` rather than owning copies.
+/// what a single arg collected during a parse
 #[derive(Default, Clone, Debug)]
 struct Slot<'a> {
-    /// times the user supplied it (flags 0/1, counts n). defaults do not bump
-    /// this, so group/required logic can tell user input apart.
-    count:  u32,
-    /// raw values, in order, borrowed from the parsed input
+    /// count of user supplied invocations
+    count: u32,
     values: Vec<&'a str>,
 }
 
-/// a successful parse: each spec entry's state, plus an optional chosen
-/// subcommand and its nested matches. raw values borrow the input for `'a`.
+/// a successful parse
 #[derive(Debug)]
 pub struct Matches<'a> {
     slots: Vec<Slot<'a>>,
-    sub:   Option<(usize, Box<Self>)>,
+    sub: Option<(usize, Box<Self>)>,
 }
 
-/// a global flag/option seen in a descendant, deferred until the ancestor that
-/// owns it can apply it. matched back to its owner by pointer identity.
+/// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
-    arg:   &'static ArgSpec,
+    arg: &'static ArgSpec,
     value: Option<&'a str>,
 }
 
@@ -55,60 +38,57 @@ impl<'a> Matches<'a> {
     fn new(len: usize) -> Self {
         Self {
             slots: vec![Slot::default(); len],
-            sub:   None,
+            sub: None,
         }
     }
 
-    /// was a flag (or any value) supplied at least once.
+    /// was a flag (or any value) supplied at least once
     #[must_use]
     pub fn flag(&self, i: usize) -> bool {
         self.slots[i].count > 0
     }
 
-    /// how many times a count flag was supplied.
+    /// how many times a count flag was supplied
     #[must_use]
     pub fn count(&self, i: usize) -> u32 {
         self.slots[i].count
     }
 
-    /// first raw value (or injected default), if any.
+    /// first raw value (or injected default), if any
     #[must_use]
     pub fn raw(&self, i: usize) -> Option<&'a str> {
         self.slots[i].values.first().copied()
     }
 
-    /// all raw values, in order.
+    /// all raw values, in order
     #[must_use]
     pub fn raws(&self, i: usize) -> &[&'a str] {
         &self.slots[i].values
     }
 
-    /// chosen subcommand index and its matches, if one ran.
+    /// chosen subcommand index and its matches, if one ran
     #[must_use]
     pub fn sub(&self) -> Option<(usize, &Self)> {
         self.sub.as_ref().map(|(i, m)| (*i, m.as_ref()))
     }
 
-    /// read a required value as `T`, for bare `T` fields. the command line
-    /// wins, then [`fallback`] (env, then default), else a missing-arg
-    /// error.
+    /// read a required value as `T`
     pub fn required<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<T, Error> {
         self.required_map(spec, i, T::from_arg)
     }
 
-    /// read an optional value as `T`, for `Option<T>` fields. same resolution
-    /// as [`Self::required`], but absence is `None` rather than an error.
+    /// read an optional value as `Option<T>`
     pub fn optional<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Option<T>, Error> {
         self.optional_map(spec, i, T::from_arg)
     }
 
-    /// read every value as `T`, for `Vec<T>` fields. user values win; otherwise
-    /// [`fallback`] supplies a single element.
+    /// read every value into `Vec<T>`
     pub fn many<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Vec<T>, Error> {
         self.many_map(spec, i, T::from_arg)
     }
 
-    /// read a required value with a caller-supplied raw-token conversion.
+    /// read a required value
+    /// caller must supply conversion fn
     pub fn required_map<T>(
         &self,
         spec: &CommandSpec,
@@ -124,7 +104,8 @@ impl<'a> Matches<'a> {
         }
     }
 
-    /// read an optional value with a caller-supplied raw-token conversion.
+    /// read an optional value
+    /// caller must supply conversion fn
     pub fn optional_map<T>(
         &self,
         spec: &CommandSpec,
@@ -140,7 +121,8 @@ impl<'a> Matches<'a> {
         }
     }
 
-    /// read every value with a caller-supplied raw-token conversion.
+    /// read every value
+    /// caller must supply conversion fn
     pub fn many_map<T>(
         &self,
         spec: &CommandSpec,
@@ -161,9 +143,7 @@ impl<'a> Matches<'a> {
     }
 }
 
-/// the value to use when an arg was not given on the command line: its `env`
-/// variable if set, otherwise its `default`. owned for env, borrowed for the
-/// `&'static` default. always falls through to the default under `no_std`.
+/// the value to use when an arg was not given
 fn fallback(spec: &CommandSpec, i: usize) -> Option<Cow<'static, str>> {
     #[cfg(feature = "std")]
     if let Some(var) = spec.args[i].env
@@ -195,7 +175,7 @@ fn parse_with<T>(
     })
 }
 
-/// entry point: parse `args` (already minus `argv[0]`) against `spec`.
+/// entrypoint. parse `args[1..]` against `spec`
 pub(crate) fn parse_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
@@ -205,9 +185,6 @@ pub(crate) fn parse_spec<'a>(
     parse_cmd(spec, &mut it, &[], &mut hits)
 }
 
-/// `globals` are ancestors' global args (for arity and help); `hits` collects
-/// global options seen at this level or deeper for the owning ancestor to
-/// drain.
 fn parse_cmd<'a>(
     spec: &CommandSpec,
     it: &mut IntoIter<&'a str>,
@@ -274,13 +251,13 @@ fn parse_cmd<'a>(
         }
     }
 
-    // must run before finalize so owned globals count toward required/group checks
+    // must run before finalise so owned globals count toward required/group checks
     apply_global_hits(spec, &mut m, hits);
-    finalize(spec, &m, globals)?;
+    finalise(spec, &m, globals)?;
     Ok(m)
 }
 
-/// apply a long option once resolved to a spec index.
+/// apply a long option
 fn apply_named<'a>(
     spec: &CommandSpec,
     m: &mut Matches<'a>,
@@ -305,10 +282,9 @@ fn apply_named<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => {
-                    it.next()
-                        .ok_or_else(|| Error::MissingValue(a.display_name()))?
-                },
+                None => it
+                    .next()
+                    .ok_or_else(|| Error::MissingValue(a.display_name()))?,
             };
             push_value(&a, &mut m.slots[idx], value);
         },
@@ -317,7 +293,7 @@ fn apply_named<'a>(
     Ok(())
 }
 
-/// apply a short cluster, e.g. `-vvf` or `-ofile`.
+/// apply a cluster of short args
 fn shorts<'a>(
     spec: &CommandSpec,
     m: &mut Matches<'a>,
@@ -326,8 +302,6 @@ fn shorts<'a>(
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), Error> {
-    // `char_indices` keeps byte offsets so an attached value can be borrowed as
-    // a sub-slice of `cluster` rather than rebuilt into an owned `String`.
     for (off, ch) in cluster.char_indices() {
         if let Some(sig) = builtin_short(spec, ch, globals) {
             return Err(sig);
@@ -348,16 +322,14 @@ fn shorts<'a>(
             }
         } else if let Some(g) = find_global_short(globals, ch) {
             match g.kind {
-                Kind::Flag | Kind::Count => {
-                    hits.push(GlobalHit {
-                        arg:   g,
-                        value: None,
-                    })
-                },
+                Kind::Flag | Kind::Count => hits.push(GlobalHit {
+                    arg: g,
+                    value: None,
+                }),
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
                     hits.push(GlobalHit {
-                        arg:   g,
+                        arg: g,
                         value: Some(value),
                     });
                     return Ok(());
@@ -373,8 +345,7 @@ fn shorts<'a>(
     Ok(())
 }
 
-/// a short option's value: the attached cluster tail (`-ofile`), else next
-/// token.
+/// a short option's value
 fn cluster_value<'a>(
     cluster: &'a str,
     off: usize,
@@ -399,9 +370,6 @@ fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
     slot.count += 1;
 }
 
-// `contains(&name)` will not type-check: `aliases` holds `&'static str` against
-// a borrowed `&str`, so the membership test is spelled by hand (as in
-// `find_long`).
 #[allow(clippy::manual_contains)]
 fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
     globals
@@ -426,20 +394,19 @@ fn record_global<'a>(
                 return Err(Error::UnexpectedValue(g.display_name()));
             }
             hits.push(GlobalHit {
-                arg:   g,
+                arg: g,
                 value: None,
             });
         },
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => {
-                    it.next()
-                        .ok_or_else(|| Error::MissingValue(g.display_name()))?
-                },
+                None => it
+                    .next()
+                    .ok_or_else(|| Error::MissingValue(g.display_name()))?,
             };
             hits.push(GlobalHit {
-                arg:   g,
+                arg: g,
                 value: Some(value),
             });
         },
@@ -448,8 +415,7 @@ fn record_global<'a>(
     Ok(())
 }
 
-/// apply the hits this `spec` owns into its slots, leaving the rest to bubble
-/// up.
+/// apply the hits this `spec` owns into its slots, leaving the rest to bubble up
 fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec<GlobalHit<'a>>) {
     hits.retain(|h| {
         let Some(idx) = spec.args.iter().position(|a| core::ptr::eq(a, h.arg)) else {
@@ -470,7 +436,7 @@ fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec
     });
 }
 
-/// assign a bare token to the next positional, or a trailing/variadic sink.
+/// assign a bare token to the next positional, or a trailing/variadic sink
 fn positional<'a>(
     spec: &CommandSpec,
     m: &mut Matches<'a>,
@@ -503,10 +469,9 @@ fn positional<'a>(
 
 /// enforce `required` and group constraints. defaults are injected separately
 /// by `apply_defaults`, so a defaulted arg never counts as missing here.
-fn finalize(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Result<(), Error> {
+fn finalise(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Result<(), Error> {
     for (i, a) in spec.args.iter().enumerate() {
-        // a `default` or `env` fallback is resolved later by the typed readers,
-        // so it counts as present here.
+        // fallback is resolved later, so it counts as present
         let present = m.slots[i].count > 0 || !m.slots[i].values.is_empty();
         if !present && a.default.is_none() && a.env.is_none() && a.required {
             return Err(Error::MissingRequired(a.display_name()));
@@ -523,8 +488,8 @@ fn finalize(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Re
             .collect();
         if set.len() > 1 {
             return Err(Error::Conflict {
-                group:  g.name.to_owned(),
-                first:  set[0].clone(),
+                group: g.name.to_owned(),
+                first: set[0].clone(),
                 second: set[1].clone(),
             });
         }
@@ -546,8 +511,8 @@ fn finalize(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Re
     for &(a, b) in spec.conflicts {
         if m.slots[a].count > 0 && m.slots[b].count > 0 {
             return Err(Error::Conflict {
-                group:  String::new(),
-                first:  spec.args[a].display_name(),
+                group: String::new(),
+                first: spec.args[a].display_name(),
                 second: spec.args[b].display_name(),
             });
         }
@@ -586,10 +551,7 @@ fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{
-        GroupSpec,
-        SubSpec,
-    };
+    use crate::spec::{GroupSpec, SubSpec};
 
     fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
         a.to_vec()
@@ -608,14 +570,14 @@ mod tests {
         ArgSpec::new(Kind::Positional).value_name("rest").multi(), // 4
     ];
     const FLAT: CommandSpec = CommandSpec {
-        name:         "flat",
-        version:      "0.1.0",
-        hash:         None,
-        about:        "a flat command",
-        args:         FLAT_ARGS,
-        groups:       &[],
-        conflicts:    &[],
-        subs:         &[],
+        name: "flat",
+        version: "0.1.0",
+        hash: None,
+        about: "a flat command",
+        args: FLAT_ARGS,
+        groups: &[],
+        conflicts: &[],
+        subs: &[],
         sub_optional: false,
     };
 
@@ -625,9 +587,10 @@ mod tests {
 
     #[test]
     fn longs_shorts_counts_positionals() {
-        let m = parse(&FLAT, &[
-            "--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma",
-        ])
+        let m = parse(
+            &FLAT,
+            &["--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma"],
+        )
         .unwrap();
         assert!(m.flag(0));
         assert_eq!(m.raw(1), Some("/x"));
@@ -698,14 +661,14 @@ mod tests {
     fn defaults_resolve_in_readers() {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("level").default("info")];
         const SPEC: CommandSpec = CommandSpec {
-            name:         "d",
-            version:      "",
-            hash:         None,
-            about:        "",
-            args:         ARGS,
-            groups:       &[],
-            conflicts:    &[],
-            subs:         &[],
+            name: "d",
+            version: "",
+            hash: None,
+            about: "",
+            args: ARGS,
+            groups: &[],
+            conflicts: &[],
+            subs: &[],
             sub_optional: false,
         };
         // unset: the reader falls back to the default
@@ -729,14 +692,14 @@ mod tests {
             ArgSpec::new(Kind::Flag).long("fetch").group("mode"),
         ];
         const OPT: CommandSpec = CommandSpec {
-            name:         "g",
-            version:      "",
-            hash:         None,
-            about:        "",
-            args:         ARGS,
-            groups:       &[GroupSpec::new("mode")],
-            conflicts:    &[],
-            subs:         &[],
+            name: "g",
+            version: "",
+            hash: None,
+            about: "",
+            args: ARGS,
+            groups: &[GroupSpec::new("mode")],
+            conflicts: &[],
+            subs: &[],
             sub_optional: false,
         };
         const REQ: CommandSpec = CommandSpec {
@@ -759,14 +722,14 @@ mod tests {
             ArgSpec::new(Kind::Flag).long("b"),
         ];
         const SPEC: CommandSpec = CommandSpec {
-            name:         "c",
-            version:      "",
-            hash:         None,
-            about:        "",
-            args:         ARGS,
-            groups:       &[],
-            conflicts:    &[(0, 1)],
-            subs:         &[],
+            name: "c",
+            version: "",
+            hash: None,
+            about: "",
+            args: ARGS,
+            groups: &[],
+            conflicts: &[(0, 1)],
+            subs: &[],
             sub_optional: false,
         };
         assert!(parse(&SPEC, &["--a"]).is_ok());
@@ -783,32 +746,32 @@ mod tests {
         ArgSpec::new(Kind::Flag).long("force").short('f'),
     ];
     const ADD: CommandSpec = CommandSpec {
-        name:         "add",
-        version:      "",
-        hash:         None,
-        about:        "add a pin",
-        args:         ADD_ARGS,
-        groups:       &[],
-        conflicts:    &[],
-        subs:         &[],
+        name: "add",
+        version: "",
+        hash: None,
+        about: "add a pin",
+        args: ADD_ARGS,
+        groups: &[],
+        conflicts: &[],
+        subs: &[],
         sub_optional: false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
-        name:    "add",
+        name: "add",
         aliases: &[],
-        about:   "add a pin",
-        spec:    &ADD,
-        hidden:  false,
+        about: "add a pin",
+        spec: &ADD,
+        hidden: false,
     }];
     const ROOT: CommandSpec = CommandSpec {
-        name:         "prog",
-        version:      "1.0.0",
-        hash:         None,
-        about:        "demo",
-        args:         &[],
-        groups:       &[],
-        conflicts:    &[],
-        subs:         ROOT_SUBS,
+        name: "prog",
+        version: "1.0.0",
+        hash: None,
+        about: "demo",
+        args: &[],
+        groups: &[],
+        conflicts: &[],
+        subs: ROOT_SUBS,
         sub_optional: false,
     };
 

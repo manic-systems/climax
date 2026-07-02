@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! PTY overlay runtime for bang widgets rendered with screw.
+//! PTY overlay runtime for bang widgets rendered with screw
 
 use bang_core::Widget as BangWidget;
 use screw::Theme;
@@ -8,7 +8,7 @@ use screw::Theme;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessSpec {
     program: String,
-    args:    Vec<String>,
+    args: Vec<String>,
 }
 
 impl ProcessSpec {
@@ -16,7 +16,7 @@ impl ProcessSpec {
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
-            args:    Vec::new(),
+            args: Vec::new(),
         }
     }
 
@@ -66,11 +66,11 @@ pub enum CtrlCPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OverlayConfig {
-    process:      ProcessSpec,
+    process: ProcessSpec,
     input_policy: InputPolicy,
-    placement:    OverlayPlacement,
-    ctrl_c:       CtrlCPolicy,
-    theme:        Theme,
+    placement: OverlayPlacement,
+    ctrl_c: CtrlCPolicy,
+    theme: Theme,
 }
 
 impl OverlayConfig {

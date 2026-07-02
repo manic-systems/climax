@@ -1,7 +1,0 @@
-error: pound: #[pound(parse = "...")] needs a value field (`flag`)
- --> tests/ui/parse_on_flag.rs:9:10
-  |
-9 | #[derive(Parse)]
-  |          ^^^^^
-  |
-  = note: this error originates in the derive macro `Parse` (in Nightly builds, run with -Z macro-backtrace for more info)

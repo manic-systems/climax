@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! the single parse error type, plus the help/version early-exit signals.
-//! `Display` is hand-written, no derive dependency.
+//! the parse error type and early-exit signals
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
 
-/// anything a parse attempt can produce.
-///
-/// [`Self::Help`] and [`Self::Version`] are not failures, they carry rendered
-/// text and mean "print this and exit 0". the `parse*` entry points handle
-/// that, the `try_parse*` ones leave it to you.
+/// anything a parse attempt can produce
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// unrecognised `--flag` or `-x`
@@ -30,14 +26,14 @@ pub enum Error {
     MissingSubcommand,
     /// a value failed to parse into its target type
     Value {
-        arg:   String,
+        arg: String,
         value: String,
-        msg:   String,
+        msg: String,
     },
     /// two members of a mutually-exclusive group were both set
     Conflict {
-        group:  String,
-        first:  String,
+        group: String,
+        first: String,
         second: String,
     },
     /// a required group had none of its members set
@@ -49,14 +45,13 @@ pub enum Error {
 }
 
 impl Error {
-    /// true for the two non-failure signals.
+    /// for non-failure signals
     #[must_use]
     pub const fn is_exit(&self) -> bool {
         matches!(*self, Self::Help(_) | Self::Version(_))
     }
 
-    /// print to the right stream and exit: help/version to stdout with 0, real
-    /// errors to stderr with 2.
+    /// print and exit
     #[cfg(feature = "std")]
     pub fn exit(self) -> ! {
         match self {

@@ -1,7 +1,0 @@
-error: pound: #[pound(parse = "...")] cannot be combined with min, max, or max_len (`byte`); use validate instead
-  --> tests/ui/parse_with_bounds.rs:11:10
-   |
-11 | #[derive(Parse)]
-   |          ^^^^^
-   |
-   = note: this error originates in the derive macro `Parse` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -11,8 +11,7 @@ license.workspace    = true
 repository.workspace = true
 
 [features]
-# forwarded from pound's `help` feature, see pound/Cargo.toml. when off, the
-# derive bakes empty help strings so they never reach the binary.
+# forwarded from pound's `help` feature, see pound/Cargo.toml
 help = [  ]
 
 [lib]

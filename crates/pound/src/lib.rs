@@ -4,21 +4,15 @@
 
 //! pound: a low footprint, derive-first cli parser.
 //!
-//! the derive emits a flat `&'static` [`spec::CommandSpec`] and one non-generic
-//! engine interprets it, so derives stay ergonomic while adding almost nothing
-//! to the binary and nothing at runtime.
 //!
-//! field shapes carry meaning, so most fields need no attribute:
-//!
-//! | shape       | meaning              |
+//! | type        | meaning              |
 //! |-------------|----------------------|
-//! | `bool`      | flag, presence is true |
+//! | `bool`      | flag                 |
 //! | `T`         | required positional  |
 //! | `Option<T>` | optional positional  |
 //! | `Vec<T>`    | variadic/repeatable  |
 //!
-//! `#[pound(short)]` / `#[pound(long)]` promote any of these to a named option.
-//! the annotated thing is the switch, values stay bare.
+//! `#[pound(short)]` / `#[pound(long)]` promote these to a named option
 //!
 //! ```ignore
 //! use pound::Parse;
@@ -35,15 +29,11 @@
 //! let add = Add::parse(); // exits on -h/--help or a parse error
 //! ```
 //!
-//! you can also hand-build a [`spec::CommandSpec`] and impl [`Parse`] yourself,
-//! as the test suite does.
+//! you may also hand-build a [`spec::CommandSpec`] and impl [`Parse`] yourself.
 
 extern crate alloc;
 
-/// the `alloc` items the modules lean on, in one place. populated only under
-/// `no_std` (the `std` prelude already provides them), so every module can
-/// `use crate::alloc_prelude::*` without repeating `cfg`-gated import lists —
-/// and adding a `String`/`format!`/`Vec` anywhere just works in both builds.
+// alloc machinery for nostd
 mod alloc_prelude {
     #[cfg(not(feature = "std"))]
     pub(crate) use alloc::{
@@ -67,8 +57,6 @@ mod value;
 
 pub use error::Error;
 pub use parse::Matches;
-// the derive macros share names with the `Parse` trait and `FromArg`, which is
-// fine: macros and types live in separate namespaces (same trick serde uses).
 #[cfg(feature = "derive")]
 pub use pound_derive::{
     Parse,
@@ -86,7 +74,7 @@ pub use value::{
     ValueError,
 };
 
-/// the trait the derive targets, also implementable by hand.
+/// the trait the derive targets
 ///
 /// a type carries its static [`CommandSpec`] and reads itself out of
 /// [`Matches`]. [`Self::parse`] is the common "parse argv or exit" path, the

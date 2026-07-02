@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! a non-trivial demo: a secrets-manager CLI that exercises the whole pound
-//! surface. value enums, nested subcommands, groups, conflicts, trailing args,
-//! a custom `FromArg`, and the override attributes all show up here.
+//! a secrets-manager CLI that exercises the whole pound
+//! surface.
+//! demonstrates value enums, nested subcommands, groups, conflicts,
+//! trailing args, a custom `FromArg`, and override attributes.
 //!
 //! run `cargo run --example vault -- --help`
 
@@ -10,19 +11,10 @@
 
 use std::time::Duration;
 
-use pound::{
-    FromArg,
-    Parse,
-    ValueEnum,
-    ValueError,
-};
+use pound::{FromArg, Parse, ValueEnum, ValueError};
 
-// ── a custom value type
-// ───────────────────────────────────────────────────────
-
-/// a time-to-live like `30s`, `15m`, `2h`, `7d`, parsed into a `Duration`.
-/// hand-implementing `FromArg` is all it takes to use a bespoke type as a
-/// field.
+/// a TTL parsed into a `Duration`.
+/// implementing `FromArg` allows us to support any value type
 #[derive(Debug)]
 struct Ttl(Duration);
 
@@ -48,8 +40,6 @@ impl FromArg for Ttl {
         Ok(Self(Duration::from_secs(secs)))
     }
 }
-
-// ── value enums ──────────────────────────────────────────────────────────────
 
 /// output format
 #[derive(ValueEnum, Debug)]
@@ -77,9 +67,6 @@ enum OnConflict {
     Fail,
 }
 
-// ── nested subcommand tree
-// ────────────────────────────────────────────────────
-
 /// namespace management
 #[derive(Parse, Debug)]
 enum NsCmd {
@@ -98,7 +85,7 @@ enum NsCmd {
     },
     /// remove a namespace and all its secrets
     Rm {
-        name:  String,
+        name: String,
         #[pound(short, long)]
         force: bool,
     },
@@ -106,92 +93,88 @@ enum NsCmd {
     Rename { from: String, to: String },
 }
 
-// ── top-level subcommands
-// ─────────────────────────────────────────────────────
-
 /// the top-level subcommand
 #[derive(Parse, Debug)]
 enum Cmd {
     /// store or update a secret
     Set {
-        key:   String,
+        key: String,
         value: String,
         /// secret type hint (short overridden to -K so -k stays free)
         #[pound(short = 'K', long)]
-        kind:  Option<Kind>,
+        kind: Option<Kind>,
         /// tag for grouping (repeatable)
         #[pound(short, long)]
-        tag:   Vec<String>,
+        tag: Vec<String>,
         /// expire after this long, e.g. 30m, 2h, 7d (custom `FromArg`)
         #[pound(long)]
-        ttl:   Option<Ttl>,
+        ttl: Option<Ttl>,
         /// mark as read-only
         #[pound(long)]
-        lock:  bool,
+        lock: bool,
     },
     /// retrieve a secret
     Get {
-        key:    String,
+        key: String,
         /// print in this format
         #[pound(short, long)]
         format: Option<Format>,
         /// copy to clipboard instead of printing (conflicts with --format)
         #[pound(short, long, conflicts_with = "format")]
-        clip:   bool,
+        clip: bool,
     },
     /// list secrets in the active namespace
     List {
         /// filter by tag
         #[pound(short, long)]
-        tag:    Option<String>,
+        tag: Option<String>,
         /// filter by kind
         #[pound(short, long)]
-        kind:   Option<Kind>,
+        kind: Option<Kind>,
         #[pound(short, long)]
         format: Option<Format>,
         /// show values (hidden by default)
         #[pound(long)]
-        show:   bool,
+        show: bool,
     },
     /// delete a secret (also reachable as `delete`)
     #[pound(alias = "delete")]
     Rm {
-        key:   String,
+        key: String,
         #[pound(short, long)]
         force: bool,
     },
     /// import secrets from a file
     Import {
-        /// file to read (explicit positional, shown as `<PATH>` via
-        /// `value_name`)
+        /// file to read (explicit positional, shown as `<PATH>`)
         #[pound(positional, value_name = "PATH")]
-        file:        String,
+        file: String,
         #[pound(short, long)]
-        format:      Option<Format>,
+        format: Option<Format>,
         /// how to handle existing keys
         #[pound(long, default = "skip")]
         on_conflict: OnConflict,
     },
-    /// export secrets to a file or stdout (pick at most one destination)
+    /// export target for secrets
     Export {
         #[pound(short, long)]
-        format:         Option<Format>,
+        format: Option<Format>,
         /// write to this file
         #[pound(short, long, group = "dest")]
-        output:         Option<String>,
+        output: Option<String>,
         /// write to stdout
         #[pound(long, group = "dest")]
-        stdout:         bool,
+        stdout: bool,
         /// filter by tag
         #[pound(short, long)]
-        tag:            Option<String>,
+        tag: Option<String>,
         /// include locked secrets
         #[pound(long)]
         include_locked: bool,
     },
     /// run a command with the namespace's secrets in its environment
     Exec {
-        /// the command and its args, everything after `--`
+        /// the command + args, ie. everything after `--`
         #[pound(trailing)]
         command: Vec<String>,
     },
@@ -200,15 +183,13 @@ enum Cmd {
         #[pound(subcommand)]
         cmd: NsCmd,
     },
-    /// show the current auth identity (exposed as `whoami`)
+    /// show the current auth identity
     #[pound(name = "whoami")]
     WhoAmI,
     /// internal diagnostics, omitted from help
     #[pound(hidden)]
     Doctor,
 }
-
-// ── root ──────────────────────────────────────────────────────────────────────
 
 /// a simple secrets manager
 #[derive(Parse, Debug)]

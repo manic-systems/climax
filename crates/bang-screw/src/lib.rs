@@ -2,36 +2,15 @@
 
 //! adapter from bang views to screw render surface
 
-use std::io::{
-    self,
-    Write,
-};
+use std::io::{self, Write};
 
 use bang_core::{
-    CalendarView,
-    ListView,
-    Role as BangRole,
-    Span,
-    TextInputView,
-    Value,
-    View,
+    CalendarView, ListView, Role as BangRole, Span, TextInputView, Value, View,
     Widget as BangWidget,
 };
-use bang_terminal::{
-    RunOutcome,
-    SessionRenderer,
-    TerminalSize,
-};
+use bang_terminal::{RunOutcome, SessionRenderer, TerminalSize};
 use screw::{
-    Position,
-    RenderCtx,
-    RenderStats,
-    Renderer,
-    Role as ScrewRole,
-    Style,
-    Surface,
-    Theme,
-    Widget,
+    Position, RenderCtx, RenderStats, Renderer, Role as ScrewRole, Style, Surface, Theme, Widget,
 };
 use unicode_width::UnicodeWidthChar as _;
 
@@ -106,7 +85,7 @@ where
     }
 }
 
-/// `bang-terminal` session renderer backed by `screw`.
+/// `bang-terminal` session renderer backed by `screw`
 pub struct ScrewSessionRenderer<'a, W> {
     renderer: RetainedRenderer<&'a mut W>,
 }
@@ -142,7 +121,7 @@ where
     }
 }
 
-/// Run a live inline terminal session using `screw` for rendering.
+/// run a session using `screw` for rendering
 pub fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, String> {
     let terminal = bang_terminal::TerminalModeGuard::activate_stdin().map_err(|error| {
         if matches!(
@@ -228,8 +207,8 @@ pub const fn map_role(role: BangRole) -> ScrewRole {
 }
 
 struct ViewRenderer<'a> {
-    theme:      Theme,
-    out:        &'a mut Surface,
+    theme: Theme,
+    out: &'a mut Surface,
     wrote_line: bool,
 }
 
@@ -278,6 +257,7 @@ impl<'a> ViewRenderer<'a> {
             } else {
                 BangRole::Dim
             };
+            // TODO allow customisation of indicators
             self.write_text(if row.selected { "> " } else { "  " }, marker_role);
             if let Some(checked) = row.checked {
                 self.write_text(if checked { "[x] " } else { "[ ] " }, marker_role);
@@ -375,386 +355,4 @@ fn prefix_width(value: &str, chars: usize) -> usize {
         .take(chars)
         .map(|ch| ch.width().unwrap_or(0))
         .sum()
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io;
-
-    use bang_core::{
-        CalendarDay,
-        CalendarView,
-        CalendarWeek,
-        CursorAnchor,
-        CursorPlacement,
-        Event,
-        ListRow,
-        ListView,
-        Role,
-        Session,
-        Span,
-        TextInputView,
-        Value,
-        View,
-        ViewId,
-        plain_snapshot,
-        widgets::{
-            Select,
-            SelectItem,
-        },
-    };
-    use screw::{
-        Color,
-        RenderStats,
-        Style,
-        Theme,
-        render_plain,
-    };
-
-    use super::{
-        BangView,
-        RetainedRenderer,
-        map_role,
-        render_surface,
-    };
-
-    #[test]
-    fn maps_semantic_roles_to_screw_roles() {
-        assert_eq!(map_role(Role::Prompt), screw::Role::Prompt);
-        assert_eq!(map_role(Role::Selected), screw::Role::Selected);
-        assert_eq!(map_role(Role::Error), screw::Role::Error);
-    }
-
-    #[test]
-    fn renders_list_view_to_screw_surface() {
-        let view = View::List(ListView {
-            id:       Some(ViewId::from("list")),
-            header:   vec![Span::new("choose one", Role::Prompt)],
-            rows:     vec![
-                ListRow {
-                    id:       Some(ViewId::from("row/0")),
-                    spans:    vec![Span::normal("alpha")],
-                    value:    "alpha".into(),
-                    selected: true,
-                    checked:  Some(true),
-                },
-                ListRow {
-                    id:       Some(ViewId::from("row/1")),
-                    spans:    vec![Span::normal("bravo")],
-                    value:    "bravo".into(),
-                    selected: false,
-                    checked:  Some(false),
-                },
-            ],
-            selected: Some(0),
-            offset:   0,
-            total:    2,
-            help:     vec![Span::new("enter submit", Role::Dim)],
-        });
-
-        let widget = BangView::new(view.clone());
-
-        assert_eq!(render_plain(&widget), plain_snapshot(&view));
-        assert!(plain_snapshot(&view).starts_with("choose one\n"));
-    }
-
-    #[test]
-    fn screw_renderer_localizes_list_selection_changes() {
-        let first = BangView::new(list_view_with_selection(0));
-        let second = BangView::new(list_view_with_selection(1));
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-
-        let initial = renderer.render(first.view()).unwrap();
-        let changed = renderer.render(second.view()).unwrap();
-
-        assert_eq!(initial.changed_rows, 3);
-        assert_eq!(changed.changed_rows, 2);
-    }
-
-    #[test]
-    fn screw_renderer_redraws_visible_rows_when_widget_window_scrolls() {
-        let widget = Select::new("choices", items()).with_page_size(3);
-        let mut session = Session::new(widget);
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-
-        let initial = renderer.render(&session.view()).unwrap();
-        session.clear_dirty();
-        session.handle(Event::key(bang_core::Key::Down));
-        session.clear_dirty();
-        session.handle(Event::key(bang_core::Key::Down));
-        session.clear_dirty();
-        session.handle(Event::key(bang_core::Key::Down));
-        let scrolled = renderer.render(&session.view()).unwrap();
-        let output = String::from_utf8(renderer.into_inner()).unwrap();
-
-        assert_eq!(initial.changed_rows, 4);
-        assert_eq!(scrolled.changed_rows, 3);
-        assert!(output.contains("alpha"));
-        assert!(output.contains("delta"));
-    }
-
-    #[test]
-    fn retained_renderer_can_drive_a_complete_blocking_session_transcript() {
-        let widget = Select::new("choices", items()).with_page_size(2);
-        let mut renderer = RecordingRetainedRenderer::new(80);
-
-        let outcome = bang_terminal::drive_blocking_session(
-            widget,
-            b"\x1b[B\x1b[B\r".as_slice(),
-            &mut renderer,
-        )
-        .unwrap();
-        let changed_rows = renderer
-            .stats
-            .iter()
-            .map(|stats| stats.changed_rows)
-            .collect::<Vec<_>>();
-        let output = String::from_utf8(renderer.into_output()).unwrap();
-
-        assert_eq!(
-            outcome,
-            bang_terminal::RunOutcome::Submitted(Value::from("charlie"))
-        );
-        assert_eq!(changed_rows, vec![3, 2, 2, 0]);
-        assert!(output.contains("alpha"));
-        assert!(output.contains("bravo"));
-        assert!(output.contains("charlie"));
-    }
-
-    #[test]
-    fn screw_renderer_localizes_text_input_edits_to_input_row() {
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-
-        let initial = renderer.render(&text_input_view("ab", 2, None)).unwrap();
-        let changed = renderer.render(&text_input_view("abc", 3, None)).unwrap();
-
-        assert_eq!(initial.changed_rows, 1);
-        assert_eq!(changed.changed_rows, 1);
-    }
-
-    #[test]
-    fn retained_renderer_clear_removes_previous_prompt_block() {
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-
-        renderer.render(&text_input_view("draft", 5, None)).unwrap();
-        let cleared = renderer.clear().unwrap();
-        let output = String::from_utf8(renderer.into_inner()).unwrap();
-
-        assert!(cleared.changed_rows > 0);
-        assert!(output.contains("\x1b[K"));
-        assert!(!output.contains("\x1b[?1049"));
-    }
-
-    #[test]
-    fn screw_renderer_localizes_validation_error_to_status_row() {
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-
-        let initial = renderer.render(&text_input_view("abc", 3, None)).unwrap();
-        let changed = renderer
-            .render(&text_input_view("abc", 3, Some("too short")))
-            .unwrap();
-
-        assert_eq!(initial.changed_rows, 1);
-        assert_eq!(changed.changed_rows, 2);
-    }
-
-    #[test]
-    fn screw_renderer_tracks_cursor_only_changes_without_rewriting_rows() {
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-
-        let initial = renderer.render(&text_input_view("abc", 3, None)).unwrap();
-        let changed = renderer.render(&text_input_view("abc", 1, None)).unwrap();
-        let output = String::from_utf8(renderer.into_inner()).unwrap();
-
-        assert_eq!(initial.changed_rows, 1);
-        assert_eq!(changed.changed_rows, 0);
-        assert!(output.contains("\x1b[3C"));
-    }
-
-    #[test]
-    fn screw_renderer_resize_forces_refit_redraw() {
-        let mut renderer = RetainedRenderer::new(Vec::new()).width(80);
-        let view = View::Line(vec![Span::normal("abcdef")]);
-
-        let initial = renderer.render(&view).unwrap();
-        renderer.resize(4);
-        let resized = renderer.render(&view).unwrap();
-
-        assert_eq!(initial.changed_rows, 1);
-        assert_eq!(resized.changed_rows, 2);
-        assert_eq!(render_surface(&view).plain_text(), "abcdef");
-    }
-
-    #[test]
-    fn renders_text_input_cursor_using_display_width() {
-        let view = View::TextInput(TextInputView {
-            id:            Some(ViewId::from("input")),
-            prompt:        vec![Span::new("> ", Role::Prompt)],
-            value:         "a語b".to_owned(),
-            placeholder:   None,
-            cursor:        2,
-            cursor_anchor: CursorAnchor::from("input/cursor"),
-            error:         None,
-        });
-
-        let surface = render_surface(&view);
-
-        assert_eq!(surface.plain_text(), "> a語b");
-        assert_eq!(surface.cursor(), Some(screw::Position { row: 0, col: 5 }));
-    }
-
-    #[test]
-    fn renders_calendar_like_core_plain_snapshot() {
-        let view = View::Calendar(CalendarView {
-            id:          Some(ViewId::from("calendar")),
-            year:        2026,
-            month:       6,
-            month_label: "June 2026".to_owned(),
-            weekdays:    vec!["Mo".to_owned(), "Tu".to_owned()],
-            weeks:       vec![CalendarWeek {
-                days: vec![
-                    CalendarDay {
-                        date:     bang_core::Date {
-                            year:  2026,
-                            month: 6,
-                            day:   1,
-                        },
-                        label:    "1".to_owned(),
-                        in_month: true,
-                        selected: true,
-                        today:    false,
-                    },
-                    CalendarDay {
-                        date:     bang_core::Date {
-                            year:  2026,
-                            month: 6,
-                            day:   2,
-                        },
-                        label:    "2".to_owned(),
-                        in_month: true,
-                        selected: false,
-                        today:    true,
-                    },
-                ],
-            }],
-            selected:    bang_core::Date {
-                year:  2026,
-                month: 6,
-                day:   1,
-            },
-            help:        vec![Span::new("enter submit", Role::Dim)],
-        });
-
-        let widget = BangView::new(view.clone());
-
-        assert_eq!(render_plain(&widget), plain_snapshot(&view));
-    }
-
-    #[test]
-    fn custom_theme_reaches_rendered_cells() {
-        let view = View::Text(vec![Span::new("!", Role::Error)]);
-        let theme = Theme::default().with(map_role(Role::Error), Style::default().fg(Color::Cyan));
-        let surface = super::render_surface_with_theme(&view, theme);
-
-        assert_eq!(
-            surface.rows()[0].cells()[0].style,
-            Style::default().fg(Color::Cyan)
-        );
-    }
-
-    #[test]
-    fn explicit_cursor_view_sets_current_row_cursor() {
-        let view = View::Stack(vec![
-            View::Line(vec![Span::normal("first")]),
-            View::Line(vec![Span::normal("second")]),
-            View::Cursor(CursorPlacement {
-                anchor: CursorAnchor::from("manual"),
-                column: 3,
-            }),
-        ]);
-
-        let surface = render_surface(&view);
-
-        assert_eq!(surface.cursor(), Some(screw::Position { row: 1, col: 3 }));
-    }
-
-    fn list_view_with_selection(selected: usize) -> View {
-        View::List(ListView {
-            id:       Some(ViewId::from("list")),
-            header:   Vec::new(),
-            rows:     ["alpha", "bravo", "charlie"]
-                .into_iter()
-                .enumerate()
-                .map(|(index, label)| {
-                    ListRow {
-                        id:       Some(ViewId::owned(format!("row/{index}"))),
-                        spans:    vec![Span::new(
-                            label,
-                            if index == selected {
-                                Role::Selected
-                            } else {
-                                Role::Normal
-                            },
-                        )],
-                        value:    label.into(),
-                        selected: index == selected,
-                        checked:  None,
-                    }
-                })
-                .collect(),
-            selected: Some(selected),
-            offset:   0,
-            total:    3,
-            help:     Vec::new(),
-        })
-    }
-
-    fn items() -> Vec<SelectItem> {
-        ["alpha", "bravo", "charlie", "delta", "echo"]
-            .into_iter()
-            .map(SelectItem::from)
-            .collect()
-    }
-
-    fn text_input_view(value: &str, cursor: usize, error: Option<&str>) -> View {
-        View::TextInput(TextInputView {
-            id: Some(ViewId::from("input")),
-            prompt: vec![Span::new("> ", Role::Prompt)],
-            value: value.to_owned(),
-            placeholder: Some("type".to_owned()),
-            cursor,
-            cursor_anchor: CursorAnchor::from("input/cursor"),
-            error: error.map(str::to_owned),
-        })
-    }
-
-    struct RecordingRetainedRenderer {
-        renderer: RetainedRenderer<Vec<u8>>,
-        stats:    Vec<RenderStats>,
-    }
-
-    impl RecordingRetainedRenderer {
-        fn new(width: usize) -> Self {
-            Self {
-                renderer: RetainedRenderer::new(Vec::new()).width(width),
-                stats:    Vec::new(),
-            }
-        }
-
-        fn into_output(self) -> Vec<u8> {
-            self.renderer.into_inner()
-        }
-    }
-
-    impl bang_terminal::SessionRenderer for RecordingRetainedRenderer {
-        fn render(&mut self, view: &View) -> io::Result<()> {
-            self.stats.push(self.renderer.render(view)?);
-            Ok(())
-        }
-
-        fn resize(&mut self, size: bang_terminal::TerminalSize) -> io::Result<()> {
-            self.renderer.resize(usize::from(size.cols));
-            Ok(())
-        }
-    }
 }

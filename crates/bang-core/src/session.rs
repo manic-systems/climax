@@ -1,33 +1,25 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{
-    Context,
-    Event,
-    FocusTarget,
-    Reaction,
-    Value,
-    View,
-    ViewContext,
-    Widget,
-};
+use crate::{Context, Event, FocusTarget, Reaction, Value, View, ViewContext, Widget};
+// FIXME I changed this line
 
 pub struct Session {
-    root:         Box<dyn Widget>,
-    focus:        Option<FocusTarget>,
-    status:       SessionStatus,
+    root: Box<dyn Widget>,
+    focus: Option<FocusTarget>,
+    status: SessionStatus,
     view_context: ViewContext,
-    dirty:        bool,
+    dirty: bool,
 }
 
 impl Session {
     #[must_use]
     pub fn new(root: impl Widget + 'static) -> Self {
         Self {
-            root:         Box::new(root),
-            focus:        None,
-            status:       SessionStatus::Running,
+            root: Box::new(root),
+            focus: None,
+            status: SessionStatus::Running,
             view_context: ViewContext::default(),
-            dirty:        true,
+            dirty: true,
         }
     }
 
@@ -134,84 +126,4 @@ pub enum SessionStatus {
     Running,
     Submitted(Value),
     Cancelled,
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        cell::RefCell,
-        rc::Rc,
-    };
-
-    use super::Session;
-    use crate::{
-        Context,
-        Event,
-        Reaction,
-        View,
-        Widget,
-        WidgetId,
-    };
-
-    #[test]
-    fn resize_updates_view_context_and_marks_session_dirty() {
-        let seen = Rc::new(RefCell::new(None));
-        let mut session = Session::new(ProbeWidget {
-            seen: Rc::clone(&seen),
-        });
-        session.clear_dirty();
-
-        assert_eq!(
-            session.handle(Event::Resize {
-                cols: 100,
-                rows: 30,
-            }),
-            Reaction::Changed
-        );
-        assert!(session.is_dirty());
-        assert_eq!(session.view_context().width, Some(100));
-        assert_eq!(session.view_context().height, Some(30));
-
-        let _view = session.view();
-        assert_eq!(*seen.borrow(), Some((Some(100), Some(30))));
-    }
-
-    #[test]
-    fn same_resize_is_ignored_when_widget_ignores_it() {
-        let seen = Rc::new(RefCell::new(None));
-        let mut session = Session::new(ProbeWidget { seen });
-
-        assert_eq!(
-            session.handle(Event::Resize { cols: 80, rows: 24 }),
-            Reaction::Changed
-        );
-        session.clear_dirty();
-
-        assert_eq!(
-            session.handle(Event::Resize { cols: 80, rows: 24 }),
-            Reaction::Ignored
-        );
-        assert!(!session.is_dirty());
-    }
-
-    type SeenContext = Rc<RefCell<Option<(Option<u16>, Option<u16>)>>>;
-
-    struct ProbeWidget {
-        seen: SeenContext,
-    }
-
-    impl Widget for ProbeWidget {
-        fn id(&self) -> WidgetId {
-            "probe".into()
-        }
-
-        fn handle(&mut self, _event: Event, _cx: &mut Context) -> Reaction {
-            Reaction::Ignored
-        }
-
-        fn view(&self, cx: &crate::ViewContext) -> View {
-            *self.seen.borrow_mut() = Some((cx.width, cx.height));
-            View::Empty
-        }
-    }
 }

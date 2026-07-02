@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! turning a raw `&str` into a typed value.
+//! turning a raw `&str` into a typed value
 //!
 //! no blanket impl over `FromStr`: that would block a bespoke [`FromArg`] for
 //! any type that already has `FromStr` (uuids, ip addrs). instead std scalars
@@ -10,21 +10,22 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
 
 /// a value that would not parse, plus context for the message. the parser wraps
 /// it into [`crate::Error::Value`] once it knows which arg it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueError {
     pub value: String,
-    pub msg:   String,
+    pub msg: String,
 }
 
 impl ValueError {
     pub fn new(value: &str, msg: impl fmt::Display) -> Self {
         Self {
             value: value.to_owned(),
-            msg:   msg.to_string(),
+            msg: msg.to_string(),
         }
     }
 }

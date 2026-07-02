@@ -1,25 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 //! help and version rendering.
-//!
-//! with the `help` feature on, [`render`] builds an aligned, sectioned screen
-//! from the [`CommandSpec`]. with it off, help strings are not stored and
-//! [`render`] degrades to a one-line usage string.
 
-#[cfg(feature = "help")] use core::fmt::Write as _;
-
-#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
-use crate::spec::{
-    ArgSpec,
-    CommandSpec,
-};
 #[cfg(feature = "help")]
-use crate::spec::{
-    Kind,
-    SubSpec,
-};
+use core::fmt::Write as _;
 
-/// `name x.y.z (hash)`, omitting any part that is not set.
+#[cfg(not(feature = "std"))]
+use crate::alloc_prelude::*;
+use crate::spec::{ArgSpec, CommandSpec};
+#[cfg(feature = "help")]
+use crate::spec::{Kind, SubSpec};
+
 pub(crate) fn version_line(spec: &CommandSpec) -> String {
     let mut out = spec.name.to_owned();
     if !spec.version.is_empty() {
@@ -34,8 +25,6 @@ pub(crate) fn version_line(spec: &CommandSpec) -> String {
     out
 }
 
-/// uppercase metavar for an arg, gnu style: `value_name`, else the long name,
-/// else ARG.
 #[cfg(feature = "help")]
 fn metavar(a: &ArgSpec) -> String {
     let name = if a.value_name.is_empty() {
@@ -46,8 +35,6 @@ fn metavar(a: &ArgSpec) -> String {
     name.to_uppercase()
 }
 
-/// the positional token for the usage line, gnu style: `NAME`, `[NAME]`,
-/// `[NAME]...`.
 #[cfg(feature = "help")]
 fn usage_positional(a: &ArgSpec) -> String {
     let meta = metavar(a);
@@ -63,8 +50,6 @@ fn usage_positional(a: &ArgSpec) -> String {
     }
 }
 
-/// the left invocation column for an option row, gnu style: `-f, --force`,
-/// `-o, --output=FILE`, or `    --long=VAL` when there is no short.
 #[cfg(feature = "help")]
 fn invocation(a: &ArgSpec) -> String {
     let mut s = String::new();
@@ -89,7 +74,6 @@ fn invocation(a: &ArgSpec) -> String {
             }
         },
         (None, Some(l)) => {
-            // pad where `-x, ` would be so longs line up
             s.push_str("    --");
             s.push_str(l);
             if takes_value {
@@ -102,7 +86,6 @@ fn invocation(a: &ArgSpec) -> String {
     s
 }
 
-/// the description column for an arg: its help, then a possible-value list.
 #[cfg(feature = "help")]
 fn help_text(a: &ArgSpec) -> String {
     let mut s = a.help.to_owned();
@@ -129,7 +112,6 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
     let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
 
-    // usage line
     out.push_str("Usage: ");
     out.push_str(spec.name);
     if visible_args.iter().any(|a| !a.is_positional()) || !globals.is_empty() {
@@ -144,7 +126,6 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     }
     out.push('\n');
 
-    // subcommands
     if !visible_subs.is_empty() {
         out.push_str("\nCommands:\n");
         let width = visible_subs.iter().map(|s| s.name.len()).max().unwrap_or(0);
@@ -153,7 +134,6 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         }
     }
 
-    // positionals
     let positionals: Vec<(String, String)> = visible_args
         .iter()
         .filter(|a| a.is_positional())
@@ -164,7 +144,6 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         push_rows(&mut out, &positionals);
     }
 
-    // options
     out.push_str("\nOptions:\n");
     let mut rows: Vec<(String, String)> = visible_args
         .iter()

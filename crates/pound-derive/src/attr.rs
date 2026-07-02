@@ -1,58 +1,51 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! parsing `#[pound(...)]` metas and doc comments off venial attributes.
+//! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
-use proc_macro2::{
-    Delimiter,
-    TokenTree,
-};
-use venial::{
-    Attribute,
-    AttributeValue,
-};
+use proc_macro2::{Delimiter, TokenTree};
+use venial::{Attribute, AttributeValue};
 
-/// the parsed `#[pound(...)]` options for one field or item.
-// short/long are tristate: absent, bare, or with a value. the bool flags are an
-// attribute bag, not a state machine, so the bool-count lint does not apply.
+/// the parsed `#[pound(...)]` options for one field or item
+// short/long are tristate: absent, bare, or with a value
 #[allow(clippy::option_option, clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct Pound {
     /// `None` absent, `Some(None)` bare `short`, `Some(Some(c))` `short = 'c'`
-    pub short:           Option<Option<char>>,
+    pub short: Option<Option<char>>,
     /// `None` absent, `Some(None)` bare `long`, `Some(Some(s))` `long = "s"`
-    pub long:            Option<Option<String>>,
-    pub positional:      bool,
-    pub trailing:        bool,
-    pub count:           bool,
+    pub long: Option<Option<String>>,
+    pub positional: bool,
+    pub trailing: bool,
+    pub count: bool,
     /// field delegates to its type's subcommand tree
-    pub subcommand:      bool,
+    pub subcommand: bool,
     /// keep this arg/variant out of help output
-    pub hidden:          bool,
+    pub hidden: bool,
     /// named flag/option that descendant subcommands also accept
-    pub global:          bool,
-    pub group:           Option<String>,
-    pub default:         Option<String>,
-    pub env:             Option<String>,
-    pub value_name:      Option<String>,
-    pub help:            Option<String>,
-    pub name:            Option<String>,
-    pub version:         Option<String>,
+    pub global: bool,
+    pub group: Option<String>,
+    pub default: Option<String>,
+    pub env: Option<String>,
+    pub value_name: Option<String>,
+    pub help: Option<String>,
+    pub name: Option<String>,
+    pub version: Option<String>,
     /// field-level: minimum accepted parsed value
-    pub min:             Option<String>,
+    pub min: Option<String>,
     /// field-level: maximum accepted parsed value
-    pub max:             Option<String>,
+    pub max: Option<String>,
     /// field-level: maximum accepted raw character count
-    pub max_len:         Option<String>,
+    pub max_len: Option<String>,
     /// field-level: custom raw-value parser function
-    pub parse:           Option<String>,
+    pub parse: Option<String>,
     /// field-level: custom parsed-value validation function
-    pub validate:        Option<String>,
+    pub validate: Option<String>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
-    pub conflicts_with:  Vec<String>,
+    pub conflicts_with: Vec<String>,
     /// extra long names (fields) or command names (variants) that also match
-    pub aliases:         Vec<String>,
+    pub aliases: Vec<String>,
 }
 
 impl Pound {
@@ -62,7 +55,7 @@ impl Pound {
     }
 }
 
-/// collect `#[pound(...)]` options from a set of attributes.
+/// collect `#[pound(...)]` options from a set of attributes
 pub fn pound(attrs: &[Attribute]) -> Pound {
     let mut out = Pound::default();
     for attr in attrs {
@@ -75,7 +68,7 @@ pub fn pound(attrs: &[Attribute]) -> Pound {
     out
 }
 
-/// the joined, trimmed doc comment of an item or field, empty when none.
+/// the joined, trimmed doc comment of an item or field, empty when none
 pub fn doc(attrs: &[Attribute]) -> String {
     let mut lines = Vec::new();
     for attr in attrs {
@@ -93,7 +86,7 @@ fn path_is(attr: &Attribute, name: &str) -> bool {
     attr.path.len() == 1 && matches!(&attr.path[0], TokenTree::Ident(id) if *id == name)
 }
 
-/// split the comma-separated metas inside `pound(...)` and apply each.
+/// split the comma-separated metas inside `pound(...)` and apply each
 fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
     for seg in split_commas(tokens) {
         let Some(TokenTree::Ident(key)) = seg.first() else {
@@ -145,14 +138,12 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
     }
 }
 
-/// split a comma list value into trimmed, non-empty names.
 fn csv(v: &str) -> impl Iterator<Item = String> + '_ {
     v.split(',')
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
 }
 
-/// split a flat token list on top-level commas.
 fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
     let mut segs = Vec::new();
     let mut cur = Vec::new();
@@ -171,7 +162,6 @@ fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
     segs
 }
 
-/// strip the quotes off a string or char literal token, leaving its content.
 fn unquote(tok: &TokenTree) -> String {
     let raw = match tok {
         TokenTree::Literal(l) => l.to_string(),
