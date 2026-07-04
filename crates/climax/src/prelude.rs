@@ -46,6 +46,15 @@ pub use screw::{
 #[cfg(feature = "interactive")] pub use crate::prompt;
 #[cfg(feature = "render")] pub use crate::status;
 pub use crate::{
+    Context,
     Error,
     Result,
+    run_with,
 };
+#[cfg(feature = "interactive")]
+pub use crate::{
+    OutputContext,
+    PromptContext,
+};
+#[cfg(feature = "parse")]
+pub use crate::run;
