@@ -10,10 +10,9 @@ keywords    = [ "cli", "terminal", "prompts", "args", "tui" ]
 categories  = [ "command-line-interface", "command-line-utilities" ]
 
 [features]
-default     = [ "derive", "interactive", "render", "json" ]
+default     = [ "derive", "interactive", "render" ]
 derive      = [ "parse", "pound/derive" ]
 interactive = [ "dep:bang-core", "dep:bang-terminal", "dep:bang-screw", "render" ]
-json        = [ "dep:serde_json" ]
 parse       = [ "dep:pound" ]
 pty-overlay = [ "parse", "interactive", "dep:bang-screw-pty" ]
 render      = [ "dep:screw" ]
@@ -28,7 +27,6 @@ pound = { path = "../pound", version = "0.1.6", optional = true, default-feature
   "help",
 ] }
 screw = { path = "../screw", version = "0.0.1", optional = true }
-serde_json = { version = "1", optional = true }
 
 [lints.clippy]
 cargo    = { level = "warn", priority = -1 }

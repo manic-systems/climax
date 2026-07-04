@@ -2,7 +2,11 @@
 
 //! adapter from bang views to screw render surface
 
-use std::io::{self, Write};
+use std::{
+    error,
+    fmt,
+    io::{self, Write},
+};
 
 use bang_core::{
     CalendarView, ListView, Role as BangRole, Span, TextInputView, Value, View,
@@ -121,26 +125,71 @@ where
     }
 }
 
-/// run a session using `screw` for rendering
-pub fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, String> {
-    let terminal = bang_terminal::TerminalModeGuard::activate_stdin().map_err(|error| {
-        if matches!(
-            error.kind(),
-            io::ErrorKind::Unsupported | io::ErrorKind::NotConnected
-        ) {
-            error.to_string()
-        } else {
-            format!("failed to enable terminal raw mode: {error}")
+#[derive(Debug)]
+pub enum LiveSessionError {
+    RawMode(io::Error),
+    Signals(io::Error),
+    TerminalIo(io::Error),
+    Cancelled,
+    InputEnded,
+    Signalled(i32),
+    ReraiseSignal {
+        signal: i32,
+        source: io::Error,
+    },
+}
+
+impl fmt::Display for LiveSessionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RawMode(error) => {
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Unsupported | io::ErrorKind::NotConnected
+                ) {
+                    write!(f, "{error}")
+                } else {
+                    write!(f, "failed to enable terminal raw mode: {error}")
+                }
+            },
+            Self::Signals(error) => {
+                write!(f, "failed to install terminal signal handlers: {error}")
+            },
+            Self::TerminalIo(error) => write!(f, "terminal I/O failed: {error}"),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::InputEnded => f.write_str("input ended before submit"),
+            Self::Signalled(signal) => write!(f, "interrupted by signal {signal}"),
+            Self::ReraiseSignal { signal, source } => {
+                write!(f, "failed to re-raise signal {signal}: {source}")
+            },
         }
-    })?;
+    }
+}
+
+impl error::Error for LiveSessionError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            Self::RawMode(error)
+            | Self::Signals(error)
+            | Self::TerminalIo(error)
+            | Self::ReraiseSignal { source: error, .. } => Some(error),
+            Self::Cancelled | Self::InputEnded | Self::Signalled(_) => None,
+        }
+    }
+}
+
+/// run a session using `screw` for rendering
+pub fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, LiveSessionError> {
+    let terminal =
+        bang_terminal::TerminalModeGuard::activate_stdin().map_err(LiveSessionError::RawMode)?;
     let mut signals = bang_terminal::SignalGuard::install_terminal_handlers()
-        .map_err(|error| format!("failed to install terminal signal handlers: {error}"))?;
+        .map_err(LiveSessionError::Signals)?;
     let stdin = io::stdin();
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
 
     let mut screen = bang_terminal::InlineScreenGuard::enter(&mut stderr)
-        .map_err(|error| format!("terminal I/O failed: {error}"))?;
+        .map_err(LiveSessionError::TerminalIo)?;
     let mut renderer = ScrewSessionRenderer::new(screen.writer());
     let result = bang_terminal::drive_tty_session_with_signals(
         widget,
@@ -154,20 +203,20 @@ pub fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, Stri
     let outcome = match (result, clear, cleanup) {
         (Ok(outcome), Ok(_stats), Ok(())) => outcome,
         (Err(error), ..) | (_, Err(error), _) | (_, _, Err(error)) => {
-            return Err(format!("terminal I/O failed: {error}"));
+            return Err(LiveSessionError::TerminalIo(error));
         },
     };
 
     match outcome {
         RunOutcome::Submitted(value) => Ok(value),
-        RunOutcome::Cancelled => Err("cancelled".to_owned()),
-        RunOutcome::InputEnded => Err("input ended before submit".to_owned()),
+        RunOutcome::Cancelled => Err(LiveSessionError::Cancelled),
+        RunOutcome::InputEnded => Err(LiveSessionError::InputEnded),
         RunOutcome::Signalled(signal) => {
             drop(signals);
             drop(terminal);
             bang_terminal::restore_default_and_raise(signal)
-                .map_err(|error| format!("failed to re-raise signal {signal}: {error}"))?;
-            Err(format!("interrupted by signal {signal}"))
+                .map_err(|source| LiveSessionError::ReraiseSignal { signal, source })?;
+            Err(LiveSessionError::Signalled(signal))
         },
     }
 }

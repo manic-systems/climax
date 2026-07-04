@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use crate::{Context, Event, FocusTarget, Reaction, Value, View, ViewContext, Widget};
-// FIXME I changed this line
 
 pub struct Session {
     root: Box<dyn Widget>,

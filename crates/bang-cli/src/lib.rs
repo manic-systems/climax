@@ -512,7 +512,7 @@ fn run_widget(
     if let Some(input_bytes) = input_bytes {
         run_replayed_session(widget, &input_bytes)
     } else {
-        bang_screw::run_live_session(widget)
+        bang_screw::run_live_session(widget).map_err(|error| error.to_string())
     }
 }
 

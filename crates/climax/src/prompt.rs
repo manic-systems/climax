@@ -1,12 +1,9 @@
-use std::io;
-
 use bang_core::{
     ActionBinding,
     Reaction,
     Session,
     SessionStatus,
     Value,
-    View,
     Widget,
     widgets::{
         MultiSelect,
@@ -302,44 +299,7 @@ impl TextPrompt {
 
 pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Result<Value> {
     let widget = bang_core::ActionLayer::new(widget).with_actions(actions);
-    run_live_widget(widget)
-}
-
-fn run_live_widget(widget: impl Widget + 'static) -> Result<Value> {
-    let terminal = bang_terminal::TerminalModeGuard::activate_stdin()?;
-    let mut signals = bang_terminal::SignalGuard::install_terminal_handlers()?;
-    let stdin = io::stdin();
-    let stderr = io::stderr();
-    let mut stderr = stderr.lock();
-
-    let mut screen = bang_terminal::InlineScreenGuard::enter(&mut stderr)?;
-    let mut renderer = ScrewSessionRenderer::new(screen.writer());
-    let result = bang_terminal::drive_tty_session_with_signals(
-        widget,
-        stdin.lock(),
-        &mut renderer,
-        &mut signals,
-    );
-    let clear = renderer.clear();
-    drop(renderer);
-    let cleanup = screen.leave();
-
-    let outcome = match (result, clear, cleanup) {
-        (Ok(outcome), Ok(()), Ok(())) => outcome,
-        (Err(error), ..) | (_, Err(error), _) | (_, _, Err(error)) => return Err(error.into()),
-    };
-
-    match outcome {
-        bang_terminal::RunOutcome::Submitted(value) => Ok(value),
-        bang_terminal::RunOutcome::Cancelled => Err(Error::Cancelled),
-        bang_terminal::RunOutcome::InputEnded => Err(Error::InputEnded),
-        bang_terminal::RunOutcome::Signalled(signal) => {
-            drop(signals);
-            drop(terminal);
-            bang_terminal::restore_default_and_raise(signal)?;
-            Err(Error::Signalled(signal))
-        },
-    }
+    bang_screw::run_live_session(widget).map_err(Error::from)
 }
 
 /// Drive a widget with already-decoded events. Useful for tests and examples.
@@ -388,40 +348,5 @@ const fn value_name(value: &Value) -> &'static str {
         Value::List(_) => "list",
         Value::Object(_) => "object",
         _ => "unknown",
-    }
-}
-
-struct ScrewSessionRenderer<'a, W> {
-    renderer: bang_screw::RetainedRenderer<&'a mut W>,
-}
-
-impl<'a, W> ScrewSessionRenderer<'a, W>
-where
-    W: io::Write,
-{
-    fn new(writer: &'a mut W) -> Self {
-        let mut renderer = bang_screw::RetainedRenderer::new(writer);
-        if let Some(size) = bang_terminal::terminal_size() {
-            renderer = renderer.width(usize::from(size.cols));
-        }
-        Self { renderer }
-    }
-
-    fn clear(&mut self) -> io::Result<()> {
-        self.renderer.clear().map(|_stats| ())
-    }
-}
-
-impl<W> bang_terminal::SessionRenderer for ScrewSessionRenderer<'_, W>
-where
-    W: io::Write,
-{
-    fn render(&mut self, view: &View) -> io::Result<()> {
-        self.renderer.render(view).map(|_stats| ())
-    }
-
-    fn resize(&mut self, size: bang_terminal::TerminalSize) -> io::Result<()> {
-        self.renderer.resize(usize::from(size.cols));
-        Ok(())
     }
 }

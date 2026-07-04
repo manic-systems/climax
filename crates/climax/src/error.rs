@@ -1,24 +1,32 @@
 use std::{
     error,
     fmt,
-    io,
 };
+
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::io;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
     /// argument parsing failed
-    Parse(pound::Error),
-    /// terminal or stream I/O failed
-    Io(io::Error),
+    #[cfg(feature = "parse")]
+    ArgParse(pound::Error),
+    /// terminal drawing or stream output failed
+    #[cfg(any(feature = "render", feature = "interactive"))]
+    Draw(io::Error),
+    /// interactive terminal session failed
+    #[cfg(feature = "interactive")]
+    Interact(bang_screw::LiveSessionError),
     /// prompt was cancelled
+    #[cfg(feature = "interactive")]
     Cancelled,
     /// input ended before value submission
+    #[cfg(feature = "interactive")]
     InputEnded,
-    /// interrupted by signal
-    Signalled(i32),
     /// invalid value
+    #[cfg(feature = "interactive")]
     UnexpectedValue {
         expected: &'static str,
         actual:   &'static str,
@@ -36,11 +44,17 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Parse(error) => write!(f, "{error}"),
-            Self::Io(error) => write!(f, "{error}"),
+            #[cfg(feature = "parse")]
+            Self::ArgParse(error) => write!(f, "{error}"),
+            #[cfg(any(feature = "render", feature = "interactive"))]
+            Self::Draw(error) => write!(f, "{error}"),
+            #[cfg(feature = "interactive")]
+            Self::Interact(error) => write!(f, "{error}"),
+            #[cfg(feature = "interactive")]
             Self::Cancelled => f.write_str("cancelled"),
+            #[cfg(feature = "interactive")]
             Self::InputEnded => f.write_str("input ended before submit"),
-            Self::Signalled(signal) => write!(f, "interrupted by signal {signal}"),
+            #[cfg(feature = "interactive")]
             Self::UnexpectedValue { expected, actual } => {
                 write!(f, "expected {expected}, got {actual}")
             },
@@ -52,26 +66,41 @@ impl fmt::Display for Error {
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::Parse(error) => Some(error),
-            Self::Io(error) => Some(error),
-            Self::Cancelled
-            | Self::InputEnded
-            | Self::Signalled(_)
-            | Self::UnexpectedValue { .. }
-            | Self::Message(_) => None,
+            #[cfg(feature = "parse")]
+            Self::ArgParse(error) => Some(error),
+            #[cfg(any(feature = "render", feature = "interactive"))]
+            Self::Draw(error) => Some(error),
+            #[cfg(feature = "interactive")]
+            Self::Interact(error) => Some(error),
+            #[cfg(feature = "interactive")]
+            Self::Cancelled | Self::InputEnded | Self::UnexpectedValue { .. } => None,
+            Self::Message(_) => None,
         }
     }
 }
 
+#[cfg(feature = "parse")]
 impl From<pound::Error> for Error {
     fn from(value: pound::Error) -> Self {
-        Self::Parse(value)
+        Self::ArgParse(value)
     }
 }
 
+#[cfg(feature = "interactive")]
+impl From<bang_screw::LiveSessionError> for Error {
+    fn from(value: bang_screw::LiveSessionError) -> Self {
+        match value {
+            bang_screw::LiveSessionError::Cancelled => Self::Cancelled,
+            bang_screw::LiveSessionError::InputEnded => Self::InputEnded,
+            other => Self::Interact(other),
+        }
+    }
+}
+
+#[cfg(any(feature = "render", feature = "interactive"))]
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Io(value)
+        Self::Draw(value)
     }
 }
 

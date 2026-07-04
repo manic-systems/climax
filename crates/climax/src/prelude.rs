@@ -24,6 +24,7 @@ pub use bang_core::{
         TextInput,
     },
 };
+#[cfg(feature = "parse")]
 pub use pound::{
     FromArg,
     Parse as ParseTrait,

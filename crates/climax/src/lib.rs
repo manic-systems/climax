@@ -16,5 +16,6 @@ pub use error::{
     Error,
     Result,
 };
+#[cfg(feature = "parse")]
 pub use pound;
 #[cfg(feature = "render")] pub use screw;
