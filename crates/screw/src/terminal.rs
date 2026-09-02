@@ -14,7 +14,6 @@ pub fn terminal_width_or_default() -> usize {
     terminal_width().unwrap_or(FALLBACK_WIDTH)
 }
 
-#[cfg(unix)]
 fn terminal_width_from_stderr() -> Option<usize> {
     let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
     // SAFETY: ioctl writes a winsize into the valid out pointer when stderr is tty
