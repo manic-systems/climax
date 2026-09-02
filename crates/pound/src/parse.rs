@@ -237,10 +237,7 @@ fn parse_cmd<'a>(
                 // not an option (negative numbers, lone values) -> positional
                 positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
             }
-        } else if spec.has_subs() && positionals.is_empty() {
-            let sidx = spec
-                .find_sub(tok)
-                .ok_or_else(|| Error::UnknownSubcommand(tok.to_owned()))?;
+        } else if let Some(sidx) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
             child_globals.extend(spec.args.iter().filter(|a| a.global));
             let sub_m = parse_cmd(spec.subs[sidx].spec, it, &child_globals, hits)?;
@@ -255,6 +252,35 @@ fn parse_cmd<'a>(
     apply_global_hits(spec, &mut m, hits);
     finalise(spec, &m, globals)?;
     Ok(m)
+}
+
+/// a bare token names a subcommand only once every required positional is filled,
+/// and never past a variadic one, which stays greedy so its tail can fill
+fn sub_dispatch(
+    spec: &CommandSpec,
+    positionals: &[usize],
+    cursor: usize,
+    tok: &str,
+) -> Result<Option<usize>, Error> {
+    if !spec.has_subs() {
+        return Ok(None);
+    }
+    let next = positionals.get(cursor).map(|&i| spec.args[i]);
+    if next.is_some_and(|a| a.multi || a.kind == Kind::Trailing) {
+        return Ok(None);
+    }
+    if positionals
+        .iter()
+        .skip(cursor)
+        .any(|&i| spec.args[i].required)
+    {
+        return Ok(None);
+    }
+    match spec.find_sub(tok) {
+        Some(sidx) => Ok(Some(sidx)),
+        None if next.is_some() => Ok(None), // an open optional slot can still take it
+        None => Err(Error::UnknownSubcommand(tok.to_owned())),
+    }
 }
 
 /// apply a long option
@@ -790,5 +816,39 @@ mod tests {
         ));
         // bare invocation shows help
         assert!(matches!(parse(&ROOT, &[]), Err(Error::Help(_))));
+    }
+
+    // positionals and subs on one command (`prog <process> <access> COMMAND`)
+    const MIXED_ARGS: &[ArgSpec] = &[
+        ArgSpec::new(Kind::Positional)
+            .value_name("process")
+            .required(),
+        ArgSpec::new(Kind::Positional)
+            .value_name("access")
+            .required(),
+    ];
+    const MIXED: CommandSpec = CommandSpec {
+        args: MIXED_ARGS,
+        ..ROOT
+    };
+
+    #[test]
+    fn subcommand_after_parent_positionals() {
+        let m = parse(&MIXED, &["p1", "a1", "add", "serde", "https://x"]).unwrap();
+        assert_eq!(m.raw(0), Some("p1"));
+        assert_eq!(m.raw(1), Some("a1"));
+        let (idx, sub) = m.sub().expect("a subcommand");
+        assert_eq!(idx, 0);
+        assert_eq!(sub.raw(0), Some("serde"));
+
+        // an unfilled required positional still wins the token
+        let m = parse(&MIXED, &["p1", "add", "add", "serde", "https://x"]).unwrap();
+        assert_eq!(m.raw(1), Some("add"));
+        assert!(m.sub().is_some());
+
+        assert!(matches!(
+            parse(&MIXED, &["p1", "a1", "nope"]),
+            Err(Error::UnknownSubcommand(_))
+        ));
     }
 }
