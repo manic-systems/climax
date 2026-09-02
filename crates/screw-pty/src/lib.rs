@@ -2,12 +2,11 @@
 
 //! PTY screen adapter for screw surfaces.
 
-use screw::{
-    RenderCtx,
-    Style,
-    Surface,
-    Widget,
-};
+mod ansi;
+
+pub use ansi::{EmittedScreen, ScreenCell, ScreenError};
+
+use screw::{RenderCtx, Style, Surface, Widget};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PtyFrame {
@@ -38,35 +37,6 @@ impl PtyFrame {
 
     pub fn clear(&mut self) {
         self.lines.clear();
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct PtyScreen {
-    frame: PtyFrame,
-}
-
-impl PtyScreen {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            frame: PtyFrame::new(),
-        }
-    }
-
-    #[must_use]
-    pub fn frame(&self) -> &PtyFrame {
-        &self.frame
-    }
-
-    pub fn replace_frame(&mut self, frame: PtyFrame) {
-        self.frame = frame;
-    }
-
-    pub fn push_lossy(&mut self, bytes: &[u8]) {
-        for line in String::from_utf8_lossy(bytes).lines() {
-            self.frame.push_line(line);
-        }
     }
 }
 

@@ -141,6 +141,7 @@ name = "screw-pty"
 version = "0.0.1"
 dependencies = [
  "screw",
+ "unicode-width",
 ]
 
 [[package]]
