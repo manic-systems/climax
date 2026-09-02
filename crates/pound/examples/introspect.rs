@@ -5,10 +5,7 @@
 
 use pound::{
     Parse,
-    spec::{
-        ArgSpec,
-        CommandSpec,
-    },
+    spec::{ArgSpec, CommandSpec},
 };
 
 /// fetch urls to disk
@@ -17,15 +14,15 @@ use pound::{
 #[allow(dead_code, reason = "not a runnable example")]
 struct Grab {
     /// urls to fetch
-    url:    Vec<String>,
+    url: Vec<String>,
     /// download directory
     #[pound(short, long)]
     output: Option<String>,
     /// no output
     #[pound(long, global)]
-    quiet:  bool,
+    quiet: bool,
     #[pound(subcommand)]
-    cmd:    Option<Cmd>,
+    cmd: Option<Cmd>,
 }
 
 /// cache maintenance
@@ -61,7 +58,7 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
     };
     println!("{pad}{}{version}  {}", spec.name, spec.about);
 
-    for arg in spec.args.iter().filter(|a| !a.hidden) {
+    for arg in spec.arguments().filter(|a| !a.hidden) {
         println!("{pad}  {}", row(arg));
     }
     for arg in inherited {
@@ -80,7 +77,7 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
 
     // globals accumulate down the tree
     let mut globals = inherited.to_vec();
-    globals.extend(spec.args.iter().filter(|a| a.global));
+    globals.extend(spec.arguments().filter(|a| a.global));
     for sub in spec.subs.iter().filter(|s| !s.hidden) {
         walk(sub.spec, depth + 1, &globals);
     }

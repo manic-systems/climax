@@ -109,7 +109,8 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         out.push_str("\n\n");
     }
 
-    let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
+    let all_args = flattened_args(spec);
+    let visible_args: Vec<&ArgSpec> = all_args.into_iter().filter(|a| !a.hidden).collect();
     let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
 
     out.push_str("Usage: ");
@@ -150,16 +151,13 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         .filter(|a| !a.is_positional())
         .map(|&a| (invocation(a), help_text(a)))
         .collect();
-    if spec.find_short('h').is_none() && spec.find_long("help").is_none() {
+    if !contains_short(spec, 'h') && !contains_long(spec, "help") {
         rows.push((
             "-h, --help".to_owned(),
             "display this help and exit".to_owned(),
         ));
     }
-    if spec.has_version_info()
-        && spec.find_short('V').is_none()
-        && spec.find_long("version").is_none()
-    {
+    if spec.has_version_info() && !contains_short(spec, 'V') && !contains_long(spec, "version") {
         rows.push((
             "-V, --version".to_owned(),
             "output version information and exit".to_owned(),
@@ -179,6 +177,25 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
 
     out.truncate(out.trim_end().len());
     out
+}
+
+#[cfg(feature = "help")]
+fn flattened_args(spec: &CommandSpec) -> Vec<&ArgSpec> {
+    spec.arguments().collect()
+}
+
+#[cfg(feature = "help")]
+fn contains_long(spec: &CommandSpec, name: &str) -> bool {
+    flattened_args(spec)
+        .iter()
+        .any(|arg| arg.long == Some(name) || arg.aliases.contains(&name))
+}
+
+#[cfg(feature = "help")]
+fn contains_short(spec: &CommandSpec, short: char) -> bool {
+    flattened_args(spec)
+        .iter()
+        .any(|arg| arg.short == Some(short))
 }
 
 #[cfg(feature = "help")]

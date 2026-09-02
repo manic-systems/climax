@@ -275,12 +275,84 @@ pub struct CommandSpec {
     pub hash: Option<&'static str>,
     pub about: &'static str,
     pub args: &'static [ArgSpec],
+    /// argument-only structs embedded at this command level
+    pub flattened: &'static [&'static Self],
+    /// source declaration order for direct and flattened fields
+    #[doc(hidden)]
+    pub argument_order: &'static [ArgumentOrder],
     pub groups: &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
     pub conflicts: &'static [(usize, usize)],
     pub subs: &'static [SubSpec],
     /// when true, a missing subcommand is allowed rather than showing help
     pub sub_optional: bool,
+}
+
+/// One direct or flattened field in a command's source declaration order.
+///
+/// This is public for derive output. Introspection should normally use
+/// [`CommandSpec::arguments`] instead.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArgumentOrder {
+    Direct(usize),
+    Flattened(usize),
+}
+
+/// Depth-first traversal of every argument accepted at one command level,
+/// including recursively flattened argument structs.
+pub struct Arguments<'a> {
+    pending: Vec<ArgumentEntry<'a>>,
+}
+
+enum ArgumentEntry<'a> {
+    Direct(&'a ArgSpec),
+    Flattened(&'a CommandSpec),
+}
+
+impl<'a> Arguments<'a> {
+    fn new(spec: &'a CommandSpec) -> Self {
+        let mut pending = Vec::new();
+        push_argument_entries(&mut pending, spec);
+        Self { pending }
+    }
+}
+
+impl<'a> Iterator for Arguments<'a> {
+    type Item = &'a ArgSpec;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(entry) = self.pending.pop() {
+            match entry {
+                ArgumentEntry::Direct(argument) => return Some(argument),
+                ArgumentEntry::Flattened(spec) => push_argument_entries(&mut self.pending, spec),
+            }
+        }
+        None
+    }
+}
+
+fn push_argument_entries<'a>(pending: &mut Vec<ArgumentEntry<'a>>, spec: &'a CommandSpec) {
+    if spec.argument_order.is_empty() {
+        pending.extend(
+            spec.flattened
+                .iter()
+                .rev()
+                .copied()
+                .map(ArgumentEntry::Flattened),
+        );
+        pending.extend(spec.args.iter().rev().map(ArgumentEntry::Direct));
+        return;
+    }
+
+    pending.extend(spec.argument_order.iter().rev().filter_map(|entry| match *entry {
+        ArgumentOrder::Direct(index) => spec.args.get(index).map(ArgumentEntry::Direct),
+        ArgumentOrder::Flattened(index) => spec
+            .flattened
+            .get(index)
+            .copied()
+            .map(ArgumentEntry::Flattened),
+    }));
 }
 
 impl CommandSpec {
@@ -293,6 +365,8 @@ impl CommandSpec {
             hash: None,
             about: "",
             args: &[],
+            flattened: &[],
+            argument_order: &[],
             groups: &[],
             conflicts: &[],
             subs: &[],
@@ -329,6 +403,21 @@ impl CommandSpec {
         self
     }
 
+    /// Embed another parsed struct's arguments at this command level.
+    #[must_use]
+    pub const fn flattened(mut self, flattened: &'static [&'static Self]) -> Self {
+        self.flattened = flattened;
+        self
+    }
+
+    /// Preserve the source order of direct and flattened argument fields.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn argument_order(mut self, order: &'static [ArgumentOrder]) -> Self {
+        self.argument_order = order;
+        self
+    }
+
     #[must_use]
     pub const fn groups(mut self, groups: &'static [GroupSpec]) -> Self {
         self.groups = groups;
@@ -360,18 +449,24 @@ impl CommandSpec {
         !self.subs.is_empty()
     }
 
-    /// index of the arg with this long name
-    #[must_use]
-    #[allow(clippy::manual_contains)]
-    pub fn find_long(&self, name: &str) -> Option<usize> {
-        self.args
-            .iter()
-            .position(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
+    /// Traverse all arguments accepted at this command level, including
+    /// recursively flattened structs.
+    pub fn arguments(&self) -> Arguments<'_> {
+        Arguments::new(self)
     }
 
+    /// Argument with this long name, including flattened arguments.
     #[must_use]
-    pub fn find_short(&self, ch: char) -> Option<usize> {
-        self.args.iter().position(|a| a.short == Some(ch))
+    #[allow(clippy::manual_contains)]
+    pub fn find_long(&self, name: &str) -> Option<&ArgSpec> {
+        self.arguments()
+            .find(|arg| arg.long == Some(name) || arg.aliases.iter().any(|&alias| alias == name))
+    }
+
+    /// Argument with this short name, including flattened arguments.
+    #[must_use]
+    pub fn find_short(&self, ch: char) -> Option<&ArgSpec> {
+        self.arguments().find(|arg| arg.short == Some(ch))
     }
 
     #[must_use]

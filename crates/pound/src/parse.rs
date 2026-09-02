@@ -25,7 +25,15 @@ struct Slot<'a> {
 #[derive(Debug)]
 pub struct Matches<'a> {
     slots: Vec<Slot<'a>>,
+    flattened: Vec<Self>,
     sub: Option<(usize, Box<Self>)>,
+}
+
+#[derive(Clone)]
+struct ArgTarget {
+    path: Vec<usize>,
+    index: usize,
+    arg: &'static ArgSpec,
 }
 
 /// a global flag/option seen in a descendant
@@ -35,11 +43,18 @@ struct GlobalHit<'a> {
 }
 
 impl<'a> Matches<'a> {
-    fn new(len: usize) -> Self {
+    fn new(spec: &CommandSpec) -> Self {
         Self {
-            slots: vec![Slot::default(); len],
+            slots: vec![Slot::default(); spec.args.len()],
+            flattened: spec.flattened.iter().map(|spec| Self::new(spec)).collect(),
             sub: None,
         }
+    }
+
+    /// Matches collected for the flattened field at `index`.
+    #[must_use]
+    pub fn flattened(&self, index: usize) -> &Self {
+        &self.flattened[index]
     }
 
     /// was a flag (or any value) supplied at least once
@@ -177,7 +192,7 @@ fn parse_with<T>(
 
 /// entrypoint. parse `args[1..]` against `spec`
 pub(crate) fn parse_spec<'a>(
-    spec: &CommandSpec,
+    spec: &'static CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
@@ -186,26 +201,25 @@ pub(crate) fn parse_spec<'a>(
 }
 
 fn parse_cmd<'a>(
-    spec: &CommandSpec,
+    spec: &'static CommandSpec,
     it: &mut IntoIter<&'a str>,
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
-    let mut m = Matches::new(spec.args.len());
-
-    let positionals: Vec<usize> = spec
-        .args
+    let targets = arg_targets(spec);
+    validate_targets(&targets)?;
+    let mut m = Matches::new(spec);
+    let positionals = targets
         .iter()
-        .enumerate()
-        .filter(|(_, a)| a.is_positional())
-        .map(|(i, _)| i)
-        .collect();
+        .filter(|target| target.arg.is_positional())
+        .cloned()
+        .collect::<Vec<_>>();
     let mut pos_cursor = 0_usize;
     let mut only_positional = false;
 
     while let Some(tok) = it.next() {
         if only_positional {
-            positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
+            positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             continue;
         }
 
@@ -219,8 +233,11 @@ fn parse_cmd<'a>(
             if let Some(sig) = builtin_long(spec, name, globals) {
                 return Err(sig);
             }
-            if let Some(idx) = spec.find_long(name) {
-                apply_named(spec, &mut m, idx, inline, it)?;
+            if let Some(target) = targets
+                .iter()
+                .find(|target| target.arg.long == Some(name) || target.arg.aliases.contains(&name))
+            {
+                apply_named(&mut m, target, inline, it)?;
             } else if let Some(g) = find_global_long(globals, name) {
                 record_global(g, inline, it, hits)?;
             } else {
@@ -228,26 +245,31 @@ fn parse_cmd<'a>(
             }
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             let first = rest.chars().next().unwrap_or('-');
-            let known = spec.find_short(first).is_some()
+            let known = targets.iter().any(|target| target.arg.short == Some(first))
                 || builtin_short(spec, first, globals).is_some()
                 || find_global_short(globals, first).is_some();
             if known {
                 shorts(spec, &mut m, rest, it, globals, hits)?;
             } else {
                 // not an option (negative numbers, lone values) -> positional
-                positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
+                positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             }
         } else if spec.has_subs() && positionals.is_empty() {
             let sidx = spec
                 .find_sub(tok)
                 .ok_or_else(|| Error::UnknownSubcommand(tok.to_owned()))?;
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
-            child_globals.extend(spec.args.iter().filter(|a| a.global));
+            child_globals.extend(
+                targets
+                    .iter()
+                    .filter(|target| target.arg.global)
+                    .map(|target| target.arg),
+            );
             let sub_m = parse_cmd(spec.subs[sidx].spec, it, &child_globals, hits)?;
             m.sub = Some((sidx, Box::new(sub_m)));
             break; // subcommand owns the rest
         } else {
-            positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
+            positional(&mut m, &positionals, &mut pos_cursor, tok)?;
         }
     }
 
@@ -259,25 +281,25 @@ fn parse_cmd<'a>(
 
 /// apply a long option
 fn apply_named<'a>(
-    spec: &CommandSpec,
     m: &mut Matches<'a>,
-    idx: usize,
+    target: &ArgTarget,
     inline: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
 ) -> Result<(), Error> {
-    let a = spec.args[idx];
+    let a = *target.arg;
+    let slot = target_slot_mut(m, target);
     match a.kind {
         Kind::Flag => {
             if inline.is_some() {
                 return Err(Error::UnexpectedValue(a.display_name()));
             }
-            m.slots[idx].count = 1;
+            slot.count = 1;
         },
         Kind::Count => {
             if inline.is_some() {
                 return Err(Error::UnexpectedValue(a.display_name()));
             }
-            m.slots[idx].count += 1;
+            slot.count += 1;
         },
         Kind::Opt => {
             let value = match inline {
@@ -286,7 +308,7 @@ fn apply_named<'a>(
                     .next()
                     .ok_or_else(|| Error::MissingValue(a.display_name()))?,
             };
-            push_value(&a, &mut m.slots[idx], value);
+            push_value(&a, slot, value);
         },
         Kind::Positional | Kind::Trailing => return Err(Error::Unknown(a.display_name())),
     }
@@ -295,25 +317,27 @@ fn apply_named<'a>(
 
 /// apply a cluster of short args
 fn shorts<'a>(
-    spec: &CommandSpec,
+    spec: &'static CommandSpec,
     m: &mut Matches<'a>,
     cluster: &'a str,
     it: &mut IntoIter<&'a str>,
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), Error> {
+    let targets = arg_targets(spec);
     for (off, ch) in cluster.char_indices() {
         if let Some(sig) = builtin_short(spec, ch, globals) {
             return Err(sig);
         }
-        if let Some(idx) = spec.find_short(ch) {
-            let a = spec.args[idx];
+        if let Some(target) = targets.iter().find(|target| target.arg.short == Some(ch)) {
+            let a = *target.arg;
+            let slot = target_slot_mut(m, target);
             match a.kind {
-                Kind::Flag => m.slots[idx].count = 1,
-                Kind::Count => m.slots[idx].count += 1,
+                Kind::Flag => slot.count = 1,
+                Kind::Count => slot.count += 1,
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, &a)?;
-                    push_value(&a, &mut m.slots[idx], value);
+                    push_value(&a, slot, value);
                     return Ok(()); // option swallowed the cluster tail
                 },
                 Kind::Positional | Kind::Trailing => {
@@ -322,10 +346,12 @@ fn shorts<'a>(
             }
         } else if let Some(g) = find_global_short(globals, ch) {
             match g.kind {
-                Kind::Flag | Kind::Count => hits.push(GlobalHit {
-                    arg: g,
-                    value: None,
-                }),
+                Kind::Flag | Kind::Count => {
+                    hits.push(GlobalHit {
+                        arg: g,
+                        value: None,
+                    });
+                },
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
                     hits.push(GlobalHit {
@@ -415,19 +441,29 @@ fn record_global<'a>(
     Ok(())
 }
 
-/// apply the hits this `spec` owns into its slots, leaving the rest to bubble up
-fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec<GlobalHit<'a>>) {
+/// apply the hits this `spec` owns into its slots, leaving the rest to bubble
+/// up
+fn apply_global_hits<'a>(
+    spec: &'static CommandSpec,
+    m: &mut Matches<'a>,
+    hits: &mut Vec<GlobalHit<'a>>,
+) {
+    let targets = arg_targets(spec);
     hits.retain(|h| {
-        let Some(idx) = spec.args.iter().position(|a| core::ptr::eq(a, h.arg)) else {
+        let Some(target) = targets
+            .iter()
+            .find(|target| core::ptr::eq(target.arg, h.arg))
+        else {
             return true;
         };
-        let a = spec.args[idx];
+        let a = *target.arg;
+        let slot = target_slot_mut(m, target);
         match a.kind {
-            Kind::Flag => m.slots[idx].count = 1,
-            Kind::Count => m.slots[idx].count += 1,
+            Kind::Flag => slot.count = 1,
+            Kind::Count => slot.count += 1,
             Kind::Opt => {
                 if let Some(v) = h.value {
-                    push_value(&a, &mut m.slots[idx], v);
+                    push_value(&a, slot, v);
                 }
             },
             Kind::Positional | Kind::Trailing => {},
@@ -438,16 +474,15 @@ fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec
 
 /// assign a bare token to the next positional, or a trailing/variadic sink
 fn positional<'a>(
-    spec: &CommandSpec,
     m: &mut Matches<'a>,
-    positionals: &[usize],
+    positionals: &[ArgTarget],
     cursor: &mut usize,
     tok: &'a str,
 ) -> Result<(), Error> {
-    let idx = if *cursor < positionals.len() {
-        positionals[*cursor]
-    } else if let Some(&last) = positionals.last() {
-        let a = spec.args[last];
+    let target = if *cursor < positionals.len() {
+        &positionals[*cursor]
+    } else if let Some(last) = positionals.last() {
+        let a = *last.arg;
         if a.multi || a.kind == Kind::Trailing {
             last // overflow lands in the variadic tail
         } else {
@@ -457,9 +492,10 @@ fn positional<'a>(
         return Err(Error::UnexpectedPositional(tok.to_owned()));
     };
 
-    let a = spec.args[idx];
-    m.slots[idx].values.push(tok);
-    m.slots[idx].count += 1;
+    let a = *target.arg;
+    let slot = target_slot_mut(m, target);
+    slot.values.push(tok);
+    slot.count += 1;
     // single positional advances the cursor, a variadic one keeps eating
     if !(a.multi || a.kind == Kind::Trailing) {
         *cursor += 1;
@@ -469,7 +505,11 @@ fn positional<'a>(
 
 /// enforce `required` and group constraints. defaults are injected separately
 /// by `apply_defaults`, so a defaulted arg never counts as missing here.
-fn finalise(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Result<(), Error> {
+fn finalise(
+    spec: &'static CommandSpec,
+    m: &Matches,
+    globals: &[&'static ArgSpec],
+) -> Result<(), Error> {
     for (i, a) in spec.args.iter().enumerate() {
         // fallback is resolved later, so it counts as present
         let present = m.slots[i].count > 0 || !m.slots[i].values.is_empty();
@@ -518,6 +558,10 @@ fn finalise(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Re
         }
     }
 
+    for (flattened_spec, flattened_matches) in spec.flattened.iter().zip(&m.flattened) {
+        finalise(flattened_spec, flattened_matches, globals)?;
+    }
+
     if spec.has_subs() && m.sub.is_none() && !spec.sub_optional {
         // empty/sub-less invocation shows help rather than a bare error
         return Err(Error::Help(help::render(spec, globals)));
@@ -526,22 +570,139 @@ fn finalise(spec: &CommandSpec, m: &Matches, globals: &[&'static ArgSpec]) -> Re
     Ok(())
 }
 
-fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) -> Option<Error> {
+fn arg_targets(spec: &'static CommandSpec) -> Vec<ArgTarget> {
+    fn collect(spec: &'static CommandSpec, path: &mut Vec<usize>, out: &mut Vec<ArgTarget>) {
+        fn collect_entry(
+            spec: &'static CommandSpec,
+            path: &mut Vec<usize>,
+            out: &mut Vec<ArgTarget>,
+            entry: crate::ArgumentOrder,
+        ) {
+            match entry {
+                crate::ArgumentOrder::Direct(index) => {
+                    if let Some(arg) = spec.args.get(index) {
+                        out.push(ArgTarget {
+                            path: path.clone(),
+                            index,
+                            arg,
+                        });
+                    }
+                },
+                crate::ArgumentOrder::Flattened(index) => {
+                    if let Some(flattened) = spec.flattened.get(index) {
+                        path.push(index);
+                        collect(flattened, path, out);
+                        path.pop();
+                    }
+                },
+            }
+        }
+
+        if spec.argument_order.is_empty() {
+            for index in 0..spec.args.len() {
+                collect_entry(spec, path, out, crate::ArgumentOrder::Direct(index));
+            }
+            for index in 0..spec.flattened.len() {
+                collect_entry(spec, path, out, crate::ArgumentOrder::Flattened(index));
+            }
+        } else {
+            for entry in spec.argument_order {
+                collect_entry(spec, path, out, *entry);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    collect(spec, &mut Vec::new(), &mut out);
+    out
+}
+
+fn validate_targets(targets: &[ArgTarget]) -> Result<(), Error> {
+    for (index, target) in targets.iter().enumerate() {
+        for other in &targets[index + 1..] {
+            if let Some(name) = duplicate_long_name(target.arg, other.arg) {
+                return Err(Error::InvalidSpecification(format!(
+                    "long name '--{name}' is used by {} and {}",
+                    target.arg.display_name(),
+                    other.arg.display_name(),
+                )));
+            }
+            if let (Some(short), Some(other_short)) = (target.arg.short, other.arg.short)
+                && short == other_short
+            {
+                return Err(Error::InvalidSpecification(format!(
+                    "short name '-{short}' is used by {} and {}",
+                    target.arg.display_name(),
+                    other.arg.display_name(),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn duplicate_long_name(first: &ArgSpec, second: &ArgSpec) -> Option<&'static str> {
+    first
+        .long
+        .into_iter()
+        .chain(first.aliases.iter().copied())
+        .find(|name| second.long == Some(*name) || second.aliases.contains(name))
+}
+
+fn target_slot_mut<'m, 'a>(matches: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mut Slot<'a> {
+    let mut matches = matches;
+    for &index in &target.path {
+        matches = &mut matches.flattened[index];
+    }
+    &mut matches.slots[target.index]
+}
+
+fn builtin_long(
+    spec: &'static CommandSpec,
+    name: &str,
+    globals: &[&'static ArgSpec],
+) -> Option<Error> {
     match name {
-        "help" if spec.find_long("help").is_none() => {
+        "help"
+            if !arg_targets(spec)
+                .iter()
+                .any(|target| {
+                    target.arg.long == Some("help") || target.arg.aliases.contains(&"help")
+                }) =>
+        {
             Some(Error::Help(help::render(spec, globals)))
         },
-        "version" if spec.has_version_info() && spec.find_long("version").is_none() => {
+        "version"
+            if spec.has_version_info()
+                && !arg_targets(spec)
+                    .iter()
+                    .any(|target| {
+                        target.arg.long == Some("version")
+                            || target.arg.aliases.contains(&"version")
+                    }) =>
+        {
             Some(Error::Version(help::version_line(spec)))
         },
         _ => None,
     }
 }
 
-fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> Option<Error> {
+fn builtin_short(
+    spec: &'static CommandSpec,
+    ch: char,
+    globals: &[&'static ArgSpec],
+) -> Option<Error> {
     match ch {
-        'h' if spec.find_short('h').is_none() => Some(Error::Help(help::render(spec, globals))),
-        'V' if spec.has_version_info() && spec.find_short('V').is_none() => {
+        'h' if !arg_targets(spec)
+            .iter()
+            .any(|target| target.arg.short == Some('h')) =>
+        {
+            Some(Error::Help(help::render(spec, globals)))
+        },
+        'V' if spec.has_version_info()
+            && !arg_targets(spec)
+                .iter()
+                .any(|target| target.arg.short == Some('V')) =>
+        {
             Some(Error::Version(help::version_line(spec)))
         },
         _ => None,
@@ -575,13 +736,15 @@ mod tests {
         hash: None,
         about: "a flat command",
         args: FLAT_ARGS,
+        flattened: &[],
+        argument_order: &[],
         groups: &[],
         conflicts: &[],
         subs: &[],
         sub_optional: false,
     };
 
-    fn parse<'a>(spec: &CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, Error> {
+    fn parse<'a>(spec: &'static CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, Error> {
         parse_spec(spec, argv(a))
     }
 
@@ -637,6 +800,9 @@ mod tests {
 
     #[test]
     fn help_and_version_signals() {
+        const HASHED: CommandSpec = CommandSpec::new("flat").version("0.1.0").hash("abc123");
+        const HASH_ONLY: CommandSpec = CommandSpec::new("flat").hash("abc123");
+
         assert!(matches!(parse(&FLAT, &["--help"]), Err(Error::Help(_))));
         assert!(matches!(parse(&FLAT, &["-h"]), Err(Error::Help(_))));
         match parse(&FLAT, &["--version"]) {
@@ -644,13 +810,11 @@ mod tests {
             other => panic!("expected version, got {other:?}"),
         }
 
-        const HASHED: CommandSpec = CommandSpec::new("flat").version("0.1.0").hash("abc123");
         match parse(&HASHED, &["--version"]) {
             Err(Error::Version(v)) => assert_eq!(v, "flat 0.1.0 (abc123)"),
             other => panic!("expected version, got {other:?}"),
         }
 
-        const HASH_ONLY: CommandSpec = CommandSpec::new("flat").hash("abc123");
         match parse(&HASH_ONLY, &["-V"]) {
             Err(Error::Version(v)) => assert_eq!(v, "flat (abc123)"),
             other => panic!("expected version, got {other:?}"),
@@ -666,6 +830,8 @@ mod tests {
             hash: None,
             about: "",
             args: ARGS,
+            flattened: &[],
+            argument_order: &[],
             groups: &[],
             conflicts: &[],
             subs: &[],
@@ -697,6 +863,8 @@ mod tests {
             hash: None,
             about: "",
             args: ARGS,
+            flattened: &[],
+            argument_order: &[],
             groups: &[GroupSpec::new("mode")],
             conflicts: &[],
             subs: &[],
@@ -727,6 +895,8 @@ mod tests {
             hash: None,
             about: "",
             args: ARGS,
+            flattened: &[],
+            argument_order: &[],
             groups: &[],
             conflicts: &[(0, 1)],
             subs: &[],
@@ -751,6 +921,8 @@ mod tests {
         hash: None,
         about: "add a pin",
         args: ADD_ARGS,
+        flattened: &[],
+        argument_order: &[],
         groups: &[],
         conflicts: &[],
         subs: &[],
@@ -769,6 +941,8 @@ mod tests {
         hash: None,
         about: "demo",
         args: &[],
+        flattened: &[],
+        argument_order: &[],
         groups: &[],
         conflicts: &[],
         subs: ROOT_SUBS,

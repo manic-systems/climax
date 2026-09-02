@@ -1,6 +1,6 @@
 [package]
 name                 = "pound-derive"
-version              = "0.1.6"
+version              = "0.2.0"
 description          = "derive macros for pound"
 keywords             = [ "cli", "args", "derive" ]
 categories           = [ "command-line-interface" ]

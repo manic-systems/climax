@@ -10,6 +10,8 @@ use crate::alloc_prelude::*;
 /// anything a parse attempt can produce
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
+    /// the static command description contains an ambiguous argument name
+    InvalidSpecification(String),
     /// unrecognised `--flag` or `-x`
     Unknown(String),
     /// an option that takes a value got none
@@ -70,6 +72,9 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSpecification(message) => {
+                write!(f, "invalid command specification: {message}")
+            },
             Self::Unknown(a) => write!(f, "unrecognised argument '{a}'"),
             Self::MissingValue(a) => write!(f, "'{a}' needs a value"),
             Self::MissingRequired(a) => write!(f, "missing required argument {a}"),
