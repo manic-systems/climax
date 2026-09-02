@@ -40,10 +40,10 @@ impl Color {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Style {
-    pub fg:      Option<Color>,
-    pub bg:      Option<Color>,
-    pub bold:    bool,
-    pub dim:     bool,
+    pub fg: Option<Color>,
+    pub bg: Option<Color>,
+    pub bold: bool,
+    pub dim: bool,
     pub reverse: bool,
 }
 
@@ -60,13 +60,13 @@ pub enum Role {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Theme {
-    prompt:   Style,
-    normal:   Style,
-    dim:      Style,
+    prompt: Style,
+    normal: Style,
+    dim: Style,
     selected: Style,
-    matched:  Style,
-    error:    Style,
-    success:  Style,
+    matched: Style,
+    error: Style,
+    success: Style,
 }
 
 impl Default for Theme {
@@ -77,13 +77,13 @@ impl Default for Theme {
 
 impl Theme {
     pub const DEFAULT: Self = Self {
-        prompt:   Style::PLAIN.bold(),
-        normal:   Style::PLAIN,
-        dim:      Style::PLAIN.dim(),
+        prompt: Style::PLAIN.bold(),
+        normal: Style::PLAIN,
+        dim: Style::PLAIN.dim(),
         selected: Style::PLAIN.reverse(),
-        matched:  Style::PLAIN.fg(Color::Yellow).bold(),
-        error:    Style::PLAIN.fg(Color::Red).bold(),
-        success:  Style::PLAIN.fg(Color::Green).bold(),
+        matched: Style::PLAIN.fg(Color::Yellow).bold(),
+        error: Style::PLAIN.fg(Color::Red).bold(),
+        success: Style::PLAIN.fg(Color::Green).bold(),
     };
 
     pub const fn style(self, role: Role) -> Style {
@@ -115,10 +115,10 @@ impl Theme {
 
 impl Style {
     pub const PLAIN: Self = Self {
-        fg:      None,
-        bg:      None,
-        bold:    false,
-        dim:     false,
+        fg: None,
+        bg: None,
+        bold: false,
+        dim: false,
         reverse: false,
     };
 

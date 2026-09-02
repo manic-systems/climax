@@ -1,15 +1,6 @@
-use std::{
-    error::Error,
-    fmt,
-};
+use std::{error::Error, fmt};
 
-use crate::{
-    Line,
-    Stack,
-    Text,
-    WidgetRef,
-    widget,
-};
+use crate::{Line, LocalWidgetRef, Stack, Text, WidgetRef, local_widget, widget};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TemplateError {
@@ -37,6 +28,29 @@ impl fmt::Display for TemplateError {
 impl Error for TemplateError {}
 
 pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, TemplateError> {
+    template_with(source, slots, widget, widget)
+}
+
+/// Parse a template whose slots and resulting composition remain local to the
+/// current thread.
+pub fn local_template<'a>(
+    source: &str,
+    slots: &[(&str, LocalWidgetRef<'a>)],
+) -> Result<Stack<LocalWidgetRef<'a>>, TemplateError> {
+    template_with(source, slots, local_widget, local_widget)
+}
+
+fn template_with<H, T, L>(
+    source: &str,
+    slots: &[(&str, H)],
+    wrap_text: T,
+    wrap_line: L,
+) -> Result<Stack<H>, TemplateError>
+where
+    H: Clone,
+    T: Fn(Text) -> H,
+    L: Fn(Line<H>) -> H,
+{
     let mut rows = vec![Vec::new()];
     let mut text = String::new();
     let mut chars = source.chars().peekable();
@@ -44,7 +58,7 @@ pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, Temp
     while let Some(ch) = chars.next() {
         match ch {
             '\n' => {
-                flush_text(&mut rows, &mut text);
+                flush_text(&mut rows, &mut text, &wrap_text);
                 rows.push(Vec::new());
             },
             '{' if chars.peek() == Some(&'{') => {
@@ -52,7 +66,7 @@ pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, Temp
                 text.push('{');
             },
             '{' => {
-                flush_text(&mut rows, &mut text);
+                flush_text(&mut rows, &mut text, &wrap_text);
                 let name = parse_slot_name(&mut chars)?;
                 let slot = find_slot(slots, &name)?;
                 current_row_mut(&mut rows).push(slot);
@@ -66,10 +80,10 @@ pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, Temp
         }
     }
 
-    flush_text(&mut rows, &mut text);
+    flush_text(&mut rows, &mut text, &wrap_text);
     Ok(Stack::new(
         rows.into_iter()
-            .map(|row| widget(Line::new(row)))
+            .map(|row| wrap_line(Line::new(row)))
             .collect::<Vec<_>>(),
     ))
 }
@@ -90,7 +104,7 @@ fn parse_slot_name(
     Err(TemplateError::UnclosedSlot(name))
 }
 
-fn find_slot(slots: &[(&str, WidgetRef)], name: &str) -> Result<WidgetRef, TemplateError> {
+fn find_slot<H: Clone>(slots: &[(&str, H)], name: &str) -> Result<H, TemplateError> {
     slots
         .iter()
         .rev()
@@ -98,13 +112,37 @@ fn find_slot(slots: &[(&str, WidgetRef)], name: &str) -> Result<WidgetRef, Templ
         .ok_or_else(|| TemplateError::MissingSlot(name.to_owned()))
 }
 
-fn flush_text(rows: &mut Vec<Vec<WidgetRef>>, text: &mut String) {
+fn flush_text<H>(rows: &mut [Vec<H>], text: &mut String, wrap: &impl Fn(Text) -> H) {
     if !text.is_empty() {
-        current_row_mut(rows).push(widget(Text::new(std::mem::take(text))));
+        current_row_mut(rows).push(wrap(Text::new(std::mem::take(text))));
     }
 }
 
-fn current_row_mut(rows: &mut [Vec<WidgetRef>]) -> &mut Vec<WidgetRef> {
+const fn current_row_mut<H>(rows: &mut [Vec<H>]) -> &mut Vec<H> {
     rows.last_mut()
         .expect("template parser always keeps a current row")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{RenderCtx, Style, Surface, Widget, local_widget, render_plain};
+
+    use super::local_template;
+
+    struct BorrowedText<'a>(&'a str);
+
+    impl Widget for BorrowedText<'_> {
+        fn render(&self, _context: &RenderCtx, output: &mut Surface) {
+            output.write(self.0, Style::PLAIN);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fn local_template_retains_borrowed_slots() {
+        let value = String::from("borrowed");
+        let slot = local_widget(BorrowedText(&value));
+        let rendered = local_template("{value}/{value}", &[("value", slot)]).unwrap();
+        assert_eq!(render_plain(&rendered), "borrowed/borrowed");
+    }
 }

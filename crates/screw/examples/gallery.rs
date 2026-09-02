@@ -1,35 +1,13 @@
 use std::{
     io,
-    sync::{
-        Arc,
-        Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
 use screw::{
-    Color,
-    Grid,
-    GridCell,
-    Line,
-    List,
-    Looping,
-    ProgressBar,
-    RenderCtx,
-    Role,
-    Runtime,
-    Stack,
-    Stateful,
-    Style,
-    Surface,
-    Text,
-    TextInput,
-    Widget,
-    WidgetRef,
-    WindowedLines,
-    screw,
-    widget,
+    Color, Grid, GridCell, Line, List, Looping, ProgressBar, RenderCtx, Role, Runtime, Stack,
+    Stateful, Style, Surface, Text, TextInput, Widget, WidgetRef, WindowedLines, screw, widget,
 };
 
 const SCENE_FRAMES: usize = 6;
@@ -44,14 +22,14 @@ enum Phase {
 
 #[derive(Clone)]
 struct SelectedList {
-    rows:     Vec<String>,
+    rows: Vec<String>,
     selected: Arc<Mutex<usize>>,
 }
 
 impl SelectedList {
     fn new(rows: &[&str]) -> Self {
         Self {
-            rows:     rows.iter().map(ToString::to_string).collect(),
+            rows: rows.iter().map(ToString::to_string).collect(),
             selected: Arc::new(Mutex::new(0)),
         }
     }
@@ -91,9 +69,10 @@ impl Calendar {
 impl Widget for Calendar {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let selected = *self.selected.lock().expect("calendar mutex poisoned");
-        let rows = [["20", "21", "22", "23", "24", "25", "26"], [
-            "27", "28", "29", "30", "31", "  ", "  ",
-        ]]
+        let rows = [
+            ["20", "21", "22", "23", "24", "25", "26"],
+            ["27", "28", "29", "30", "31", "  ", "  "],
+        ]
         .into_iter()
         .map(|week| {
             week.into_iter()
@@ -143,13 +122,13 @@ impl Widget for DraftInput {
 }
 
 struct Gallery {
-    root:     WidgetRef,
-    phase:    Arc<Stateful<Phase>>,
-    logs:     WindowedLines,
+    root: WidgetRef,
+    phase: Arc<Stateful<Phase>>,
+    logs: WindowedLines,
     progress: ProgressBar,
-    list:     SelectedList,
+    list: SelectedList,
     calendar: Calendar,
-    input:    DraftInput,
+    input: DraftInput,
 }
 
 impl Gallery {
