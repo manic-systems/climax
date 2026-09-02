@@ -1,69 +1,54 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use bang_core::{
-    ActionBinding,
-    Date,
-    Key,
-    KeyEvent,
-    Modifiers,
-    Number,
-    Value,
-    widgets::{
-        ReviewActionBinding,
-        ReviewState,
-        SelectItem,
-        TextInput,
-    },
+    ActionBinding, Date, Key, KeyEvent, Modifiers, Number, Value,
+    widgets::{ReviewActionBinding, ReviewState, SelectItem, TextInput},
 };
 use serde::Deserialize;
 
 /// parsed widget config
 #[derive(Clone, Debug, PartialEq)]
 pub struct WidgetConfig {
-    pub kind:             WidgetKind,
-    pub input_bytes:      Option<String>,
-    pub page_size:        Option<usize>,
-    pub prompt:           Option<String>,
-    pub placeholder:      Option<String>,
-    pub value:            Option<String>,
-    pub wrap:             Option<bool>,
-    pub show_removed:     Option<bool>,
-    pub action_output:    Option<bool>,
-    pub actions:          Vec<ActionBinding>,
-    pub review_actions:   Vec<ReviewActionBinding>,
-    pub options:          Vec<SelectItem>,
+    pub kind: WidgetKind,
+    pub input_bytes: Option<String>,
+    pub page_size: Option<usize>,
+    pub prompt: Option<String>,
+    pub placeholder: Option<String>,
+    pub value: Option<String>,
+    pub wrap: Option<bool>,
+    pub show_removed: Option<bool>,
+    pub action_output: Option<bool>,
+    pub actions: Vec<ActionBinding>,
+    pub review_actions: Vec<ReviewActionBinding>,
+    pub options: Vec<SelectItem>,
     pub selected_indices: Vec<usize>,
-    pub review_states:    Vec<ReviewState>,
-    pub fields:           Vec<FieldConfig>,
-    pub selected_date:    Option<Date>,
-    pub today:            Option<Date>,
+    pub review_states: Vec<ReviewState>,
+    pub fields: Vec<FieldConfig>,
+    pub selected_date: Option<Date>,
+    pub today: Option<Date>,
 }
 
 /// a single form field
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldConfig {
-    pub name:             String,
-    pub kind:             WidgetKind,
-    pub page_size:        Option<usize>,
-    pub prompt:           Option<String>,
-    pub placeholder:      Option<String>,
-    pub value:            Option<String>,
-    pub wrap:             Option<bool>,
-    pub show_removed:     Option<bool>,
-    pub action_output:    Option<bool>,
-    pub actions:          Vec<ActionBinding>,
-    pub review_actions:   Vec<ReviewActionBinding>,
-    pub options:          Vec<SelectItem>,
+    pub name: String,
+    pub kind: WidgetKind,
+    pub page_size: Option<usize>,
+    pub prompt: Option<String>,
+    pub placeholder: Option<String>,
+    pub value: Option<String>,
+    pub wrap: Option<bool>,
+    pub show_removed: Option<bool>,
+    pub action_output: Option<bool>,
+    pub actions: Vec<ActionBinding>,
+    pub review_actions: Vec<ReviewActionBinding>,
+    pub options: Vec<SelectItem>,
     pub selected_indices: Vec<usize>,
-    pub review_states:    Vec<ReviewState>,
-    pub selected_date:    Option<Date>,
-    pub today:            Option<Date>,
+    pub review_states: Vec<ReviewState>,
+    pub selected_date: Option<Date>,
+    pub today: Option<Date>,
 }
 
 impl WidgetConfig {
@@ -95,23 +80,23 @@ pub enum WidgetKind {
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(rename = "type")]
-    kind:          RawWidgetKind,
-    input_bytes:   Option<String>,
-    page_size:     Option<usize>,
-    prompt:        Option<String>,
-    placeholder:   Option<String>,
-    value:         Option<String>,
+    kind: RawWidgetKind,
+    input_bytes: Option<String>,
+    page_size: Option<usize>,
+    prompt: Option<String>,
+    placeholder: Option<String>,
+    value: Option<String>,
     selected_date: Option<String>,
-    today:         Option<String>,
-    wrap:          Option<bool>,
-    show_removed:  Option<bool>,
+    today: Option<String>,
+    wrap: Option<bool>,
+    show_removed: Option<bool>,
     action_output: Option<bool>,
     #[serde(default)]
-    actions:       Vec<RawAction>,
+    actions: Vec<RawAction>,
     #[serde(default)]
-    options:       Vec<OptionEntry>,
+    options: Vec<OptionEntry>,
     #[serde(default)]
-    fields:        Vec<RawFieldConfig>,
+    fields: Vec<RawFieldConfig>,
 }
 
 impl RawConfig {
@@ -214,22 +199,22 @@ impl From<RawWidgetKind> for WidgetKind {
 
 #[derive(Debug, Deserialize)]
 struct RawFieldConfig {
-    name:          String,
+    name: String,
     #[serde(rename = "type")]
-    kind:          RawWidgetKind,
-    page_size:     Option<usize>,
-    prompt:        Option<String>,
-    placeholder:   Option<String>,
-    value:         Option<String>,
+    kind: RawWidgetKind,
+    page_size: Option<usize>,
+    prompt: Option<String>,
+    placeholder: Option<String>,
+    value: Option<String>,
     selected_date: Option<String>,
-    today:         Option<String>,
-    wrap:          Option<bool>,
-    show_removed:  Option<bool>,
+    today: Option<String>,
+    wrap: Option<bool>,
+    show_removed: Option<bool>,
     action_output: Option<bool>,
     #[serde(default)]
-    actions:       Vec<RawAction>,
+    actions: Vec<RawAction>,
     #[serde(default)]
-    options:       Vec<OptionEntry>,
+    options: Vec<OptionEntry>,
 }
 
 impl RawFieldConfig {
@@ -300,13 +285,11 @@ enum OptionEntry {
 impl OptionEntry {
     fn finish(self) -> Result<FinishedOption, String> {
         match self {
-            Self::Label(label) => {
-                Ok(FinishedOption {
-                    item:         SelectItem::new(label.clone(), label),
-                    selected:     false,
-                    review_state: ReviewState::Unconfirmed,
-                })
-            },
+            Self::Label(label) => Ok(FinishedOption {
+                item: SelectItem::new(label.clone(), label),
+                selected: false,
+                review_state: ReviewState::Unconfirmed,
+            }),
             Self::Detailed(option) => option.finish(),
         }
     }
@@ -314,16 +297,16 @@ impl OptionEntry {
 
 #[derive(Debug, Deserialize)]
 struct DetailedOption {
-    label:    String,
-    value:    Option<toml::Value>,
+    label: String,
+    value: Option<toml::Value>,
     #[serde(default)]
     selected: bool,
-    state:    Option<String>,
+    state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawAction {
-    key:  String,
+    key: String,
     name: String,
     help: Option<String>,
 }
@@ -378,16 +361,16 @@ impl DetailedOption {
 
 #[derive(Debug, PartialEq)]
 struct FinishedOption {
-    item:         SelectItem,
-    selected:     bool,
+    item: SelectItem,
+    selected: bool,
     review_state: ReviewState,
 }
 
 #[derive(Debug, PartialEq)]
 struct FinishedOptions {
-    items:            Vec<SelectItem>,
+    items: Vec<SelectItem>,
     selected_indices: Vec<usize>,
-    review_states:    Vec<ReviewState>,
+    review_states: Vec<ReviewState>,
 }
 
 fn finish_options(options: Vec<OptionEntry>) -> Result<FinishedOptions, String> {
@@ -431,7 +414,10 @@ fn finish_review_actions(actions: Vec<RawAction>) -> Result<Vec<ReviewActionBind
                 action.key()
             ));
         }
-        if seen.contains(&action.key()) {
+        if seen
+            .iter()
+            .any(|seen: &char| seen.eq_ignore_ascii_case(&action.key()))
+        {
             return Err(format!("duplicate review action key '{}'", action.key()));
         }
         seen.push(action.key());
@@ -555,12 +541,8 @@ const fn is_reserved_action_key(key: char) -> bool {
     matches!(
         key,
         ' ' | '\t'
-            | 'a'
-            | 'A'
             | 'c'
             | 'C'
-            | 'g'
-            | 'G'
             | 'j'
             | 'J'
             | 'k'
@@ -569,8 +551,6 @@ const fn is_reserved_action_key(key: char) -> bool {
             | 'N'
             | 'r'
             | 'R'
-            | 's'
-            | 'S'
             | 'u'
             | 'U'
             | 'x'
@@ -587,22 +567,18 @@ fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
         toml::Value::Float(value) => Value::Number(Number::Float(value)),
         toml::Value::Boolean(value) => Value::Bool(value),
         toml::Value::Datetime(value) => Value::String(value.to_string()),
-        toml::Value::Array(values) => {
-            Value::List(
-                values
-                    .into_iter()
-                    .map(toml_value_to_bang)
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-        },
-        toml::Value::Table(values) => {
-            Value::Object(
-                values
-                    .into_iter()
-                    .map(|(key, value)| Ok((key, toml_value_to_bang(value)?)))
-                    .collect::<Result<BTreeMap<_, _>, String>>()?,
-            )
-        },
+        toml::Value::Array(values) => Value::List(
+            values
+                .into_iter()
+                .map(toml_value_to_bang)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        toml::Value::Table(values) => Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| Ok((key, toml_value_to_bang(value)?)))
+                .collect::<Result<BTreeMap<_, _>, String>>()?,
+        ),
     })
 }
 

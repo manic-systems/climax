@@ -8,6 +8,14 @@ version = "0.0.1"
 dependencies = [
  "bang-core",
  "bang-screw",
+]
+
+[[package]]
+name = "bang-cli"
+version = "0.0.1"
+dependencies = [
+ "bang",
+ "bang-core",
  "bang-terminal",
  "libc",
  "pound",

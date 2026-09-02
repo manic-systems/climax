@@ -5,48 +5,28 @@
 mod config;
 
 use bang_core::{
-    ActionBinding,
-    ActionLayer,
-    OutputFormat as CoreOutputFormat,
-    Reaction,
-    Session,
-    SessionStatus,
-    Value,
-    Widget,
-    format_output,
+    ActionBinding, ActionLayer, OutputFormat as CoreOutputFormat, Reaction, Session, SessionStatus,
+    Value, Widget, format_output,
     widgets::{
-        DatePicker,
-        Form,
-        MultiSelect,
-        ReviewList,
-        SearchSelect,
-        Select,
-        SelectItem,
-        TextInput,
+        DatePicker, Form, MultiSelect, ReviewActionBinding, ReviewList, SearchSelect, Select,
+        SelectItem, TextInput,
     },
 };
 use bang_terminal::Decoder;
 use config::{
-    FieldConfig,
-    WidgetConfig,
-    WidgetKind,
-    parse_action_binding,
-    parse_review_action_binding,
+    FieldConfig, WidgetConfig, WidgetKind, parse_action_binding, parse_review_action_binding,
     text_from_config,
 };
-use pound::{
-    Parse,
-    ValueEnum,
-};
+use pound::{Parse, ValueEnum};
 
 /// toplevel CLI
 #[derive(Debug, Parse)]
 #[pound(name = "bang", version = "0.1.0")]
 pub struct Cli {
     #[pound(short, long)]
-    config:  Option<String>,
+    config: Option<String>,
     #[pound(short, long, global, default = "text")]
-    output:  OutputFormat,
+    output: OutputFormat,
     #[pound(subcommand)]
     command: Option<Command>,
 }
@@ -57,31 +37,31 @@ pub enum Command {
     Select {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option:      Vec<String>,
+        option: Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:   usize,
+        page_size: usize,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action:      Vec<String>,
+        action: Vec<String>,
     },
     /// choose zero or more options
     MultiSelect {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option:      Vec<String>,
+        option: Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:   usize,
+        page_size: usize,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action:      Vec<String>,
+        action: Vec<String>,
     },
     /// edit and submit text
     Text {
@@ -90,49 +70,49 @@ pub enum Command {
         input_bytes: Option<String>,
         /// initial value
         #[pound(long, default = "")]
-        value:       String,
+        value: String,
         /// prompt shown in logical views
         #[pound(long, default = "text: ")]
-        prompt:      String,
+        prompt: String,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action:      Vec<String>,
+        action: Vec<String>,
     },
     /// filter options and choose one
     Search {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option:      Vec<String>,
+        option: Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:   usize,
+        page_size: usize,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action:      Vec<String>,
+        action: Vec<String>,
     },
     /// review options with confirmed/denied/unconfirmed row state
     ReviewList {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option:        Vec<String>,
+        option: Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
-        input_bytes:   Option<String>,
+        input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:     usize,
+        page_size: usize,
         /// hide rows whose initial review state is denied
         #[pound(long)]
-        hide_removed:  bool,
-        /// return an object with action and rows; enables g/s/a action keys
+        hide_removed: bool,
+        /// return a structured exit and rows; enables g/s/a action keys
         #[pound(long)]
         action_output: bool,
         /// extra action key in key:name form; may be repeated
         #[pound(long)]
-        action:        Vec<String>,
+        action: Vec<String>,
     },
 }
 
@@ -182,49 +162,41 @@ fn run_command(command: Command) -> Result<Value, String> {
             input_bytes,
             page_size,
             action,
-        } => {
-            run_widget(
-                Select::new("select", choice_items(option)?).with_page_size(page_size),
-                input_bytes,
-                action_bindings(action)?,
-            )
-        },
+        } => run_widget(
+            Select::new("select", choice_items(option)?).with_page_size(page_size),
+            input_bytes,
+            action_bindings(action)?,
+        ),
         Command::MultiSelect {
             option,
             input_bytes,
             page_size,
             action,
-        } => {
-            run_widget(
-                MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
-                input_bytes,
-                action_bindings(action)?,
-            )
-        },
+        } => run_widget(
+            MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
+            input_bytes,
+            action_bindings(action)?,
+        ),
         Command::Text {
             input_bytes,
             value,
             prompt,
             action,
-        } => {
-            run_widget(
-                TextInput::new("text").with_prompt(prompt).with_value(value),
-                input_bytes,
-                action_bindings(action)?,
-            )
-        },
+        } => run_widget(
+            TextInput::new("text").with_prompt(prompt).with_value(value),
+            input_bytes,
+            action_bindings(action)?,
+        ),
         Command::Search {
             option,
             input_bytes,
             page_size,
             action,
-        } => {
-            run_widget(
-                SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
-                input_bytes,
-                action_bindings(action)?,
-            )
-        },
+        } => run_widget(
+            SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
+            input_bytes,
+            action_bindings(action)?,
+        ),
         Command::ReviewList {
             option,
             input_bytes,
@@ -233,12 +205,13 @@ fn run_command(command: Command) -> Result<Value, String> {
             action_output,
             action,
         } => {
+            let actions = review_action_bindings_with_defaults(action, action_output)?;
             run_widget(
                 ReviewList::new("review-list", choice_items(option)?)
                     .with_page_size(page_size)
                     .with_show_removed(!hide_removed)
-                    .with_action_output(action_output || !action.is_empty())
-                    .with_custom_actions(review_action_bindings(action)?),
+                    .with_exit_output(action_output || !actions.is_empty())
+                    .with_custom_actions(actions),
                 input_bytes,
                 Vec::new(),
             )
@@ -274,13 +247,11 @@ fn run_config(config: WidgetConfig) -> Result<Value, String> {
             }
             run_widget(widget, config.input_bytes, config.actions)
         },
-        WidgetKind::Text => {
-            run_widget(
-                text_from_config(&config),
-                config.input_bytes,
-                config.actions,
-            )
-        },
+        WidgetKind::Text => run_widget(
+            text_from_config(&config),
+            config.input_bytes,
+            config.actions,
+        ),
         WidgetKind::Search => {
             let mut widget = SearchSelect::new("search", config.options)
                 .with_page_size(config.page_size.unwrap_or(9))
@@ -316,15 +287,17 @@ fn run_config(config: WidgetConfig) -> Result<Value, String> {
         },
         WidgetKind::ReviewList => {
             let first_selected = config.selected_indices.first().copied();
+            let actions = review_actions_with_defaults(
+                config.review_actions,
+                config.action_output.unwrap_or(false),
+            )?;
             let mut widget = ReviewList::new("review-list", config.options)
                 .with_page_size(config.page_size.unwrap_or(9))
                 .with_wrap(config.wrap.unwrap_or(true))
                 .with_states(config.review_states)
                 .with_show_removed(config.show_removed.unwrap_or(true))
-                .with_action_output(
-                    config.action_output.unwrap_or(false) || !config.review_actions.is_empty(),
-                )
-                .with_custom_actions(config.review_actions);
+                .with_exit_output(config.action_output.unwrap_or(false) || !actions.is_empty())
+                .with_custom_actions(actions);
             if let Some(prompt) = config.prompt {
                 widget = widget.with_prompt(prompt);
             }
@@ -416,15 +389,18 @@ fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
         },
         WidgetKind::ReviewList => {
             let first_selected = field.selected_indices.first().copied();
+            let actions = review_actions_with_defaults(
+                field.review_actions,
+                field.action_output.unwrap_or(false),
+            )?;
             let mut widget = ReviewList::new(field.name.clone(), field.options)
                 .with_page_size(field.page_size.unwrap_or(9))
                 .with_wrap(field.wrap.unwrap_or(true))
                 .with_states(field.review_states)
                 .with_show_removed(field.show_removed.unwrap_or(true))
-                .with_action_output(
-                    field.action_output.unwrap_or(false) || !field.review_actions.is_empty(),
-                )
-                .with_custom_actions(field.review_actions);
+                .with_exit_output(field.action_output.unwrap_or(false) || !actions.is_empty())
+                .with_custom_actions(actions)
+                .with_leave_output(false);
             if let Some(prompt) = field.prompt {
                 widget = widget.with_prompt(prompt);
             }
@@ -476,20 +452,56 @@ fn action_bindings(actions: Vec<String>) -> Result<Vec<ActionBinding>, String> {
     Ok(bindings)
 }
 
-fn review_action_bindings(
+fn review_action_bindings_with_defaults(
     actions: Vec<String>,
-) -> Result<Vec<bang_core::widgets::ReviewActionBinding>, String> {
+    defaults: bool,
+) -> Result<Vec<ReviewActionBinding>, String> {
     let mut seen = Vec::new();
-    let mut bindings = Vec::new();
+    let mut bindings = if defaults {
+        default_review_actions()
+    } else {
+        Vec::new()
+    };
+    seen.extend(bindings.iter().map(ReviewActionBinding::key));
     for action in actions {
         let binding = parse_review_action_binding(&action)?;
-        if seen.contains(&binding.key()) {
-            return Err(format!("duplicate review action key '{}'", binding.key()));
+        let key = binding.key().to_ascii_lowercase();
+        if seen.iter().any(|seen| seen.eq_ignore_ascii_case(&key)) {
+            return Err(format!("duplicate review action key '{key}'"));
         }
-        seen.push(binding.key());
+        seen.push(key);
         bindings.push(binding);
     }
     Ok(bindings)
+}
+
+fn review_actions_with_defaults(
+    actions: Vec<ReviewActionBinding>,
+    defaults: bool,
+) -> Result<Vec<ReviewActionBinding>, String> {
+    let mut bindings = if defaults {
+        default_review_actions()
+    } else {
+        Vec::new()
+    };
+    for action in actions {
+        if bindings
+            .iter()
+            .any(|existing| existing.key().eq_ignore_ascii_case(&action.key()))
+        {
+            return Err(format!("duplicate review action key '{}'", action.key()));
+        }
+        bindings.push(action);
+    }
+    Ok(bindings)
+}
+
+fn default_review_actions() -> Vec<ReviewActionBinding> {
+    vec![
+        ReviewActionBinding::new('g', "regen").with_help("regenerate"),
+        ReviewActionBinding::new('s', "search"),
+        ReviewActionBinding::new('a', "add"),
+    ]
 }
 
 fn action_key_label(key: &bang_core::KeyEvent) -> String {
@@ -508,11 +520,11 @@ fn run_widget(
     input_bytes: Option<String>,
     actions: Vec<ActionBinding>,
 ) -> Result<Value, String> {
-    let widget = ActionLayer::new(widget).with_actions(actions);
     if let Some(input_bytes) = input_bytes {
+        let widget = ActionLayer::new(widget).with_actions(actions);
         run_replayed_session(widget, &input_bytes)
     } else {
-        bang_screw::run_live_session(widget).map_err(|error| error.to_string())
+        bang::advanced::interact_widget(widget, actions).map_err(|error| error.to_string())
     }
 }
 

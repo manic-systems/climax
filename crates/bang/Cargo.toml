@@ -1,0 +1,18 @@
+[package]
+name                 = "bang"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface" ]
+description          = "typed interactive terminal prompts"
+edition.workspace    = true
+keywords             = [ "cli", "input", "terminal", "prompts" ]
+license.workspace    = true
+readme               = "../../README.md"
+repository.workspace = true
+
+[dependencies]
+bang-core  = { path = "../bang-core", version = "0.0.1" }
+bang-screw = { path = "../bang-screw", version = "0.0.1" }
+
+[lints]
+workspace = true

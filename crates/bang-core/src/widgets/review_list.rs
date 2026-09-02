@@ -217,12 +217,6 @@ impl ReviewList {
     }
 
     #[must_use]
-    #[doc(hidden)]
-    pub const fn with_action_output(self, action_output: bool) -> Self {
-        self.with_exit_output(action_output)
-    }
-
-    #[must_use]
     pub const fn with_leave_output(mut self, leave_output: bool) -> Self {
         if matches!(self.output, ReviewOutput::Exits { .. }) {
             self.output = ReviewOutput::Exits {
