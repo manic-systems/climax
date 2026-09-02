@@ -1,6 +1,6 @@
 [package]
 name                 = "pound"
-version              = "0.1.6"
+version              = "0.2.0"
 description          = "low footprint, derive-first CLI parser"
 keywords             = [ "cli", "args", "argparse", "derive", "command-line" ]
 categories           = [ "command-line-interface" ]
@@ -12,12 +12,12 @@ repository.workspace = true
 
 [features]
 default = [ "std", "help", "derive" ]
-std = [  ]
-help = [ "pound-derive?/help" ]
-derive = [ "dep:pound-derive" ]
+std     = [  ]
+help    = [ "pound-derive?/help" ]
+derive  = [ "dep:pound-derive" ]
 
 [dependencies]
-pound-derive = { version = "0.1.6", path = "../pound-derive", optional = true }
+pound-derive = { version = "0.2.0", path = "../pound-derive", optional = true }
 
 [[example]]
 name              = "grab"

@@ -19,6 +19,8 @@ pub struct Pound {
     pub count: bool,
     /// field delegates to its type's subcommand tree
     pub subcommand: bool,
+    /// field contributes its type's arguments at this command level
+    pub flatten: bool,
     /// keep this arg/variant out of help output
     pub hidden: bool,
     /// named flag/option that descendant subcommands also accept
@@ -104,6 +106,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "trailing" => out.trailing = true,
             "count" => out.count = true,
             "subcommand" => out.subcommand = true,
+            "flatten" => out.flatten = true,
             "hidden" => out.hidden = true,
             "global" => out.global = true,
             "group" => out.group = value,

@@ -13,12 +13,20 @@
 //! | `Vec<T>`    | variadic/repeatable  |
 //!
 //! `#[pound(short)]` / `#[pound(long)]` promote these to a named option
+//! and `#[pound(flatten)]` embeds a reusable parsed struct at the same command
+//! level.
 //!
 //! ```ignore
 //! use pound::Parse;
 //!
 //! #[derive(Parse)]
+//! struct Common {
+//!     #[pound(long)] verbose: bool,
+//! }
+//!
+//! #[derive(Parse)]
 //! struct Add {
+//!     #[pound(flatten)] common: Common,
 //!     name: String,                          // required positional
 //!     url:  String,                          // required positional
 //!     #[pound(long)] unpack:  Option<String>,
@@ -40,10 +48,7 @@ mod alloc_prelude {
         borrow::ToOwned,
         boxed::Box,
         format,
-        string::{
-            String,
-            ToString,
-        },
+        string::{String, ToString},
         vec,
         vec::Vec,
     };
@@ -58,21 +63,9 @@ mod value;
 pub use error::Error;
 pub use parse::Matches;
 #[cfg(feature = "derive")]
-pub use pound_derive::{
-    Parse,
-    ValueEnum,
-};
-pub use spec::{
-    ArgSpec,
-    CommandSpec,
-    GroupSpec,
-    Kind,
-    SubSpec,
-};
-pub use value::{
-    FromArg,
-    ValueError,
-};
+pub use pound_derive::{Parse, ValueEnum};
+pub use spec::{ArgSpec, ArgumentOrder, Arguments, CommandSpec, GroupSpec, Kind, SubSpec};
+pub use value::{FromArg, ValueError};
 
 /// the trait the derive targets
 ///

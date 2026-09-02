@@ -14,7 +14,7 @@ repository.workspace = true
 bang-core     = { path = "../bang-core", version = "0.0.1" }
 bang-screw    = { path = "../bang-screw", version = "0.0.1" }
 bang-terminal = { path = "../bang-terminal", version = "0.0.1" }
-pound         = { path = "../pound", version = "0.1.6" }
+pound         = { path = "../pound", version = "0.2.0" }
 serde         = { version = "1", features = [ "derive" ] }
 toml          = "0.8"
 
