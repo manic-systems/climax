@@ -1,11 +1,18 @@
-use climax::prelude::*;
+use bang::PromptOutcome;
 
 fn main() -> climax::Result<()> {
-    let shell = prompt::select("shell")
-        .option("bash")
-        .option("nushell")
-        .option("zsh")
-        .run()?;
+    climax::run_with((), |context, ()| {
+        let shell = match context
+            .select("shell")
+            .choice("bash", "bash")
+            .choice("nushell", "nushell")
+            .choice("zsh", "zsh")
+            .interact()?
+        {
+            PromptOutcome::Submit(shell) => shell,
+            PromptOutcome::Leave => return Ok(()),
+        };
 
-    output::print_value(&shell, output::Format::Text)
+        context.output().result(&shell).text(|shell| *shell).emit()
+    })
 }

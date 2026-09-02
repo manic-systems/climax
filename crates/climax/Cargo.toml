@@ -10,23 +10,21 @@ keywords    = [ "cli", "terminal", "prompts", "args", "tui" ]
 categories  = [ "command-line-interface", "command-line-utilities" ]
 
 [features]
-default     = [ "derive", "interactive", "render" ]
-derive      = [ "parse", "pound/derive" ]
-interactive = [ "dep:bang-core", "dep:bang-terminal", "dep:bang-screw", "render" ]
+default     = [ "interactive", "parse", "render", "structured" ]
+interactive = [ "dep:bang" ]
 parse       = [ "dep:pound" ]
-pty-overlay = [ "parse", "interactive", "dep:bang-screw-pty" ]
 render      = [ "dep:screw" ]
+structured  = [ "dep:serde", "dep:serde_json" ]
 
 [dependencies]
-bang-core = { path = "../bang-core", version = "0.0.1", optional = true }
-bang-screw = { path = "../bang-screw", version = "0.0.1", optional = true }
-bang-screw-pty = { path = "../bang-screw-pty", version = "0.0.1", optional = true }
-bang-terminal = { path = "../bang-terminal", version = "0.0.1", optional = true }
+bang = { path = "../bang", version = "0.0.1", optional = true }
 pound = { path = "../pound", version = "0.2.0", optional = true, default-features = false, features = [
   "std",
   "help",
 ] }
 screw = { path = "../screw", version = "0.0.1", optional = true }
+serde = { version = "1", optional = true }
+serde_json = { version = "1", optional = true }
 
 [lints.clippy]
 cargo    = { level = "warn", priority = -1 }
