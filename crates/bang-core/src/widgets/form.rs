@@ -3,22 +3,12 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    Context,
-    Event,
-    FocusTarget,
-    Key,
-    Reaction,
-    Role,
-    Span,
-    Value,
-    View,
-    ViewContext,
-    Widget,
+    Context, Event, FocusTarget, Key, Reaction, Role, Span, Value, View, ViewContext, Widget,
     WidgetId,
 };
 
 pub struct Form {
-    id:     WidgetId,
+    id: WidgetId,
     fields: Vec<FormField>,
     active: usize,
 }
@@ -27,7 +17,7 @@ impl Form {
     #[must_use]
     pub fn new(id: impl Into<WidgetId>) -> Self {
         Self {
-            id:     id.into(),
+            id: id.into(),
             fields: Vec::new(),
             active: 0,
         }
@@ -41,7 +31,7 @@ impl Form {
 
     pub fn push_field(&mut self, name: impl Into<String>, widget: impl Widget + 'static) {
         self.fields.push(FormField {
-            name:   name.into(),
+            name: name.into(),
             widget: Box::new(widget),
         });
         self.active = self.active.min(self.fields.len().saturating_sub(1));
@@ -125,15 +115,13 @@ impl Widget for Form {
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         match &event {
-            Event::Key(key) => {
-                match key.key {
-                    Key::Tab => return self.move_focus(1),
-                    Key::Backtab => return self.move_focus(-1),
-                    Key::Esc => return Reaction::Cancel,
-                    _ => {},
-                }
+            Event::Key(key) => match key.key {
+                Key::Tab => return self.move_focus(1),
+                Key::Backtab => return self.move_focus(-1),
+                Key::Esc => return Reaction::Cancel,
+                _ => {},
             },
-            Event::Resize { .. } | Event::Tick | Event::Paste(_) => {},
+            Event::Resize { .. } | Event::Tick | Event::Paste(_) | Event::UnknownEscape(_) => {},
         }
 
         let Some(field) = self.fields.get_mut(self.active) else {
@@ -148,14 +136,13 @@ impl Widget for Form {
             Reaction::Cancel => Reaction::Cancel,
             Reaction::Focus(FocusTarget::Next) => self.move_focus(1),
             Reaction::Focus(FocusTarget::Previous) => self.move_focus(-1),
-            Reaction::Focus(FocusTarget::Widget(id)) => {
-                self.fields
-                    .iter()
-                    .position(|field| field.widget.id() == id)
-                    .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
-                        self.set_active_index(index)
-                    })
-            },
+            Reaction::Focus(FocusTarget::Widget(id)) => self
+                .fields
+                .iter()
+                .position(|field| field.widget.id() == id)
+                .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
+                    self.set_active_index(index)
+                }),
             Reaction::Changed => Reaction::Changed,
             Reaction::Ignored => Reaction::Ignored,
         }
@@ -191,6 +178,6 @@ impl Widget for Form {
 }
 
 struct FormField {
-    name:   String,
+    name: String,
     widget: Box<dyn Widget>,
 }

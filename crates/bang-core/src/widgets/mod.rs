@@ -9,16 +9,7 @@ mod text_input;
 
 pub use date_picker::DatePicker;
 pub use form::Form;
-pub use review_list::{
-    ReviewAction,
-    ReviewActionBinding,
-    ReviewList,
-    ReviewState,
-};
+pub use review_list::{ReviewActionBinding, ReviewList, ReviewState};
 pub use search_select::SearchSelect;
-pub use select::{
-    MultiSelect,
-    Select,
-    SelectItem,
-};
+pub use select::{MultiSelect, Select, SelectItem};
 pub use text_input::TextInput;

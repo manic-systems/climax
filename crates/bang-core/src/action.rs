@@ -3,22 +3,12 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    Context,
-    Event,
-    Key,
-    KeyEvent,
-    Modifiers,
-    Reaction,
-    Value,
-    View,
-    ViewContext,
-    Widget,
-    WidgetId,
+    Context, Event, Key, KeyEvent, Modifiers, Reaction, Value, View, ViewContext, Widget, WidgetId,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActionBinding {
-    key:  KeyEvent,
+    key: KeyEvent,
     name: String,
     help: String,
 }
@@ -76,7 +66,7 @@ impl ActionBinding {
 /// carries widget state + action executed
 #[derive(Clone, Debug)]
 pub struct ActionLayer<W> {
-    widget:  W,
+    widget: W,
     actions: Vec<ActionBinding>,
 }
 
@@ -150,20 +140,9 @@ fn action_output(action: &str, value: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use crate::{
-        ActionBinding,
-        ActionLayer,
-        Event,
-        Key,
-        KeyEvent,
-        Modifiers,
-        Reaction,
-        Session,
-        SessionStatus,
-        Value,
-        widgets::{
-            SelectItem,
-            TextInput,
-        },
+        ActionBinding, ActionLayer, Event, Key, KeyEvent, Modifiers, Reaction, Session,
+        SessionStatus, Value,
+        widgets::{SelectItem, TextInput},
     };
 
     #[test]
@@ -192,10 +171,10 @@ mod tests {
     #[test]
     fn action_layer_passes_unbound_events_to_inner_widget() {
         let mut session = Session::new(
-            ActionLayer::new(crate::widgets::Select::new("choice", [
-                SelectItem::from("alpha"),
-                SelectItem::from("bravo"),
-            ]))
+            ActionLayer::new(crate::widgets::Select::new(
+                "choice",
+                [SelectItem::from("alpha"), SelectItem::from("bravo")],
+            ))
             .with_actions([ActionBinding::control_char('s', "save")]),
         );
 

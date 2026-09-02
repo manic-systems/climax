@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    collections::BTreeMap,
-    fmt,
-    str::FromStr,
-};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -107,9 +103,9 @@ pub enum Number {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Date {
-    pub year:  i32,
+    pub year: i32,
     pub month: u8,
-    pub day:   u8,
+    pub day: u8,
 }
 
 impl Date {

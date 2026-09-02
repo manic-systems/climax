@@ -1,23 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use crate::{
-    CalendarDay,
-    CalendarView,
-    CalendarWeek,
-    Context,
-    Date,
-    Event,
-    Key,
-    KeyEvent,
-    Reaction,
-    Role,
-    Span,
-    Value,
-    View,
-    ViewContext,
-    ViewId,
-    Widget,
-    WidgetId,
+    CalendarDay, CalendarView, CalendarWeek, Context, Date, Event, Key, KeyEvent, Reaction, Role,
+    Span, Value, View, ViewContext, ViewId, Widget, WidgetId,
 };
 
 const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
@@ -38,18 +23,18 @@ const MONTHS: [&str; 12] = [
 
 #[derive(Clone, Debug)]
 pub struct DatePicker {
-    id:       WidgetId,
+    id: WidgetId,
     selected: Date,
-    today:    Option<Date>,
+    today: Option<Date>,
 }
 
 impl DatePicker {
     #[must_use]
     pub fn new(id: impl Into<WidgetId>, selected: Date) -> Self {
         Self {
-            id:       id.into(),
+            id: id.into(),
             selected: clamp_date(selected),
-            today:    None,
+            today: None,
         }
     }
 
@@ -88,9 +73,9 @@ impl DatePicker {
 
     fn move_month_edge(&mut self, day: u8) -> Reaction {
         let next = Date {
-            year:  self.selected.year,
+            year: self.selected.year,
             month: self.selected.month,
-            day:   day.min(days_in_month(self.selected.year, self.selected.month)),
+            day: day.min(days_in_month(self.selected.year, self.selected.month)),
         };
         if next == self.selected {
             return Reaction::Ignored;
@@ -105,29 +90,27 @@ impl DatePicker {
 
     fn calendar_view(&self) -> CalendarView {
         let first = Date {
-            year:  self.selected.year,
+            year: self.selected.year,
             month: self.selected.month,
-            day:   1,
+            day: 1,
         };
         let start_offset = i32::from(weekday_monday0(first));
         let grid_start = add_days(first, -start_offset);
 
         let weeks = (0..6)
-            .map(|week| {
-                CalendarWeek {
-                    days: (0..7)
-                        .map(|weekday| {
-                            let date = add_days(grid_start, week * 7 + weekday);
-                            CalendarDay {
-                                date,
-                                label: date.day.to_string(),
-                                in_month: date.month == self.selected.month,
-                                selected: date == self.selected,
-                                today: self.today == Some(date),
-                            }
-                        })
-                        .collect(),
-                }
+            .map(|week| CalendarWeek {
+                days: (0..7)
+                    .map(|weekday| {
+                        let date = add_days(grid_start, week * 7 + weekday);
+                        CalendarDay {
+                            date,
+                            label: date.day.to_string(),
+                            in_month: date.month == self.selected.month,
+                            selected: date == self.selected,
+                            today: self.today == Some(date),
+                        }
+                    })
+                    .collect(),
             })
             .collect();
 
@@ -255,9 +238,9 @@ fn civil_from_days(days: i32) -> Date {
     let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
     let month = month_prime + if month_prime < 10 { 3 } else { -9 };
     Date {
-        year:  year + i32::from(month <= 2),
+        year: year + i32::from(month <= 2),
         month: u8::try_from(month).unwrap_or(1),
-        day:   u8::try_from(day).unwrap_or(1),
+        day: u8::try_from(day).unwrap_or(1),
     }
 }
 

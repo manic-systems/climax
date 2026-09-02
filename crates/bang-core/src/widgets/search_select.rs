@@ -1,39 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use super::{
-    SelectItem,
-    TextInput,
-};
+use super::{SelectItem, TextInput};
 use crate::{
-    Context,
-    Event,
-    Key,
-    KeyEvent,
-    ListRow,
-    ListView,
-    Reaction,
-    Role,
-    Span,
-    TextInputView,
-    View,
-    ViewContext,
-    ViewId,
-    Widget,
-    WidgetId,
+    Context, Event, Key, KeyEvent, ListRow, ListView, Reaction, Role, Span, TextInputView, View,
+    ViewContext, ViewId, Widget, WidgetId,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 9;
 
 pub struct SearchSelect {
-    id:        WidgetId,
-    input:     TextInput,
-    header:    Vec<Span>,
-    items:     Vec<SelectItem>,
-    matches:   Vec<usize>,
-    selected:  usize,
-    top:       usize,
+    id: WidgetId,
+    input: TextInput,
+    header: Vec<Span>,
+    items: Vec<SelectItem>,
+    matches: Vec<usize>,
+    selected: usize,
+    top: usize,
     page_size: usize,
-    wrap:      bool,
+    wrap: bool,
 }
 
 impl SearchSelect {
@@ -138,6 +122,28 @@ impl SearchSelect {
             .map(|selected| &self.items[self.matches[selected]])
     }
 
+    fn list_id(&self) -> ViewId {
+        ViewId::owned(format!("{}/results", self.id.as_str()))
+    }
+
+    fn sync_presentation(&mut self, context: &Context) {
+        if let Some(presentation) = context.list_presentation(&self.list_id()) {
+            self.top = presentation.visible.start;
+        }
+    }
+
+    fn page_target(&self, context: &Context, down: bool) -> Option<usize> {
+        context
+            .list_presentation(&self.list_id())
+            .and_then(|presentation| {
+                if down {
+                    presentation.page_down
+                } else {
+                    presentation.page_up
+                }
+            })
+    }
+
     fn handle_input(&mut self, event: Event, cx: &mut Context) -> Reaction {
         match self.input.handle(event, cx) {
             Reaction::Changed => {
@@ -170,6 +176,19 @@ impl SearchSelect {
             return Reaction::Ignored;
         }
         self.selected = next;
+        self.ensure_visible();
+        Reaction::Changed
+    }
+
+    fn move_to(&mut self, selected: usize) -> Reaction {
+        if self.matches.is_empty() {
+            return Reaction::Ignored;
+        }
+        let selected = selected.min(self.matches.len() - 1);
+        if selected == self.selected {
+            return Reaction::Ignored;
+        }
+        self.selected = selected;
         self.ensure_visible();
         Reaction::Changed
     }
@@ -211,13 +230,10 @@ impl SearchSelect {
     }
 
     fn list_view(&self) -> ListView {
-        let visible = self.visible_len();
         let rows = self
             .matches
             .iter()
             .enumerate()
-            .skip(self.top)
-            .take(visible)
             .map(|(match_index, item_index)| {
                 let item = &self.items[*item_index];
                 let selected = Some(match_index) == self.selected_match_index();
@@ -228,7 +244,6 @@ impl SearchSelect {
                         item_index
                     ))),
                     spans: highlight_match(&item.label, self.query(), selected),
-                    value: item.value.clone(),
                     selected,
                     checked: None,
                 }
@@ -236,14 +251,13 @@ impl SearchSelect {
             .collect();
 
         ListView {
-            id: Some(ViewId::owned(format!("{}/results", self.id.as_str()))),
+            id: Some(self.list_id()),
             header: self.header.clone(),
             rows,
-            selected: self
-                .selected_match_index()
-                .map(|selected| selected.saturating_sub(self.top)),
-            offset: self.top,
+            selected: self.selected_match_index(),
+            requested_start: self.top,
             total: self.matches.len(),
+            max_visible: Some(self.page_size),
             help: vec![Span::new(
                 "type filter | enter submit | esc cancel",
                 Role::Dim,
@@ -258,22 +272,33 @@ impl Widget for SearchSelect {
     }
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        self.sync_presentation(cx);
         match &event {
-            Event::Key(key) => {
-                match key.key {
-                    Key::Up => self.move_by(-1),
-                    Key::Down => self.move_by(1),
-                    Key::PageUp => self.move_by(-visible_delta(self.visible_len())),
-                    Key::PageDown => self.move_by(visible_delta(self.visible_len())),
-                    Key::Char('k' | 'K') if no_modifiers(key) => self.move_by(-1),
-                    Key::Char('j' | 'J') if no_modifiers(key) => self.move_by(1),
-                    Key::Enter => self.submit(),
-                    Key::Esc => Reaction::Cancel,
-                    _ => self.handle_input(event, cx),
-                }
+            Event::Key(key) => match key.key {
+                Key::Up => self.move_by(-1),
+                Key::Down => self.move_by(1),
+                Key::PageUp => {
+                    if let Some(target) = self.page_target(cx, false) {
+                        self.move_to(target)
+                    } else {
+                        self.move_by(-visible_delta(self.visible_len()))
+                    }
+                },
+                Key::PageDown => {
+                    if let Some(target) = self.page_target(cx, true) {
+                        self.move_to(target)
+                    } else {
+                        self.move_by(visible_delta(self.visible_len()))
+                    }
+                },
+                Key::Char('k' | 'K') if no_modifiers(key) => self.move_by(-1),
+                Key::Char('j' | 'J') if no_modifiers(key) => self.move_by(1),
+                Key::Enter => self.submit(),
+                Key::Esc => Reaction::Cancel,
+                _ => self.handle_input(event, cx),
             },
             Event::Paste(_) => self.handle_input(event, cx),
-            Event::Resize { .. } | Event::Tick => Reaction::Ignored,
+            Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
         }
     }
 
