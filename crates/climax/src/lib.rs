@@ -1,32 +1,26 @@
-//! batteries-included CLI facade over `pound`, `screw`, and `bang`
+//! Batteries-included application facade over `pound`, `screw`, and `bang`.
+//!
+//! The crate root and [`prelude`] contain the ordinary application workflow.
+//! Add `pound`, `screw`, or `bang` as direct dependencies when using their
+//! standalone or advanced APIs; `climax` deliberately does not re-export them.
+//!
+//! Deriving `pound::Parse` also requires a direct `pound` dependency with its
+//! `derive` feature. A transitive dependency through `climax` is not sufficient
+//! because the generated code refers to `pound` by name.
 
-pub mod app;
+mod app;
 pub mod error;
 pub mod output;
 pub mod prelude;
+pub mod terminal;
 
-#[cfg(feature = "interactive")] pub mod prompt;
+#[cfg(feature = "render")]
+pub mod status;
 
-#[cfg(feature = "render")] pub mod status;
-
-#[cfg(feature = "interactive")] pub use bang_core as bang;
-#[cfg(feature = "pty-overlay")]
-pub use bang_screw_pty as overlay;
-pub use app::{
-    Context,
-    run_with,
-};
-#[cfg(feature = "interactive")]
-pub use app::{
-    OutputContext,
-    PromptContext,
-};
+#[allow(deprecated)]
 #[cfg(feature = "parse")]
 pub use app::run;
-pub use error::{
-    Error,
-    Result,
-};
+pub use app::{Context, run_with};
 #[cfg(feature = "parse")]
-pub use pound;
-#[cfg(feature = "render")] pub use screw;
+pub use app::{main, try_run, try_run_from};
+pub use error::{Error, Result};

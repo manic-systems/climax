@@ -1,117 +1,190 @@
-use std::{
-    error,
-    fmt,
-};
-
-#[cfg(any(feature = "render", feature = "interactive"))]
-use std::io;
+use std::{error, fmt, io};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
-pub enum Error {
-    /// argument parsing failed
-    #[cfg(feature = "parse")]
-    ArgParse(pound::Error),
-    /// terminal drawing or stream output failed
-    #[cfg(any(feature = "render", feature = "interactive"))]
-    Draw(io::Error),
-    /// interactive terminal session failed
-    #[cfg(feature = "interactive")]
-    Interact(bang_screw::LiveSessionError),
-    /// prompt was cancelled
-    #[cfg(feature = "interactive")]
+/// A stable, high-level category for an application error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// Command-line arguments could not be parsed.
+    Parse,
+    /// Terminal output could not be rendered or written.
+    Output,
+    /// Filesystem or other general I/O failed.
+    Io,
+    /// An interactive operation failed.
+    Interactive,
+    /// The user cancelled an operation.
     Cancelled,
-    /// input ended before value submission
-    #[cfg(feature = "interactive")]
+    /// Input ended before an operation completed.
     InputEnded,
-    /// invalid value
-    #[cfg(feature = "interactive")]
-    UnexpectedValue {
-        expected: &'static str,
-        actual:   &'static str,
-    },
-    Message(String),
+    /// Interactive input is unavailable under the current terminal policy.
+    InteractionUnavailable,
+    /// Another prompt already owns the interactive terminal.
+    InteractionBusy,
+    /// An application-owned source error.
+    Application,
+    /// An application-defined error.
+    Message,
+}
+
+/// An error reported through the `climax` application facade.
+///
+/// Dependency-specific errors are retained as opaque sources instead of being
+/// exposed as variants in the facade contract.
+#[derive(Debug)]
+pub struct Error {
+    kind: ErrorKind,
+    message: String,
+    source: Option<Box<dyn error::Error + Send + Sync + 'static>>,
+    related: Vec<Self>,
 }
 
 impl Error {
     #[must_use]
     pub fn message(message: impl Into<String>) -> Self {
-        Self::Message(message.into())
+        Self {
+            kind: ErrorKind::Message,
+            message: message.into(),
+            source: None,
+            related: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
+        Self::with_source(ErrorKind::Application, source)
+    }
+
+    #[must_use]
+    pub fn application_context(
+        message: impl Into<String>,
+        source: impl error::Error + Send + Sync + 'static,
+    ) -> Self {
+        let message = format!("{}: {source}", message.into());
+        Self {
+            kind: ErrorKind::Application,
+            message,
+            source: Some(Box::new(source)),
+            related: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn source_error(&self) -> Option<&(dyn error::Error + Send + Sync + 'static)> {
+        self.source.as_deref()
+    }
+
+    /// Additional failures which occurred while cleaning up the primary
+    /// operation. The original error remains the primary kind and source.
+    #[must_use]
+    pub fn related_errors(&self) -> &[Self] {
+        &self.related
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn with_cleanup(mut self, cleanup: Self) -> Self {
+        self.message = format!("{}; cleanup also failed: {cleanup}", self.message);
+        self.related.push(cleanup);
+        self
+    }
+
+    pub(crate) fn with_source(
+        kind: ErrorKind,
+        source: impl error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            kind,
+            message: source.to_string(),
+            source: Some(Box::new(source)),
+            related: Vec::new(),
+        }
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            #[cfg(feature = "parse")]
-            Self::ArgParse(error) => write!(f, "{error}"),
-            #[cfg(any(feature = "render", feature = "interactive"))]
-            Self::Draw(error) => write!(f, "{error}"),
-            #[cfg(feature = "interactive")]
-            Self::Interact(error) => write!(f, "{error}"),
-            #[cfg(feature = "interactive")]
-            Self::Cancelled => f.write_str("cancelled"),
-            #[cfg(feature = "interactive")]
-            Self::InputEnded => f.write_str("input ended before submit"),
-            #[cfg(feature = "interactive")]
-            Self::UnexpectedValue { expected, actual } => {
-                write!(f, "expected {expected}, got {actual}")
-            },
-            Self::Message(message) => f.write_str(message),
-        }
+        f.write_str(&self.message)
     }
 }
 
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            #[cfg(feature = "parse")]
-            Self::ArgParse(error) => Some(error),
-            #[cfg(any(feature = "render", feature = "interactive"))]
-            Self::Draw(error) => Some(error),
-            #[cfg(feature = "interactive")]
-            Self::Interact(error) => Some(error),
-            #[cfg(feature = "interactive")]
-            Self::Cancelled | Self::InputEnded | Self::UnexpectedValue { .. } => None,
-            Self::Message(_) => None,
-        }
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn error::Error + 'static))
     }
 }
 
 #[cfg(feature = "parse")]
 impl From<pound::Error> for Error {
     fn from(value: pound::Error) -> Self {
-        Self::ArgParse(value)
+        Self::with_source(ErrorKind::Parse, value)
     }
 }
 
 #[cfg(feature = "interactive")]
-impl From<bang_screw::LiveSessionError> for Error {
-    fn from(value: bang_screw::LiveSessionError) -> Self {
-        match value {
-            bang_screw::LiveSessionError::Cancelled => Self::Cancelled,
-            bang_screw::LiveSessionError::InputEnded => Self::InputEnded,
-            other => Self::Interact(other),
-        }
+impl From<bang::Error> for Error {
+    fn from(value: bang::Error) -> Self {
+        let kind = match value.kind() {
+            bang::ErrorKind::Cancelled => ErrorKind::Cancelled,
+            bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
+            bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
+            bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
+            _ => ErrorKind::Interactive,
+        };
+        Self::with_source(kind, value)
     }
 }
 
-#[cfg(any(feature = "render", feature = "interactive"))]
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Draw(value)
+        Self::with_source(ErrorKind::Io, value)
     }
 }
 
 impl From<String> for Error {
     fn from(value: String) -> Self {
-        Self::Message(value)
+        Self::message(value)
     }
 }
 
 impl From<&str> for Error {
     fn from(value: &str) -> Self {
-        Self::Message(value.to_owned())
+        Self::message(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_errors_have_no_dependency_source() {
+        let error = Error::message("boom");
+        assert_eq!(error.kind(), ErrorKind::Message);
+        assert_eq!(error.to_string(), "boom");
+        assert!(error.source_error().is_none());
+    }
+
+    #[test]
+    fn dependency_errors_are_opaque_sources() {
+        let error = Error::from(io::Error::other("closed"));
+        assert_eq!(error.kind(), ErrorKind::Io);
+        assert_eq!(error.to_string(), "closed");
+        assert!(error.source_error().is_some());
+    }
+
+    #[test]
+    fn application_context_preserves_its_source() {
+        let error = Error::application_context("cannot query history", io::Error::other("closed"));
+        assert_eq!(error.kind(), ErrorKind::Application);
+        assert_eq!(error.to_string(), "cannot query history: closed");
+        assert!(error.source_error().is_some());
     }
 }
