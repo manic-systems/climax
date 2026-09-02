@@ -107,7 +107,7 @@ pub struct OverlayBuilder {
 
 impl OverlayBuilder {
     #[must_use]
-    pub fn new(process: ProcessSpec) -> Self {
+    pub const fn new(process: ProcessSpec) -> Self {
         Self {
             config: OverlayConfig {
                 process,

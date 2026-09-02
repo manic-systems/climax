@@ -4,21 +4,8 @@ use std::collections::BTreeMap;
 
 use super::SelectItem;
 use crate::{
-    Context,
-    Event,
-    Key,
-    KeyEvent,
-    ListRow,
-    ListView,
-    Reaction,
-    Role,
-    Span,
-    Value,
-    View,
-    ViewContext,
-    ViewId,
-    Widget,
-    WidgetId,
+    Context, Event, Key, KeyEvent, ListRow, ListView, Reaction, Role, Span, Value, View,
+    ViewContext, ViewId, Widget, WidgetId,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 9;
@@ -77,32 +64,9 @@ impl TryFrom<&str> for ReviewState {
             "unconfirmed" => Ok(Self::Unconfirmed),
             "confirmed" => Ok(Self::Confirmed),
             "denied" => Ok(Self::Denied),
-            _ => {
-                Err(format!(
-                    "invalid review state '{value}', expected unconfirmed, confirmed, or denied"
-                ))
-            },
-        }
-    }
-}
-
-/// Application-level action that can finish a review list.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReviewAction {
-    Save,
-    Regen,
-    Search,
-    Add,
-}
-
-impl ReviewAction {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Save => "save",
-            Self::Regen => "regen",
-            Self::Search => "search",
-            Self::Add => "add",
+            _ => Err(format!(
+                "invalid review state '{value}', expected unconfirmed, confirmed, or denied"
+            )),
         }
     }
 }
@@ -110,7 +74,7 @@ impl ReviewAction {
 /// Additional application-level action bound to one character key.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewActionBinding {
-    key:  char,
+    key: char,
     name: String,
     help: String,
 }
@@ -150,18 +114,27 @@ impl ReviewActionBinding {
 /// A list where each row keeps an independent confirm/deny/unset state.
 #[derive(Clone, Debug)]
 pub struct ReviewList {
-    id:             WidgetId,
-    header:         Vec<Span>,
-    items:          Vec<SelectItem>,
+    id: WidgetId,
+    header: Vec<Span>,
+    items: Vec<SelectItem>,
     initial_states: Vec<ReviewState>,
-    states:         Vec<ReviewState>,
-    selected:       usize,
-    top:            usize,
-    page_size:      usize,
-    wrap:           bool,
-    show_removed:   bool,
-    action_output:  bool,
+    states: Vec<ReviewState>,
+    selected: usize,
+    top: usize,
+    page_size: usize,
+    wrap: bool,
+    show_removed: bool,
+    output: ReviewOutput,
     custom_actions: Vec<ReviewActionBinding>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ReviewOutput {
+    #[default]
+    Rows,
+    Exits {
+        leave: bool,
+    },
 }
 
 impl ReviewList {
@@ -183,7 +156,7 @@ impl ReviewList {
             page_size: DEFAULT_PAGE_SIZE,
             wrap: true,
             show_removed: true,
-            action_output: false,
+            output: ReviewOutput::Rows,
             custom_actions: Vec::new(),
         }
     }
@@ -234,8 +207,28 @@ impl ReviewList {
     }
 
     #[must_use]
-    pub const fn with_action_output(mut self, action_output: bool) -> Self {
-        self.action_output = action_output;
+    pub const fn with_exit_output(mut self, exit_output: bool) -> Self {
+        self.output = if exit_output {
+            ReviewOutput::Exits { leave: true }
+        } else {
+            ReviewOutput::Rows
+        };
+        self
+    }
+
+    #[must_use]
+    #[doc(hidden)]
+    pub const fn with_action_output(self, action_output: bool) -> Self {
+        self.with_exit_output(action_output)
+    }
+
+    #[must_use]
+    pub const fn with_leave_output(mut self, leave_output: bool) -> Self {
+        if matches!(self.output, ReviewOutput::Exits { .. }) {
+            self.output = ReviewOutput::Exits {
+                leave: leave_output,
+            };
+        }
         self
     }
 
@@ -245,6 +238,9 @@ impl ReviewList {
         actions: impl IntoIterator<Item = ReviewActionBinding>,
     ) -> Self {
         self.custom_actions = actions.into_iter().collect();
+        if !self.custom_actions.is_empty() {
+            self.output = ReviewOutput::Exits { leave: true };
+        }
         self
     }
 
@@ -380,6 +376,29 @@ impl ReviewList {
         self.top = self.top.min(max_top);
     }
 
+    fn list_id(&self) -> ViewId {
+        ViewId::owned(format!("{}/list", self.id.as_str()))
+    }
+
+    fn sync_presentation(&mut self, context: &Context) {
+        if let Some(presentation) = context.list_presentation(&self.list_id()) {
+            self.top = presentation.visible.start;
+        }
+    }
+
+    fn page_target(&self, context: &Context, down: bool) -> Option<usize> {
+        let position = context
+            .list_presentation(&self.list_id())
+            .and_then(|presentation| {
+                if down {
+                    presentation.page_down
+                } else {
+                    presentation.page_up
+                }
+            })?;
+        self.visible_indices().get(position).copied()
+    }
+
     fn visible_len(&self) -> usize {
         self.page_size.min(self.visible_indices().len()).max(1)
     }
@@ -416,33 +435,42 @@ impl ReviewList {
         )
     }
 
-    fn output_action(&self, action: ReviewAction) -> Value {
-        self.output_action_name(action.as_str())
-    }
-
-    fn output_action_name(&self, action: &str) -> Value {
-        Value::Object(BTreeMap::from([
-            ("action".to_owned(), Value::from(action)),
+    fn output_exit(&self, exit: &str, action: Option<&str>) -> Value {
+        let mut output = BTreeMap::from([
+            ("exit".to_owned(), Value::from(exit)),
             ("rows".to_owned(), self.output_rows()),
-        ]))
+        ]);
+        if let Some(action) = action {
+            output.insert("action".to_owned(), Value::from(action));
+        }
+        Value::Object(output)
     }
 
-    fn submit(&self, action: ReviewAction) -> Reaction {
-        if self.action_output {
-            Reaction::Submit(self.output_action(action))
+    fn submit(&self) -> Reaction {
+        if matches!(self.output, ReviewOutput::Exits { .. }) {
+            Reaction::Submit(self.output_exit("submit", None))
         } else {
             Reaction::Submit(self.output_rows())
         }
     }
 
+    fn leave(&self) -> Reaction {
+        if self.output == (ReviewOutput::Exits { leave: true }) {
+            Reaction::Submit(self.output_exit("leave", None))
+        } else {
+            Reaction::Cancel
+        }
+    }
+
+    fn action(&self, action: &str) -> Reaction {
+        Reaction::Submit(self.output_exit("action", Some(action)))
+    }
+
     fn list_view(&self) -> ListView {
-        let visible = self.visible_len();
         let visible_indices = self.visible_indices();
         let rows = self
             .visible_indices()
             .into_iter()
-            .skip(self.top)
-            .take(visible)
             .map(|index| {
                 let item = &self.items[index];
                 let state = self.states[index];
@@ -460,30 +488,24 @@ impl ReviewList {
                             },
                         ),
                     ],
-                    value: item.value.clone(),
                     selected,
                     checked: None,
                 }
             })
             .collect();
 
-        let help = if self.action_output {
-            self.action_help()
-        } else {
-            "space cycle | y confirm | x deny | u unset | r removed | enter submit | esc cancel"
-                .to_owned()
-        };
+        let help = self.action_help();
 
         ListView {
-            id: Some(ViewId::owned(format!("{}/list", self.id.as_str()))),
+            id: Some(self.list_id()),
             header: self.header.clone(),
             rows,
             selected: self
                 .selected_index()
-                .and_then(|selected| visible_indices.iter().position(|index| *index == selected))
-                .map(|position| position.saturating_sub(self.top)),
-            offset: self.top,
+                .and_then(|selected| visible_indices.iter().position(|index| *index == selected)),
+            requested_start: self.top,
             total: visible_indices.len(),
+            max_visible: Some(self.page_size),
             help: vec![Span::new(help, Role::Dim)],
         }
     }
@@ -495,17 +517,20 @@ impl ReviewList {
             "x deny".to_owned(),
             "u unset".to_owned(),
             "r removed".to_owned(),
-            "enter save".to_owned(),
-            "g regen".to_owned(),
-            "s search".to_owned(),
-            "a add".to_owned(),
+            "enter submit".to_owned(),
         ];
-        parts.extend(
-            self.custom_actions
-                .iter()
-                .map(ReviewActionBinding::help_text),
-        );
-        parts.push("esc cancel".to_owned());
+        if matches!(self.output, ReviewOutput::Exits { .. }) {
+            parts.extend(
+                self.custom_actions
+                    .iter()
+                    .map(ReviewActionBinding::help_text),
+            );
+        }
+        if self.output == (ReviewOutput::Exits { leave: true }) {
+            parts.push("esc leave".to_owned());
+        } else {
+            parts.push("esc cancel".to_owned());
+        }
         parts.join(" | ")
     }
 }
@@ -515,7 +540,8 @@ impl Widget for ReviewList {
         self.id.clone()
     }
 
-    fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
+    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        self.sync_presentation(cx);
         let Event::Key(key) = event else {
             return Reaction::Ignored;
         };
@@ -525,8 +551,20 @@ impl Widget for ReviewList {
             Key::Down => self.move_by(1),
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.items.len().saturating_sub(1)),
-            Key::PageUp => self.move_by(-visible_delta(self.visible_len())),
-            Key::PageDown => self.move_by(visible_delta(self.visible_len())),
+            Key::PageUp => {
+                if let Some(target) = self.page_target(cx, false) {
+                    self.move_to(target)
+                } else {
+                    self.move_by(-visible_delta(self.visible_len()))
+                }
+            },
+            Key::PageDown => {
+                if let Some(target) = self.page_target(cx, true) {
+                    self.move_to(target)
+                } else {
+                    self.move_by(visible_delta(self.visible_len()))
+                }
+            },
             Key::Char('k' | 'K') if no_modifiers(&key) => self.move_by(-1),
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_by(1),
             Key::Char(' ') | Key::Tab => self.cycle_selected_state(),
@@ -540,25 +578,16 @@ impl Widget for ReviewList {
             Key::Char('u' | 'U') if no_modifiers(&key) => {
                 self.set_selected_state(ReviewState::Unconfirmed)
             },
-            Key::Char('g' | 'G') if no_modifiers(&key) && self.action_output => {
-                Reaction::Submit(self.output_action(ReviewAction::Regen))
-            },
-            Key::Char('s' | 'S') if no_modifiers(&key) && self.action_output => {
-                Reaction::Submit(self.output_action(ReviewAction::Search))
-            },
-            Key::Char('a' | 'A') if no_modifiers(&key) && self.action_output => {
-                Reaction::Submit(self.output_action(ReviewAction::Add))
-            },
-            Key::Char(value) if no_modifiers(&key) && self.action_output => {
+            Key::Char(value)
+                if no_modifiers(&key) && matches!(self.output, ReviewOutput::Exits { .. }) =>
+            {
                 self.custom_actions
                     .iter()
-                    .find(|action| action.key == value)
-                    .map_or(Reaction::Ignored, |action| {
-                        Reaction::Submit(self.output_action_name(&action.name))
-                    })
+                    .find(|action| action.key.eq_ignore_ascii_case(&value))
+                    .map_or(Reaction::Ignored, |action| self.action(&action.name))
             },
-            Key::Enter => self.submit(ReviewAction::Save),
-            Key::Esc => Reaction::Cancel,
+            Key::Enter => self.submit(),
+            Key::Esc => self.leave(),
             _ => Reaction::Ignored,
         }
     }
@@ -595,4 +624,34 @@ fn visible_delta(value: usize) -> isize {
 
 const fn no_modifiers(key: &KeyEvent) -> bool {
     key.modifiers.bits() == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Session, SessionStatus};
+
+    #[test]
+    fn structured_review_distinguishes_submit_leave_and_action() {
+        let review = || {
+            ReviewList::new("review", ["alpha"])
+                .with_exit_output(true)
+                .with_custom_actions([ReviewActionBinding::new('g', "regenerate")])
+        };
+
+        assert_exit(review(), Event::key(Key::Enter), "submit", None);
+        assert_exit(review(), Event::key(Key::Esc), "leave", None);
+        assert_exit(review(), Event::char('G'), "action", Some("regenerate"));
+    }
+
+    fn assert_exit(review: ReviewList, event: Event, exit: &str, action: Option<&str>) {
+        let mut session = Session::new(review);
+        session.handle(event);
+        let SessionStatus::Submitted(Value::Object(output)) = session.status() else {
+            panic!("structured review should submit an exit object");
+        };
+        assert_eq!(output.get("exit").and_then(Value::as_str), Some(exit));
+        assert_eq!(output.get("action").and_then(Value::as_str), action);
+        assert!(matches!(output.get("rows"), Some(Value::List(_))));
+    }
 }

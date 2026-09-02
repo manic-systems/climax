@@ -6,6 +6,13 @@ pub enum Event {
     Key(KeyEvent),
     /// text paste
     Paste(String),
+    /// A complete terminal escape sequence not understood by the decoder.
+    ///
+    /// The bytes are surfaced for application policy rather than being
+    /// mistaken for the standalone Escape key. They must not be written back
+    /// to a terminal verbatim because they may themselves be terminal control
+    /// sequences.
+    UnknownEscape(Vec<u8>),
     /// term resize
     Resize { cols: u16, rows: u16 },
     /// animation tick
@@ -26,7 +33,7 @@ impl Event {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyEvent {
-    pub key:       Key,
+    pub key: Key,
     pub modifiers: Modifiers,
 }
 

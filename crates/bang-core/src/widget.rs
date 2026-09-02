@@ -1,23 +1,29 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{
-    Event,
-    Value,
-    View,
-    ViewContext,
-    WidgetId,
-};
+use crate::{Event, ListPresentation, Presentation, Value, View, ViewContext, ViewId, WidgetId};
 
 /// context from a handled event
 #[derive(Debug, Default)]
 pub struct Context {
     focus: Option<FocusTarget>,
+    presentation: Presentation,
 }
 
 impl Context {
     #[must_use]
     pub const fn new() -> Self {
-        Self { focus: None }
+        Self {
+            focus: None,
+            presentation: Presentation { lists: Vec::new() },
+        }
+    }
+
+    #[must_use]
+    pub const fn with_presentation(presentation: Presentation) -> Self {
+        Self {
+            focus: None,
+            presentation,
+        }
     }
 
     pub fn request_focus(&mut self, target: FocusTarget) {
@@ -27,6 +33,11 @@ impl Context {
     #[must_use]
     pub const fn take_focus(&mut self) -> Option<FocusTarget> {
         self.focus.take()
+    }
+
+    #[must_use]
+    pub fn list_presentation(&self, id: &ViewId) -> Option<&ListPresentation> {
+        self.presentation.list(id)
     }
 }
 

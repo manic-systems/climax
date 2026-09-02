@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    collections::BTreeMap,
-    fmt,
-    str::FromStr,
-};
+use std::{collections::BTreeMap, fmt, str::FromStr};
 
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -105,11 +101,20 @@ pub enum Number {
     Float(f64),
 }
 
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integer(value) => write!(f, "{value}"),
+            Self::Float(value) => write!(f, "{value}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Date {
-    pub year:  i32,
+    pub year: i32,
     pub month: u8,
-    pub day:   u8,
+    pub day: u8,
 }
 
 impl Date {
