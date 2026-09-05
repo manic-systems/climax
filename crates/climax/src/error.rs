@@ -1,4 +1,8 @@
-use std::{error, fmt, io};
+use std::{
+    error,
+    fmt,
+    io,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -34,9 +38,9 @@ pub enum ErrorKind {
 /// exposed as variants in the facade contract.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
+    kind:    ErrorKind,
     message: String,
-    source: Option<Box<dyn error::Error + Send + Sync + 'static>>,
+    source:  Option<Box<dyn error::Error + Send + Sync + 'static>>,
     related: Vec<Self>,
 }
 
@@ -44,9 +48,9 @@ impl Error {
     #[must_use]
     pub fn message(message: impl Into<String>) -> Self {
         Self {
-            kind: ErrorKind::Message,
+            kind:    ErrorKind::Message,
             message: message.into(),
-            source: None,
+            source:  None,
             related: Vec::new(),
         }
     }

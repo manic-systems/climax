@@ -1,6 +1,18 @@
-use std::io::{self, Write};
+use std::io::{
+    self,
+    Write,
+};
 
-use crate::{Cell, Position, RenderCtx, Style, Surface, Theme, Widget, terminal_width_or_default};
+use crate::{
+    Cell,
+    Position,
+    RenderCtx,
+    Style,
+    Surface,
+    Theme,
+    Widget,
+    terminal_width_or_default,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RenderStats {
@@ -31,16 +43,16 @@ struct RenderedFrame {
 }
 
 pub struct Renderer<W> {
-    writer: W,
-    previous: Option<RenderedFrame>,
-    frame: u64,
-    width: Option<usize>,
-    height: Option<usize>,
-    layout_mode: LayoutMode,
-    theme: Theme,
+    writer:            W,
+    previous:          Option<RenderedFrame>,
+    frame:             u64,
+    width:             Option<usize>,
+    height:            Option<usize>,
+    layout_mode:       LayoutMode,
+    theme:             Theme,
     cursor_visibility: CursorVisibility,
-    cursor_visible: Option<bool>,
-    force_full: bool,
+    cursor_visible:    Option<bool>,
+    force_full:        bool,
 }
 
 impl<W> Renderer<W>
@@ -339,17 +351,14 @@ fn extend_for_growth(
     }
 
     *cursor = Cursor {
-        row: previous_final.row,
-        col: previous_final.col,
+        row:   previous_final.row,
+        col:   previous_final.col,
         style: Style::default(),
     };
-    cursor.move_to(
-        writer,
-        Position {
-            row: previous_bottom,
-            col: 0,
-        },
-    )?;
+    cursor.move_to(writer, Position {
+        row: previous_bottom,
+        col: 0,
+    })?;
     for _ in previous_bottom..next_bottom {
         writer.write_all(b"\r\n")?;
         cursor.row += 1;
@@ -414,24 +423,18 @@ fn diff_surfaces(
                 stats.changed_rows += 1;
             },
             (Some(_), None) => {
-                cursor.move_to(
-                    writer,
-                    Position {
-                        row: row_index,
-                        col: 0,
-                    },
-                )?;
+                cursor.move_to(writer, Position {
+                    row: row_index,
+                    col: 0,
+                })?;
                 writer.write_all(b"\x1b[2K")?;
                 stats.changed_rows += 1;
             },
             (None, Some(new)) => {
-                cursor.move_to(
-                    writer,
-                    Position {
-                        row: row_index,
-                        col: 0,
-                    },
-                )?;
+                cursor.move_to(writer, Position {
+                    row: row_index,
+                    col: 0,
+                })?;
                 write_row_tail(writer, cursor, new.cells(), 0)?;
                 writer.write_all(b"\x1b[K")?;
                 stats.changed_rows += 1;
@@ -449,13 +452,10 @@ fn clear_surface(
     stats: &mut RenderStats,
 ) -> io::Result<()> {
     for row_index in 0..surface.height() {
-        cursor.move_to(
-            writer,
-            Position {
-                row: row_index,
-                col: 0,
-            },
-        )?;
+        cursor.move_to(writer, Position {
+            row: row_index,
+            col: 0,
+        })?;
         writer.write_all(b"\x1b[2K")?;
         stats.changed_rows += 1;
     }
@@ -485,13 +485,10 @@ fn patch_row(
     };
     let col = cells_width(&new[..prefix]);
 
-    cursor.move_to(
-        writer,
-        Position {
-            row: row_index,
-            col,
-        },
-    )?;
+    cursor.move_to(writer, Position {
+        row: row_index,
+        col,
+    })?;
     write_row_tail(writer, cursor, &new[..end], prefix)?;
 
     if !can_patch_middle && cells_width(old) > cells_width(new) {
@@ -535,16 +532,18 @@ fn cells_width(cells: &[Cell]) -> usize {
 }
 
 fn final_position(surface: &Surface) -> Position {
-    surface.cursor().unwrap_or_else(|| Position {
-        row: surface.height().saturating_sub(1),
-        col: surface.row_width(surface.height().saturating_sub(1)),
+    surface.cursor().unwrap_or_else(|| {
+        Position {
+            row: surface.height().saturating_sub(1),
+            col: surface.row_width(surface.height().saturating_sub(1)),
+        }
     })
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Cursor {
-    row: usize,
-    col: usize,
+    row:   usize,
+    col:   usize,
     style: Style,
 }
 
@@ -583,8 +582,21 @@ impl Cursor {
 #[cfg(test)]
 mod tests {
     use crate::{
-        CursorMerge, CursorVisibility, Edge, Fill, Floating, Insets, Layers, LayoutMode, Position,
-        Renderer, Size, Style, Surface, Widget, renderer::layout_surface,
+        CursorMerge,
+        CursorVisibility,
+        Edge,
+        Fill,
+        Floating,
+        Insets,
+        Layers,
+        LayoutMode,
+        Position,
+        Renderer,
+        Size,
+        Style,
+        Surface,
+        Widget,
+        renderer::layout_surface,
     };
 
     fn surface(lines: &[&str], cursor: Option<Position>) -> Surface {
@@ -788,10 +800,10 @@ mod tests {
         let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
         renderer.draw(&pane()).unwrap();
         assert_eq!(
-            text_at(
-                &renderer.previous.as_ref().unwrap().physical,
-                Position { row: 5, col: 15 },
-            ),
+            text_at(&renderer.previous.as_ref().unwrap().physical, Position {
+                row: 5,
+                col: 15,
+            },),
             Some("p"),
         );
 

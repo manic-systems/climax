@@ -1,6 +1,14 @@
-use std::io::{self, Write};
+use std::io::{
+    self,
+    Write,
+};
 
-use crate::{RenderCtx, Surface, Theme, Widget};
+use crate::{
+    RenderCtx,
+    Surface,
+    Theme,
+    Widget,
+};
 
 pub fn render_plain<T>(widget: &T) -> String
 where

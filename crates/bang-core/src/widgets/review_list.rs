@@ -5,8 +5,20 @@ use std::collections::BTreeMap;
 use super::navigation::{move_index, no_modifiers, visible_delta};
 use super::SelectItem;
 use crate::{
-    Context, Event, Key, ListRow, ListView, Reaction, Role, Span, Value, View,
-    ViewContext, ViewId, Widget, WidgetId,
+    Context,
+    Event,
+    Key,
+    ListRow,
+    ListView,
+    Reaction,
+    Role,
+    Span,
+    Value,
+    View,
+    ViewContext,
+    ViewId,
+    Widget,
+    WidgetId,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 9;
@@ -65,9 +77,11 @@ impl TryFrom<&str> for ReviewState {
             "unconfirmed" => Ok(Self::Unconfirmed),
             "confirmed" => Ok(Self::Confirmed),
             "denied" => Ok(Self::Denied),
-            _ => Err(format!(
-                "invalid review state '{value}', expected unconfirmed, confirmed, or denied"
-            )),
+            _ => {
+                Err(format!(
+                    "invalid review state '{value}', expected unconfirmed, confirmed, or denied"
+                ))
+            },
         }
     }
 }
@@ -75,7 +89,7 @@ impl TryFrom<&str> for ReviewState {
 /// Additional application-level action bound to one character key.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewActionBinding {
-    key: char,
+    key:  char,
     name: String,
     help: String,
 }
@@ -115,17 +129,17 @@ impl ReviewActionBinding {
 /// A list where each row keeps an independent confirm/deny/unset state.
 #[derive(Clone, Debug)]
 pub struct ReviewList {
-    id: WidgetId,
-    header: Vec<Span>,
-    items: Vec<SelectItem>,
+    id:             WidgetId,
+    header:         Vec<Span>,
+    items:          Vec<SelectItem>,
     initial_states: Vec<ReviewState>,
-    states: Vec<ReviewState>,
-    selected: usize,
-    top: usize,
-    page_size: usize,
-    wrap: bool,
-    show_removed: bool,
-    output: ReviewOutput,
+    states:         Vec<ReviewState>,
+    selected:       usize,
+    top:            usize,
+    page_size:      usize,
+    wrap:           bool,
+    show_removed:   bool,
+    output:         ReviewOutput,
     custom_actions: Vec<ReviewActionBinding>,
 }
 
@@ -599,7 +613,10 @@ impl Widget for ReviewList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Session, SessionStatus};
+    use crate::{
+        Session,
+        SessionStatus,
+    };
 
     #[test]
     fn structured_review_distinguishes_submit_leave_and_action() {

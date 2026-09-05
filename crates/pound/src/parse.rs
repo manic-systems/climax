@@ -2,52 +2,61 @@
 
 //! walks `argv` against a [`CommandSpec`] and produces [`Matches`]
 
-use alloc::{borrow::Cow, vec::IntoIter};
+use alloc::{
+    borrow::Cow,
+    vec::IntoIter,
+};
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
     error::Error,
     help,
-    spec::{ArgSpec, CommandSpec, Kind},
-    value::{FromArg, ValueError},
+    spec::{
+        ArgSpec,
+        CommandSpec,
+        Kind,
+    },
+    value::{
+        FromArg,
+        ValueError,
+    },
 };
 
 /// what a single arg collected during a parse
 #[derive(Default, Clone, Debug)]
 struct Slot<'a> {
     /// count of user supplied invocations
-    count: u32,
+    count:  u32,
     values: Vec<&'a str>,
 }
 
 /// a successful parse
 #[derive(Debug)]
 pub struct Matches<'a> {
-    slots: Vec<Slot<'a>>,
+    slots:     Vec<Slot<'a>>,
     flattened: Vec<Self>,
-    sub: Option<(usize, Box<Self>)>,
+    sub:       Option<(usize, Box<Self>)>,
 }
 
 #[derive(Clone)]
 struct ArgTarget {
-    path: Vec<usize>,
+    path:  Vec<usize>,
     index: usize,
-    arg: &'static ArgSpec,
+    arg:   &'static ArgSpec,
 }
 
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
-    arg: &'static ArgSpec,
+    arg:   &'static ArgSpec,
     value: Option<&'a str>,
 }
 
 impl<'a> Matches<'a> {
     fn new(spec: &CommandSpec) -> Self {
         Self {
-            slots: vec![Slot::default(); spec.args.len()],
+            slots:     vec![Slot::default(); spec.args.len()],
             flattened: spec.flattened.iter().map(|spec| Self::new(spec)).collect(),
-            sub: None,
+            sub:       None,
         }
     }
 
@@ -304,9 +313,10 @@ fn apply_named<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => it
-                    .next()
-                    .ok_or_else(|| Error::MissingValue(a.display_name()))?,
+                None => {
+                    it.next()
+                        .ok_or_else(|| Error::MissingValue(a.display_name()))?
+                },
             };
             push_value(&a, slot, value);
         },
@@ -348,14 +358,14 @@ fn shorts<'a>(
             match g.kind {
                 Kind::Flag | Kind::Count => {
                     hits.push(GlobalHit {
-                        arg: g,
+                        arg:   g,
                         value: None,
                     });
                 },
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
                     hits.push(GlobalHit {
-                        arg: g,
+                        arg:   g,
                         value: Some(value),
                     });
                     return Ok(());
@@ -420,19 +430,20 @@ fn record_global<'a>(
                 return Err(Error::UnexpectedValue(g.display_name()));
             }
             hits.push(GlobalHit {
-                arg: g,
+                arg:   g,
                 value: None,
             });
         },
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => it
-                    .next()
-                    .ok_or_else(|| Error::MissingValue(g.display_name()))?,
+                None => {
+                    it.next()
+                        .ok_or_else(|| Error::MissingValue(g.display_name()))?
+                },
             };
             hits.push(GlobalHit {
-                arg: g,
+                arg:   g,
                 value: Some(value),
             });
         },
@@ -527,8 +538,8 @@ fn finalise(
             .collect();
         if set.len() > 1 {
             return Err(Error::Conflict {
-                group: g.name.to_owned(),
-                first: set[0].clone(),
+                group:  g.name.to_owned(),
+                first:  set[0].clone(),
                 second: set[1].clone(),
             });
         }
@@ -550,8 +561,8 @@ fn finalise(
     for &(a, b) in spec.conflicts {
         if m.slots[a].count > 0 && m.slots[b].count > 0 {
             return Err(Error::Conflict {
-                group: String::new(),
-                first: spec.args[a].display_name(),
+                group:  String::new(),
+                first:  spec.args[a].display_name(),
                 second: spec.args[b].display_name(),
             });
         }
@@ -703,7 +714,10 @@ fn builtin_short(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{GroupSpec, SubSpec};
+    use crate::spec::{
+        GroupSpec,
+        SubSpec,
+    };
 
     fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
         a.to_vec()
@@ -722,17 +736,17 @@ mod tests {
         ArgSpec::new(Kind::Positional).value_name("rest").multi(), // 4
     ];
     const FLAT: CommandSpec = CommandSpec {
-        name: "flat",
-        version: "0.1.0",
-        hash: None,
-        about: "a flat command",
-        args: FLAT_ARGS,
-        flattened: &[],
+        name:           "flat",
+        version:        "0.1.0",
+        hash:           None,
+        about:          "a flat command",
+        args:           FLAT_ARGS,
+        flattened:      &[],
         argument_order: &[],
-        groups: &[],
-        conflicts: &[],
-        subs: &[],
-        sub_optional: false,
+        groups:         &[],
+        conflicts:      &[],
+        subs:           &[],
+        sub_optional:   false,
     };
 
     fn parse<'a>(spec: &'static CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, Error> {
@@ -741,10 +755,9 @@ mod tests {
 
     #[test]
     fn longs_shorts_counts_positionals() {
-        let m = parse(
-            &FLAT,
-            &["--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma"],
-        )
+        let m = parse(&FLAT, &[
+            "--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma",
+        ])
         .unwrap();
         assert!(m.flag(0));
         assert_eq!(m.raw(1), Some("/x"));
@@ -816,17 +829,17 @@ mod tests {
     fn defaults_resolve_in_readers() {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("level").default("info")];
         const SPEC: CommandSpec = CommandSpec {
-            name: "d",
-            version: "",
-            hash: None,
-            about: "",
-            args: ARGS,
-            flattened: &[],
+            name:           "d",
+            version:        "",
+            hash:           None,
+            about:          "",
+            args:           ARGS,
+            flattened:      &[],
             argument_order: &[],
-            groups: &[],
-            conflicts: &[],
-            subs: &[],
-            sub_optional: false,
+            groups:         &[],
+            conflicts:      &[],
+            subs:           &[],
+            sub_optional:   false,
         };
         // unset: the reader falls back to the default
         let m = parse(&SPEC, &[]).unwrap();
@@ -849,17 +862,17 @@ mod tests {
             ArgSpec::new(Kind::Flag).long("fetch").group("mode"),
         ];
         const OPT: CommandSpec = CommandSpec {
-            name: "g",
-            version: "",
-            hash: None,
-            about: "",
-            args: ARGS,
-            flattened: &[],
+            name:           "g",
+            version:        "",
+            hash:           None,
+            about:          "",
+            args:           ARGS,
+            flattened:      &[],
             argument_order: &[],
-            groups: &[GroupSpec::new("mode")],
-            conflicts: &[],
-            subs: &[],
-            sub_optional: false,
+            groups:         &[GroupSpec::new("mode")],
+            conflicts:      &[],
+            subs:           &[],
+            sub_optional:   false,
         };
         const REQ: CommandSpec = CommandSpec {
             groups: &[GroupSpec::new("mode").required()],
@@ -881,17 +894,17 @@ mod tests {
             ArgSpec::new(Kind::Flag).long("b"),
         ];
         const SPEC: CommandSpec = CommandSpec {
-            name: "c",
-            version: "",
-            hash: None,
-            about: "",
-            args: ARGS,
-            flattened: &[],
+            name:           "c",
+            version:        "",
+            hash:           None,
+            about:          "",
+            args:           ARGS,
+            flattened:      &[],
             argument_order: &[],
-            groups: &[],
-            conflicts: &[(0, 1)],
-            subs: &[],
-            sub_optional: false,
+            groups:         &[],
+            conflicts:      &[(0, 1)],
+            subs:           &[],
+            sub_optional:   false,
         };
         assert!(parse(&SPEC, &["--a"]).is_ok());
         assert!(matches!(
@@ -907,37 +920,37 @@ mod tests {
         ArgSpec::new(Kind::Flag).long("force").short('f'),
     ];
     const ADD: CommandSpec = CommandSpec {
-        name: "add",
-        version: "",
-        hash: None,
-        about: "add a pin",
-        args: ADD_ARGS,
-        flattened: &[],
+        name:           "add",
+        version:        "",
+        hash:           None,
+        about:          "add a pin",
+        args:           ADD_ARGS,
+        flattened:      &[],
         argument_order: &[],
-        groups: &[],
-        conflicts: &[],
-        subs: &[],
-        sub_optional: false,
+        groups:         &[],
+        conflicts:      &[],
+        subs:           &[],
+        sub_optional:   false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
-        name: "add",
+        name:    "add",
         aliases: &[],
-        about: "add a pin",
-        spec: &ADD,
-        hidden: false,
+        about:   "add a pin",
+        spec:    &ADD,
+        hidden:  false,
     }];
     const ROOT: CommandSpec = CommandSpec {
-        name: "prog",
-        version: "1.0.0",
-        hash: None,
-        about: "demo",
-        args: &[],
-        flattened: &[],
+        name:           "prog",
+        version:        "1.0.0",
+        hash:           None,
+        about:          "demo",
+        args:           &[],
+        flattened:      &[],
         argument_order: &[],
-        groups: &[],
-        conflicts: &[],
-        subs: ROOT_SUBS,
-        sub_optional: false,
+        groups:         &[],
+        conflicts:      &[],
+        subs:           ROOT_SUBS,
+        sub_optional:   false,
     };
 
     #[test]

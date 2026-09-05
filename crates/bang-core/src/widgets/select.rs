@@ -2,8 +2,20 @@
 
 use super::navigation::{move_index, no_modifiers, visible_delta};
 use crate::{
-    Context, Event, Key, ListRow, ListView, Reaction, Role, Span, Value, View,
-    ViewContext, ViewId, Widget, WidgetId,
+    Context,
+    Event,
+    Key,
+    ListRow,
+    ListView,
+    Reaction,
+    Role,
+    Span,
+    Value,
+    View,
+    ViewContext,
+    ViewId,
+    Widget,
+    WidgetId,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 9;
@@ -39,13 +51,13 @@ impl From<String> for SelectItem {
 /// A single-choice list widget.
 #[derive(Clone, Debug)]
 pub struct Select {
-    id: WidgetId,
-    header: Vec<Span>,
-    items: Vec<SelectItem>,
-    selected: usize,
-    top: usize,
+    id:        WidgetId,
+    header:    Vec<Span>,
+    items:     Vec<SelectItem>,
+    selected:  usize,
+    top:       usize,
     page_size: usize,
-    wrap: bool,
+    wrap:      bool,
 }
 
 impl Select {
@@ -55,13 +67,13 @@ impl Select {
         T: Into<SelectItem>,
     {
         Self {
-            id: id.into(),
-            header: Vec::new(),
-            items: items.into_iter().map(Into::into).collect(),
-            selected: 0,
-            top: 0,
+            id:        id.into(),
+            header:    Vec::new(),
+            items:     items.into_iter().map(Into::into).collect(),
+            selected:  0,
+            top:       0,
             page_size: DEFAULT_PAGE_SIZE,
-            wrap: true,
+            wrap:      true,
         }
     }
 
@@ -293,7 +305,7 @@ impl Widget for Select {
 /// A multiple-choice list widget.
 #[derive(Clone, Debug)]
 pub struct MultiSelect {
-    select: Select,
+    select:  Select,
     checked: Vec<bool>,
 }
 

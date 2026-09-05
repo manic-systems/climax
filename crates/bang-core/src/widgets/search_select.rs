@@ -1,24 +1,39 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use super::navigation::{move_index, no_modifiers, visible_delta};
-use super::{SelectItem, TextInput};
+use super::{
+    SelectItem,
+    TextInput,
+};
 use crate::{
-    Context, Event, Key, ListRow, ListView, Reaction, Role, Span, TextInputView, View,
-    ViewContext, ViewId, Widget, WidgetId,
+    Context,
+    Event,
+    Key,
+    ListRow,
+    ListView,
+    Reaction,
+    Role,
+    Span,
+    TextInputView,
+    View,
+    ViewContext,
+    ViewId,
+    Widget,
+    WidgetId,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 9;
 
 pub struct SearchSelect {
-    id: WidgetId,
-    input: TextInput,
-    header: Vec<Span>,
-    items: Vec<SelectItem>,
-    matches: Vec<usize>,
-    selected: usize,
-    top: usize,
+    id:        WidgetId,
+    input:     TextInput,
+    header:    Vec<Span>,
+    items:     Vec<SelectItem>,
+    matches:   Vec<usize>,
+    selected:  usize,
+    top:       usize,
     page_size: usize,
-    wrap: bool,
+    wrap:      bool,
 }
 
 impl SearchSelect {
@@ -275,28 +290,30 @@ impl Widget for SearchSelect {
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         self.sync_presentation(cx);
         match &event {
-            Event::Key(key) => match key.key {
-                Key::Up => self.move_by(-1),
-                Key::Down => self.move_by(1),
-                Key::PageUp => {
-                    if let Some(target) = self.page_target(cx, false) {
-                        self.move_to(target)
-                    } else {
-                        self.move_by(-visible_delta(self.visible_len()))
-                    }
-                },
-                Key::PageDown => {
-                    if let Some(target) = self.page_target(cx, true) {
-                        self.move_to(target)
-                    } else {
-                        self.move_by(visible_delta(self.visible_len()))
-                    }
-                },
-                Key::Char('k' | 'K') if no_modifiers(key) => self.move_by(-1),
-                Key::Char('j' | 'J') if no_modifiers(key) => self.move_by(1),
-                Key::Enter => self.submit(),
-                Key::Esc => Reaction::Cancel,
-                _ => self.handle_input(event, cx),
+            Event::Key(key) => {
+                match key.key {
+                    Key::Up => self.move_by(-1),
+                    Key::Down => self.move_by(1),
+                    Key::PageUp => {
+                        if let Some(target) = self.page_target(cx, false) {
+                            self.move_to(target)
+                        } else {
+                            self.move_by(-visible_delta(self.visible_len()))
+                        }
+                    },
+                    Key::PageDown => {
+                        if let Some(target) = self.page_target(cx, true) {
+                            self.move_to(target)
+                        } else {
+                            self.move_by(visible_delta(self.visible_len()))
+                        }
+                    },
+                    Key::Char('k' | 'K') if no_modifiers(key) => self.move_by(-1),
+                    Key::Char('j' | 'J') if no_modifiers(key) => self.move_by(1),
+                    Key::Enter => self.submit(),
+                    Key::Esc => Reaction::Cancel,
+                    _ => self.handle_input(event, cx),
+                }
             },
             Event::Paste(_) => self.handle_input(event, cx),
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,

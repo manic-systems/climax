@@ -1,4 +1,7 @@
-use std::{error, fmt};
+use std::{
+    error,
+    fmt,
+};
 
 /// Broad failure category for a prompt interaction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,9 +22,9 @@ pub enum ErrorKind {
 /// [`error::Error::source`] without becoming part of Bang's public data model.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
+    kind:    ErrorKind,
     message: String,
-    source: Option<Box<dyn error::Error + Send + Sync>>,
+    source:  Option<Box<dyn error::Error + Send + Sync>>,
 }
 
 impl Error {
@@ -32,17 +35,17 @@ impl Error {
 
     pub(crate) fn unexpected(expected: &'static str) -> Self {
         Self {
-            kind: ErrorKind::UnexpectedValue,
+            kind:    ErrorKind::UnexpectedValue,
             message: format!("prompt returned an unexpected value; expected {expected}"),
-            source: None,
+            source:  None,
         }
     }
 
     pub(crate) fn invalid_configuration(message: impl Into<String>) -> Self {
         Self {
-            kind: ErrorKind::InvalidConfiguration,
+            kind:    ErrorKind::InvalidConfiguration,
             message: message.into(),
-            source: None,
+            source:  None,
         }
     }
 
@@ -62,33 +65,33 @@ impl Error {
 
     pub(crate) fn cancelled() -> Self {
         Self {
-            kind: ErrorKind::Cancelled,
+            kind:    ErrorKind::Cancelled,
             message: "prompt was cancelled".to_owned(),
-            source: None,
+            source:  None,
         }
     }
 
     pub(crate) fn input_ended() -> Self {
         Self {
-            kind: ErrorKind::InputEnded,
+            kind:    ErrorKind::InputEnded,
             message: "input ended before the prompt was submitted".to_owned(),
-            source: None,
+            source:  None,
         }
     }
 
     pub fn interaction_busy() -> Self {
         Self {
-            kind: ErrorKind::InteractionBusy,
+            kind:    ErrorKind::InteractionBusy,
             message: "another interaction already owns the terminal".to_owned(),
-            source: None,
+            source:  None,
         }
     }
 
     pub fn interaction_unavailable() -> Self {
         Self {
-            kind: ErrorKind::InteractionUnavailable,
+            kind:    ErrorKind::InteractionUnavailable,
             message: "interactive terminal input is unavailable".to_owned(),
-            source: None,
+            source:  None,
         }
     }
 
@@ -96,9 +99,9 @@ impl Error {
     /// boundary.
     pub fn terminal(source: impl error::Error + Send + Sync + 'static) -> Self {
         Self {
-            kind: ErrorKind::Terminal,
+            kind:    ErrorKind::Terminal,
             message: source.to_string(),
-            source: Some(Box::new(source)),
+            source:  Some(Box::new(source)),
         }
     }
 }

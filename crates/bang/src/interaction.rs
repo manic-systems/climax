@@ -1,11 +1,26 @@
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{
+    cell::RefCell,
+    fmt,
+    rc::Rc,
+};
 
 use bang_core::{
-    ActionBinding, ActionLayer, Context, Event, Reaction, Value, View, ViewContext, Widget,
+    ActionBinding,
+    ActionLayer,
+    Context,
+    Event,
+    Reaction,
+    Value,
+    View,
+    ViewContext,
+    Widget,
     WidgetId,
 };
 
-use crate::{Error, Result};
+use crate::{
+    Error,
+    Result,
+};
 
 type Runner = dyn Fn(Box<dyn Widget>) -> Result<Value>;
 type GuardFactory = dyn Fn() -> Result<Box<dyn Guard>>;
@@ -167,7 +182,7 @@ mod tests {
     use super::*;
 
     struct RecordedGuard {
-        label: &'static str,
+        label:  &'static str,
         events: Rc<RefCell<Vec<&'static str>>>,
     }
 
@@ -189,7 +204,7 @@ mod tests {
         let interaction = interaction.with_guard(move || {
             first_events.borrow_mut().push("acquire first");
             Ok(RecordedGuard {
-                label: "release first",
+                label:  "release first",
                 events: first_events.clone(),
             })
         });
@@ -197,7 +212,7 @@ mod tests {
         let interaction = interaction.with_guard(move || {
             second_events.borrow_mut().push("acquire second");
             Ok(RecordedGuard {
-                label: "release second",
+                label:  "release second",
                 events: second_events.clone(),
             })
         });
@@ -206,16 +221,13 @@ mod tests {
             .interact(bang_core::widgets::TextInput::new("widget"), [])
             .unwrap();
 
-        assert_eq!(
-            *events.borrow(),
-            [
-                "acquire first",
-                "acquire second",
-                "run",
-                "release second",
-                "release first",
-            ]
-        );
+        assert_eq!(*events.borrow(), [
+            "acquire first",
+            "acquire second",
+            "run",
+            "release second",
+            "release first",
+        ]);
     }
 
     #[test]
@@ -225,7 +237,7 @@ mod tests {
         let interaction = Interaction::disabled().with_guard(move || {
             first_events.borrow_mut().push("acquire first");
             Ok(RecordedGuard {
-                label: "release first",
+                label:  "release first",
                 events: first_events.clone(),
             })
         });
@@ -240,9 +252,10 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.kind(), crate::ErrorKind::InteractionUnavailable);
-        assert_eq!(
-            *events.borrow(),
-            ["acquire first", "acquire second", "release first"]
-        );
+        assert_eq!(*events.borrow(), [
+            "acquire first",
+            "acquire second",
+            "release first"
+        ]);
     }
 }

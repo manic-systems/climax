@@ -15,13 +15,22 @@ pub mod prelude;
 mod sync;
 pub mod terminal;
 
-#[cfg(feature = "render")]
-pub mod status;
+#[cfg(feature = "render")] pub mod status;
 
 #[allow(deprecated)]
 #[cfg(feature = "parse")]
 pub use app::run;
-pub use app::{Context, run_with};
+pub use app::{
+    Context,
+    run_with,
+};
 #[cfg(feature = "parse")]
-pub use app::{main, try_run, try_run_from};
-pub use error::{Error, Result};
+pub use app::{
+    main,
+    try_run,
+    try_run_from,
+};
+pub use error::{
+    Error,
+    Result,
+};

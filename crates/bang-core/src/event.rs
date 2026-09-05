@@ -33,7 +33,7 @@ impl Event {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KeyEvent {
-    pub key: Key,
+    pub key:       Key,
     pub modifiers: Modifiers,
 }
 

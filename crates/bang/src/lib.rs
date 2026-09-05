@@ -13,10 +13,32 @@ pub mod advanced;
 pub mod prelude;
 
 pub use bang_core::widgets::ReviewState;
-pub use error::{Error, ErrorKind, Result};
+pub use error::{
+    Error,
+    ErrorKind,
+    Result,
+};
 pub use interaction::Interaction;
 pub use prompt::{
-    Configurable, MultiSelectConfig, MultiSelectPrompt, PromptOutcome, ReviewConfig, ReviewExit,
-    ReviewOutcome, ReviewPrompt, ReviewPromptWithActions, Reviewed, SearchConfig, SearchPrompt,
-    SelectConfig, SelectPrompt, TextConfig, TextPrompt, multi_select, review, search, select, text,
+    Configurable,
+    MultiSelectConfig,
+    MultiSelectPrompt,
+    PromptOutcome,
+    ReviewConfig,
+    ReviewExit,
+    ReviewOutcome,
+    ReviewPrompt,
+    ReviewPromptWithActions,
+    Reviewed,
+    SearchConfig,
+    SearchPrompt,
+    SelectConfig,
+    SelectPrompt,
+    TextConfig,
+    TextPrompt,
+    multi_select,
+    review,
+    search,
+    select,
+    text,
 };

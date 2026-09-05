@@ -7,22 +7,55 @@
 //! [`bang_core::adapter`] and can use this crate as a reference implementation.
 
 use std::{
-    error, fmt,
-    io::{self, IsTerminal as _, Write},
-    sync::{Arc, Mutex},
+    error,
+    fmt,
+    io::{
+        self,
+        IsTerminal as _,
+        Write,
+    },
+    sync::{
+        Arc,
+        Mutex,
+    },
 };
 
 use bang_core::{
-    Value, Widget as BangWidget,
+    Value,
+    Widget as BangWidget,
     adapter::{
-        CalendarView, CursorPlacement, ListPresentation, ListRow, ListView, Presentation,
-        Role as BangRole, Span, TextInputView, View,
+        CalendarView,
+        CursorPlacement,
+        ListPresentation,
+        ListRow,
+        ListView,
+        Presentation,
+        Role as BangRole,
+        Span,
+        TextInputView,
+        View,
     },
 };
-use bang_terminal::{RunOutcome, SessionRenderer, TerminalSize};
+use bang_terminal::{
+    RunOutcome,
+    SessionRenderer,
+    TerminalSize,
+};
 use screw::{
-    CursorVisibility, LayoutMode, Position, RenderCtx, RenderStats, Renderer, Role as ScrewRole,
-    Stack as ScrewStack, Style, Surface, Theme, VerticalViewport, Widget, widget,
+    CursorVisibility,
+    LayoutMode,
+    Position,
+    RenderCtx,
+    RenderStats,
+    Renderer,
+    Role as ScrewRole,
+    Stack as ScrewStack,
+    Style,
+    Surface,
+    Theme,
+    VerticalViewport,
+    Widget,
+    widget,
 };
 use unicode_width::UnicodeWidthChar as _;
 
@@ -41,7 +74,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 struct ViewWidget {
-    view: View,
+    view:         View,
     presentation: PresentationSink,
 }
 
@@ -53,7 +86,7 @@ impl Widget for ViewWidget {
 }
 
 pub struct RetainedRenderer<W> {
-    renderer: Renderer<W>,
+    renderer:     Renderer<W>,
     presentation: Presentation,
 }
 
@@ -63,7 +96,7 @@ where
 {
     pub const fn new(writer: W) -> Self {
         Self {
-            renderer: Renderer::new(writer).cursor_visibility(CursorVisibility::FromSurface),
+            renderer:     Renderer::new(writer).cursor_visibility(CursorVisibility::FromSurface),
             presentation: Presentation { lists: Vec::new() },
         }
     }
@@ -92,7 +125,7 @@ where
     pub fn render(&mut self, view: &View) -> io::Result<RenderStats> {
         let sink: PresentationSink = Arc::new(Mutex::new(Presentation { lists: Vec::new() }));
         let stats = self.renderer.draw(&ViewWidget {
-            view: view.clone(),
+            view:         view.clone(),
             presentation: Arc::clone(&sink),
         })?;
         self.presentation = std::mem::take(&mut *lock(&sink));
@@ -165,7 +198,7 @@ pub enum LiveSessionError {
         source: io::Error,
     },
     Cleanup {
-        primary: Option<Box<Self>>,
+        primary:  Option<Box<Self>>,
         failures: Vec<CleanupFailure>,
     },
 }
@@ -181,7 +214,7 @@ pub enum CleanupStage {
 
 #[derive(Debug)]
 pub struct CleanupFailure {
-    stage: CleanupStage,
+    stage:  CleanupStage,
     source: io::Error,
 }
 
@@ -263,14 +296,16 @@ impl error::Error for LiveSessionError {
             | Self::Signals(error)
             | Self::TerminalIo(error)
             | Self::ReraiseSignal { source: error, .. } => Some(error),
-            Self::Cleanup { primary, failures } => primary
-                .as_deref()
-                .map(|error| error as &(dyn error::Error + 'static))
-                .or_else(|| {
-                    failures
-                        .first()
-                        .map(|failure| &failure.source as &(dyn error::Error + 'static))
-                }),
+            Self::Cleanup { primary, failures } => {
+                primary
+                    .as_deref()
+                    .map(|error| error as &(dyn error::Error + 'static))
+                    .or_else(|| {
+                        failures
+                            .first()
+                            .map(|failure| &failure.source as &(dyn error::Error + 'static))
+                    })
+            },
             Self::Unavailable | Self::Cancelled | Self::InputEnded | Self::Signalled(_) => None,
         }
     }
@@ -337,9 +372,11 @@ pub fn run_live_session_forced(
         Ok(RunOutcome::Signalled(signal)) => Err(LiveSessionError::Signalled(signal)),
         Err(error) => Err(LiveSessionError::TerminalIo(error)),
     };
-    let signal = primary.as_ref().err().and_then(|error| match error {
-        LiveSessionError::Signalled(signal) => Some(*signal),
-        _ => None,
+    let signal = primary.as_ref().err().and_then(|error| {
+        match error {
+            LiveSessionError::Signalled(signal) => Some(*signal),
+            _ => None,
+        }
     });
     let mut failures = Vec::new();
     collect_cleanup(&mut failures, CleanupStage::Renderer, clear.map(|_| ()));
@@ -421,11 +458,11 @@ pub const fn map_role(role: BangRole) -> ScrewRole {
 }
 
 struct ViewRenderer<'a> {
-    context: &'a RenderCtx,
-    out: &'a mut Surface,
+    context:      &'a RenderCtx,
+    out:          &'a mut Surface,
     presentation: PresentationSink,
-    cursor: Option<CursorPlacement>,
-    wrote_line: bool,
+    cursor:       Option<CursorPlacement>,
+    wrote_line:   bool,
 }
 
 impl<'a> ViewRenderer<'a> {
@@ -498,11 +535,11 @@ impl<'a> ViewRenderer<'a> {
             if let Some(id) = &list.id {
                 let report = report.report();
                 lock(&self.presentation).lists.push(ListPresentation {
-                    id: id.clone(),
-                    visible: report.visible,
+                    id:            id.clone(),
+                    visible:       report.visible,
                     fully_visible: report.fully_visible,
-                    page_up: report.page_up,
-                    page_down: report.page_down,
+                    page_up:       report.page_up,
+                    page_down:     report.page_down,
                 });
             }
         }
@@ -595,9 +632,9 @@ impl<'a> ViewRenderer<'a> {
 
 #[derive(Clone)]
 struct MappedView {
-    view: View,
+    view:         View,
     presentation: PresentationSink,
-    cursor: Option<CursorPlacement>,
+    cursor:       Option<CursorPlacement>,
 }
 
 impl Widget for MappedView {
@@ -700,16 +737,42 @@ fn prefix_width(value: &str, chars: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use bang_core::{
-        CursorAnchor, Date, Event, Key, KeyEvent, Modifiers, Session, ViewId,
+        CursorAnchor,
+        Date,
+        Event,
+        Key,
+        KeyEvent,
+        Modifiers,
+        Session,
+        ViewId,
         adapter::{
-            CalendarDay, CalendarView, CalendarWeek, CursorPlacement, ListRow, ListView, Role,
-            Span, TextInputView, View, plain_snapshot,
+            CalendarDay,
+            CalendarView,
+            CalendarWeek,
+            CursorPlacement,
+            ListRow,
+            ListView,
+            Role,
+            Span,
+            TextInputView,
+            View,
+            plain_snapshot,
         },
         widgets::Select,
     };
-    use screw::{Color, Position, Role as ScrewRole, Style, Theme};
+    use screw::{
+        Color,
+        Position,
+        Role as ScrewRole,
+        Style,
+        Theme,
+    };
 
-    use super::{RetainedRenderer, map_role, render_surface};
+    use super::{
+        RetainedRenderer,
+        map_role,
+        render_surface,
+    };
 
     fn date(day: u8) -> Date {
         Date::new(2026, 7, day).expect("test date is valid")
@@ -718,27 +781,27 @@ mod tests {
     #[test]
     fn list_view_preserves_plain_content_and_semantic_styles() {
         let view = View::List(ListView {
-            id: None,
-            header: vec![Span::new("Choose", Role::Prompt)],
-            rows: vec![
+            id:              None,
+            header:          vec![Span::new("Choose", Role::Prompt)],
+            rows:            vec![
                 ListRow {
-                    id: None,
-                    spans: vec![Span::normal("Alpha")],
+                    id:       None,
+                    spans:    vec![Span::normal("Alpha")],
                     selected: true,
-                    checked: Some(true),
+                    checked:  Some(true),
                 },
                 ListRow {
-                    id: None,
-                    spans: vec![Span::new("Beta", Role::Match)],
+                    id:       None,
+                    spans:    vec![Span::new("Beta", Role::Match)],
                     selected: false,
-                    checked: Some(false),
+                    checked:  Some(false),
                 },
             ],
-            selected: Some(0),
+            selected:        Some(0),
             requested_start: 0,
-            total: 2,
-            max_visible: None,
-            help: vec![Span::new("enter to select", Role::Dim)],
+            total:           2,
+            max_visible:     None,
+            help:            vec![Span::new("enter to select", Role::Dim)],
         });
 
         let surface = render_surface(&view);
@@ -770,19 +833,19 @@ mod tests {
     #[test]
     fn list_view_indents_explicit_continuation_lines() {
         let view = View::List(ListView {
-            id: None,
-            header: Vec::new(),
-            rows: vec![ListRow {
-                id: None,
-                spans: vec![Span::normal("first\n↳ second")],
+            id:              None,
+            header:          Vec::new(),
+            rows:            vec![ListRow {
+                id:       None,
+                spans:    vec![Span::normal("first\n↳ second")],
                 selected: true,
-                checked: Some(false),
+                checked:  Some(false),
             }],
-            selected: Some(0),
+            selected:        Some(0),
             requested_start: 0,
-            total: 1,
-            max_visible: None,
-            help: Vec::new(),
+            total:           1,
+            max_visible:     None,
+            help:            Vec::new(),
         });
 
         assert_eq!(
@@ -794,13 +857,13 @@ mod tests {
     #[test]
     fn text_input_converts_scalar_cursor_to_display_column() {
         let view = View::TextInput(TextInputView {
-            id: None,
-            prompt: vec![Span::new("> ", Role::Prompt)],
-            value: "a界z".to_owned(),
-            placeholder: Some("unused".to_owned()),
-            cursor: 2,
+            id:            None,
+            prompt:        vec![Span::new("> ", Role::Prompt)],
+            value:         "a界z".to_owned(),
+            placeholder:   Some("unused".to_owned()),
+            cursor:        2,
             cursor_anchor: CursorAnchor::borrowed("input"),
-            error: Some("try again".to_owned()),
+            error:         Some("try again".to_owned()),
         });
 
         let surface = render_surface(&view);
@@ -818,13 +881,13 @@ mod tests {
         let anchor = CursorAnchor::borrowed("input");
         let view = View::Stack(vec![
             View::TextInput(TextInputView {
-                id: None,
-                prompt: vec![Span::new("> ", Role::Prompt)],
-                value: "abcdef".to_owned(),
-                placeholder: None,
-                cursor: 0,
+                id:            None,
+                prompt:        vec![Span::new("> ", Role::Prompt)],
+                value:         "abcdef".to_owned(),
+                placeholder:   None,
+                cursor:        0,
                 cursor_anchor: anchor.clone(),
-                error: None,
+                error:         None,
             }),
             View::Cursor(CursorPlacement { anchor, column: 4 }),
         ]);
@@ -837,23 +900,23 @@ mod tests {
     #[test]
     fn retained_renderer_follows_bang_cursor_intent() {
         let input = View::TextInput(TextInputView {
-            id: None,
-            prompt: vec![Span::new("search: ", Role::Prompt)],
-            value: String::new(),
-            placeholder: Some("type to filter".to_owned()),
-            cursor: 0,
+            id:            None,
+            prompt:        vec![Span::new("search: ", Role::Prompt)],
+            value:         String::new(),
+            placeholder:   Some("type to filter".to_owned()),
+            cursor:        0,
             cursor_anchor: CursorAnchor::borrowed("search"),
-            error: None,
+            error:         None,
         });
         let list = View::List(ListView {
-            id: None,
-            header: Vec::new(),
-            rows: Vec::new(),
-            selected: None,
+            id:              None,
+            header:          Vec::new(),
+            rows:            Vec::new(),
+            selected:        None,
             requested_start: 0,
-            total: 0,
-            max_visible: None,
-            help: Vec::new(),
+            total:           0,
+            max_visible:     None,
+            help:            Vec::new(),
         });
         let mut renderer = RetainedRenderer::new(Vec::new());
 
@@ -874,10 +937,13 @@ mod tests {
 
     #[test]
     fn physical_viewport_feedback_drives_page_navigation() {
-        let select = Select::new(
-            "choices",
-            ["one", "two\ncontinued", "three", "four", "five"],
-        )
+        let select = Select::new("choices", [
+            "one",
+            "two\ncontinued",
+            "three",
+            "four",
+            "five",
+        ])
         .with_header("choose");
         let mut session = Session::new(select);
         let _reaction = session.handle(Event::Resize { cols: 40, rows: 5 });
@@ -896,7 +962,7 @@ mod tests {
         renderer.resize_viewport(40, 5);
 
         let reaction = session.handle(Event::Key(KeyEvent {
-            key: Key::PageDown,
+            key:       Key::PageDown,
             modifiers: Modifiers::empty(),
         }));
         assert!(reaction.changed());
@@ -913,22 +979,24 @@ mod tests {
     fn semantic_stack_shares_height_between_list_viewports() {
         let list = |id: &'static str, labels: [&str; 3]| {
             View::List(ListView {
-                id: Some(ViewId::borrowed(id)),
-                header: Vec::new(),
-                rows: labels
+                id:              Some(ViewId::borrowed(id)),
+                header:          Vec::new(),
+                rows:            labels
                     .into_iter()
-                    .map(|label| ListRow {
-                        id: None,
-                        spans: vec![Span::normal(label)],
-                        selected: false,
-                        checked: None,
+                    .map(|label| {
+                        ListRow {
+                            id:       None,
+                            spans:    vec![Span::normal(label)],
+                            selected: false,
+                            checked:  None,
+                        }
                     })
                     .collect(),
-                selected: Some(0),
+                selected:        Some(0),
                 requested_start: 0,
-                total: 3,
-                max_visible: None,
-                help: Vec::new(),
+                total:           3,
+                max_visible:     None,
+                help:            Vec::new(),
             })
         };
         let view = View::Stack(vec![
@@ -950,38 +1018,38 @@ mod tests {
     #[test]
     fn calendar_view_preserves_day_markers_and_roles() {
         let view = View::Calendar(CalendarView {
-            id: None,
-            year: 2026,
-            month: 7,
+            id:          None,
+            year:        2026,
+            month:       7,
             month_label: "July 2026".to_owned(),
-            weekdays: vec!["Mo".to_owned(), "Tu".to_owned(), "We".to_owned()],
-            weeks: vec![CalendarWeek {
+            weekdays:    vec!["Mo".to_owned(), "Tu".to_owned(), "We".to_owned()],
+            weeks:       vec![CalendarWeek {
                 days: vec![
                     CalendarDay {
-                        date: date(1),
-                        label: "1".to_owned(),
+                        date:     date(1),
+                        label:    "1".to_owned(),
                         in_month: true,
                         selected: true,
-                        today: false,
+                        today:    false,
                     },
                     CalendarDay {
-                        date: date(2),
-                        label: "2".to_owned(),
+                        date:     date(2),
+                        label:    "2".to_owned(),
                         in_month: true,
                         selected: false,
-                        today: true,
+                        today:    true,
                     },
                     CalendarDay {
-                        date: date(3),
-                        label: "3".to_owned(),
+                        date:     date(3),
+                        label:    "3".to_owned(),
                         in_month: false,
                         selected: false,
-                        today: false,
+                        today:    false,
                     },
                 ],
             }],
-            selected: date(1),
-            help: vec![Span::new("arrows move", Role::Dim)],
+            selected:    date(1),
+            help:        vec![Span::new("arrows move", Role::Dim)],
         });
 
         let surface = render_surface(&view);

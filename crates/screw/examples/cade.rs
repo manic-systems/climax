@@ -1,8 +1,23 @@
-use std::{io, sync::Arc, thread, time::Duration};
+use std::{
+    io,
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 use screw::{
-    Color, InputAnchor, Looping, ProgressBar, Runtime, Stateful, Style, Text, WidgetRef,
-    WindowedLines, layout, widget,
+    Color,
+    InputAnchor,
+    Looping,
+    ProgressBar,
+    Runtime,
+    Stateful,
+    Style,
+    Text,
+    WidgetRef,
+    WindowedLines,
+    layout,
+    widget,
 };
 
 const SCENE_FRAMES: usize = 4;
@@ -16,9 +31,9 @@ enum LoadState {
 }
 
 struct Demo {
-    root: WidgetRef,
-    state: Arc<Stateful<LoadState>>,
-    logs: WindowedLines,
+    root:     WidgetRef,
+    state:    Arc<Stateful<LoadState>>,
+    logs:     WindowedLines,
     progress: ProgressBar,
 }
 

@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io;
-use std::os::fd::{AsFd, AsRawFd as _};
+use std::{
+    io,
+    os::fd::{
+        AsFd,
+        AsRawFd as _,
+    },
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalSize {

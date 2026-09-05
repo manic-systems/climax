@@ -5,7 +5,10 @@
 
 use pound::{
     Parse,
-    spec::{ArgSpec, CommandSpec},
+    spec::{
+        ArgSpec,
+        CommandSpec,
+    },
 };
 
 /// fetch urls to disk
@@ -14,15 +17,15 @@ use pound::{
 #[allow(dead_code, reason = "not a runnable example")]
 struct Grab {
     /// urls to fetch
-    url: Vec<String>,
+    url:    Vec<String>,
     /// download directory
     #[pound(short, long)]
     output: Option<String>,
     /// no output
     #[pound(long, global)]
-    quiet: bool,
+    quiet:  bool,
     #[pound(subcommand)]
-    cmd: Option<Cmd>,
+    cmd:    Option<Cmd>,
 }
 
 /// cache maintenance

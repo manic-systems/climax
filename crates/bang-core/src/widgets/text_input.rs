@@ -2,33 +2,45 @@
 
 use super::navigation::no_modifiers;
 use crate::{
-    Context, CursorAnchor, Event, Key, Reaction, Role, Span, TextInputView, Value, View,
-    ViewContext, ViewId, Widget, WidgetId,
+    Context,
+    CursorAnchor,
+    Event,
+    Key,
+    Reaction,
+    Role,
+    Span,
+    TextInputView,
+    Value,
+    View,
+    ViewContext,
+    ViewId,
+    Widget,
+    WidgetId,
 };
 
 type Validator = dyn Fn(&str) -> Result<(), String> + 'static;
 
 pub struct TextInput {
-    id: WidgetId,
-    prompt: Vec<Span>,
+    id:          WidgetId,
+    prompt:      Vec<Span>,
     placeholder: Option<String>,
-    value: String,
-    cursor: usize,
-    error: Option<String>,
-    validator: Option<Box<Validator>>,
+    value:       String,
+    cursor:      usize,
+    error:       Option<String>,
+    validator:   Option<Box<Validator>>,
 }
 
 impl TextInput {
     #[must_use]
     pub fn new(id: impl Into<WidgetId>) -> Self {
         Self {
-            id: id.into(),
-            prompt: Vec::new(),
+            id:          id.into(),
+            prompt:      Vec::new(),
             placeholder: None,
-            value: String::new(),
-            cursor: 0,
-            error: None,
-            validator: None,
+            value:       String::new(),
+            cursor:      0,
+            error:       None,
+            validator:   None,
         }
     }
 
@@ -190,17 +202,19 @@ impl Widget for TextInput {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         match event {
-            Event::Key(key) => match key.key {
-                Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
-                Key::Backspace => self.backspace(),
-                Key::Delete => self.delete(),
-                Key::Left => self.move_left(),
-                Key::Right => self.move_right(),
-                Key::Home => self.move_home(),
-                Key::End => self.move_end(),
-                Key::Enter => self.submit(),
-                Key::Esc => Reaction::Cancel,
-                _ => Reaction::Ignored,
+            Event::Key(key) => {
+                match key.key {
+                    Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
+                    Key::Backspace => self.backspace(),
+                    Key::Delete => self.delete(),
+                    Key::Left => self.move_left(),
+                    Key::Right => self.move_right(),
+                    Key::Home => self.move_home(),
+                    Key::End => self.move_end(),
+                    Key::Enter => self.submit(),
+                    Key::Esc => Reaction::Cancel,
+                    _ => Reaction::Ignored,
+                }
             },
             Event::Paste(value) => self.insert_str(&value),
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
@@ -209,13 +223,13 @@ impl Widget for TextInput {
 
     fn view(&self, _cx: &ViewContext) -> View {
         View::TextInput(TextInputView {
-            id: Some(ViewId::owned(format!("{}/input", self.id.as_str()))),
-            prompt: self.prompt.clone(),
-            value: self.value.clone(),
-            placeholder: self.placeholder.clone(),
-            cursor: self.cursor_char_index(),
+            id:            Some(ViewId::owned(format!("{}/input", self.id.as_str()))),
+            prompt:        self.prompt.clone(),
+            value:         self.value.clone(),
+            placeholder:   self.placeholder.clone(),
+            cursor:        self.cursor_char_index(),
             cursor_anchor: self.cursor_anchor(),
-            error: self.error.clone(),
+            error:         self.error.clone(),
         })
     }
 

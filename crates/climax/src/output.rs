@@ -2,14 +2,24 @@
 
 use std::{
     fmt,
-    io::{self, Write},
-    sync::{Arc, Mutex},
+    io::{
+        self,
+        Write,
+    },
+    sync::{
+        Arc,
+        Mutex,
+    },
 };
 
-#[cfg(feature = "structured")]
-use serde::Serialize;
+#[cfg(feature = "structured")] use serde::Serialize;
 
-use crate::{Error, Result, error::ErrorKind, sync::lock};
+use crate::{
+    Error,
+    Result,
+    error::ErrorKind,
+    sync::lock,
+};
 
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Format {
@@ -26,10 +36,10 @@ pub enum Format {
 /// A configured destination-independent application output writer.
 #[derive(Clone)]
 pub struct Output {
-    format: Format,
-    writer: SharedWriter,
+    format:  Format,
+    writer:  SharedWriter,
     notices: SharedWriter,
-    state: Arc<Mutex<EmissionState>>,
+    state:   Arc<Mutex<EmissionState>>,
 }
 
 impl Output {
@@ -156,17 +166,21 @@ impl Output {
             (EmissionMode::Finite, EmissionState::Finite(_)) => {
                 Err(output_policy("a finite result is already registered"))
             },
-            (EmissionMode::Finite, EmissionState::Streaming) => Err(output_policy(
-                "cannot emit a finite result after streaming output",
-            )),
+            (EmissionMode::Finite, EmissionState::Streaming) => {
+                Err(output_policy(
+                    "cannot emit a finite result after streaming output",
+                ))
+            },
             (EmissionMode::Stream, state @ EmissionState::Empty) => {
                 *state = EmissionState::Streaming;
                 self.write_bytes(&bytes)
             },
             (EmissionMode::Stream, EmissionState::Streaming) => self.write_bytes(&bytes),
-            (EmissionMode::Stream, EmissionState::Finite(_)) => Err(output_policy(
-                "cannot stream output after registering a finite result",
-            )),
+            (EmissionMode::Stream, EmissionState::Finite(_)) => {
+                Err(output_policy(
+                    "cannot stream output after registering a finite result",
+                ))
+            },
             (EmissionMode::Finite | EmissionMode::Stream, EmissionState::Closed) => {
                 Err(output_policy("the output lifecycle is already complete"))
             },
@@ -221,7 +235,7 @@ enum EmissionState {
 }
 
 struct PendingResult {
-    bytes: Vec<u8>,
+    bytes:  Vec<u8>,
     writer: SharedWriter,
 }
 
@@ -240,9 +254,9 @@ pub struct MissingText;
 #[must_use]
 pub struct ResultBuilder<'a, T: ?Sized, F> {
     output: &'a Output,
-    value: &'a T,
-    text: F,
-    mode: EmissionMode,
+    value:  &'a T,
+    text:   F,
+    mode:   EmissionMode,
 }
 
 #[cfg(feature = "structured")]
@@ -337,14 +351,16 @@ impl Write for SharedWriter {
 fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| match value {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect(),
-            '\n' => "\\n".chars().collect(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-            value => vec![value],
+        .flat_map(|value| {
+            match value {
+                '"' => "\\\"".chars().collect::<Vec<_>>(),
+                '\\' => "\\\\".chars().collect(),
+                '\n' => "\\n".chars().collect(),
+                '\r' => "\\r".chars().collect(),
+                '\t' => "\\t".chars().collect(),
+                value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
+                value => vec![value],
+            }
         })
         .collect()
 }
@@ -369,8 +385,12 @@ fn output_policy(message: &'static str) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{
+        AtomicUsize,
+        Ordering,
+    };
+
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -394,7 +414,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct FlushCapture {
-        bytes: Arc<Mutex<Vec<u8>>>,
+        bytes:   Arc<Mutex<Vec<u8>>>,
         flushes: Arc<AtomicUsize>,
     }
 

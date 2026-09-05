@@ -1,6 +1,9 @@
 use unicode_width::UnicodeWidthChar as _;
 
-use crate::{Rect, Style};
+use crate::{
+    Rect,
+    Style,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fill {
@@ -31,7 +34,7 @@ pub struct Position {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cell {
-    pub text: String,
+    pub text:  String,
     pub width: usize,
     pub style: Style,
 }
@@ -39,24 +42,26 @@ pub struct Cell {
 impl Cell {
     pub fn new(ch: char, style: Style) -> Option<Self> {
         let width = ch.width().unwrap_or(0);
-        (width > 0).then(|| Self {
-            text: ch.to_string(),
-            width,
-            style,
+        (width > 0).then(|| {
+            Self {
+                text: ch.to_string(),
+                width,
+                style,
+            }
         })
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Row {
-    cells: Vec<Cell>,
+    cells:       Vec<Cell>,
     break_after: RowBreak,
 }
 
 impl Row {
     pub const fn new() -> Self {
         Self {
-            cells: Vec::new(),
+            cells:       Vec::new(),
             break_after: RowBreak::None,
         }
     }
@@ -98,7 +103,7 @@ impl Default for Row {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Surface {
-    rows: Vec<Row>,
+    rows:   Vec<Row>,
     cursor: Option<Position>,
 }
 
@@ -111,7 +116,7 @@ impl Default for Surface {
 impl Surface {
     pub fn new() -> Self {
         Self {
-            rows: vec![Row::new()],
+            rows:   vec![Row::new()],
             cursor: None,
         }
     }
@@ -143,7 +148,8 @@ impl Surface {
     ///
     /// Tabs, escapes, and other C0/C1 controls have no cell representation;
     /// they are dropped so they cannot leak into cell text or corrupt widths.
-    /// Combining marks (zero-width, non-control) still append to the prior cell.
+    /// Combining marks (zero-width, non-control) still append to the prior
+    /// cell.
     ///
     /// See [`Self::newline`] for the one control that does have a meaning here.
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
@@ -298,7 +304,7 @@ enum Column {
 #[derive(Clone)]
 struct PlacedCell {
     start: usize,
-    cell: Cell,
+    cell:  Cell,
 }
 
 fn overlay_writes(
@@ -310,16 +316,16 @@ fn overlay_writes(
 ) -> Vec<PlacedCell> {
     let mut writes = Vec::new();
     if let Fill::Opaque(style) = fill {
-        writes.extend(
-            (requested.origin.col..requested.right()).map(|start| PlacedCell {
+        writes.extend((requested.origin.col..requested.right()).map(|start| {
+            PlacedCell {
                 start,
                 cell: Cell {
                     text: " ".into(),
                     width: 1,
                     style,
                 },
-            }),
-        );
+            }
+        }));
     }
 
     let Some(row) = source.rows().get(source_row) else {
@@ -336,7 +342,7 @@ fn overlay_writes(
             writes.retain(|write| write.start < target || write.start >= target_right);
             writes.push(PlacedCell {
                 start: target,
-                cell: cell.clone(),
+                cell:  cell.clone(),
             });
         }
         source_col = source_right;

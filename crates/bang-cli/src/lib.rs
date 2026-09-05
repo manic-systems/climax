@@ -5,28 +5,49 @@
 mod config;
 
 use bang_core::{
-    ActionBinding, ActionLayer, OutputFormat as CoreOutputFormat, Reaction, Session, SessionStatus,
-    Value, Widget, format_output,
+    ActionBinding,
+    ActionLayer,
+    OutputFormat as CoreOutputFormat,
+    Reaction,
+    Session,
+    SessionStatus,
+    Value,
+    Widget,
+    format_output,
     widgets::{
-        DatePicker, Form, MultiSelect, ReviewActionBinding, ReviewList, SearchSelect, Select,
-        SelectItem, TextInput,
+        DatePicker,
+        Form,
+        MultiSelect,
+        ReviewActionBinding,
+        ReviewList,
+        SearchSelect,
+        Select,
+        SelectItem,
+        TextInput,
     },
 };
 use bang_terminal::Decoder;
 use config::{
-    FieldConfig, WidgetConfig, WidgetKind, parse_action_binding, parse_review_action_binding,
+    FieldConfig,
+    WidgetConfig,
+    WidgetKind,
+    parse_action_binding,
+    parse_review_action_binding,
     text_from_config,
 };
-use pound::{Parse, ValueEnum};
+use pound::{
+    Parse,
+    ValueEnum,
+};
 
 /// toplevel CLI
 #[derive(Debug, Parse)]
 #[pound(name = "bang", version = "0.1.0")]
 pub struct Cli {
     #[pound(short, long)]
-    config: Option<String>,
+    config:  Option<String>,
     #[pound(short, long, global, default = "text")]
-    output: OutputFormat,
+    output:  OutputFormat,
     #[pound(subcommand)]
     command: Option<Command>,
 }
@@ -37,31 +58,31 @@ pub enum Command {
     Select {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option: Vec<String>,
+        option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        page_size:   usize,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action: Vec<String>,
+        action:      Vec<String>,
     },
     /// choose zero or more options
     MultiSelect {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option: Vec<String>,
+        option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        page_size:   usize,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action: Vec<String>,
+        action:      Vec<String>,
     },
     /// edit and submit text
     Text {
@@ -70,49 +91,49 @@ pub enum Command {
         input_bytes: Option<String>,
         /// initial value
         #[pound(long, default = "")]
-        value: String,
+        value:       String,
         /// prompt shown in logical views
         #[pound(long, default = "text: ")]
-        prompt: String,
+        prompt:      String,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action: Vec<String>,
+        action:      Vec<String>,
     },
     /// filter options and choose one
     Search {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option: Vec<String>,
+        option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        page_size:   usize,
         /// app action key in key:name form; may be repeated
         #[pound(long)]
-        action: Vec<String>,
+        action:      Vec<String>,
     },
     /// review options with confirmed/denied/unconfirmed row state
     ReviewList {
         /// option label/value; may be repeated
         #[pound(short, long)]
-        option: Vec<String>,
+        option:        Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
-        input_bytes: Option<String>,
+        input_bytes:   Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        page_size:     usize,
         /// hide rows whose initial review state is denied
         #[pound(long)]
-        hide_removed: bool,
+        hide_removed:  bool,
         /// return a structured exit and rows; enables g/s/a action keys
         #[pound(long)]
         action_output: bool,
         /// extra action key in key:name form; may be repeated
         #[pound(long)]
-        action: Vec<String>,
+        action:        Vec<String>,
     },
 }
 
@@ -162,41 +183,49 @@ fn run_command(command: Command) -> Result<Value, String> {
             input_bytes,
             page_size,
             action,
-        } => run_widget(
-            Select::new("select", choice_items(option)?).with_page_size(page_size),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                Select::new("select", choice_items(option)?).with_page_size(page_size),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::MultiSelect {
             option,
             input_bytes,
             page_size,
             action,
-        } => run_widget(
-            MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::Text {
             input_bytes,
             value,
             prompt,
             action,
-        } => run_widget(
-            TextInput::new("text").with_prompt(prompt).with_value(value),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                TextInput::new("text").with_prompt(prompt).with_value(value),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::Search {
             option,
             input_bytes,
             page_size,
             action,
-        } => run_widget(
-            SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::ReviewList {
             option,
             input_bytes,
@@ -247,11 +276,13 @@ fn run_config(config: WidgetConfig) -> Result<Value, String> {
             }
             run_widget(widget, config.input_bytes, config.actions)
         },
-        WidgetKind::Text => run_widget(
-            text_from_config(&config),
-            config.input_bytes,
-            config.actions,
-        ),
+        WidgetKind::Text => {
+            run_widget(
+                text_from_config(&config),
+                config.input_bytes,
+                config.actions,
+            )
+        },
         WidgetKind::Search => {
             let mut widget = SearchSelect::new("search", config.options)
                 .with_page_size(config.page_size.unwrap_or(9))

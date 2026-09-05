@@ -7,12 +7,28 @@
 
 mod attr;
 
-use std::{collections::HashMap, process::Command, str::FromStr};
+use std::{
+    collections::HashMap,
+    process::Command,
+    str::FromStr,
+};
 
 use proc_macro::TokenStream;
-use proc_macro2::{TokenStream as TokenStream2, TokenTree};
-use quote::{format_ident, quote};
-use venial::{Fields, Item, NamedField, TypeExpr, parse_item};
+use proc_macro2::{
+    TokenStream as TokenStream2,
+    TokenTree,
+};
+use quote::{
+    format_ident,
+    quote,
+};
+use venial::{
+    Fields,
+    Item,
+    NamedField,
+    TypeExpr,
+    parse_item,
+};
 
 use crate::attr::Pound;
 
@@ -47,13 +63,13 @@ enum Card {
 enum Conversion {
     FromArg,
     CheckedFromArg {
-        min: Option<String>,
-        max: Option<String>,
-        max_len: Option<String>,
+        min:      Option<String>,
+        max:      Option<String>,
+        max_len:  Option<String>,
         validate: Option<String>,
     },
     CustomParse {
-        parse: String,
+        parse:    String,
         validate: Option<String>,
     },
 }
@@ -61,45 +77,45 @@ enum Conversion {
 // the resolved plan for one field.
 #[allow(clippy::struct_excessive_bools)]
 struct Plan {
-    ident: proc_macro2::Ident,
-    kind: &'static str,
-    long: Option<String>,
-    short: Option<char>,
-    required: bool,
-    multi: bool,
-    group: Option<String>,
-    default: Option<String>,
-    env: Option<String>,
-    value_name: String,
-    help: String,
-    aliases: Vec<String>,
+    ident:          proc_macro2::Ident,
+    kind:           &'static str,
+    long:           Option<String>,
+    short:          Option<char>,
+    required:       bool,
+    multi:          bool,
+    group:          Option<String>,
+    default:        Option<String>,
+    env:            Option<String>,
+    value_name:     String,
+    help:           String,
+    aliases:        Vec<String>,
     conflicts_with: Vec<String>,
-    hidden: bool,
-    global: bool,
-    card: Card,
-    conversion: Option<Conversion>,
-    inner_ty: TokenStream2,
-    full_ty: TokenStream2,
+    hidden:         bool,
+    global:         bool,
+    card:           Card,
+    conversion:     Option<Conversion>,
+    inner_ty:       TokenStream2,
+    full_ty:        TokenStream2,
 }
 
 // a field that delegates to its type's subcommand tree.
 struct SubField {
-    ident: proc_macro2::Ident,
-    ty: TokenStream2,
+    ident:    proc_macro2::Ident,
+    ty:       TokenStream2,
     optional: bool,
 }
 
 // a field whose command arguments are embedded at the containing level.
 struct FlattenField {
     ident: proc_macro2::Ident,
-    ty: TokenStream2,
+    ty:    TokenStream2,
 }
 
 struct FieldPlan {
-    args: Vec<Plan>,
+    args:      Vec<Plan>,
     flattened: Vec<FlattenField>,
-    order: Vec<FieldOrder>,
-    sub: Option<SubField>,
+    order:     Vec<FieldOrder>,
+    sub:       Option<SubField>,
 }
 
 enum FieldOrder {
@@ -408,10 +424,10 @@ fn analyze(fields: &Fields) -> Result<FieldPlan, String> {
     let named = match fields {
         Fields::Unit => {
             return Ok(FieldPlan {
-                args: Vec::new(),
+                args:      Vec::new(),
                 flattened: Vec::new(),
-                order: Vec::new(),
-                sub: None,
+                order:     Vec::new(),
+                sub:       None,
             });
         },
         Fields::Tuple(_) => {
@@ -475,8 +491,8 @@ fn sub_field(field: &NamedField) -> Result<SubField, String> {
         return Err("pound: #[pound(subcommand)] must be `T` or `Option<T>`".into());
     }
     Ok(SubField {
-        ident: field.name.clone(),
-        ty: inner,
+        ident:    field.name.clone(),
+        ty:       inner,
         optional: card == Card::Opt,
     })
 }
@@ -592,15 +608,15 @@ fn conversion_for(a: &Pound, ident: &proc_macro2::Ident) -> Result<Conversion, S
             ));
         }
         return Ok(Conversion::CustomParse {
-            parse: parse.clone(),
+            parse:    parse.clone(),
             validate: a.validate.clone(),
         });
     }
     if a.min.is_some() || a.max.is_some() || a.max_len.is_some() || a.validate.is_some() {
         return Ok(Conversion::CheckedFromArg {
-            min: a.min.clone(),
-            max: a.max.clone(),
-            max_len: a.max_len.clone(),
+            min:      a.min.clone(),
+            max:      a.max.clone(),
+            max_len:  a.max_len.clone(),
             validate: a.validate.clone(),
         });
     }

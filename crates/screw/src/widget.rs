@@ -1,16 +1,29 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{
+        HashMap,
+        VecDeque,
+    },
     hash::Hash,
     rc::Rc,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc,
+        Mutex,
+    },
     time::Duration,
 };
 
 use unicode_width::UnicodeWidthChar as _;
 
 use crate::{
-    LayoutMode, Role, Style, Surface, Theme, Viewport, renderer::layout_surface,
-    surface::append_surface, sync::lock,
+    LayoutMode,
+    Role,
+    Style,
+    Surface,
+    Theme,
+    Viewport,
+    renderer::layout_surface,
+    surface::append_surface,
+    sync::lock,
 };
 
 /// A widget's vertical allocation behavior inside a [`Stack`].
@@ -32,21 +45,21 @@ pub enum TickInterest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
-    frame: u64,
-    columns: Option<usize>,
-    rows: Option<usize>,
+    frame:       u64,
+    columns:     Option<usize>,
+    rows:        Option<usize>,
     layout_mode: LayoutMode,
-    theme: Theme,
+    theme:       Theme,
 }
 
 impl RenderCtx {
     pub const fn new() -> Self {
         Self {
-            frame: 0,
-            columns: None,
-            rows: None,
+            frame:       0,
+            columns:     None,
+            rows:        None,
             layout_mode: LayoutMode::Clip,
-            theme: Theme::DEFAULT,
+            theme:       Theme::DEFAULT,
         }
     }
 
@@ -207,14 +220,14 @@ impl Widget for Text {
 #[derive(Clone, Debug)]
 pub struct Looping {
     frames: Arc<[String]>,
-    style: Style,
+    style:  Style,
 }
 
 impl Looping {
     pub fn new<const N: usize>(frames: [&str; N]) -> Self {
         Self {
             frames: frames.map(ToOwned::to_owned).into(),
-            style: Style::default(),
+            style:  Style::default(),
         }
     }
 
@@ -243,8 +256,8 @@ impl Widget for Looping {
 #[derive(Clone, Debug)]
 pub struct WindowedLines {
     capacity: usize,
-    lines: Arc<Mutex<VecDeque<String>>>,
-    style: Style,
+    lines:    Arc<Mutex<VecDeque<String>>>,
+    style:    Style,
 }
 
 impl WindowedLines {
@@ -291,10 +304,10 @@ impl Widget for WindowedLines {
 
 #[derive(Clone, Debug)]
 pub struct List {
-    rows: Arc<[String]>,
-    selected: usize,
-    height: usize,
-    normal: Role,
+    rows:          Arc<[String]>,
+    selected:      usize,
+    height:        usize,
+    normal:        Role,
     selected_role: Role,
 }
 
@@ -365,7 +378,7 @@ impl Widget for List {
 #[derive(Clone, Debug)]
 pub struct Grid {
     rows: Arc<[Arc<[GridCell]>]>,
-    gap: usize,
+    gap:  usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -383,7 +396,7 @@ impl Grid {
                 .map(|row| Arc::from(row.into_boxed_slice()))
                 .collect::<Vec<_>>()
                 .into(),
-            gap: 1,
+            gap:  1,
         }
     }
 
@@ -430,9 +443,9 @@ impl Widget for Grid {
 #[derive(Clone, Debug)]
 pub struct ProgressBar {
     fraction: Arc<Mutex<f32>>,
-    width: usize,
-    filled: Style,
-    empty: Style,
+    width:    usize,
+    filled:   Style,
+    empty:    Style,
 }
 
 impl ProgressBar {
@@ -483,14 +496,14 @@ impl Widget for ProgressBar {
 #[derive(Clone, Debug)]
 pub struct InputAnchor {
     prompt: String,
-    style: Style,
+    style:  Style,
 }
 
 impl InputAnchor {
     pub fn prompt(prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
-            style: Style::default(),
+            style:  Style::default(),
         }
     }
 
@@ -510,21 +523,21 @@ impl Widget for InputAnchor {
 
 #[derive(Clone, Debug)]
 pub struct TextInput {
-    prompt: String,
-    value: String,
-    cursor: usize,
+    prompt:      String,
+    value:       String,
+    cursor:      usize,
     prompt_role: Role,
-    value_role: Role,
+    value_role:  Role,
 }
 
 impl TextInput {
     pub fn new(prompt: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            value: value.into(),
-            cursor: 0,
+            prompt:      prompt.into(),
+            value:       value.into(),
+            cursor:      0,
             prompt_role: Role::Prompt,
-            value_role: Role::Normal,
+            value_role:  Role::Normal,
         }
     }
 

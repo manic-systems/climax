@@ -1,6 +1,17 @@
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+};
 
-use crate::{Line, LocalWidgetRef, Stack, Text, WidgetRef, local_widget, widget};
+use crate::{
+    Line,
+    LocalWidgetRef,
+    Stack,
+    Text,
+    WidgetRef,
+    local_widget,
+    widget,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TemplateError {
@@ -125,9 +136,15 @@ const fn current_row_mut<H>(rows: &mut [Vec<H>]) -> &mut Vec<H> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{RenderCtx, Style, Surface, Widget, local_widget, render_plain};
-
     use super::local_template;
+    use crate::{
+        RenderCtx,
+        Style,
+        Surface,
+        Widget,
+        local_widget,
+        render_plain,
+    };
 
     struct BorrowedText<'a>(&'a str);
 

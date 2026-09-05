@@ -4,8 +4,7 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// anything a parse attempt can produce
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,14 +27,14 @@ pub enum Error {
     MissingSubcommand,
     /// a value failed to parse into its target type
     Value {
-        arg: String,
+        arg:   String,
         value: String,
-        msg: String,
+        msg:   String,
     },
     /// two members of a mutually-exclusive group were both set
     Conflict {
-        group: String,
-        first: String,
+        group:  String,
+        first:  String,
         second: String,
     },
     /// a required group had none of its members set

@@ -11,7 +11,12 @@
 
 use std::time::Duration;
 
-use pound::{FromArg, Parse, ValueEnum, ValueError};
+use pound::{
+    FromArg,
+    Parse,
+    ValueEnum,
+    ValueError,
+};
 
 /// a TTL parsed into a `Duration`.
 /// implementing `FromArg` allows us to support any value type
@@ -85,7 +90,7 @@ enum NsCmd {
     },
     /// remove a namespace and all its secrets
     Rm {
-        name: String,
+        name:  String,
         #[pound(short, long)]
         force: bool,
     },
@@ -98,49 +103,49 @@ enum NsCmd {
 enum Cmd {
     /// store or update a secret
     Set {
-        key: String,
+        key:   String,
         value: String,
         /// secret type hint (short overridden to -K so -k stays free)
         #[pound(short = 'K', long)]
-        kind: Option<Kind>,
+        kind:  Option<Kind>,
         /// tag for grouping (repeatable)
         #[pound(short, long)]
-        tag: Vec<String>,
+        tag:   Vec<String>,
         /// expire after this long, e.g. 30m, 2h, 7d (custom `FromArg`)
         #[pound(long)]
-        ttl: Option<Ttl>,
+        ttl:   Option<Ttl>,
         /// mark as read-only
         #[pound(long)]
-        lock: bool,
+        lock:  bool,
     },
     /// retrieve a secret
     Get {
-        key: String,
+        key:    String,
         /// print in this format
         #[pound(short, long)]
         format: Option<Format>,
         /// copy to clipboard instead of printing (conflicts with --format)
         #[pound(short, long, conflicts_with = "format")]
-        clip: bool,
+        clip:   bool,
     },
     /// list secrets in the active namespace
     List {
         /// filter by tag
         #[pound(short, long)]
-        tag: Option<String>,
+        tag:    Option<String>,
         /// filter by kind
         #[pound(short, long)]
-        kind: Option<Kind>,
+        kind:   Option<Kind>,
         #[pound(short, long)]
         format: Option<Format>,
         /// show values (hidden by default)
         #[pound(long)]
-        show: bool,
+        show:   bool,
     },
     /// delete a secret (also reachable as `delete`)
     #[pound(alias = "delete")]
     Rm {
-        key: String,
+        key:   String,
         #[pound(short, long)]
         force: bool,
     },
@@ -148,9 +153,9 @@ enum Cmd {
     Import {
         /// file to read (explicit positional, shown as `<PATH>`)
         #[pound(positional, value_name = "PATH")]
-        file: String,
+        file:        String,
         #[pound(short, long)]
-        format: Option<Format>,
+        format:      Option<Format>,
         /// how to handle existing keys
         #[pound(long, default = "skip")]
         on_conflict: OnConflict,
@@ -158,16 +163,16 @@ enum Cmd {
     /// export target for secrets
     Export {
         #[pound(short, long)]
-        format: Option<Format>,
+        format:         Option<Format>,
         /// write to this file
         #[pound(short, long, group = "dest")]
-        output: Option<String>,
+        output:         Option<String>,
         /// write to stdout
         #[pound(long, group = "dest")]
-        stdout: bool,
+        stdout:         bool,
         /// filter by tag
         #[pound(short, long)]
-        tag: Option<String>,
+        tag:            Option<String>,
         /// include locked secrets
         #[pound(long)]
         include_locked: bool,

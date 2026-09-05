@@ -2,21 +2,38 @@ use std::{
     collections::BTreeMap,
     fmt,
     io::Write as _,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc,
+        Mutex,
+        OnceLock,
+    },
     time::Duration,
 };
 
 use screw::{
-    AutoRuntime, Looping, RenderCtx, Runtime, Surface, Text, TickInterest, Widget, WidgetRef,
-    layout, widget,
+    AutoRuntime,
+    Looping,
+    RenderCtx,
+    Runtime,
+    Surface,
+    Text,
+    TickInterest,
+    Widget,
+    WidgetRef,
+    layout,
+    widget,
 };
 
 use crate::{
-    Error, Result,
+    Error,
+    Result,
     error::ErrorKind,
     output::SharedWriter,
     sync::lock,
-    terminal::{StatusMode, TerminalCapabilities},
+    terminal::{
+        StatusMode,
+        TerminalCapabilities,
+    },
 };
 
 type Entries = Arc<Mutex<BTreeMap<u64, StatusEntry>>>;
@@ -44,11 +61,11 @@ pub fn message(message: impl Into<String>) -> Status {
 }
 
 pub struct Status {
-    message: String,
-    spinner: bool,
-    fps: u16,
+    message:       String,
+    spinner:       bool,
+    fps:           u16,
     final_message: Option<String>,
-    coordinator: StatusCoordinator,
+    coordinator:   StatusCoordinator,
 }
 
 impl Status {
@@ -93,8 +110,8 @@ impl Status {
     #[must_use]
     pub fn start(self) -> StatusRuntime {
         let entry = StatusEntry {
-            widget: self.root_widget(),
-            plain: self.message,
+            widget:        self.root_widget(),
+            plain:         self.message,
             final_message: self.final_message,
         };
         let (id, started) = self.coordinator.insert(entry, self.fps);
@@ -116,9 +133,11 @@ impl Status {
                 status.finish()?;
                 Ok(value)
             },
-            Err(error) => match status.finish() {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(error.with_cleanup(cleanup)),
+            Err(error) => {
+                match status.finish() {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(error.with_cleanup(cleanup)),
+                }
             },
         }
     }
@@ -139,9 +158,9 @@ impl Status {
 
 pub struct StatusRuntime {
     coordinator: StatusCoordinator,
-    id: Option<u64>,
+    id:          Option<u64>,
     /// The first frame's draw result, reported by `finish`.
-    started: Result<()>,
+    started:     Result<()>,
 }
 
 impl StatusRuntime {
@@ -168,8 +187,8 @@ impl Drop for StatusRuntime {
 }
 
 struct StatusEntry {
-    widget: WidgetRef,
-    plain: String,
+    widget:        WidgetRef,
+    plain:         String,
     final_message: Option<String>,
 }
 
@@ -180,15 +199,15 @@ pub(crate) struct StatusCoordinator {
 
 struct CoordinatorInner {
     entries: Entries,
-    state: Mutex<CoordinatorState>,
-    writer: SharedWriter,
+    state:   Mutex<CoordinatorState>,
+    writer:  SharedWriter,
 }
 
 struct CoordinatorState {
-    next_id: u64,
-    mode: StatusMode,
-    fps: u16,
-    runtime: Option<AutoRuntime<SharedWriter>>,
+    next_id:       u64,
+    mode:          StatusMode,
+    fps:           u16,
+    runtime:       Option<AutoRuntime<SharedWriter>>,
     prompt_active: bool,
 }
 
@@ -447,7 +466,13 @@ mod tests {
     use std::{
         collections::HashSet,
         io,
-        sync::{atomic::{AtomicUsize, Ordering}, Barrier},
+        sync::{
+            Barrier,
+            atomic::{
+                AtomicUsize,
+                Ordering,
+            },
+        },
     };
 
     use super::*;
@@ -474,8 +499,8 @@ mod tests {
 
     fn entry(message: &str) -> StatusEntry {
         StatusEntry {
-            widget: widget(Text::new(message.to_owned())),
-            plain: message.to_owned(),
+            widget:        widget(Text::new(message.to_owned())),
+            plain:         message.to_owned(),
             final_message: None,
         }
     }

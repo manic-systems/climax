@@ -2,8 +2,14 @@
 
 //! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
-use proc_macro2::{Delimiter, TokenTree};
-use venial::{Attribute, AttributeValue};
+use proc_macro2::{
+    Delimiter,
+    TokenTree,
+};
+use venial::{
+    Attribute,
+    AttributeValue,
+};
 
 /// the parsed `#[pound(...)]` options for one field or item
 // short/long are tristate: absent, bare, or with a value
@@ -11,43 +17,43 @@ use venial::{Attribute, AttributeValue};
 #[derive(Default)]
 pub struct Pound {
     /// `None` absent, `Some(None)` bare `short`, `Some(Some(c))` `short = 'c'`
-    pub short: Option<Option<char>>,
+    pub short:           Option<Option<char>>,
     /// `None` absent, `Some(None)` bare `long`, `Some(Some(s))` `long = "s"`
-    pub long: Option<Option<String>>,
-    pub positional: bool,
-    pub trailing: bool,
-    pub count: bool,
+    pub long:            Option<Option<String>>,
+    pub positional:      bool,
+    pub trailing:        bool,
+    pub count:           bool,
     /// field delegates to its type's subcommand tree
-    pub subcommand: bool,
+    pub subcommand:      bool,
     /// field contributes its type's arguments at this command level
-    pub flatten: bool,
+    pub flatten:         bool,
     /// keep this arg/variant out of help output
-    pub hidden: bool,
+    pub hidden:          bool,
     /// named flag/option that descendant subcommands also accept
-    pub global: bool,
-    pub group: Option<String>,
-    pub default: Option<String>,
-    pub env: Option<String>,
-    pub value_name: Option<String>,
-    pub help: Option<String>,
-    pub name: Option<String>,
-    pub version: Option<String>,
+    pub global:          bool,
+    pub group:           Option<String>,
+    pub default:         Option<String>,
+    pub env:             Option<String>,
+    pub value_name:      Option<String>,
+    pub help:            Option<String>,
+    pub name:            Option<String>,
+    pub version:         Option<String>,
     /// field-level: minimum accepted parsed value
-    pub min: Option<String>,
+    pub min:             Option<String>,
     /// field-level: maximum accepted parsed value
-    pub max: Option<String>,
+    pub max:             Option<String>,
     /// field-level: maximum accepted raw character count
-    pub max_len: Option<String>,
+    pub max_len:         Option<String>,
     /// field-level: custom raw-value parser function
-    pub parse: Option<String>,
+    pub parse:           Option<String>,
     /// field-level: custom parsed-value validation function
-    pub validate: Option<String>,
+    pub validate:        Option<String>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
-    pub conflicts_with: Vec<String>,
+    pub conflicts_with:  Vec<String>,
     /// extra long names (fields) or command names (variants) that also match
-    pub aliases: Vec<String>,
+    pub aliases:         Vec<String>,
 }
 
 impl Pound {

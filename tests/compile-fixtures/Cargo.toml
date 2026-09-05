@@ -1,11 +1,5 @@
 [workspace]
-members = [
-  "bang-only",
-  "climax-only",
-  "climax-with-components",
-  "pound-only",
-  "screw-only",
-]
+members  = [ "bang-only", "climax-only", "climax-with-components", "pound-only", "screw-only" ]
 resolver = "3"
 
 [workspace.package]

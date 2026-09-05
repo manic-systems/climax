@@ -4,9 +4,17 @@
 
 mod ansi;
 
-pub use ansi::{EmittedScreen, ScreenCell, ScreenError};
-
-use screw::{RenderCtx, Style, Surface, Widget};
+pub use ansi::{
+    EmittedScreen,
+    ScreenCell,
+    ScreenError,
+};
+use screw::{
+    RenderCtx,
+    Style,
+    Surface,
+    Widget,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PtyFrame {

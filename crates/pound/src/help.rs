@@ -2,14 +2,18 @@
 
 //! help and version rendering.
 
-#[cfg(feature = "help")]
-use core::fmt::Write as _;
+#[cfg(feature = "help")] use core::fmt::Write as _;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
-use crate::spec::{ArgSpec, CommandSpec};
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+use crate::spec::{
+    ArgSpec,
+    CommandSpec,
+};
 #[cfg(feature = "help")]
-use crate::spec::{Kind, SubSpec};
+use crate::spec::{
+    Kind,
+    SubSpec,
+};
 
 pub(crate) fn version_line(spec: &CommandSpec) -> String {
     let mut out = spec.name.to_owned();

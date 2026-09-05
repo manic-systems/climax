@@ -1,27 +1,51 @@
 use std::{
-    io::{self, Write},
+    io::{
+        self,
+        Write,
+    },
     marker::PhantomData,
-    sync::mpsc::{self, RecvTimeoutError, Sender},
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    sync::mpsc::{
+        self,
+        RecvTimeoutError,
+        Sender,
+    },
+    thread::{
+        self,
+        JoinHandle,
+    },
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use crate::{
-    CursorVisibility, LayoutMode, RenderCtx, RenderStats, Renderer, Surface, Theme, TickInterest,
+    CursorVisibility,
+    LayoutMode,
+    RenderCtx,
+    RenderStats,
+    Renderer,
+    Surface,
+    Theme,
+    TickInterest,
     WidgetRef,
-    renderer::{layout_surface, usable_columns},
-    stderr_is_terminal, terminal_width_or_default,
+    renderer::{
+        layout_surface,
+        usable_columns,
+    },
+    stderr_is_terminal,
+    terminal_width_or_default,
 };
 
 const DEFAULT_FPS: u16 = 15;
 
 pub struct Runtime<W, H = WidgetRef, F = WidgetRef> {
-    root: H,
-    final_widget: Option<F>,
-    renderer: Renderer<W>,
+    root:           H,
+    final_widget:   Option<F>,
+    renderer:       Renderer<W>,
     frame_interval: Duration,
-    last_draw: Option<Instant>,
-    dirty: bool,
+    last_draw:      Option<Instant>,
+    dirty:          bool,
 }
 
 impl<W, H> Runtime<W, H, WidgetRef>
@@ -207,8 +231,8 @@ enum ThreadFinishMode {
 }
 
 pub struct LiveRuntime<W, H = WidgetRef, F = WidgetRef> {
-    handle: RuntimeHandle,
-    thread: Option<JoinHandle<io::Result<W>>>,
+    handle:       RuntimeHandle,
+    thread:       Option<JoinHandle<io::Result<W>>>,
     widget_types: PhantomData<fn() -> (H, F)>,
 }
 
@@ -217,16 +241,16 @@ pub struct RuntimeHandle {
 }
 
 pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
-    writer: W,
-    root: H,
-    interactive: bool,
-    fps: u16,
-    width: Option<usize>,
-    height: Option<usize>,
-    layout_mode: LayoutMode,
+    writer:            W,
+    root:              H,
+    interactive:       bool,
+    fps:               u16,
+    width:             Option<usize>,
+    height:            Option<usize>,
+    layout_mode:       LayoutMode,
     cursor_visibility: CursorVisibility,
-    theme: Theme,
-    final_widget: Option<F>,
+    theme:             Theme,
+    final_widget:      Option<F>,
 }
 
 impl<W, H> AutoRuntimeBuilder<W, H, WidgetRef>
@@ -305,16 +329,16 @@ where
         G: crate::Widget + Send + 'static,
     {
         AutoRuntimeBuilder {
-            writer: self.writer,
-            root: self.root,
-            interactive: self.interactive,
-            fps: self.fps,
-            width: self.width,
-            height: self.height,
-            layout_mode: self.layout_mode,
+            writer:            self.writer,
+            root:              self.root,
+            interactive:       self.interactive,
+            fps:               self.fps,
+            width:             self.width,
+            height:            self.height,
+            layout_mode:       self.layout_mode,
             cursor_visibility: self.cursor_visibility,
-            theme: self.theme,
-            final_widget: Some(final_widget),
+            theme:             self.theme,
+            final_widget:      Some(final_widget),
         }
     }
 
@@ -334,12 +358,12 @@ where
             AutoRuntime::Live(runtime.start())
         } else {
             AutoRuntime::Plain(PlainRuntime {
-                writer: self.writer,
-                root: self.root,
-                width: self.width,
-                height: self.height,
-                layout_mode: self.layout_mode,
-                theme: self.theme,
+                writer:       self.writer,
+                root:         self.root,
+                width:        self.width,
+                height:       self.height,
+                layout_mode:  self.layout_mode,
+                theme:        self.theme,
                 final_widget: self.final_widget,
             })
         }
@@ -410,12 +434,12 @@ where
 }
 
 pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
-    writer: W,
-    root: H,
-    width: Option<usize>,
-    height: Option<usize>,
-    layout_mode: LayoutMode,
-    theme: Theme,
+    writer:       W,
+    root:         H,
+    width:        Option<usize>,
+    height:       Option<usize>,
+    layout_mode:  LayoutMode,
+    theme:        Theme,
     final_widget: Option<F>,
 }
 
@@ -517,7 +541,7 @@ where
                     Ok(
                         command @ (RuntimeCommand::Dirty
                         | RuntimeCommand::Resize(_)
-                        | RuntimeCommand::ResizeViewport(_, _)),
+                        | RuntimeCommand::ResizeViewport(..)),
                     ) => {
                         apply_command(&mut runtime, &command);
                     },
@@ -536,7 +560,7 @@ where
                     match command {
                         RuntimeCommand::Dirty
                         | RuntimeCommand::Resize(_)
-                        | RuntimeCommand::ResizeViewport(_, _) => {
+                        | RuntimeCommand::ResizeViewport(..) => {
                             apply_command(&mut runtime, &command);
                         },
                         RuntimeCommand::Finish(finish_mode) => {
@@ -549,8 +573,8 @@ where
         });
 
         Self {
-            handle: RuntimeHandle { tx },
-            thread: Some(thread),
+            handle:       RuntimeHandle { tx },
+            thread:       Some(thread),
             widget_types: PhantomData,
         }
     }
@@ -705,14 +729,25 @@ fn fps_interval(fps: u16) -> Duration {
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::{Cell, RefCell},
+        cell::{
+            Cell,
+            RefCell,
+        },
         rc::Rc,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc,
+            Mutex,
+        },
     };
 
-    use crate::{Position, Stack, Style, Widget, local_widget};
-
     use super::*;
+    use crate::{
+        Position,
+        Stack,
+        Style,
+        Widget,
+        local_widget,
+    };
 
     type RecordedFrame = (u64, Option<usize>, Option<usize>);
     type RecordedFrames = Arc<Mutex<Vec<RecordedFrame>>>;
@@ -844,10 +879,10 @@ mod tests {
         synchronous.draw_now(Instant::now()).unwrap();
         synchronous.resize_viewport(5, 2);
         synchronous.draw_now(Instant::now()).unwrap();
-        assert_eq!(
-            synchronous_seen.lock().unwrap().as_slice(),
-            [(0, Some(7), Some(3)), (1, Some(4), Some(2)),],
-        );
+        assert_eq!(synchronous_seen.lock().unwrap().as_slice(), [
+            (0, Some(7), Some(3)),
+            (1, Some(4), Some(2)),
+        ],);
 
         let (live_root, live_seen) = recording_widget();
         let live = Runtime::new(Vec::new(), live_root).viewport(8, 3).start();
@@ -872,9 +907,10 @@ mod tests {
             .start();
         plain.resize_viewport(5, 2).unwrap();
         plain.finish().unwrap();
-        assert_eq!(
-            plain_seen.lock().unwrap().as_slice(),
-            [(0, Some(4), Some(2))],
-        );
+        assert_eq!(plain_seen.lock().unwrap().as_slice(), [(
+            0,
+            Some(4),
+            Some(2)
+        )],);
     }
 }

@@ -1,4 +1,7 @@
-use pound::{Error, Parse};
+use pound::{
+    Error,
+    Parse,
+};
 
 #[derive(Debug, Parse, PartialEq, Eq)]
 struct Shared {
@@ -7,7 +10,7 @@ struct Shared {
     min_count: usize,
     /// history entries to inspect
     #[pound(long, env = "POUND_TEST_HISTORY_LIMIT", default = "1000")]
-    limit: usize,
+    limit:     usize,
 }
 
 #[derive(Debug, Parse, PartialEq, Eq)]
@@ -16,7 +19,7 @@ enum Command {
         #[pound(flatten)]
         shared: Shared,
         #[pound(long, default = "40")]
-        top: usize,
+        top:    usize,
     },
 }
 
@@ -30,18 +33,15 @@ struct Cli {
 #[test]
 fn flattened_options_parse_into_their_own_type() {
     let parsed = Cli::try_parse_from(["scan", "--limit", "25", "--top", "3"]).unwrap();
-    assert_eq!(
-        parsed,
-        Cli {
-            command: Command::Scan {
-                shared: Shared {
-                    min_count: 8,
-                    limit: 25,
-                },
-                top: 3,
+    assert_eq!(parsed, Cli {
+        command: Command::Scan {
+            shared: Shared {
+                min_count: 8,
+                limit:     25,
             },
-        }
-    );
+            top:    3,
+        },
+    });
 }
 
 #[test]
@@ -74,12 +74,12 @@ fn introspection_traverses_flattened_options() {
 #[derive(Debug, Parse, PartialEq, Eq)]
 struct PositionalMiddle {
     second: String,
-    third: String,
+    third:  String,
 }
 
 #[derive(Debug, Parse, PartialEq, Eq)]
 struct InterleavedPositionals {
-    first: String,
+    first:  String,
     #[pound(flatten)]
     middle: PositionalMiddle,
     fourth: String,
@@ -90,17 +90,14 @@ fn direct_and_flattened_positionals_follow_declaration_order() {
     let parsed = InterleavedPositionals::try_parse_from(["one", "two", "three", "four"])
         .expect("interleaved positionals should parse");
 
-    assert_eq!(
-        parsed,
-        InterleavedPositionals {
-            first: "one".to_owned(),
-            middle: PositionalMiddle {
-                second: "two".to_owned(),
-                third: "three".to_owned(),
-            },
-            fourth: "four".to_owned(),
-        }
-    );
+    assert_eq!(parsed, InterleavedPositionals {
+        first:  "one".to_owned(),
+        middle: PositionalMiddle {
+            second: "two".to_owned(),
+            third:  "three".to_owned(),
+        },
+        fourth: "four".to_owned(),
+    });
 
     let names = InterleavedPositionals::SPEC
         .arguments()
@@ -114,7 +111,7 @@ struct BuiltinAliases {
     #[pound(long, alias = "help")]
     assistance: bool,
     #[pound(flatten)]
-    release: ReleaseAlias,
+    release:    ReleaseAlias,
 }
 
 #[derive(Debug, Parse, PartialEq, Eq)]
@@ -129,7 +126,7 @@ fn direct_and_flattened_aliases_override_builtin_long_names() {
         BuiltinAliases::try_parse_from(["--help"]).unwrap(),
         BuiltinAliases {
             assistance: true,
-            release: ReleaseAlias {
+            release:    ReleaseAlias {
                 release_information: false,
             },
         }
@@ -138,7 +135,7 @@ fn direct_and_flattened_aliases_override_builtin_long_names() {
         BuiltinAliases::try_parse_from(["--version"]).unwrap(),
         BuiltinAliases {
             assistance: false,
-            release: ReleaseAlias {
+            release:    ReleaseAlias {
                 release_information: true,
             },
         }
