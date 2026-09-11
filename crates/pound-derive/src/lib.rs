@@ -197,6 +197,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     let mut sub_specs = Vec::new();
     let mut arms = Vec::new();
     let mut uses_spec = false;
+    let mut indexed_variants = 0;
+    let mut last_spec_index = 0;
 
     for (idx, variant) in e.variants.items().enumerate() {
         let (plans, sub) = match analyze(&variant.fields) {
@@ -265,6 +267,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 quote! {}
             } else {
                 uses_spec = true;
+                indexed_variants += 1;
+                last_spec_index = idx;
                 quote! { let __s = spec.subs[#idx].spec; }
             };
             quote! {
@@ -281,6 +285,11 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         quote!(spec)
     } else {
         quote!(_spec)
+    };
+    let spec_assert = if indexed_variants > 1 {
+        quote! { assert!(spec.subs.len() > #last_spec_index); }
+    } else {
+        quote! {}
     };
 
     quote! {
@@ -299,6 +308,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             fn from_matches(#spec_param: &'static ::pound::CommandSpec, m: &::pound::Matches)
                 -> ::core::result::Result<Self, ::pound::Error>
             {
+                #spec_assert
                 match ::pound::Matches::sub(m) {
                     #(#arms)*
                     _ => ::core::result::Result::Err(::pound::Error::MissingSubcommand),
@@ -432,7 +442,8 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         "Positional"
     };
 
-    // long/short only for named kinds, defaulting a long name when neither given.
+    // long/short only for named kinds, defaulting a long name when neither
+    // given.
     let (mut long, mut short) = (None, None);
     if matches!(kind, "Flag" | "Count" | "Opt") {
         if let Some(l) = &a.long {
@@ -569,8 +580,9 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     let vn = &p.value_name;
     e = quote! { #e.value_name(#vn) };
-    // valued kinds pull a possible-value list from a value enum (None otherwise).
-    // custom parsers may target types without FromArg, so they cannot expose one.
+    // valued kinds pull a possible-value list from a value enum (None
+    // otherwise). custom parsers may target types without FromArg, so they
+    // cannot expose one.
     if matches!(
         &p.conversion,
         Some(Conversion::FromArg | Conversion::CheckedFromArg { .. })
