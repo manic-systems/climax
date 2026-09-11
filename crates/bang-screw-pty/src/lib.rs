@@ -8,7 +8,7 @@ use screw::Theme;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessSpec {
     program: String,
-    args: Vec<String>,
+    args:    Vec<String>,
 }
 
 impl ProcessSpec {
@@ -16,7 +16,7 @@ impl ProcessSpec {
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
-            args: Vec::new(),
+            args:    Vec::new(),
         }
     }
 
@@ -66,11 +66,11 @@ pub enum CtrlCPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OverlayConfig {
-    process: ProcessSpec,
+    process:      ProcessSpec,
     input_policy: InputPolicy,
-    placement: OverlayPlacement,
-    ctrl_c: CtrlCPolicy,
-    theme: Theme,
+    placement:    OverlayPlacement,
+    ctrl_c:       CtrlCPolicy,
+    theme:        Theme,
 }
 
 impl OverlayConfig {
@@ -107,7 +107,7 @@ pub struct OverlayBuilder {
 
 impl OverlayBuilder {
     #[must_use]
-    pub fn new(process: ProcessSpec) -> Self {
+    pub const fn new(process: ProcessSpec) -> Self {
         Self {
             config: OverlayConfig {
                 process,

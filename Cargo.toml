@@ -1,15 +1,15 @@
 [workspace]
 members = [
-  "crates/bang-cli",
-  "crates/bang-core",
-  "crates/bang-screw",
-  "crates/bang-screw-pty",
-  "crates/bang-terminal",
-  "crates/climax",
-  "crates/pound",
-  "crates/pound-derive",
-  "crates/screw",
-  "crates/screw-pty",
+	"crates/bang-cli",
+	"crates/bang-core",
+	"crates/bang-screw",
+	"crates/bang-screw-pty",
+	"crates/bang-terminal",
+	"crates/climax",
+	"crates/pound",
+	"crates/pound-derive",
+	"crates/screw",
+	"crates/screw-pty",
 ]
 resolver = "3"
 
