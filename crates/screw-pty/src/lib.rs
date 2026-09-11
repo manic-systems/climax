@@ -55,7 +55,7 @@ impl PtyScreen {
     }
 
     #[must_use]
-    pub fn frame(&self) -> &PtyFrame {
+    pub const fn frame(&self) -> &PtyFrame {
         &self.frame
     }
 
