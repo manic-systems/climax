@@ -271,19 +271,15 @@ impl StatusCoordinator {
     }
 
     fn ensure_runtime(&self) {
+        let mut state = lock(&self.inner.state);
+        if state.mode != StatusMode::Live || state.prompt_active || state.runtime.is_some() {
+            return;
+        }
         if lock(&self.inner.entries).is_empty() {
             return;
         }
-        // Snapshot the fps before starting the thread; the new thread
-        // re-locks entries when `StatusStack` renders, so hold no guards
-        // across `start()`.
-        let fps = {
-            let state = lock(&self.inner.state);
-            if state.mode != StatusMode::Live || state.prompt_active || state.runtime.is_some() {
-                return;
-            }
-            state.fps
-        };
+        // Starting a renderer does not wait for its first frame. Keep state
+        // locked through publication, but release entries before spawning.
         // Capture only the entries map. Handing the whole coordinator to the
         // root widget would make the render thread's root reach back to the
         // runtime that owns it, so the coordinator could never be dropped.
@@ -291,10 +287,10 @@ impl StatusCoordinator {
             entries: Arc::clone(&self.inner.entries),
         });
         let runtime = Runtime::auto(self.inner.writer.clone(), root, true)
-            .fps(fps)
+            .fps(state.fps)
             .width(screw::terminal_width_or_default())
             .start();
-        lock(&self.inner.state).runtime = Some(runtime);
+        state.runtime = Some(runtime);
     }
 
     fn stop_runtime(&self) -> Result<()> {
@@ -448,8 +444,11 @@ fn collect_failure(failure: &mut Option<Error>, result: Result<()>) {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        collections::HashSet,
+        io,
+        sync::{atomic::{AtomicUsize, Ordering}, Barrier},
+    };
 
     use super::*;
 
@@ -508,6 +507,55 @@ mod tests {
             weak.upgrade().is_none(),
             "the render thread's root widget must not own the coordinator"
         );
+    }
+
+    #[test]
+    fn concurrent_statuses_share_one_render_thread() {
+        struct Probe(Arc<Mutex<HashSet<std::thread::ThreadId>>>);
+
+        impl Widget for Probe {
+            fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+                lock(&self.0).insert(std::thread::current().id());
+                out.write("working", screw::Style::PLAIN);
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(HashSet::new()));
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let barrier = Arc::new(Barrier::new(17));
+        let ids = std::thread::scope(|scope| {
+            let mut threads = Vec::new();
+            for _ in 0..16 {
+                let seen = Arc::clone(&seen);
+                let barrier = Arc::clone(&barrier);
+                let coordinator = coordinator.clone();
+                threads.push(scope.spawn(move || {
+                    barrier.wait();
+                    let (id, started) = coordinator.insert(
+                        StatusEntry {
+                            widget: widget(Probe(seen)),
+                            plain: "working".to_owned(),
+                            final_message: None,
+                        },
+                        15,
+                    );
+                    started.unwrap();
+                    id
+                }));
+            }
+            barrier.wait();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        coordinator.stop_runtime().unwrap();
+        assert_eq!(lock(&seen).len(), 1);
+        for id in ids {
+            coordinator.remove(id).unwrap();
+        }
     }
 
     #[test]
