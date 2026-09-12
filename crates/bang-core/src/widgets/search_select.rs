@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use super::navigation::{move_index, no_modifiers, visible_delta};
 use super::{SelectItem, TextInput};
 use crate::{
-    Context, Event, Key, KeyEvent, ListRow, ListView, Reaction, Role, Span, TextInputView, View,
+    Context, Event, Key, ListRow, ListView, Reaction, Role, Span, TextInputView, View,
     ViewContext, ViewId, Widget, WidgetId,
 };
 
@@ -347,29 +348,4 @@ fn highlight_match(label: &str, query: &str, selected: bool) -> Vec<Span> {
         spans.push(Span::new(&label[end..], base_role));
     }
     spans
-}
-
-fn move_index(current: usize, len: usize, delta: isize, wrap: bool) -> Option<usize> {
-    if len == 0 {
-        return None;
-    }
-
-    let current = current.min(len - 1);
-    if wrap {
-        let len = isize::try_from(len).ok()?;
-        let current = isize::try_from(current).ok()?;
-        let next = (current + delta).rem_euclid(len);
-        return usize::try_from(next).ok();
-    }
-
-    let next = current.saturating_add_signed(delta).min(len - 1);
-    Some(next)
-}
-
-fn visible_delta(value: usize) -> isize {
-    isize::try_from(value).unwrap_or(isize::MAX)
-}
-
-const fn no_modifiers(key: &KeyEvent) -> bool {
-    key.modifiers.bits() == 0
 }

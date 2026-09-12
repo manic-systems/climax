@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use super::navigation::no_modifiers;
 use crate::{
-    CalendarDay, CalendarView, CalendarWeek, Context, Date, Event, Key, KeyEvent, Reaction, Role,
+    CalendarDay, CalendarView, CalendarWeek, Context, Date, Event, Key, Reaction, Role,
     Span, Value, View, ViewContext, ViewId, Widget, WidgetId,
 };
 
@@ -260,8 +261,4 @@ const fn days_in_month(year: i32, month: u8) -> u8 {
 
 const fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
-}
-
-const fn no_modifiers(key: &KeyEvent) -> bool {
-    key.modifiers.bits() == 0
 }
