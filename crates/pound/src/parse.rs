@@ -502,8 +502,8 @@ fn positional<'a>(
     Ok(())
 }
 
-/// enforce `required` and group constraints. defaults are injected separately
-/// by `apply_defaults`, so a defaulted arg never counts as missing here.
+/// enforce `required` and group constraints. defaults are resolved later by
+/// `Matches` readers, so a defaulted arg never counts as missing here.
 fn finalise(
     spec: &'static CommandSpec,
     m: &Matches,

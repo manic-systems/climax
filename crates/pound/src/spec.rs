@@ -13,8 +13,8 @@
 //! - match [`Kind`] with a `_` arm
 //! - construct spec types through their `const fn` builders
 //!
-//! `-h`/`--help` (always) and `-V`/`--version` are always present,
-//! either implemented by user or generated on their behalf
+//! `-h`/`--help` are always present, while `-V`/`--version` are generated
+//! only when version or hash metadata exists. users may implement either flag
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
