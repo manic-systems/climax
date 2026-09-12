@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use super::navigation::no_modifiers;
 use crate::{
-    Context, CursorAnchor, Event, Key, KeyEvent, Reaction, Role, Span, TextInputView, Value, View,
+    Context, CursorAnchor, Event, Key, Reaction, Role, Span, TextInputView, Value, View,
     ViewContext, ViewId, Widget, WidgetId,
 };
 
-type Validator = dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static;
+type Validator = dyn Fn(&str) -> Result<(), String> + 'static;
 
 pub struct TextInput {
     id: WidgetId,
@@ -67,7 +68,7 @@ impl TextInput {
     #[must_use]
     pub fn with_validator(
         mut self,
-        validator: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+        validator: impl Fn(&str) -> Result<(), String> + 'static,
     ) -> Self {
         self.validator = Some(Box::new(validator));
         self
@@ -239,8 +240,4 @@ fn next_boundary(value: &str, cursor: usize) -> usize {
 
 fn char_count(value: &str) -> usize {
     value.chars().count()
-}
-
-const fn no_modifiers(key: &KeyEvent) -> bool {
-    key.modifiers.bits() == 0
 }

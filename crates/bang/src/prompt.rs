@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, rc::Rc};
 
 use bang_core::{
     Value,
@@ -159,14 +159,14 @@ impl SearchConfig {
     }
 }
 
-type Validator = dyn Fn(&str) -> std::result::Result<(), String> + Send + Sync + 'static;
+type Validator = dyn Fn(&str) -> std::result::Result<(), String> + 'static;
 
 #[derive(Clone, Default)]
 pub struct TextConfig {
     id: Option<String>,
     value: Option<String>,
     placeholder: Option<String>,
-    validator: Option<Arc<Validator>>,
+    validator: Option<Rc<Validator>>,
 }
 
 impl TextConfig {
@@ -191,9 +191,9 @@ impl TextConfig {
     #[must_use]
     pub fn validator(
         mut self,
-        validator: impl Fn(&str) -> std::result::Result<(), String> + Send + Sync + 'static,
+        validator: impl Fn(&str) -> std::result::Result<(), String> + 'static,
     ) -> Self {
-        self.validator = Some(Arc::new(validator));
+        self.validator = Some(Rc::new(validator));
         self
     }
 }
@@ -878,7 +878,7 @@ impl TextPrompt {
     #[must_use]
     pub fn validator(
         mut self,
-        validator: impl Fn(&str) -> std::result::Result<(), String> + Send + Sync + 'static,
+        validator: impl Fn(&str) -> std::result::Result<(), String> + 'static,
     ) -> Self {
         self.config = self.config.validator(validator);
         self
@@ -1058,6 +1058,7 @@ fn resolve_review<T, A>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn prompt_specific_configs_cover_normal_presentation_state() {
@@ -1290,6 +1291,41 @@ mod tests {
             .unwrap();
         assert_eq!(selected, PromptOutcome::Submit(20));
         assert_eq!(text, PromptOutcome::Submit("Ada".to_owned()));
+    }
+
+    #[test]
+    fn cloned_text_prompt_accepts_local_validator() {
+        let values = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&values);
+        let prompt = text("name")
+            .validator(move |value| {
+                seen.borrow_mut().push(value.to_owned());
+                (!value.is_empty())
+                    .then_some(())
+                    .ok_or_else(|| "empty".to_owned())
+            })
+            .interaction(crate::advanced::scripted_interaction([
+                vec![
+                    bang_core::Event::key(bang_core::Key::Enter),
+                    bang_core::Event::char('A'),
+                    bang_core::Event::key(bang_core::Key::Enter),
+                ],
+                vec![
+                    bang_core::Event::char('B'),
+                    bang_core::Event::key(bang_core::Key::Enter),
+                ],
+            ]));
+        let cloned = prompt.clone();
+
+        assert_eq!(
+            prompt.interact().unwrap(),
+            PromptOutcome::Submit("A".to_owned())
+        );
+        assert_eq!(
+            cloned.interact().unwrap(),
+            PromptOutcome::Submit("B".to_owned())
+        );
+        assert_eq!(*values.borrow(), ["", "A", "B"]);
     }
 
     #[test]
