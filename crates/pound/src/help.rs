@@ -50,6 +50,17 @@ fn usage_positional(a: &ArgSpec) -> String {
     }
 }
 
+/// the `=VALUE` tail of a long option, bracketed when the value may be omitted
+#[cfg(feature = "help")]
+fn value_suffix(a: &ArgSpec) -> String {
+    let meta = metavar(a);
+    if a.default_missing.is_some() {
+        format!("[={meta}]")
+    } else {
+        format!("={meta}")
+    }
+}
+
 /// the long spelling, folding a `no-` negation into the `--[no-]name` form and
 /// listing any other negation as a second spelling
 #[cfg(feature = "help")]
@@ -72,8 +83,7 @@ fn invocation(a: &ArgSpec) -> String {
             s.push_str(", ");
             s.push_str(&long_form(a, l));
             if takes_value {
-                s.push('=');
-                s.push_str(&metavar(a));
+                s.push_str(&value_suffix(a));
             }
         },
         (Some(c), None) => {
@@ -81,15 +91,18 @@ fn invocation(a: &ArgSpec) -> String {
             s.push(c);
             if takes_value {
                 s.push(' ');
-                s.push_str(&metavar(a));
+                if a.default_missing.is_some() {
+                    let _ = write!(s, "[{}]", metavar(a));
+                } else {
+                    s.push_str(&metavar(a));
+                }
             }
         },
         (None, Some(l)) => {
             s.push_str("    ");
             s.push_str(&long_form(a, l));
             if takes_value {
-                s.push('=');
-                s.push_str(&metavar(a));
+                s.push_str(&value_suffix(a));
             }
         },
         (None, None) => s.push_str(&metavar(a)),

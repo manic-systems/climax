@@ -25,6 +25,8 @@ pub struct Pound {
     pub global: bool,
     pub group: Option<String>,
     pub default: Option<String>,
+    /// value an option takes when written with no `=value`
+    pub default_missing: Option<String>,
     pub env: Option<String>,
     /// `None` absent, `Some(None)` bare `negate`, which infers `no-<long>`
     pub negate: Option<Option<String>>,
@@ -110,6 +112,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "global" => out.global = true,
             "group" => out.group = value,
             "default" => out.default = value,
+            "default_missing" => out.default_missing = value,
             "env" => out.env = value,
             "negate" => {
                 out.negate = Some(value.map(|v| v.trim_start_matches('-').to_owned()));

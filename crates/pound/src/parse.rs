@@ -311,9 +311,7 @@ fn apply_named<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => it
-                    .next()
-                    .ok_or_else(|| Error::MissingValue(a.display_name()))?,
+                None => detached_value(&a, it)?,
             };
             push_value(&a, &mut m.slots[idx], value);
         },
@@ -389,11 +387,20 @@ fn cluster_value<'a>(
 ) -> Result<&'a str, Error> {
     let rest = &cluster[off + ch.len_utf8()..];
     if rest.is_empty() {
-        it.next()
-            .ok_or_else(|| Error::MissingValue(a.display_name()))
+        detached_value(a, it)
     } else {
         Ok(rest)
     }
+}
+
+/// the value for an option written without an attached one. an option that
+/// declares `default_missing` takes that instead of eating the next token.
+fn detached_value<'a>(a: &ArgSpec, it: &mut IntoIter<&'a str>) -> Result<&'a str, Error> {
+    if let Some(missing) = a.default_missing {
+        return Ok(missing);
+    }
+    it.next()
+        .ok_or_else(|| Error::MissingValue(a.display_name()))
 }
 
 fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
@@ -450,9 +457,7 @@ fn record_global<'a>(
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => it
-                    .next()
-                    .ok_or_else(|| Error::MissingValue(g.display_name()))?,
+                None => detached_value(g, it)?,
             };
             hits.push(GlobalHit {
                 arg: g,
@@ -758,6 +763,21 @@ mod tests {
             parse(&SPEC, &["--no-color=1"]),
             Err(Error::UnexpectedValue(_))
         ));
+    }
+
+    #[test]
+    fn optional_value_leaves_the_next_token_alone() {
+        const ARGS: &[ArgSpec] = &[
+            ArgSpec::new(Kind::Opt).long("color").default_missing("always"),
+            ArgSpec::new(Kind::Positional).value_name("file"),
+        ];
+        const SPEC: CommandSpec = CommandSpec::new("o").args(ARGS);
+
+        let m = parse(&SPEC, &["--color", "x.txt"]).unwrap();
+        assert_eq!(m.raw(0), Some("always"));
+        assert_eq!(m.raw(1), Some("x.txt"));
+
+        assert_eq!(parse(&SPEC, &["--color=never"]).unwrap().raw(0), Some("never"));
     }
 
     #[test]
