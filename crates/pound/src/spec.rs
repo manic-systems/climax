@@ -62,6 +62,8 @@ pub struct ArgSpec {
     pub negate: Option<&'static str>,
     pub value_name: &'static str,
     pub help: &'static str,
+    /// section this arg is listed under in help, `Options` when unset
+    pub heading: Option<&'static str>,
     pub possible: Option<&'static [&'static str]>,
     /// kept out of help output, but accepted by parser
     pub hidden: bool,
@@ -85,6 +87,7 @@ impl ArgSpec {
             negate: None,
             value_name: "",
             help: "",
+            heading: None,
             possible: None,
             hidden: false,
             global: false,
@@ -160,6 +163,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn help(mut self, help: &'static str) -> Self {
         self.help = help;
+        self
+    }
+
+    #[must_use]
+    pub const fn heading(mut self, heading: &'static str) -> Self {
+        self.heading = Some(heading);
         self
     }
 

@@ -32,6 +32,8 @@ pub struct Pound {
     pub negate: Option<Option<String>>,
     pub value_name: Option<String>,
     pub help: Option<String>,
+    /// help section this arg is listed under
+    pub heading: Option<String>,
     pub name: Option<String>,
     pub version: Option<String>,
     /// field-level: minimum accepted parsed value
@@ -119,6 +121,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             },
             "value_name" => out.value_name = value,
             "help" => out.help = value,
+            "heading" => out.heading = value,
             "name" => out.name = value,
             "version" => out.version = value,
             "min" => out.min = value,

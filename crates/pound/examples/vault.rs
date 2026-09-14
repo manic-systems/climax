@@ -196,11 +196,11 @@ enum Cmd {
 #[pound(name = "vault", version = "0.1.0", required_group = "auth")]
 struct Cli {
     /// unlock with this token
-    #[pound(long, group = "auth")]
+    #[pound(long, group = "auth", heading = "Authentication")]
     token: Option<String>,
 
     /// unlock with this key file (exactly one auth method is required)
-    #[pound(long, group = "auth")]
+    #[pound(long, group = "auth", heading = "Authentication")]
     key_file: Option<String>,
 
     /// active namespace (also accepts --ns)
