@@ -94,6 +94,7 @@ struct Plan {
     heading:         Option<String>,
     aliases:         Vec<String>,
     conflicts_with:  Vec<String>,
+    requires:        Vec<String>,
     hidden:          bool,
     global:          bool,
     card:            Card,
@@ -124,10 +125,14 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
         Ok(c) => c,
         Err(e) => return err(&e),
     };
+    let requires = match require_pairs(&plans) {
+        Ok(r) => index_pairs(&r),
+        Err(e) => return err(&e),
+    };
     let args = plans.iter().map(arg_expr);
     let default_asserts = plans.iter().filter_map(default_assert);
     let groups = group_exprs(&plans, &item.required_groups);
-    let conflicts = conflict_tokens(&conflicts);
+    let conflicts = index_pairs(&conflicts);
     let (subs, sub_optional) = sub_parts(sub.as_ref());
     let name_expr = name_expr(&item);
     let version_expr = version_expr(&item);
@@ -165,6 +170,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                 const ARGS: &[::pound::ArgSpec] = &[ #(#args),* ];
                 const GROUPS: &[::pound::GroupSpec] = &[ #(#groups),* ];
                 const CONFLICTS: &[(usize, usize)] = #conflicts;
+                const REQUIRES: &[(usize, usize)] = #requires;
                 const CMD: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
@@ -173,6 +179,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                     .args(ARGS)
                     .groups(GROUPS)
                     .conflicts(CONFLICTS)
+                    .requires(REQUIRES)
                     .subs(#subs)
                     #sub_optional_call;
                 &CMD
@@ -230,14 +237,19 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             Ok(c) => c,
             Err(msg) => return err(&msg),
         };
+        let requires = match require_pairs(&plans) {
+            Ok(r) => index_pairs(&r),
+            Err(msg) => return err(&msg),
+        };
         let args = plans.iter().map(arg_expr);
         let default_asserts = plans.iter().filter_map(default_assert);
         let groups = group_exprs(&plans, &vattr.required_groups);
-        let conflicts = conflict_tokens(&conflicts);
+        let conflicts = index_pairs(&conflicts);
         let (subs, sub_optional) = sub_parts(sub.as_ref());
         let ak = format_ident!("ARGS{}", idx);
         let gk = format_ident!("GROUPS{}", idx);
         let xk = format_ident!("CONFLICTS{}", idx);
+        let rk = format_ident!("REQUIRES{}", idx);
         let ck = format_ident!("CMD{}", idx);
         // parameterless builders, so only chain them when the flag is set.
         let sub_optional_call = if sub_optional {
@@ -251,12 +263,14 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             const #ak: &[::pound::ArgSpec] = &[ #(#args),* ];
             const #gk: &[::pound::GroupSpec] = &[ #(#groups),* ];
             const #xk: &[(usize, usize)] = #conflicts;
+            const #rk: &[(usize, usize)] = #requires;
             const #ck: ::pound::CommandSpec = ::pound::CommandSpec::new(#sub_name)
                 #about_call
                 #long_about_call
                 .args(#ak)
                 .groups(#gk)
                 .conflicts(#xk)
+                .requires(#rk)
                 .subs(#subs)
                 #sub_optional_call;
         });
@@ -544,6 +558,7 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         heading: a.heading,
         aliases: a.aliases,
         conflicts_with: a.conflicts_with,
+        requires: a.requires,
         hidden: a.hidden,
         global: a.global,
         card,
@@ -859,6 +874,28 @@ fn validate_globals(plans: &[Plan]) -> Result<(), String> {
     Ok(())
 }
 
+// resolve field-level requires names to index pairs. direction carries meaning
+// here, so unlike conflicts these are not normalised.
+fn require_pairs(plans: &[Plan]) -> Result<Vec<(usize, usize)>, String> {
+    let index: HashMap<String, usize> = plans
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.ident.to_string(), i))
+        .collect();
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for (i, p) in plans.iter().enumerate() {
+        for name in &p.requires {
+            let j = *index
+                .get(name)
+                .ok_or_else(|| format!("pound: requires: no field named `{name}`"))?;
+            if i != j && !pairs.contains(&(i, j)) {
+                pairs.push((i, j));
+            }
+        }
+    }
+    Ok(pairs)
+}
+
 // resolve field-level conflicts_with names to normalised, deduped index pairs.
 fn conflict_pairs(plans: &[Plan]) -> Result<Vec<(usize, usize)>, String> {
     let index: HashMap<String, usize> = plans
@@ -884,8 +921,8 @@ fn conflict_pairs(plans: &[Plan]) -> Result<Vec<(usize, usize)>, String> {
     Ok(pairs)
 }
 
-// the `&[(usize, usize)]` token list for a conflict-pair set.
-fn conflict_tokens(pairs: &[(usize, usize)]) -> TokenStream2 {
+// the `&[(usize, usize)]` token list for a set of index pairs.
+fn index_pairs(pairs: &[(usize, usize)]) -> TokenStream2 {
     let items = pairs.iter().map(|(a, b)| quote! { (#a, #b) });
     quote! { &[ #(#items),* ] }
 }

@@ -542,6 +542,16 @@ fn positional<'a>(
     Ok(())
 }
 
+/// whether an arg will have a value by the time it is read. a fallback is
+/// resolved later, so declaring one already counts.
+fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
+    let a = spec.args[i];
+    m.slots[i].count > 0
+        || !m.slots[i].values.is_empty()
+        || a.default.is_some()
+        || a.env.is_some()
+}
+
 /// enforce `required` and group constraints. defaults are injected separately
 /// by `apply_defaults`, so a defaulted arg never counts as missing here.
 fn finalise(
@@ -550,10 +560,17 @@ fn finalise(
     globals: &[&'static ArgSpec],
 ) -> Result<(), ErrorKind> {
     for (i, a) in spec.args.iter().enumerate() {
-        // fallback is resolved later, so it counts as present
-        let present = m.slots[i].count > 0 || !m.slots[i].values.is_empty();
-        if !present && a.default.is_none() && a.env.is_none() && a.required {
+        if !supplied(spec, m, i) && a.required {
             return Err(ErrorKind::MissingRequired(a.display_name()));
+        }
+    }
+
+    for &(a, b) in spec.requires {
+        if m.slots[a].count > 0 && !supplied(spec, m, b) {
+            return Err(ErrorKind::Requires {
+                arg: spec.args[a].display_name(),
+                needs: spec.args[b].display_name(),
+            });
         }
     }
 
@@ -718,6 +735,7 @@ mod tests {
         args: FLAT_ARGS,
         groups: &[],
         conflicts: &[],
+        requires: &[],
         subs: &[],
         sub_optional: false,
     };
@@ -825,6 +843,7 @@ mod tests {
             args: ARGS,
             groups: &[],
             conflicts: &[],
+            requires: &[],
             subs: &[],
             sub_optional: false,
         };
@@ -894,6 +913,7 @@ mod tests {
             args: ARGS,
             groups: &[GroupSpec::new("mode")],
             conflicts: &[],
+            requires: &[],
             subs: &[],
             sub_optional: false,
         };
@@ -911,6 +931,23 @@ mod tests {
     }
 
     #[test]
+    fn requires_obliges_the_other_arg() {
+        const ARGS: &[ArgSpec] = &[
+            ArgSpec::new(Kind::Opt).long("output"),
+            ArgSpec::new(Kind::Opt).long("format"),
+        ];
+        const SPEC: CommandSpec = CommandSpec::new("r").args(ARGS).requires(&[(0, 1)]);
+
+        assert!(parse(&SPEC, &[]).is_ok());
+        assert!(parse(&SPEC, &["--format", "json"]).is_ok());
+        assert!(parse(&SPEC, &["--output", "f", "--format", "json"]).is_ok());
+        assert!(matches!(
+            parse(&SPEC, &["--output", "f"]),
+            Err(ErrorKind::Requires { .. })
+        ));
+    }
+
+    #[test]
     fn conflict_pairs() {
         const ARGS: &[ArgSpec] = &[
             ArgSpec::new(Kind::Flag).long("a"),
@@ -925,6 +962,7 @@ mod tests {
             args: ARGS,
             groups: &[],
             conflicts: &[(0, 1)],
+            requires: &[],
             subs: &[],
             sub_optional: false,
         };
@@ -950,6 +988,7 @@ mod tests {
         args: ADD_ARGS,
         groups: &[],
         conflicts: &[],
+        requires: &[],
         subs: &[],
         sub_optional: false,
     };
@@ -969,6 +1008,7 @@ mod tests {
         args: &[],
         groups: &[],
         conflicts: &[],
+        requires: &[],
         subs: ROOT_SUBS,
         sub_optional: false,
     };

@@ -317,6 +317,8 @@ pub struct CommandSpec {
     pub groups: &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
     pub conflicts: &'static [(usize, usize)],
+    /// pairs where setting the first arg obliges the second
+    pub requires: &'static [(usize, usize)],
     pub subs: &'static [SubSpec],
     /// when true, a missing subcommand is allowed rather than showing help
     pub sub_optional: bool,
@@ -335,6 +337,7 @@ impl CommandSpec {
             args: &[],
             groups: &[],
             conflicts: &[],
+            requires: &[],
             subs: &[],
             sub_optional: false,
         }
@@ -384,6 +387,12 @@ impl CommandSpec {
     #[must_use]
     pub const fn conflicts(mut self, conflicts: &'static [(usize, usize)]) -> Self {
         self.conflicts = conflicts;
+        self
+    }
+
+    #[must_use]
+    pub const fn requires(mut self, requires: &'static [(usize, usize)]) -> Self {
+        self.requires = requires;
         self
     }
 

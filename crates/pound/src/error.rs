@@ -42,6 +42,8 @@ pub enum ErrorKind {
         first: String,
         second: String,
     },
+    /// an arg was set without the other arg it obliges
+    Requires { arg: String, needs: String },
     /// a required group had none of its members set
     MissingGroup { group: String, options: String },
     /// `-h` / `--help`, payload is rendered help
@@ -87,6 +89,7 @@ impl fmt::Display for ErrorKind {
                     write!(f, "{first} and {second} cannot be used together ({group})")
                 }
             },
+            Self::Requires { arg, needs } => write!(f, "{arg} requires {needs}"),
             Self::MissingGroup { group, options } => {
                 write!(f, "one of {options} is required ({group})")
             },

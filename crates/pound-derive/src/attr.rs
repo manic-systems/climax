@@ -52,6 +52,8 @@ pub struct Pound {
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
     pub conflicts_with: Vec<String>,
+    /// field-level: names of fields this one obliges when set
+    pub requires: Vec<String>,
     /// extra long names (fields) or command names (variants) that also match
     pub aliases: Vec<String>,
 }
@@ -160,6 +162,11 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "conflicts_with" => {
                 if let Some(v) = value {
                     out.conflicts_with.extend(csv(&v));
+                }
+            },
+            "requires" => {
+                if let Some(v) = value {
+                    out.requires.extend(csv(&v));
                 }
             },
             "alias" => {
