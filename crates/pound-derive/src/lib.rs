@@ -125,6 +125,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
         Err(e) => return err(&e),
     };
     let args = plans.iter().map(arg_expr);
+    let default_asserts = plans.iter().filter_map(default_assert);
     let groups = group_exprs(&plans, &item.required_groups);
     let conflicts = conflict_tokens(&conflicts);
     let (subs, sub_optional) = sub_parts(sub.as_ref());
@@ -160,6 +161,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     quote! {
         impl ::pound::Parse for #name {
             const SPEC: &'static ::pound::CommandSpec = {
+                #(#default_asserts)*
                 const ARGS: &[::pound::ArgSpec] = &[ #(#args),* ];
                 const GROUPS: &[::pound::GroupSpec] = &[ #(#groups),* ];
                 const CONFLICTS: &[(usize, usize)] = #conflicts;
@@ -229,6 +231,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             Err(msg) => return err(&msg),
         };
         let args = plans.iter().map(arg_expr);
+        let default_asserts = plans.iter().filter_map(default_assert);
         let groups = group_exprs(&plans, &vattr.required_groups);
         let conflicts = conflict_tokens(&conflicts);
         let (subs, sub_optional) = sub_parts(sub.as_ref());
@@ -244,6 +247,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         };
         let hidden_call = if hidden { quote!(.hidden()) } else { quote!() };
         sub_consts.push(quote! {
+            #(#default_asserts)*
             const #ak: &[::pound::ArgSpec] = &[ #(#args),* ];
             const #gk: &[::pound::GroupSpec] = &[ #(#groups),* ];
             const #xk: &[(usize, usize)] = #conflicts;
@@ -602,6 +606,29 @@ fn strip_wrapper(toks: &[TokenTree], wrapper: &str) -> Option<TokenStream2> {
 }
 
 // --- emit helpers
+
+// a const assertion that a declared default is one of its type's values. only
+// a `FromArg` conversion exposes a value list, so a custom parser gets none.
+fn default_assert(p: &Plan) -> Option<TokenStream2> {
+    let default = p.default.as_ref()?;
+    if !matches!(
+        p.conversion,
+        Some(Conversion::FromArg | Conversion::CheckedFromArg { .. })
+    ) {
+        return None;
+    }
+    let inner = &p.inner_ty;
+    let message = format!(
+        "pound: default \"{default}\" is not one of the possible values for `{}`",
+        p.ident
+    );
+    Some(quote! {
+        const _: () = ::core::assert!(
+            ::pound::default_allowed(#default, <#inner as ::pound::FromArg>::POSSIBLE),
+            #message
+        );
+    })
+}
 
 fn arg_expr(p: &Plan) -> TokenStream2 {
     let kind = format_ident!("{}", p.kind);

@@ -75,6 +75,7 @@ pub use spec::{
 pub use value::{
     FromArg,
     ValueError,
+    default_allowed,
 };
 
 /// the trait the derive targets
