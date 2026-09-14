@@ -50,6 +50,10 @@ pub struct ArgSpec {
     pub required: bool,
     /// `Vec<T>` field, accept the option/positional more than once
     pub multi: bool,
+    /// fewest values a `multi` arg accepts, waived when a fallback fills it
+    pub min_values: Option<usize>,
+    /// most values a `multi` arg accepts
+    pub max_values: Option<usize>,
     pub group: Option<&'static str>,
     pub default: Option<&'static str>,
     /// value a [`Kind::Opt`] takes when given with no `=value`, which also
@@ -82,6 +86,8 @@ impl ArgSpec {
             kind,
             required: false,
             multi: false,
+            min_values: None,
+            max_values: None,
             group: None,
             default: None,
             default_missing: None,
@@ -124,6 +130,18 @@ impl ArgSpec {
     #[must_use]
     pub const fn multi(mut self) -> Self {
         self.multi = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn min_values(mut self, min_values: usize) -> Self {
+        self.min_values = Some(min_values);
+        self
+    }
+
+    #[must_use]
+    pub const fn max_values(mut self, max_values: usize) -> Self {
+        self.max_values = Some(max_values);
         self
     }
 
