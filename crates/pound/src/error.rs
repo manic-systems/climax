@@ -44,6 +44,18 @@ pub enum ErrorKind {
     },
     /// an arg was set without the other arg it obliges
     Requires { arg: String, needs: String },
+    /// a list arg got fewer values than it accepts
+    TooFewValues {
+        arg: String,
+        min: usize,
+        got: usize,
+    },
+    /// a list arg got more values than it accepts
+    TooManyValues {
+        arg: String,
+        max: usize,
+        got: usize,
+    },
     /// a required group had none of its members set
     MissingGroup { group: String, options: String },
     /// `-h` / `--help`, payload is rendered help
@@ -90,6 +102,12 @@ impl fmt::Display for ErrorKind {
                 }
             },
             Self::Requires { arg, needs } => write!(f, "{arg} requires {needs}"),
+            Self::TooFewValues { arg, min, got } => {
+                write!(f, "{arg} takes at least {min} values, got {got}")
+            },
+            Self::TooManyValues { arg, max, got } => {
+                write!(f, "{arg} takes at most {max} values, got {got}")
+            },
             Self::MissingGroup { group, options } => {
                 write!(f, "one of {options} is required ({group})")
             },

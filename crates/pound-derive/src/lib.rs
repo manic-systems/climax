@@ -83,6 +83,8 @@ struct Plan {
     short:           Option<char>,
     required:        bool,
     multi:           bool,
+    min_values:      Option<usize>,
+    max_values:      Option<usize>,
     group:           Option<String>,
     default:         Option<String>,
     default_missing: Option<String>,
@@ -469,6 +471,35 @@ fn negation(
     Ok(Some(spelling.clone().unwrap_or_else(|| format!("no-{name}"))))
 }
 
+// the `min_values`/`max_values` bounds, which only a `Vec` field can satisfy.
+fn arity(
+    a: &Pound,
+    multi: bool,
+    ident: &proc_macro2::Ident,
+) -> Result<(Option<usize>, Option<usize>), String> {
+    let read = |name: &str, raw: Option<&String>| match raw {
+        None => Ok(None),
+        Some(_) if !multi => Err(format!(
+            "pound: #[pound({name})] needs a `Vec` field (`{ident}`)"
+        )),
+        Some(text) => text
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| format!("pound: #[pound({name} = {text})] is not a count (`{ident}`)")),
+    };
+
+    let min = read("min_values", a.min_values.as_ref())?;
+    let max = read("max_values", a.max_values.as_ref())?;
+    if let (Some(min), Some(max)) = (min, max)
+        && min > max
+    {
+        return Err(format!(
+            "pound: min_values {min} exceeds max_values {max} (`{ident}`)"
+        ));
+    }
+    Ok((min, max))
+}
+
 fn check_kind(a: &Pound, kind: &str, ident: &proc_macro2::Ident) -> Result<(), String> {
     if a.heading.is_some() && !matches!(kind, "Flag" | "Count" | "Opt") {
         return Err(format!(
@@ -522,6 +553,7 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
     let long_help = a.long_help.clone().or_else(|| (help != doc).then(|| doc.clone()));
 
     check_kind(&a, kind, &field.name)?;
+    let (min_values, max_values) = arity(&a, card == Card::Many, &field.name)?;
     let negate = negation(&a, kind, long.as_deref(), &field.name)?;
 
     let required = matches!(kind, "Opt" | "Positional" | "Trailing")
@@ -547,6 +579,8 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         short,
         required,
         multi: card == Card::Many,
+        min_values,
+        max_values,
         group: a.group,
         default: a.default,
         default_missing: a.default_missing,
@@ -659,6 +693,12 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     if p.multi {
         e = quote! { #e.multi() };
+    }
+    if let Some(n) = p.min_values {
+        e = quote! { #e.min_values(#n) };
+    }
+    if let Some(n) = p.max_values {
+        e = quote! { #e.max_values(#n) };
     }
     if let Some(g) = &p.group {
         e = quote! { #e.group(#g) };

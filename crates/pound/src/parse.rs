@@ -542,6 +542,32 @@ fn positional<'a>(
     Ok(())
 }
 
+/// enforce a list arg's arity. an absent arg with a fallback is left alone,
+/// since the fallback supplies the one value the reader will see.
+fn count_values(a: &ArgSpec, got: usize) -> Result<(), ErrorKind> {
+    let filled_by_fallback = got == 0 && (a.default.is_some() || a.env.is_some());
+    if let Some(min) = a.min_values
+        && got < min
+        && !filled_by_fallback
+    {
+        return Err(ErrorKind::TooFewValues {
+            arg: a.display_name(),
+            min,
+            got,
+        });
+    }
+    if let Some(max) = a.max_values
+        && got > max
+    {
+        return Err(ErrorKind::TooManyValues {
+            arg: a.display_name(),
+            max,
+            got,
+        });
+    }
+    Ok(())
+}
+
 /// whether an arg will have a value by the time it is read. a fallback is
 /// resolved later, so declaring one already counts.
 fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
@@ -563,6 +589,7 @@ fn finalise(
         if !supplied(spec, m, i) && a.required {
             return Err(ErrorKind::MissingRequired(a.display_name()));
         }
+        count_values(a, m.slots[i].values.len())?;
     }
 
     for &(a, b) in spec.requires {
@@ -928,6 +955,27 @@ mod tests {
         assert!(parse(&OPT, &["--flake"]).is_ok());
         assert!(parse(&OPT, &[]).is_ok()); // not required, zero is fine
         assert!(matches!(parse(&REQ, &[]), Err(ErrorKind::MissingGroup { .. })));
+    }
+
+    #[test]
+    fn value_counts_are_bounded() {
+        const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Positional)
+            .value_name("file")
+            .multi()
+            .min_values(1)
+            .max_values(2)];
+        const SPEC: CommandSpec = CommandSpec::new("c").args(ARGS);
+
+        assert!(parse(&SPEC, &["a"]).is_ok());
+        assert!(parse(&SPEC, &["a", "b"]).is_ok());
+        assert!(matches!(
+            parse(&SPEC, &[]),
+            Err(ErrorKind::TooFewValues { .. })
+        ));
+        assert!(matches!(
+            parse(&SPEC, &["a", "b", "c"]),
+            Err(ErrorKind::TooManyValues { .. })
+        ));
     }
 
     #[test]

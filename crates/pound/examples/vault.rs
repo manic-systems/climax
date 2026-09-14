@@ -103,8 +103,8 @@ enum Cmd {
         /// secret type hint (short overridden to -K so -k stays free)
         #[pound(short = 'K', long)]
         kind: Option<Kind>,
-        /// tag for grouping (repeatable)
-        #[pound(short, long)]
+        /// tag for grouping (repeatable, at most four)
+        #[pound(short, long, max_values = 4)]
         tag: Vec<String>,
         /// expire after this long, e.g. 30m, 2h, 7d (custom `FromArg`)
         #[pound(long)]
