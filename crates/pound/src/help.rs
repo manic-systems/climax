@@ -171,19 +171,20 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         .filter(|a| a.is_positional())
         .map(|&a| (usage_positional(a), help_text(a)))
         .collect();
-    if !positionals.is_empty() {
-        out.push_str("\nArguments:\n");
-        push_rows(&mut out, &positionals);
+
+    let mut sections = vec![("Options", vec![])];
+    for &a in visible_args.iter().filter(|a| !a.is_positional()) {
+        let heading = a.heading.unwrap_or("Options");
+        let row = (invocation(a), help_text(a));
+        match sections.iter_mut().find(|(name, _)| *name == heading) {
+            Some((_, rows)) => rows.push(row),
+            None => sections.push((heading, vec![row])),
+        }
     }
 
-    out.push_str("\nOptions:\n");
-    let mut rows: Vec<(String, String)> = visible_args
-        .iter()
-        .filter(|a| !a.is_positional())
-        .map(|&a| (invocation(a), help_text(a)))
-        .collect();
+    let builtins = &mut sections[0].1;
     if spec.find_short('h').is_none() && spec.find_long("help").is_none() {
-        rows.push((
+        builtins.push((
             "-h, --help".to_owned(),
             "display this help and exit".to_owned(),
         ));
@@ -192,21 +193,41 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         && spec.find_short('V').is_none()
         && spec.find_long("version").is_none()
     {
-        rows.push((
+        builtins.push((
             "-V, --version".to_owned(),
             "output version information and exit".to_owned(),
         ));
     }
-    push_rows(&mut out, &rows);
 
     let grows: Vec<(String, String)> = globals
         .iter()
         .filter(|a| !a.hidden)
         .map(|&a| (invocation(a), help_text(a)))
         .collect();
+
+    // one width across every section, so the help column lines up throughout
+    let width = positionals
+        .iter()
+        .chain(sections.iter().flat_map(|(_, rows)| rows))
+        .chain(&grows)
+        .map(|(left, _)| left.len())
+        .max()
+        .unwrap_or(0);
+
+    if !positionals.is_empty() {
+        out.push_str("\nArguments:\n");
+        push_rows(&mut out, &positionals, width);
+    }
+    for (heading, rows) in &sections {
+        if rows.is_empty() {
+            continue;
+        }
+        let _ = write!(out, "\n{heading}:\n");
+        push_rows(&mut out, rows, width);
+    }
     if !grows.is_empty() {
         out.push_str("\nGlobal options:\n");
-        push_rows(&mut out, &grows);
+        push_rows(&mut out, &grows, width);
     }
 
     out.truncate(out.trim_end().len());
@@ -214,8 +235,7 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
 }
 
 #[cfg(feature = "help")]
-fn push_rows(out: &mut String, rows: &[(String, String)]) {
-    let width = rows.iter().map(|(l, _)| l.len()).max().unwrap_or(0);
+fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
     for (left, help) in rows {
         if help.is_empty() {
             let _ = writeln!(out, "  {left}");

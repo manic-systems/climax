@@ -90,6 +90,7 @@ struct Plan {
     negate:          Option<String>,
     value_name:      String,
     help:            String,
+    heading:         Option<String>,
     aliases:         Vec<String>,
     conflicts_with:  Vec<String>,
     hidden:          bool,
@@ -459,6 +460,14 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         }
     }
 
+    if a.heading.is_some() && !matches!(kind, "Flag" | "Count" | "Opt") {
+        return Err(format!(
+            "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
+             Arguments (`{}`)",
+            field.name
+        ));
+    }
+
     if a.default_missing.is_some() && kind != "Opt" {
         return Err(format!(
             "pound: #[pound(default_missing)] needs a value option (short/long) (`{}`)",
@@ -515,6 +524,7 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         negate,
         value_name: a.value_name.unwrap_or(fname),
         help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
+        heading: a.heading,
         aliases: a.aliases,
         conflicts_with: a.conflicts_with,
         hidden: a.hidden,
@@ -613,6 +623,9 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     if !p.aliases.is_empty() {
         let al = &p.aliases;
         e = quote! { #e.aliases(&[ #(#al),* ]) };
+    }
+    if let Some(h) = &p.heading {
+        e = quote! { #e.heading(#h) };
     }
     let vn = &p.value_name;
     e = quote! { #e.value_name(#vn) };
