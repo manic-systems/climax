@@ -77,26 +77,27 @@ enum Conversion {
 // the resolved plan for one field.
 #[allow(clippy::struct_excessive_bools)]
 struct Plan {
-    ident:          proc_macro2::Ident,
-    kind:           &'static str,
-    long:           Option<String>,
-    short:          Option<char>,
-    required:       bool,
-    multi:          bool,
-    group:          Option<String>,
-    default:        Option<String>,
-    env:            Option<String>,
-    negate:         Option<String>,
-    value_name:     String,
-    help:           String,
-    aliases:        Vec<String>,
-    conflicts_with: Vec<String>,
-    hidden:         bool,
-    global:         bool,
-    card:           Card,
-    conversion:     Option<Conversion>,
-    inner_ty:       TokenStream2,
-    full_ty:        TokenStream2,
+    ident:           proc_macro2::Ident,
+    kind:            &'static str,
+    long:            Option<String>,
+    short:           Option<char>,
+    required:        bool,
+    multi:           bool,
+    group:           Option<String>,
+    default:         Option<String>,
+    default_missing: Option<String>,
+    env:             Option<String>,
+    negate:          Option<String>,
+    value_name:      String,
+    help:            String,
+    aliases:         Vec<String>,
+    conflicts_with:  Vec<String>,
+    hidden:          bool,
+    global:          bool,
+    card:            Card,
+    conversion:      Option<Conversion>,
+    inner_ty:        TokenStream2,
+    full_ty:         TokenStream2,
 }
 
 // a field that delegates to its type's subcommand tree.
@@ -458,6 +459,13 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         }
     }
 
+    if a.default_missing.is_some() && kind != "Opt" {
+        return Err(format!(
+            "pound: #[pound(default_missing)] needs a value option (short/long) (`{}`)",
+            field.name
+        ));
+    }
+
     let negate = match &a.negate {
         Some(spelling) => {
             if kind != "Flag" {
@@ -502,6 +510,7 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         multi: card == Card::Many,
         group: a.group,
         default: a.default,
+        default_missing: a.default_missing,
         env: a.env,
         negate,
         value_name: a.value_name.unwrap_or(fname),
@@ -591,6 +600,9 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     if let Some(d) = &p.default {
         e = quote! { #e.default(#d) };
+    }
+    if let Some(dm) = &p.default_missing {
+        e = quote! { #e.default_missing(#dm) };
     }
     if let Some(ev) = &p.env {
         e = quote! { #e.env(#ev) };

@@ -52,6 +52,9 @@ pub struct ArgSpec {
     pub multi: bool,
     pub group: Option<&'static str>,
     pub default: Option<&'static str>,
+    /// value a [`Kind::Opt`] takes when given with no `=value`, which also
+    /// stops it consuming the following token
+    pub default_missing: Option<&'static str>,
     /// name of an environment variable to fall back to when the arg is not
     /// given on the command line. disabled in nostd.
     pub env: Option<&'static str>,
@@ -77,6 +80,7 @@ impl ArgSpec {
             multi: false,
             group: None,
             default: None,
+            default_missing: None,
             env: None,
             negate: None,
             value_name: "",
@@ -126,6 +130,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn default(mut self, default: &'static str) -> Self {
         self.default = Some(default);
+        self
+    }
+
+    #[must_use]
+    pub const fn default_missing(mut self, default_missing: &'static str) -> Self {
+        self.default_missing = Some(default_missing);
         self
     }
 
