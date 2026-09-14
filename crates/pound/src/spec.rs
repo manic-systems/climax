@@ -62,6 +62,8 @@ pub struct ArgSpec {
     pub negate: Option<&'static str>,
     pub value_name: &'static str,
     pub help: &'static str,
+    /// fuller help shown by `--help`, `None` when it adds nothing
+    pub long_help: Option<&'static str>,
     /// section this arg is listed under in help, `Options` when unset
     pub heading: Option<&'static str>,
     pub possible: Option<&'static [&'static str]>,
@@ -87,6 +89,7 @@ impl ArgSpec {
             negate: None,
             value_name: "",
             help: "",
+            long_help: None,
             heading: None,
             possible: None,
             hidden: false,
@@ -163,6 +166,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn help(mut self, help: &'static str) -> Self {
         self.help = help;
+        self
+    }
+
+    #[must_use]
+    pub const fn long_help(mut self, long_help: &'static str) -> Self {
+        self.long_help = Some(long_help);
         self
     }
 
@@ -302,6 +311,8 @@ pub struct CommandSpec {
     /// commit hash for the compiled program's source
     pub hash: Option<&'static str>,
     pub about: &'static str,
+    /// fuller description shown by `--help`, empty when it adds nothing
+    pub long_about: &'static str,
     pub args: &'static [ArgSpec],
     pub groups: &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
@@ -320,6 +331,7 @@ impl CommandSpec {
             version: "",
             hash: None,
             about: "",
+            long_about: "",
             args: &[],
             groups: &[],
             conflicts: &[],
@@ -348,6 +360,12 @@ impl CommandSpec {
     #[must_use]
     pub const fn about(mut self, about: &'static str) -> Self {
         self.about = about;
+        self
+    }
+
+    #[must_use]
+    pub const fn long_about(mut self, long_about: &'static str) -> Self {
+        self.long_about = long_about;
         self
     }
 

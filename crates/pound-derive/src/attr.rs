@@ -32,6 +32,8 @@ pub struct Pound {
     pub negate: Option<Option<String>>,
     pub value_name: Option<String>,
     pub help: Option<String>,
+    /// help text `--help` shows in place of the short form
+    pub long_help: Option<String>,
     /// help section this arg is listed under
     pub heading: Option<String>,
     pub name: Option<String>,
@@ -74,18 +76,38 @@ pub fn pound(attrs: &[Attribute]) -> Pound {
     out
 }
 
-/// the joined, trimmed doc comment of an item or field, empty when none
+/// the doc comment of an item or field, empty when none. lines are joined into
+/// paragraphs, and a blank line stays a paragraph break so `--help` can show
+/// more than `-h` does.
 pub fn doc(attrs: &[Attribute]) -> String {
-    let mut lines = Vec::new();
+    let mut out = String::new();
+    let mut fresh = true;
     for attr in attrs {
         if path_is(attr, "doc")
             && let AttributeValue::Equals(_, tokens) = &attr.value
             && let Some(text) = tokens.first().map(unquote)
         {
-            lines.push(text.trim().to_owned());
+            let line = text.trim();
+            if line.is_empty() {
+                if !out.is_empty() {
+                    out.push_str("\n\n");
+                }
+                fresh = true;
+            } else {
+                if !fresh {
+                    out.push(' ');
+                }
+                out.push_str(line);
+                fresh = false;
+            }
         }
     }
-    lines.join(" ").trim().to_owned()
+    out.trim().to_owned()
+}
+
+/// the opening paragraph, which is all `-h` shows
+pub fn summary(doc: &str) -> &str {
+    doc.split("\n\n").next().unwrap_or(doc)
 }
 
 fn path_is(attr: &Attribute, name: &str) -> bool {
@@ -121,6 +143,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             },
             "value_name" => out.value_name = value,
             "help" => out.help = value,
+            "long_help" => out.long_help = value,
             "heading" => out.heading = value,
             "name" => out.name = value,
             "version" => out.version = value,

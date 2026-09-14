@@ -111,8 +111,13 @@ fn invocation(a: &ArgSpec) -> String {
 }
 
 #[cfg(feature = "help")]
-fn help_text(a: &ArgSpec) -> String {
-    let mut s = a.help.to_owned();
+fn help_text(a: &ArgSpec, long: bool) -> String {
+    let text = if long {
+        a.long_help.unwrap_or(a.help)
+    } else {
+        a.help
+    };
+    let mut s = text.to_owned();
     if let Some(values) = a.possible
         && !values.is_empty()
     {
@@ -122,6 +127,32 @@ fn help_text(a: &ArgSpec) -> String {
         let _ = write!(s, "[possible values: {}]", values.join(", "));
     }
     s
+}
+
+/// the listing for `-h`/`--help` or `-V`/`--version`. the parser answers each
+/// spelling independently, so a command that takes `-h` for its own flag still
+/// gets `--help`, and the row has to say so.
+#[cfg(feature = "help")]
+fn builtin_row(
+    spec: &CommandSpec,
+    short: char,
+    long: &'static str,
+    help: &'static str,
+) -> Option<(String, String)> {
+    let free_short = spec.find_short(short).is_none();
+    let free_long = spec.find_long(long).is_none();
+    if !free_short && !free_long {
+        return None;
+    }
+
+    let mut a = ArgSpec::new(Kind::Flag);
+    if free_short {
+        a = a.short(short);
+    }
+    if free_long {
+        a = a.long(long);
+    }
+    Some((invocation(&a), help.to_owned()))
 }
 
 #[cfg(feature = "help")]
@@ -144,11 +175,16 @@ pub(crate) fn usage_line(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
+pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> String {
     let mut out = String::new();
 
-    if !spec.about.is_empty() {
-        out.push_str(spec.about);
+    let about = if long && !spec.long_about.is_empty() {
+        spec.long_about
+    } else {
+        spec.about
+    };
+    if !about.is_empty() {
+        out.push_str(about);
         out.push_str("\n\n");
     }
 
@@ -169,13 +205,13 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     let positionals: Vec<(String, String)> = visible_args
         .iter()
         .filter(|a| a.is_positional())
-        .map(|&a| (usage_positional(a), help_text(a)))
+        .map(|&a| (usage_positional(a), help_text(a, long)))
         .collect();
 
     let mut sections = vec![("Options", vec![])];
     for &a in visible_args.iter().filter(|a| !a.is_positional()) {
         let heading = a.heading.unwrap_or("Options");
-        let row = (invocation(a), help_text(a));
+        let row = (invocation(a), help_text(a, long));
         match sections.iter_mut().find(|(name, _)| *name == heading) {
             Some((_, rows)) => rows.push(row),
             None => sections.push((heading, vec![row])),
@@ -183,26 +219,24 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     }
 
     let builtins = &mut sections[0].1;
-    if spec.find_short('h').is_none() && spec.find_long("help").is_none() {
-        builtins.push((
-            "-h, --help".to_owned(),
-            "display this help and exit".to_owned(),
-        ));
+    if let Some(row) = builtin_row(spec, 'h', "help", "display this help and exit") {
+        builtins.push(row);
     }
     if spec.has_version_info()
-        && spec.find_short('V').is_none()
-        && spec.find_long("version").is_none()
+        && let Some(row) = builtin_row(
+            spec,
+            'V',
+            "version",
+            "output version information and exit",
+        )
     {
-        builtins.push((
-            "-V, --version".to_owned(),
-            "output version information and exit".to_owned(),
-        ));
+        builtins.push(row);
     }
 
     let grows: Vec<(String, String)> = globals
         .iter()
         .filter(|a| !a.hidden)
-        .map(|&a| (invocation(a), help_text(a)))
+        .map(|&a| (invocation(a), help_text(a, long)))
         .collect();
 
     // one width across every section, so the help column lines up throughout
@@ -239,8 +273,17 @@ fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
     for (left, help) in rows {
         if help.is_empty() {
             let _ = writeln!(out, "  {left}");
-        } else {
-            let _ = writeln!(out, "  {left:<width$}  {help}");
+            continue;
+        }
+        let mut paragraphs = help.split('\n');
+        let first = paragraphs.next().unwrap_or_default();
+        let _ = writeln!(out, "  {left:<width$}  {first}");
+        for paragraph in paragraphs {
+            if paragraph.is_empty() {
+                out.push('\n');
+            } else {
+                let _ = writeln!(out, "  {:<width$}  {paragraph}", "");
+            }
         }
     }
 }
@@ -255,6 +298,6 @@ pub(crate) fn usage_line(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
+pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], _long: bool) -> String {
     usage_line(spec, globals)
 }

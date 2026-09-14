@@ -67,15 +67,15 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
     for arg in inherited {
         println!("{pad}  {}  [inherited global]", row(arg));
     }
-    // help/version are accepted without living in `args`, unless overridden.
-    if spec.find_long("help").is_none() && spec.find_short('h').is_none() {
-        println!("{pad}  -h, --help  [implicit]");
+    // help/version are accepted without living in `args`, and each spelling is
+    // dropped on its own when the command claims it, so check them separately.
+    for spelling in implicit(spec, 'h', "help") {
+        println!("{pad}  {spelling}  [implicit]");
     }
-    if !spec.version.is_empty()
-        && spec.find_long("version").is_none()
-        && spec.find_short('V').is_none()
-    {
-        println!("{pad}  -V, --version  [implicit]");
+    if spec.has_version_info() {
+        for spelling in implicit(spec, 'V', "version") {
+            println!("{pad}  {spelling}  [implicit]");
+        }
     }
 
     // globals accumulate down the tree
@@ -84,6 +84,18 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
     for sub in spec.subs.iter().filter(|s| !s.hidden) {
         walk(sub.spec, depth + 1, &globals);
     }
+}
+
+/// whichever spellings of a builtin this command has not claimed for itself
+fn implicit(spec: &CommandSpec, short: char, long: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if spec.find_short(short).is_none() {
+        out.push(format!("-{short}"));
+    }
+    if spec.find_long(long).is_none() {
+        out.push(format!("--{long}"));
+    }
+    out
 }
 
 /// a single arg's specification

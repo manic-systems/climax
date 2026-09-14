@@ -90,6 +90,7 @@ struct Plan {
     negate:          Option<String>,
     value_name:      String,
     help:            String,
+    long_help:       Option<String>,
     heading:         Option<String>,
     aliases:         Vec<String>,
     conflicts_with:  Vec<String>,
@@ -130,7 +131,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let name_expr = name_expr(&item);
     let version_expr = version_expr(&item);
     let hash_call = git_hash_call();
-    let about = help_lit(&attr::doc(&s.attributes));
+    let (about, long_about) = about_calls(&attr::doc(&s.attributes));
 
     let m = quote!(m);
     let sp = quote!(spec);
@@ -165,7 +166,8 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                 const CMD: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
-                    .about(#about)
+                    #about
+                    #long_about
                     .args(ARGS)
                     .groups(GROUPS)
                     .conflicts(CONFLICTS)
@@ -194,7 +196,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     let name_expr = name_expr(&item);
     let version_expr = version_expr(&item);
     let hash_call = git_hash_call();
-    let about = help_lit(&attr::doc(&e.attributes));
+    let (about, long_about) = about_calls(&attr::doc(&e.attributes));
 
     let mut sub_consts = Vec::new();
     let mut sub_specs = Vec::new();
@@ -214,7 +216,9 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             .name
             .clone()
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
-        let sub_about = help_lit(&attr::doc(&variant.attributes));
+        let variant_doc = attr::doc(&variant.attributes);
+        let sub_about = help_lit(attr::summary(&variant_doc));
+        let (about_call, long_about_call) = about_calls(&variant_doc);
         let hidden = vattr.hidden;
 
         if let Err(msg) = validate_globals(&plans) {
@@ -244,7 +248,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             const #gk: &[::pound::GroupSpec] = &[ #(#groups),* ];
             const #xk: &[(usize, usize)] = #conflicts;
             const #ck: ::pound::CommandSpec = ::pound::CommandSpec::new(#sub_name)
-                .about(#sub_about)
+                #about_call
+                #long_about_call
                 .args(#ak)
                 .groups(#gk)
                 .conflicts(#xk)
@@ -303,7 +308,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 const ROOT: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
-                    .about(#about)
+                    #about
+                    #long_about
                     .subs(SUBS);
                 &ROOT
             };
@@ -427,6 +433,39 @@ fn sub_reader(sf: &SubField, m: &TokenStream2) -> TokenStream2 {
     }
 }
 
+fn negation(
+    a: &Pound,
+    kind: &str,
+    long: Option<&str>,
+    ident: &proc_macro2::Ident,
+) -> Result<Option<String>, String> {
+    let Some(spelling) = &a.negate else {
+        return Ok(None);
+    };
+    if kind != "Flag" {
+        return Err(format!("pound: #[pound(negate)] needs a bool field (`{ident}`)"));
+    }
+    let Some(name) = long else {
+        return Err(format!("pound: #[pound(negate)] needs a long name (`{ident}`)"));
+    };
+    Ok(Some(spelling.clone().unwrap_or_else(|| format!("no-{name}"))))
+}
+
+fn check_kind(a: &Pound, kind: &str, ident: &proc_macro2::Ident) -> Result<(), String> {
+    if a.heading.is_some() && !matches!(kind, "Flag" | "Count" | "Opt") {
+        return Err(format!(
+            "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
+             Arguments (`{ident}`)"
+        ));
+    }
+    if a.default_missing.is_some() && kind != "Opt" {
+        return Err(format!(
+            "pound: #[pound(default_missing)] needs a value option (short/long) (`{ident}`)"
+        ));
+    }
+    Ok(())
+}
+
 fn plan_field(field: &NamedField) -> Result<Plan, String> {
     let a = attr::pound(&field.attributes);
     let (is_bool, card, inner_ty) = classify(&field.ty);
@@ -460,39 +499,12 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         }
     }
 
-    if a.heading.is_some() && !matches!(kind, "Flag" | "Count" | "Opt") {
-        return Err(format!(
-            "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
-             Arguments (`{}`)",
-            field.name
-        ));
-    }
+    let doc = a.help.clone().unwrap_or_else(|| attr::doc(&field.attributes));
+    let help = attr::summary(&doc).to_owned();
+    let long_help = a.long_help.clone().or_else(|| (help != doc).then(|| doc.clone()));
 
-    if a.default_missing.is_some() && kind != "Opt" {
-        return Err(format!(
-            "pound: #[pound(default_missing)] needs a value option (short/long) (`{}`)",
-            field.name
-        ));
-    }
-
-    let negate = match &a.negate {
-        Some(spelling) => {
-            if kind != "Flag" {
-                return Err(format!(
-                    "pound: #[pound(negate)] needs a bool field (`{}`)",
-                    field.name
-                ));
-            }
-            let Some(name) = &long else {
-                return Err(format!(
-                    "pound: #[pound(negate)] needs a long name (`{}`)",
-                    field.name
-                ));
-            };
-            Some(spelling.clone().unwrap_or_else(|| format!("no-{name}")))
-        },
-        None => None,
-    };
+    check_kind(&a, kind, &field.name)?;
+    let negate = negation(&a, kind, long.as_deref(), &field.name)?;
 
     let required = matches!(kind, "Opt" | "Positional" | "Trailing")
         && card == Card::One
@@ -523,7 +535,8 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         env: a.env,
         negate,
         value_name: a.value_name.unwrap_or(fname),
-        help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
+        help,
+        long_help,
         heading: a.heading,
         aliases: a.aliases,
         conflicts_with: a.conflicts_with,
@@ -644,6 +657,10 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     }
     if p.global {
         e = quote! { #e.global() };
+    }
+    if let Some(lh) = &p.long_help {
+        let lh = help_lit(lh);
+        e = quote! { #e.long_help(#lh) };
     }
     let help = help_lit(&p.help);
     quote! { #e.help(#help) }
@@ -877,6 +894,19 @@ fn git_hash() -> Option<String> {
     let hash = String::from_utf8(output.stdout).ok()?;
     let hash = hash.trim();
     (!hash.is_empty() && hash.chars().all(|ch| ch.is_ascii_hexdigit())).then(|| hash.to_owned())
+}
+
+// bake the help string only when the feature is on, otherwise emit "".
+// the `.about()` / `.long_about()` calls for a doc comment. the long form is
+// chained only when it says more than the summary already does.
+fn about_calls(doc: &str) -> (TokenStream2, TokenStream2) {
+    let summary = help_lit(attr::summary(doc));
+    let about = quote! { .about(#summary) };
+    if attr::summary(doc) == doc {
+        return (about, quote!());
+    }
+    let full = help_lit(doc);
+    (about, quote! { .long_about(#full) })
 }
 
 // bake the help string only when the feature is on, otherwise emit "".

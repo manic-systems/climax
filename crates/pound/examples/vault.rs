@@ -192,6 +192,11 @@ enum Cmd {
 }
 
 /// a simple secrets manager
+///
+/// secrets live in namespaces, and every invocation unlocks the vault with
+/// either a token or a key file before it does anything else.
+///
+/// this paragraph and the one above it are shown by --help but not by -h.
 #[derive(Parse, Debug)]
 #[pound(name = "vault", version = "0.1.0", required_group = "auth")]
 struct Cli {
@@ -217,6 +222,8 @@ struct Cli {
     db: Option<String>,
 
     /// increase verbosity
+    ///
+    /// once prints the resolved config, twice dumps the parsed command.
     #[pound(short, long, count)]
     verbose: u8,
 
