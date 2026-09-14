@@ -313,7 +313,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 #spec_assert
                 match ::pound::Matches::sub(m) {
                     #(#arms)*
-                    _ => ::core::result::Result::Err(::pound::Error::MissingSubcommand),
+                    _ => ::core::result::Result::Err(::pound::ErrorKind::MissingSubcommand.into()),
                 }
             }
         }
@@ -347,7 +347,7 @@ fn value_enum(e: &venial::Enum) -> TokenStream {
                 match s {
                     #(#arms)*
                     other => ::core::result::Result::Err(
-                        ::pound::ValueError::new(other, "unrecognised value")
+                        ::pound::ValueError::new(other, "unrecognized value")
                     ),
                 }
             }
