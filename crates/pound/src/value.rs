@@ -69,6 +69,42 @@ pub trait FromArg: Sized {
     }
 }
 
+/// whether a declared default survives its own type's value list.
+///
+/// the `Parse` derive calls this from a `const` block, so a `default` that no
+/// `ValueEnum` variant answers to fails the build instead of the first run that
+/// leaves the flag out.
+#[must_use]
+pub const fn default_allowed(default: &str, possible: Option<&[&str]>) -> bool {
+    let Some(values) = possible else {
+        return true;
+    };
+    let mut i = 0;
+    while i < values.len() {
+        if const_eq(values[i], default) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+// `str` has no const `PartialEq`, so compare the bytes by hand.
+const fn const_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// impl [`FromArg`] for one or more types via their [`FromStr`].
 ///
 /// ```
