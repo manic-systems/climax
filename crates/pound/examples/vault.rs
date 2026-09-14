@@ -133,8 +133,8 @@ enum Cmd {
         kind: Option<Kind>,
         #[pound(short, long)]
         format: Option<Format>,
-        /// show values (hidden by default)
-        #[pound(long)]
+        /// show values (hidden by default, needs --format to say how)
+        #[pound(long, requires = "format")]
         show: bool,
     },
     /// delete a secret (also reachable as `delete`)
