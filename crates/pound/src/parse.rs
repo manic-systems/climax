@@ -599,7 +599,7 @@ fn finalise(
 
     if spec.has_subs() && m.sub.is_none() && !spec.sub_optional {
         // empty/sub-less invocation shows help rather than a bare error
-        return Err(ErrorKind::Help(help::render(spec, globals)));
+        return Err(ErrorKind::Help(help::render(spec, globals, false)));
     }
 
     Ok(())
@@ -608,7 +608,7 @@ fn finalise(
 fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) -> Option<ErrorKind> {
     match name {
         "help" if spec.find_long("help").is_none() => {
-            Some(ErrorKind::Help(help::render(spec, globals)))
+            Some(ErrorKind::Help(help::render(spec, globals, true)))
         },
         "version" if spec.has_version_info() && spec.find_long("version").is_none() => {
             Some(ErrorKind::Version(help::version_line(spec)))
@@ -619,7 +619,9 @@ fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) ->
 
 fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> Option<ErrorKind> {
     match ch {
-        'h' if spec.find_short('h').is_none() => Some(ErrorKind::Help(help::render(spec, globals))),
+        'h' if spec.find_short('h').is_none() => {
+            Some(ErrorKind::Help(help::render(spec, globals, false)))
+        },
         'V' if spec.has_version_info() && spec.find_short('V').is_none() => {
             Some(ErrorKind::Version(help::version_line(spec)))
         },
@@ -711,6 +713,7 @@ mod tests {
         name: "flat",
         version: "0.1.0",
         hash: None,
+        long_about: "",
         about: "a flat command",
         args: FLAT_ARGS,
         groups: &[],
@@ -817,6 +820,7 @@ mod tests {
             name: "d",
             version: "",
             hash: None,
+            long_about: "",
             about: "",
             args: ARGS,
             groups: &[],
@@ -885,6 +889,7 @@ mod tests {
             name: "g",
             version: "",
             hash: None,
+            long_about: "",
             about: "",
             args: ARGS,
             groups: &[GroupSpec::new("mode")],
@@ -915,6 +920,7 @@ mod tests {
             name: "c",
             version: "",
             hash: None,
+            long_about: "",
             about: "",
             args: ARGS,
             groups: &[],
@@ -939,6 +945,7 @@ mod tests {
         name: "add",
         version: "",
         hash: None,
+        long_about: "",
         about: "add a pin",
         args: ADD_ARGS,
         groups: &[],
@@ -957,6 +964,7 @@ mod tests {
         name: "prog",
         version: "1.0.0",
         hash: None,
+        long_about: "",
         about: "demo",
         args: &[],
         groups: &[],
