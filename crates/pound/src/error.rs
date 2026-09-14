@@ -7,11 +7,14 @@ use core::fmt;
 #[cfg(not(feature = "std"))]
 use crate::alloc_prelude::*;
 
-/// anything a parse attempt can produce
+/// what a parse attempt ran into, or which early exit it was asked for
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Error {
-    /// unrecognised `--flag` or `-x`
-    Unknown(String),
+pub enum ErrorKind {
+    /// unrecognized `--flag` or `-x`
+    Unknown {
+        arg: String,
+        closest: Option<String>,
+    },
     /// an option that takes a value got none
     MissingValue(String),
     /// a required arg or positional was absent
@@ -21,7 +24,10 @@ pub enum Error {
     /// a flag was given a value (e.g. `--verbose=3`) but takes none
     UnexpectedValue(String),
     /// first positional named a subcommand that does not exist
-    UnknownSubcommand(String),
+    UnknownSubcommand {
+        name: String,
+        closest: Option<String>,
+    },
     /// a subcommand was required but none given
     MissingSubcommand,
     /// a value failed to parse into its target type
@@ -44,38 +50,28 @@ pub enum Error {
     Version(String),
 }
 
-impl Error {
-    /// for non-failure signals
+impl ErrorKind {
+    /// the known spelling a mistyped one was probably meant to be
     #[must_use]
-    pub const fn is_exit(&self) -> bool {
-        matches!(*self, Self::Help(_) | Self::Version(_))
-    }
-
-    /// print and exit
-    #[cfg(feature = "std")]
-    pub fn exit(self) -> ! {
+    pub fn closest(&self) -> Option<&str> {
         match self {
-            Self::Help(text) | Self::Version(text) => {
-                println!("{text}");
-                std::process::exit(0);
+            Self::Unknown { closest, .. } | Self::UnknownSubcommand { closest, .. } => {
+                closest.as_deref()
             },
-            other => {
-                eprintln!("error: {other}");
-                std::process::exit(2);
-            },
+            _ => None,
         }
     }
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unknown(a) => write!(f, "unrecognised argument '{a}'"),
+            Self::Unknown { arg, .. } => write!(f, "unrecognized argument '{arg}'"),
             Self::MissingValue(a) => write!(f, "'{a}' needs a value"),
             Self::MissingRequired(a) => write!(f, "missing required argument {a}"),
             Self::UnexpectedPositional(v) => write!(f, "unexpected argument '{v}'"),
             Self::UnexpectedValue(a) => write!(f, "'{a}' does not take a value"),
-            Self::UnknownSubcommand(s) => write!(f, "unknown subcommand '{s}'"),
+            Self::UnknownSubcommand { name, .. } => write!(f, "unknown subcommand '{name}'"),
             Self::MissingSubcommand => write!(f, "a subcommand is required"),
             Self::Value { arg, value, msg } => {
                 write!(f, "invalid value '{value}' for {arg}: {msg}")
@@ -96,6 +92,76 @@ impl fmt::Display for Error {
             },
             Self::Help(text) | Self::Version(text) => write!(f, "{text}"),
         }
+    }
+}
+
+/// a parse outcome that is not a value, carrying the usage line of whichever
+/// command in the tree raised it
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Error {
+    pub kind: ErrorKind,
+    pub usage: Option<String>,
+}
+
+impl Error {
+    /// for non-failure signals
+    #[must_use]
+    pub const fn is_exit(&self) -> bool {
+        matches!(self.kind, ErrorKind::Help(_) | ErrorKind::Version(_))
+    }
+
+    /// remember the usage line of the command being parsed, unless a nested
+    /// command already claimed the failure as its own
+    pub(crate) fn or_usage(mut self, usage: impl FnOnce() -> String) -> Self {
+        if self.usage.is_none() && !self.is_exit() {
+            self.usage = Some(usage());
+        }
+        self
+    }
+
+    /// the whole report: the message, a spelling suggestion, the usage line,
+    /// and where to look next
+    #[must_use]
+    pub fn render(&self) -> String {
+        if let ErrorKind::Help(text) | ErrorKind::Version(text) = &self.kind {
+            return text.clone();
+        }
+
+        let mut out = format!("error: {}", self.kind);
+        if let Some(closest) = self.kind.closest() {
+            out.push_str("\n\n  tip: did you mean '");
+            out.push_str(closest);
+            out.push('\'');
+        }
+        if let Some(usage) = &self.usage {
+            out.push_str("\n\n");
+            out.push_str(usage);
+        }
+        out.push_str("\n\nFor more information, try '--help'.");
+        out
+    }
+
+    /// print and exit
+    #[cfg(feature = "std")]
+    pub fn exit(self) -> ! {
+        if self.is_exit() {
+            println!("{}", self.render());
+            std::process::exit(0);
+        }
+        eprintln!("{}", self.render());
+        std::process::exit(2);
+    }
+}
+
+impl From<ErrorKind> for Error {
+    fn from(kind: ErrorKind) -> Self {
+        Self { kind, usage: None }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.kind)
     }
 }
 

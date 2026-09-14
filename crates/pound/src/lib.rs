@@ -55,7 +55,10 @@ mod parse;
 pub mod spec;
 mod value;
 
-pub use error::Error;
+pub use error::{
+    Error,
+    ErrorKind,
+};
 pub use parse::Matches;
 #[cfg(feature = "derive")]
 pub use pound_derive::{

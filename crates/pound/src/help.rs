@@ -125,6 +125,25 @@ fn help_text(a: &ArgSpec) -> String {
 }
 
 #[cfg(feature = "help")]
+pub(crate) fn usage_line(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
+    let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
+
+    let mut out = String::from("Usage: ");
+    out.push_str(spec.name);
+    if visible_args.iter().any(|a| !a.is_positional()) || !globals.is_empty() {
+        out.push_str(" [OPTION]...");
+    }
+    for a in visible_args.iter().filter(|a| a.is_positional()) {
+        out.push(' ');
+        out.push_str(&usage_positional(a));
+    }
+    if spec.subs.iter().any(|s| !s.hidden) {
+        out.push_str(" COMMAND");
+    }
+    out
+}
+
+#[cfg(feature = "help")]
 pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     let mut out = String::new();
 
@@ -136,18 +155,7 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
     let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
     let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
 
-    out.push_str("Usage: ");
-    out.push_str(spec.name);
-    if visible_args.iter().any(|a| !a.is_positional()) || !globals.is_empty() {
-        out.push_str(" [OPTION]...");
-    }
-    for a in visible_args.iter().filter(|a| a.is_positional()) {
-        out.push(' ');
-        out.push_str(&usage_positional(a));
-    }
-    if !visible_subs.is_empty() {
-        out.push_str(" COMMAND");
-    }
+    out.push_str(&usage_line(spec, globals));
     out.push('\n');
 
     if !visible_subs.is_empty() {
@@ -218,10 +226,15 @@ fn push_rows(out: &mut String, rows: &[(String, String)]) {
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn render(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
+pub(crate) fn usage_line(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
     let mut out = format!("Usage: {}", spec.name);
     if spec.has_subs() {
         out.push_str(" COMMAND");
     }
     out
+}
+
+#[cfg(not(feature = "help"))]
+pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
+    usage_line(spec, globals)
 }
