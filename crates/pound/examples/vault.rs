@@ -224,6 +224,10 @@ struct Cli {
     #[pound(long)]
     dry_run: bool,
 
+    /// colorize output (disable with --no-color)
+    #[pound(long, negate, default = "true")]
+    color: bool,
+
     /// dump internal state (unstable, hidden from help)
     #[pound(long, hidden)]
     debug_internals: bool,

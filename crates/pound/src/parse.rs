@@ -18,6 +18,8 @@ use crate::{
 struct Slot<'a> {
     /// count of user supplied invocations
     count: u32,
+    /// the last spelling seen was the arg's negation
+    negated: bool,
     values: Vec<&'a str>,
 }
 
@@ -32,6 +34,7 @@ pub struct Matches<'a> {
 struct GlobalHit<'a> {
     arg: &'static ArgSpec,
     value: Option<&'a str>,
+    negated: bool,
 }
 
 impl<'a> Matches<'a> {
@@ -46,6 +49,20 @@ impl<'a> Matches<'a> {
     #[must_use]
     pub fn flag(&self, i: usize) -> bool {
         self.slots[i].count > 0
+    }
+
+    /// resolve a flag to its final state, honoring the negation spelling and
+    /// falling back to the env var or default when neither was given
+    #[must_use]
+    pub fn switch(&self, spec: &CommandSpec, i: usize) -> bool {
+        let slot = &self.slots[i];
+        if slot.negated {
+            return false;
+        }
+        if slot.count > 0 {
+            return true;
+        }
+        matches!(fallback(spec, i).as_deref(), Some("1" | "true" | "yes"))
     }
 
     /// how many times a count flag was supplied
@@ -221,8 +238,19 @@ fn parse_cmd<'a>(
             }
             if let Some(idx) = spec.find_long(name) {
                 apply_named(spec, &mut m, idx, inline, it)?;
+            } else if let Some(idx) = spec.find_negate(name) {
+                apply_negation(&mut m.slots[idx], name, inline)?;
             } else if let Some(g) = find_global_long(globals, name) {
                 record_global(g, inline, it, hits)?;
+            } else if let Some(g) = find_global_negate(globals, name) {
+                if inline.is_some() {
+                    return Err(Error::UnexpectedValue(format!("--{name}")));
+                }
+                hits.push(GlobalHit {
+                    arg: g,
+                    value: None,
+                    negated: true,
+                });
             } else {
                 return Err(Error::Unknown(format!("--{name}")));
             }
@@ -272,6 +300,7 @@ fn apply_named<'a>(
                 return Err(Error::UnexpectedValue(a.display_name()));
             }
             m.slots[idx].count = 1;
+            m.slots[idx].negated = false;
         },
         Kind::Count => {
             if inline.is_some() {
@@ -309,7 +338,10 @@ fn shorts<'a>(
         if let Some(idx) = spec.find_short(ch) {
             let a = spec.args[idx];
             match a.kind {
-                Kind::Flag => m.slots[idx].count = 1,
+                Kind::Flag => {
+                    m.slots[idx].count = 1;
+                    m.slots[idx].negated = false;
+                },
                 Kind::Count => m.slots[idx].count += 1,
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, &a)?;
@@ -325,12 +357,14 @@ fn shorts<'a>(
                 Kind::Flag | Kind::Count => hits.push(GlobalHit {
                     arg: g,
                     value: None,
+                    negated: false,
                 }),
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
                     hits.push(GlobalHit {
                         arg: g,
                         value: Some(value),
+                        negated: false,
                     });
                     return Ok(());
                 },
@@ -378,6 +412,20 @@ fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<&'static
         .find(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
 }
 
+fn find_global_negate(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
+    globals.iter().copied().find(|a| a.negate == Some(name))
+}
+
+/// switch a flag back off, so the last spelling on the line wins
+fn apply_negation(slot: &mut Slot<'_>, name: &str, inline: Option<&str>) -> Result<(), Error> {
+    if inline.is_some() {
+        return Err(Error::UnexpectedValue(format!("--{name}")));
+    }
+    slot.count = 0;
+    slot.negated = true;
+    Ok(())
+}
+
 fn find_global_short(globals: &[&'static ArgSpec], ch: char) -> Option<&'static ArgSpec> {
     globals.iter().copied().find(|a| a.short == Some(ch))
 }
@@ -396,6 +444,7 @@ fn record_global<'a>(
             hits.push(GlobalHit {
                 arg: g,
                 value: None,
+                negated: false,
             });
         },
         Kind::Opt => {
@@ -408,6 +457,7 @@ fn record_global<'a>(
             hits.push(GlobalHit {
                 arg: g,
                 value: Some(value),
+                negated: false,
             });
         },
         Kind::Positional | Kind::Trailing => return Err(Error::Unknown(g.display_name())),
@@ -423,7 +473,10 @@ fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec
         };
         let a = spec.args[idx];
         match a.kind {
-            Kind::Flag => m.slots[idx].count = 1,
+            Kind::Flag => {
+                m.slots[idx].count = u32::from(!h.negated);
+                m.slots[idx].negated = h.negated;
+            },
             Kind::Count => m.slots[idx].count += 1,
             Kind::Opt => {
                 if let Some(v) = h.value {
@@ -683,6 +736,28 @@ mod tests {
             m.optional::<String>(&SPEC, 0).unwrap().as_deref(),
             Some("debug")
         );
+    }
+
+    #[test]
+    fn negation_switches_a_flag_off() {
+        const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Flag)
+            .long("color")
+            .negate("no-color")
+            .default("true")];
+        const SPEC: CommandSpec = CommandSpec::new("n").args(ARGS);
+
+        assert!(parse(&SPEC, &[]).unwrap().switch(&SPEC, 0));
+        assert!(!parse(&SPEC, &["--no-color"]).unwrap().switch(&SPEC, 0));
+        // the last spelling on the line wins
+        assert!(
+            parse(&SPEC, &["--no-color", "--color"])
+                .unwrap()
+                .switch(&SPEC, 0)
+        );
+        assert!(matches!(
+            parse(&SPEC, &["--no-color=1"]),
+            Err(Error::UnexpectedValue(_))
+        ));
     }
 
     #[test]

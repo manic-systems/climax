@@ -55,6 +55,8 @@ pub struct ArgSpec {
     /// name of an environment variable to fall back to when the arg is not
     /// given on the command line. disabled in nostd.
     pub env: Option<&'static str>,
+    /// long name that switches a [`Kind::Flag`] back off, without the `--`
+    pub negate: Option<&'static str>,
     pub value_name: &'static str,
     pub help: &'static str,
     pub possible: Option<&'static [&'static str]>,
@@ -76,6 +78,7 @@ impl ArgSpec {
             group: None,
             default: None,
             env: None,
+            negate: None,
             value_name: "",
             help: "",
             possible: None,
@@ -129,6 +132,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn env(mut self, env: &'static str) -> Self {
         self.env = Some(env);
+        self
+    }
+
+    #[must_use]
+    pub const fn negate(mut self, negate: &'static str) -> Self {
+        self.negate = Some(negate);
         self
     }
 
@@ -372,6 +381,12 @@ impl CommandSpec {
     #[must_use]
     pub fn find_short(&self, ch: char) -> Option<usize> {
         self.args.iter().position(|a| a.short == Some(ch))
+    }
+
+    /// index of the flag this long name switches off
+    #[must_use]
+    pub fn find_negate(&self, name: &str) -> Option<usize> {
+        self.args.iter().position(|a| a.negate == Some(name))
     }
 
     #[must_use]
