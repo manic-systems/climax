@@ -50,6 +50,17 @@ fn usage_positional(a: &ArgSpec) -> String {
     }
 }
 
+/// the long spelling, folding a `no-` negation into the `--[no-]name` form and
+/// listing any other negation as a second spelling
+#[cfg(feature = "help")]
+fn long_form(a: &ArgSpec, long: &str) -> String {
+    match a.negate {
+        Some(negate) if negate.strip_prefix("no-") == Some(long) => format!("--[no-]{long}"),
+        Some(negate) => format!("--{long}, --{negate}"),
+        None => format!("--{long}"),
+    }
+}
+
 #[cfg(feature = "help")]
 fn invocation(a: &ArgSpec) -> String {
     let mut s = String::new();
@@ -58,8 +69,8 @@ fn invocation(a: &ArgSpec) -> String {
         (Some(c), Some(l)) => {
             s.push('-');
             s.push(c);
-            s.push_str(", --");
-            s.push_str(l);
+            s.push_str(", ");
+            s.push_str(&long_form(a, l));
             if takes_value {
                 s.push('=');
                 s.push_str(&metavar(a));
@@ -74,8 +85,8 @@ fn invocation(a: &ArgSpec) -> String {
             }
         },
         (None, Some(l)) => {
-            s.push_str("    --");
-            s.push_str(l);
+            s.push_str("    ");
+            s.push_str(&long_form(a, l));
             if takes_value {
                 s.push('=');
                 s.push_str(&metavar(a));

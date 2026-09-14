@@ -86,6 +86,7 @@ struct Plan {
     group:          Option<String>,
     default:        Option<String>,
     env:            Option<String>,
+    negate:         Option<String>,
     value_name:     String,
     help:           String,
     aliases:        Vec<String>,
@@ -457,6 +458,25 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         }
     }
 
+    let negate = match &a.negate {
+        Some(spelling) => {
+            if kind != "Flag" {
+                return Err(format!(
+                    "pound: #[pound(negate)] needs a bool field (`{}`)",
+                    field.name
+                ));
+            }
+            let Some(name) = &long else {
+                return Err(format!(
+                    "pound: #[pound(negate)] needs a long name (`{}`)",
+                    field.name
+                ));
+            };
+            Some(spelling.clone().unwrap_or_else(|| format!("no-{name}")))
+        },
+        None => None,
+    };
+
     let required = matches!(kind, "Opt" | "Positional" | "Trailing")
         && card == Card::One
         && a.default.is_none();
@@ -483,6 +503,7 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
         group: a.group,
         default: a.default,
         env: a.env,
+        negate,
         value_name: a.value_name.unwrap_or(fname),
         help: a.help.unwrap_or_else(|| attr::doc(&field.attributes)),
         aliases: a.aliases,
@@ -574,6 +595,9 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
     if let Some(ev) = &p.env {
         e = quote! { #e.env(#ev) };
     }
+    if let Some(n) = &p.negate {
+        e = quote! { #e.negate(#n) };
+    }
     if !p.aliases.is_empty() {
         let al = &p.aliases;
         e = quote! { #e.aliases(&[ #(#al),* ]) };
@@ -603,7 +627,7 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
 fn reader(p: &Plan, i: usize, m: &TokenStream2, spec: &TokenStream2) -> TokenStream2 {
     let fname = &p.ident;
     let body = match p.kind {
-        "Flag" => quote! { #m.flag(#i) },
+        "Flag" => quote! { #m.switch(#spec, #i) },
         "Count" => {
             let ty = &p.full_ty;
             quote! { #m.count(#i) as #ty }
