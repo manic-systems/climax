@@ -1,0 +1,8 @@
+[package]
+name = "fixture-pound-only"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+pound = { path = "../../../crates/pound", default-features = false, features = [ "derive", "help", "std" ] }
