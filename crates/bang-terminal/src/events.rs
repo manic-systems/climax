@@ -242,6 +242,13 @@ where
     Z: TerminalSizeSource,
     C: Clock,
 {
+    pub(crate) fn initial_terminal_size(&mut self) -> io::Result<Option<TerminalSize>> {
+        let size = self.sizes.terminal_size()?;
+        self.size_initialized = true;
+        self.last_size = size;
+        Ok(size)
+    }
+
     pub fn next_event(&mut self) -> io::Result<TerminalPoll> {
         if let Some(item) = self.pending.pop_front() {
             return Ok(item);
