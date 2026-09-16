@@ -9,7 +9,7 @@ use crate::{
     WidgetId,
 };
 
-type Validator = dyn Fn(&str) -> Result<(), String> + Send + Sync + 'static;
+type Validator = dyn Fn(&str) -> Result<(), String> + 'static;
 
 pub struct TextInput {
     id:          WidgetId,
@@ -71,7 +71,7 @@ impl TextInput {
     #[must_use]
     pub fn with_validator(
         mut self,
-        validator: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+        validator: impl Fn(&str) -> Result<(), String> + 'static,
     ) -> Self {
         self.validator = Some(Box::new(validator));
         self
