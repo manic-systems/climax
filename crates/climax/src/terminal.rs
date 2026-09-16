@@ -1,4 +1,9 @@
 use std::io::{self, IsTerminal as _};
+#[cfg(all(feature = "interactive", feature = "render"))]
+use std::io::{Read, Write};
+#[cfg(all(feature = "interactive", feature = "render"))]
+use std::os::fd::AsFd;
+
 /// How prompt interaction should use detected terminal capabilities.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum InteractionMode {
@@ -32,6 +37,65 @@ pub struct TerminalCapabilities {
     input_terminal: bool,
     transient_terminal: bool,
     ansi: bool,
+}
+
+/// Readable terminal input accepted by a [`TerminalApplication`].
+#[cfg(all(feature = "interactive", feature = "render"))]
+pub trait TerminalInput: Read + AsFd {}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+impl<T> TerminalInput for T where T: Read + AsFd + ?Sized {}
+
+/// Configured input and transient output held under Context's exclusive
+/// terminal-presentation lease.
+#[cfg(all(feature = "interactive", feature = "render"))]
+pub struct TerminalApplication<'a> {
+    input: Box<dyn TerminalInput + 'a>,
+    output: Box<dyn Write + 'a>,
+    capabilities: TerminalCapabilities,
+}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+impl<'a> TerminalApplication<'a> {
+    pub(crate) const fn new(
+        input: Box<dyn TerminalInput + 'a>,
+        output: Box<dyn Write + 'a>,
+        capabilities: TerminalCapabilities,
+    ) -> Self {
+        Self {
+            input,
+            output,
+            capabilities,
+        }
+    }
+
+    #[must_use]
+    pub const fn capabilities(&self) -> TerminalCapabilities {
+        self.capabilities
+    }
+
+    pub fn input(&mut self) -> &mut (dyn TerminalInput + 'a) {
+        &mut *self.input
+    }
+
+    pub fn output(&mut self) -> &mut dyn Write {
+        &mut *self.output
+    }
+
+    pub fn split(&mut self) -> (&mut (dyn TerminalInput + 'a), &mut (dyn Write + 'a)) {
+        (&mut *self.input, &mut *self.output)
+    }
+}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+impl Write for TerminalApplication<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.output.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
 }
 
 impl TerminalCapabilities {

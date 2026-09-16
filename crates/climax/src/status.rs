@@ -190,6 +190,7 @@ struct CoordinatorState {
     mode: StatusMode,
     fps: u16,
     runtime: Option<AutoRuntime<SharedWriter>>,
+    prompt_active: bool,
 }
 
 impl StatusCoordinator {
@@ -202,6 +203,7 @@ impl StatusCoordinator {
                     mode,
                     fps: 15,
                     runtime: None,
+                    prompt_active: false,
                 }),
                 writer,
             }),
@@ -270,19 +272,15 @@ impl StatusCoordinator {
     }
 
     fn ensure_runtime(&self) {
+        let mut state = lock(&self.inner.state);
+        if state.mode != StatusMode::Live || state.prompt_active || state.runtime.is_some() {
+            return;
+        }
         if lock(&self.inner.entries).is_empty() {
             return;
         }
-        // Snapshot the fps before starting the thread; the new thread
-        // re-locks entries when `StatusStack` renders, so hold no guards
-        // across `start()`.
-        let fps = {
-            let state = lock(&self.inner.state);
-            if state.mode != StatusMode::Live || state.runtime.is_some() {
-                return;
-            }
-            state.fps
-        };
+        // Starting a renderer does not wait for its first frame. Keep state
+        // locked through publication, but release entries before spawning.
         // Capture only the entries map. Handing the whole coordinator to the
         // root widget would make the render thread's root reach back to the
         // runtime that owns it, so the coordinator could never be dropped.
@@ -290,10 +288,10 @@ impl StatusCoordinator {
             entries: Arc::clone(&self.inner.entries),
         });
         let runtime = Runtime::auto(self.inner.writer.clone(), root, true)
-            .fps(fps)
+            .fps(state.fps)
             .width(screw::terminal_width_or_default())
             .start();
-        lock(&self.inner.state).runtime = Some(runtime);
+        state.runtime = Some(runtime);
     }
 
     fn stop_runtime(&self) -> Result<()> {
@@ -313,6 +311,53 @@ impl StatusCoordinator {
         self.ensure_runtime();
         Ok(())
     }
+
+    #[cfg(feature = "interactive")]
+    pub(crate) fn prompt_guard(&self) -> bang::Result<PromptGuard> {
+        let runtime = {
+            let mut state = lock(&self.inner.state);
+            if state.prompt_active {
+                return Err(bang::Error::interaction_busy());
+            }
+            state.prompt_active = true;
+            state.runtime.take()
+        };
+        if let Some(runtime) = runtime
+            && let Err(error) = runtime.finish_cleared()
+        {
+            lock(&self.inner.state).prompt_active = false;
+            return Err(bang::Error::terminal(error));
+        }
+        Ok(PromptGuard {
+            coordinator: self.clone(),
+        })
+    }
+
+    #[cfg(feature = "interactive")]
+    pub(crate) fn application_guard(&self) -> Result<PromptGuard> {
+        let runtime = {
+            let mut state = lock(&self.inner.state);
+            if state.prompt_active {
+                return Err(Error::from(bang::Error::interaction_busy()));
+            }
+            state.prompt_active = true;
+            state.runtime.take()
+        };
+        if let Some(runtime) = runtime
+            && let Err(error) = runtime.finish_cleared()
+        {
+            lock(&self.inner.state).prompt_active = false;
+            return Err(output_error(error));
+        }
+        Ok(PromptGuard {
+            coordinator: self.clone(),
+        })
+    }
+
+    #[cfg(feature = "interactive")]
+    pub(crate) fn writer(&self) -> SharedWriter {
+        self.inner.writer.clone()
+    }
 }
 
 impl fmt::Debug for StatusCoordinator {
@@ -321,6 +366,19 @@ impl fmt::Debug for StatusCoordinator {
             .field("entries", &lock(&self.inner.entries).len())
             .field("mode", &lock(&self.inner.state).mode)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "interactive")]
+pub(crate) struct PromptGuard {
+    coordinator: StatusCoordinator,
+}
+
+#[cfg(feature = "interactive")]
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        lock(&self.coordinator.inner.state).prompt_active = false;
+        self.coordinator.ensure_runtime();
     }
 }
 
@@ -387,8 +445,11 @@ fn collect_failure(failure: &mut Option<Error>, result: Result<()>) {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        collections::HashSet,
+        io,
+        sync::{atomic::{AtomicUsize, Ordering}, Barrier},
+    };
 
     use super::*;
 
@@ -447,6 +508,55 @@ mod tests {
             weak.upgrade().is_none(),
             "the render thread's root widget must not own the coordinator"
         );
+    }
+
+    #[test]
+    fn concurrent_statuses_share_one_render_thread() {
+        struct Probe(Arc<Mutex<HashSet<std::thread::ThreadId>>>);
+
+        impl Widget for Probe {
+            fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+                lock(&self.0).insert(std::thread::current().id());
+                out.write("working", screw::Style::PLAIN);
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(HashSet::new()));
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let barrier = Arc::new(Barrier::new(17));
+        let ids = std::thread::scope(|scope| {
+            let mut threads = Vec::new();
+            for _ in 0..16 {
+                let seen = Arc::clone(&seen);
+                let barrier = Arc::clone(&barrier);
+                let coordinator = coordinator.clone();
+                threads.push(scope.spawn(move || {
+                    barrier.wait();
+                    let (id, started) = coordinator.insert(
+                        StatusEntry {
+                            widget: widget(Probe(seen)),
+                            plain: "working".to_owned(),
+                            final_message: None,
+                        },
+                        15,
+                    );
+                    started.unwrap();
+                    id
+                }));
+            }
+            barrier.wait();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+
+        coordinator.stop_runtime().unwrap();
+        assert_eq!(lock(&seen).len(), 1);
+        for id in ids {
+            coordinator.remove(id).unwrap();
+        }
     }
 
     #[test]
@@ -581,5 +691,22 @@ mod tests {
         assert!(error.to_string().contains("first frame failed"));
     }
 
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn prompt_exclusivity_suspends_and_restores_status_presentation() {
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        assert!(lock(&coordinator.inner.state).runtime.is_some());
 
+        let guard = coordinator.prompt_guard().unwrap();
+        assert!(lock(&coordinator.inner.state).runtime.is_none());
+        assert!(coordinator.prompt_guard().is_err());
+
+        drop(guard);
+        assert!(lock(&coordinator.inner.state).runtime.is_some());
+        status.finish().unwrap();
+    }
 }

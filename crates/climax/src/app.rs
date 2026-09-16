@@ -10,6 +10,11 @@ use crate::Result;
 /// are written to stderr with exit code 1. A cancellation that reaches this
 /// function exits silently with 130.
 ///
+/// Typed prompts do not reach it: they resolve a cancelled prompt to
+/// [`bang::PromptOutcome::Leave`] so the handler decides what leaving means.
+/// Exit 130 is therefore reserved for cancellation the handler propagates, such
+/// as from [`crate::Context::with_terminal_application`] or a custom
+/// interaction driver.
 #[cfg(feature = "parse")]
 pub fn main<C, F>(f: F) -> ExitCode
 where
@@ -293,6 +298,55 @@ impl Context {
         self.terminal.interaction_available()
     }
 
+    /// Run a custom terminal application while prompts and live statuses are
+    /// excluded from the configured transient stream.
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    pub fn with_terminal_application<T>(
+        &self,
+        operation: impl FnOnce(&mut crate::terminal::TerminalApplication<'_>) -> Result<T>,
+    ) -> Result<T> {
+        self.acquire_terminal_application()?;
+        let _guard = self.statuses.application_guard()?;
+        let stdin = std::io::stdin();
+        let mut terminal = crate::terminal::TerminalApplication::new(
+            Box::new(stdin.lock()),
+            Box::new(self.statuses.writer()),
+            self.terminal.capabilities(),
+        );
+        operation(&mut terminal)
+    }
+
+    /// Run a custom terminal application on caller-supplied handles while
+    /// prompts and live statuses are excluded from the transient region.
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    pub fn with_terminal_application_on<'a, T, I, O>(
+        &self,
+        input: I,
+        output: O,
+        operation: impl FnOnce(&mut crate::terminal::TerminalApplication<'a>) -> Result<T>,
+    ) -> Result<T>
+    where
+        I: crate::terminal::TerminalInput + 'a,
+        O: std::io::Write + 'a,
+    {
+        self.acquire_terminal_application()?;
+        let _guard = self.statuses.application_guard()?;
+        let mut terminal = crate::terminal::TerminalApplication::new(
+            Box::new(input),
+            Box::new(output),
+            self.terminal.capabilities(),
+        );
+        operation(&mut terminal)
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    fn acquire_terminal_application(&self) -> Result<()> {
+        if !self.terminal.interaction_available() {
+            return Err(crate::Error::from(bang::Error::interaction_unavailable()));
+        }
+        Ok(())
+    }
+
     pub fn set_terminal_capabilities(
         &mut self,
         capabilities: crate::terminal::TerminalCapabilities,
@@ -380,6 +434,11 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
+        #[cfg(feature = "render")]
+        {
+            guarded_interaction(self.interaction.clone(), &self.statuses)
+        }
+        #[cfg(not(feature = "render"))]
         self.interaction.clone()
     }
 
@@ -409,6 +468,15 @@ fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interacti
         },
         crate::terminal::InteractionMode::Force => bang::Interaction::forced(),
     }
+}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+fn guarded_interaction(
+    interaction: bang::Interaction,
+    statuses: &crate::status::StatusCoordinator,
+) -> bang::Interaction {
+    let statuses = statuses.clone();
+    interaction.with_guard(move || statuses.prompt_guard())
 }
 
 #[cfg(test)]
@@ -443,6 +511,72 @@ mod tests {
         let context = Context::new().with_output_format(crate::output::Format::Json);
         assert_eq!(context.output_format(), crate::output::Format::Json);
         assert_eq!(context.output().format(), crate::output::Format::Json);
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
+    #[test]
+    fn terminal_application_uses_configured_output_and_excludes_nested_owners() {
+        use std::io::Write as _;
+
+        let capture = Capture::default();
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force)
+            .with_transient_writer(capture.clone());
+
+        context
+            .with_terminal_application(|terminal| {
+                terminal.write_all(b"application").unwrap();
+                let nested = context.with_terminal_application(|_| Ok(()));
+                assert_eq!(
+                    nested.unwrap_err().kind(),
+                    crate::error::ErrorKind::InteractionBusy,
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(capture.text(), "application");
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    #[test]
+    fn terminal_application_releases_exclusivity_after_an_error() {
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+        let failed = context.with_terminal_application::<()>(|_| Err("failed".into()));
+        assert!(failed.is_err());
+        context.with_terminal_application(|_| Ok(())).unwrap();
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    #[test]
+    fn terminal_application_accepts_caller_supplied_handles() {
+        use std::{io::Write as _, os::unix::net::UnixStream};
+
+        let (input, _peer) = UnixStream::pair().unwrap();
+        let mut output = Vec::new();
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+
+        context
+            .with_terminal_application_on(input, &mut output, |terminal| {
+                terminal.write_all(b"custom").unwrap();
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(output, b"custom");
     }
 
     #[test]
