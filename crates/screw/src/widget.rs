@@ -4,6 +4,7 @@ use std::{
         VecDeque,
     },
     hash::Hash,
+    rc::Rc,
     sync::{
         Arc,
         Mutex,
@@ -34,7 +35,7 @@ pub struct RenderCtx {
     pub theme: Theme,
 }
 
-pub trait Widget: Send + Sync {
+pub trait Widget {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface);
 
     fn tick_interest(&self) -> TickInterest {
@@ -42,11 +43,29 @@ pub trait Widget: Send + Sync {
     }
 }
 
-pub type WidgetRef = Arc<dyn Widget>;
+pub type SharedWidgetRef = Arc<dyn Widget + Send + Sync>;
+
+pub type WidgetRef = SharedWidgetRef;
+
+pub type LocalWidgetRef<'a> = Rc<dyn Widget + 'a>;
 
 pub fn widget<W>(widget: W) -> WidgetRef
 where
-    W: Widget + 'static,
+    W: Widget + Send + Sync + 'static,
+{
+    Arc::new(widget)
+}
+
+pub fn local_widget<'a, W>(widget: W) -> LocalWidgetRef<'a>
+where
+    W: Widget + 'a,
+{
+    Rc::new(widget)
+}
+
+pub fn shared_widget<W>(widget: W) -> SharedWidgetRef
+where
+    W: Widget + Send + Sync + 'static,
 {
     Arc::new(widget)
 }
