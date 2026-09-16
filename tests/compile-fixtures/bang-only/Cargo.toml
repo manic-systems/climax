@@ -1,6 +1,6 @@
 [package]
-name = "fixture-bang-only"
-version = "0.0.0"
+name              = "fixture-bang-only"
+version           = "0.0.0"
 edition.workspace = true
 publish.workspace = true
 

@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use super::navigation::{move_index, no_modifiers, visible_delta};
+use super::navigation::{
+    move_index,
+    no_modifiers,
+    visible_delta,
+};
 use crate::{
-    Context, Event, Key, ListRow, ListView, Reaction, Role, Span, Value, View,
+    Context,
+    Event,
+    Key,
+    ListRow,
+    ListView,
+    Reaction,
+    Role,
+    Span,
+    Value,
+    View,
     ViewContext,
     ViewId,
     Widget,

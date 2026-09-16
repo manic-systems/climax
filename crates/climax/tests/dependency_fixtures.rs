@@ -1,4 +1,7 @@
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::PathBuf,
+    process::Command,
+};
 
 #[test]
 fn documented_dependency_stories_compile_in_isolation() {

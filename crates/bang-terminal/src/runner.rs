@@ -1,19 +1,35 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{
-    self,
-    Read,
+use std::{
+    io::{
+        self,
+        Read,
+    },
+    os::fd::AsFd,
 };
-use std::os::fd::AsFd;
 
 use bang_core::{
-    Event, Key, Modifiers, Presentation, Reaction, Session, SessionStatus, Value, Widget,
+    Event,
+    Key,
+    Modifiers,
+    Presentation,
+    Reaction,
+    Session,
+    SessionStatus,
+    Value,
+    Widget,
     adapter::View,
 };
 
 use crate::{
-    Clock, ProcessTerminalSize, SignalGuard, SignalSource, TerminalEvents, TerminalPoll,
-    TerminalSize, TerminalSizeSource,
+    Clock,
+    ProcessTerminalSize,
+    SignalGuard,
+    SignalSource,
+    TerminalEvents,
+    TerminalPoll,
+    TerminalSize,
+    TerminalSizeSource,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -122,11 +138,13 @@ fn handle_event(
     Ok(match reaction {
         Reaction::Submit(value) => Some(RunOutcome::Submitted(value)),
         Reaction::Cancel => Some(RunOutcome::Cancelled),
-        Reaction::Ignored | Reaction::Changed | Reaction::Focus(_) => match session.status() {
-            SessionStatus::Submitted(value) => Some(RunOutcome::Submitted(value.clone())),
-            SessionStatus::Cancelled => Some(RunOutcome::Cancelled),
-            SessionStatus::Running if ignored => unhandled,
-            SessionStatus::Running => None,
+        Reaction::Ignored | Reaction::Changed | Reaction::Focus(_) => {
+            match session.status() {
+                SessionStatus::Submitted(value) => Some(RunOutcome::Submitted(value.clone())),
+                SessionStatus::Cancelled => Some(RunOutcome::Cancelled),
+                SessionStatus::Running if ignored => unhandled,
+                SessionStatus::Running => None,
+            }
         },
     })
 }
@@ -169,11 +187,21 @@ fn outcome_from_status(status: &SessionStatus) -> RunOutcome {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, io::Cursor};
+    use std::{
+        collections::VecDeque,
+        io::Cursor,
+    };
 
     use bang_core::{
-        ListPresentation, Presentation, Role, Span, ViewContext, ViewId, WidgetId,
-        adapter::plain_snapshot, widgets::TextInput,
+        ListPresentation,
+        Presentation,
+        Role,
+        Span,
+        ViewContext,
+        ViewId,
+        WidgetId,
+        adapter::plain_snapshot,
+        widgets::TextInput,
     };
 
     use super::*;
@@ -181,12 +209,12 @@ mod tests {
 
     #[derive(Default)]
     struct FakeRenderer {
-        views: Vec<String>,
-        resizes: Vec<TerminalSize>,
-        viewport: Option<TerminalSize>,
+        views:               Vec<String>,
+        resizes:             Vec<TerminalSize>,
+        viewport:            Option<TerminalSize>,
         viewports_at_render: Vec<Option<TerminalSize>>,
-        presentation: Presentation,
-        fail_render_at: Option<usize>,
+        presentation:        Presentation,
+        fail_render_at:      Option<usize>,
     }
 
     impl SessionRenderer for FakeRenderer {
@@ -244,10 +272,9 @@ mod tests {
                 .iter()
                 .all(|viewport| *viewport == Some(size))
         );
-        assert_eq!(
-            renderer.views,
-            ["name: ", "name: a", "name: ab", "name: ab"]
-        );
+        assert_eq!(renderer.views, [
+            "name: ", "name: a", "name: ab", "name: ab"
+        ]);
     }
 
     #[test]
@@ -274,11 +301,11 @@ mod tests {
         let mut renderer = FakeRenderer {
             presentation: Presentation {
                 lists: vec![ListPresentation {
-                    id: ViewId::borrowed("choices"),
-                    visible: 1..3,
+                    id:            ViewId::borrowed("choices"),
+                    visible:       1..3,
                     fully_visible: 1..3,
-                    page_up: Some(0),
-                    page_down: Some(3),
+                    page_up:       Some(0),
+                    page_down:     Some(3),
                 }],
             },
             ..FakeRenderer::default()

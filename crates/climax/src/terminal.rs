@@ -1,6 +1,12 @@
-use std::io::{self, IsTerminal as _};
+use std::io::{
+    self,
+    IsTerminal as _,
+};
 #[cfg(all(feature = "interactive", feature = "render"))]
-use std::io::{Read, Write};
+use std::io::{
+    Read,
+    Write,
+};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::os::fd::AsFd;
 
@@ -34,9 +40,9 @@ pub enum StatusMode {
 /// Terminal facts observed by the application facade.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalCapabilities {
-    input_terminal: bool,
+    input_terminal:     bool,
     transient_terminal: bool,
-    ansi: bool,
+    ansi:               bool,
 }
 
 /// Readable terminal input accepted by a [`TerminalApplication`].
@@ -50,8 +56,8 @@ impl<T> TerminalInput for T where T: Read + AsFd + ?Sized {}
 /// terminal-presentation lease.
 #[cfg(all(feature = "interactive", feature = "render"))]
 pub struct TerminalApplication<'a> {
-    input: Box<dyn TerminalInput + 'a>,
-    output: Box<dyn Write + 'a>,
+    input:        Box<dyn TerminalInput + 'a>,
+    output:       Box<dyn Write + 'a>,
     capabilities: TerminalCapabilities,
 }
 
@@ -148,8 +154,8 @@ impl TerminalCapabilities {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalPolicy {
     capabilities: TerminalCapabilities,
-    interaction: InteractionMode,
-    status: StatusMode,
+    interaction:  InteractionMode,
+    status:       StatusMode,
 }
 
 impl TerminalPolicy {
@@ -157,8 +163,8 @@ impl TerminalPolicy {
     pub(crate) fn process() -> Self {
         Self {
             capabilities: TerminalCapabilities::detect_process(),
-            interaction: InteractionMode::Auto,
-            status: StatusMode::Auto,
+            interaction:  InteractionMode::Auto,
+            status:       StatusMode::Auto,
         }
     }
 

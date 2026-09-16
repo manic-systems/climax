@@ -1,14 +1,27 @@
-use std::{fmt, rc::Rc};
+use std::{
+    fmt,
+    rc::Rc,
+};
 
 use bang_core::{
     Value,
     widgets::{
-        MultiSelect, ReviewActionBinding, ReviewList, ReviewState, SearchSelect, Select,
-        SelectItem, TextInput,
+        MultiSelect,
+        ReviewActionBinding,
+        ReviewList,
+        ReviewState,
+        SearchSelect,
+        Select,
+        SelectItem,
+        TextInput,
     },
 };
 
-use crate::{Error, Interaction, Result};
+use crate::{
+    Error,
+    Interaction,
+    Result,
+};
 
 const DEFAULT_PAGE_SIZE: usize = 9;
 
@@ -47,16 +60,16 @@ pub fn text(prompt: impl Into<String>) -> TextPrompt {
 
 #[derive(Clone, Debug)]
 struct ListConfig {
-    header: Option<String>,
-    wrap: bool,
+    header:    Option<String>,
+    wrap:      bool,
     page_size: usize,
 }
 
 impl Default for ListConfig {
     fn default() -> Self {
         Self {
-            header: None,
-            wrap: true,
+            header:    None,
+            wrap:      true,
             page_size: DEFAULT_PAGE_SIZE,
         }
     }
@@ -86,7 +99,7 @@ macro_rules! list_config_methods {
 
 #[derive(Clone, Debug, Default)]
 pub struct SelectConfig {
-    list: ListConfig,
+    list:     ListConfig,
     selected: Option<usize>,
 }
 
@@ -102,9 +115,9 @@ impl SelectConfig {
 
 #[derive(Clone, Debug, Default)]
 pub struct MultiSelectConfig {
-    list: ListConfig,
+    list:     ListConfig,
     selected: Option<usize>,
-    checked: Vec<usize>,
+    checked:  Vec<usize>,
 }
 
 impl MultiSelectConfig {
@@ -131,10 +144,10 @@ impl MultiSelectConfig {
 
 #[derive(Clone, Debug, Default)]
 pub struct SearchConfig {
-    list: ListConfig,
-    prompt: Option<String>,
+    list:        ListConfig,
+    prompt:      Option<String>,
     placeholder: Option<String>,
-    selected: Option<usize>,
+    selected:    Option<usize>,
 }
 
 impl SearchConfig {
@@ -163,10 +176,10 @@ type Validator = dyn Fn(&str) -> std::result::Result<(), String> + 'static;
 
 #[derive(Clone, Default)]
 pub struct TextConfig {
-    id: Option<String>,
-    value: Option<String>,
+    id:          Option<String>,
+    value:       Option<String>,
     placeholder: Option<String>,
-    validator: Option<Rc<Validator>>,
+    validator:   Option<Rc<Validator>>,
 }
 
 impl TextConfig {
@@ -212,16 +225,16 @@ impl fmt::Debug for TextConfig {
 
 #[derive(Clone, Debug)]
 pub struct ReviewConfig {
-    list: ListConfig,
-    selected: Option<usize>,
+    list:         ListConfig,
+    selected:     Option<usize>,
     show_removed: bool,
 }
 
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
-            list: ListConfig::default(),
-            selected: None,
+            list:         ListConfig::default(),
+            selected:     None,
             show_removed: true,
         }
     }
@@ -263,8 +276,8 @@ pub enum ReviewExit<A> {
 /// An item returned from an accepted review.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reviewed<T> {
-    value: T,
-    state: ReviewState,
+    value:   T,
+    state:   ReviewState,
     changed: bool,
 }
 
@@ -293,7 +306,7 @@ impl<T> Reviewed<T> {
 /// The exit and, when accepted, the resulting review items.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewOutcome<T, A> {
-    exit: ReviewExit<A>,
+    exit:           ReviewExit<A>,
     accepted_items: Option<Vec<Reviewed<T>>>,
 }
 
@@ -318,9 +331,9 @@ impl<T, A> ReviewOutcome<T, A> {
 
 #[derive(Clone, Debug)]
 struct ReviewPromptCore<T> {
-    id: String,
-    choices: Vec<ReviewChoice<T>>,
-    config: ReviewConfig,
+    id:          String,
+    choices:     Vec<ReviewChoice<T>>,
+    config:      ReviewConfig,
     interaction: Interaction,
 }
 
@@ -328,9 +341,9 @@ impl<T> ReviewPromptCore<T> {
     #[must_use]
     fn new(id: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
-            choices: Vec::new(),
-            config: ReviewConfig::default(),
+            id:          id.into(),
+            choices:     Vec::new(),
+            config:      ReviewConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -440,7 +453,7 @@ impl<T> ReviewPrompt<T> {
         value: A,
     ) -> ReviewPromptWithActions<T, A> {
         ReviewPromptWithActions {
-            core: self.core,
+            core:    self.core,
             actions: vec![ReviewPromptAction {
                 key,
                 help: help.into(),
@@ -458,9 +471,11 @@ impl<T> ReviewPrompt<T> {
             resolve_review(interaction.interact(widget, [])?, choices, Vec::new())?;
         let (exit, items) = outcome.into_parts();
         match exit {
-            ReviewExit::Submit => items
-                .map(PromptOutcome::Submit)
-                .ok_or_else(|| Error::unexpected("accepted review items")),
+            ReviewExit::Submit => {
+                items
+                    .map(PromptOutcome::Submit)
+                    .ok_or_else(|| Error::unexpected("accepted review items"))
+            },
             ReviewExit::Leave => Ok(PromptOutcome::Leave),
             ReviewExit::Action(never) => match never {},
         }
@@ -479,7 +494,7 @@ impl<T> Configurable for ReviewPrompt<T> {
 /// A review prompt with one or more typed intrinsic actions.
 #[derive(Clone, Debug)]
 pub struct ReviewPromptWithActions<T, A> {
-    core: ReviewPromptCore<T>,
+    core:    ReviewPromptCore<T>,
     actions: Vec<ReviewPromptAction<A>>,
 }
 
@@ -542,16 +557,16 @@ struct ReviewChoice<T> {
 
 #[derive(Clone, Debug)]
 struct ReviewPromptAction<A> {
-    key: char,
-    help: String,
+    key:   char,
+    help:  String,
     value: A,
 }
 
 #[derive(Clone, Debug)]
 pub struct SelectPrompt<T> {
-    id: String,
-    choices: Vec<Choice<T>>,
-    config: SelectConfig,
+    id:          String,
+    choices:     Vec<Choice<T>>,
+    config:      SelectConfig,
     interaction: Interaction,
 }
 
@@ -559,9 +574,9 @@ impl<T> SelectPrompt<T> {
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
-            choices: Vec::new(),
-            config: SelectConfig::default(),
+            id:          id.into(),
+            choices:     Vec::new(),
+            config:      SelectConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -639,9 +654,9 @@ impl<T> Configurable for SelectPrompt<T> {
 
 #[derive(Clone, Debug)]
 pub struct MultiSelectPrompt<T> {
-    id: String,
-    choices: Vec<Choice<T>>,
-    config: MultiSelectConfig,
+    id:          String,
+    choices:     Vec<Choice<T>>,
+    config:      MultiSelectConfig,
     interaction: Interaction,
 }
 
@@ -649,9 +664,9 @@ impl<T> MultiSelectPrompt<T> {
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
-            choices: Vec::new(),
-            config: MultiSelectConfig::default(),
+            id:          id.into(),
+            choices:     Vec::new(),
+            config:      MultiSelectConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -735,9 +750,9 @@ impl<T> Configurable for MultiSelectPrompt<T> {
 
 #[derive(Clone, Debug)]
 pub struct SearchPrompt<T> {
-    id: String,
-    choices: Vec<Choice<T>>,
-    config: SearchConfig,
+    id:          String,
+    choices:     Vec<Choice<T>>,
+    config:      SearchConfig,
     interaction: Interaction,
 }
 
@@ -745,9 +760,9 @@ impl<T> SearchPrompt<T> {
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         Self {
-            id: id.into(),
-            choices: Vec::new(),
-            config: SearchConfig::default(),
+            id:          id.into(),
+            choices:     Vec::new(),
+            config:      SearchConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -842,8 +857,8 @@ impl<T> Configurable for SearchPrompt<T> {
 
 #[derive(Clone, Debug)]
 pub struct TextPrompt {
-    prompt: String,
-    config: TextConfig,
+    prompt:      String,
+    config:      TextConfig,
     interaction: Interaction,
 }
 
@@ -851,8 +866,8 @@ impl TextPrompt {
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            config: TextConfig::default(),
+            prompt:      prompt.into(),
+            config:      TextConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -902,9 +917,11 @@ impl TextPrompt {
         if let Some(validator) = self.config.validator {
             widget = widget.with_validator(move |value| validator(value));
         }
-        resolve_prompt(self.interaction.interact(widget, []), |value| match value {
-            Value::String(value) => Ok(value),
-            _ => Err(Error::unexpected("text")),
+        resolve_prompt(self.interaction.interact(widget, []), |value| {
+            match value {
+                Value::String(value) => Ok(value),
+                _ => Err(Error::unexpected("text")),
+            }
         })
     }
 }
@@ -996,7 +1013,7 @@ fn resolve_review<T, A>(
         .ok_or_else(|| Error::unexpected("a review exit"))?;
     if exit == "leave" {
         return Ok(ReviewOutcome {
-            exit: ReviewExit::Leave,
+            exit:           ReviewExit::Leave,
             accepted_items: None,
         });
     }
@@ -1057,8 +1074,9 @@ fn resolve_review<T, A>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     #[test]
     fn prompt_specific_configs_cover_normal_presentation_state() {
@@ -1215,8 +1233,8 @@ mod tests {
                 state: ReviewState::Unconfirmed,
             }],
             vec![ReviewPromptAction {
-                key: 'g',
-                help: "regenerate".to_owned(),
+                key:   'g',
+                help:  "regenerate".to_owned(),
                 value: "regen",
             }],
         )

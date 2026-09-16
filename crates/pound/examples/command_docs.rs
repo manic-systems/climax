@@ -27,9 +27,9 @@ struct Demo {
 #[derive(Debug, Parse)]
 struct Shared {
     #[pound(flatten)]
-    output:  Output,
+    output:   Output,
     #[pound(short, long, count, global, help = "Increase diagnostic detail")]
-    verbose: u8,
+    verbose:  u8,
     #[pound(long, global, hidden)]
     trace:    bool,
     #[pound(flatten)]

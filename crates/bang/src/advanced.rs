@@ -3,12 +3,28 @@
 //! Most applications should use the typed prompt builders at the crate root.
 
 pub use bang_core::{
-    ActionBinding, ActionLayer, Context, Event, FocusTarget, Key, KeyEvent, Modifiers, Reaction,
-    Session, SessionStatus, Value, Widget, widgets,
+    ActionBinding,
+    ActionLayer,
+    Context,
+    Event,
+    FocusTarget,
+    Key,
+    KeyEvent,
+    Modifiers,
+    Reaction,
+    Session,
+    SessionStatus,
+    Value,
+    Widget,
+    widgets,
 };
 
 pub use crate::interaction::InteractionWidget;
-use crate::{Error, Interaction, Result};
+use crate::{
+    Error,
+    Interaction,
+    Result,
+};
 
 /// Run a custom widget in the live terminal session.
 pub fn interact_widget(
@@ -90,7 +106,11 @@ fn is_control_char(event: &Event, value: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use bang_core::{ActionBinding, ActionLayer, widgets::TextInput};
+    use bang_core::{
+        ActionBinding,
+        ActionLayer,
+        widgets::TextInput,
+    };
 
     use super::*;
 

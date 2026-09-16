@@ -2,10 +2,25 @@
 
 use std::collections::BTreeMap;
 
-use super::navigation::{move_index, no_modifiers, visible_delta};
-use super::SelectItem;
+use super::{
+    SelectItem,
+    navigation::{
+        move_index,
+        no_modifiers,
+        visible_delta,
+    },
+};
 use crate::{
-    Context, Event, Key, ListRow, ListView, Reaction, Role, Span, Value, View,
+    Context,
+    Event,
+    Key,
+    ListRow,
+    ListView,
+    Reaction,
+    Role,
+    Span,
+    Value,
+    View,
     ViewContext,
     ViewId,
     Widget,
@@ -130,7 +145,7 @@ pub struct ReviewList {
     page_size:      usize,
     wrap:           bool,
     show_removed:   bool,
-    output: ReviewOutput,
+    output:         ReviewOutput,
     custom_actions: Vec<ReviewActionBinding>,
 }
 
@@ -604,7 +619,10 @@ impl Widget for ReviewList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Session, SessionStatus};
+    use crate::{
+        Session,
+        SessionStatus,
+    };
 
     #[test]
     fn structured_review_distinguishes_submit_leave_and_action() {

@@ -25,7 +25,11 @@ pub use app::{
     run_with,
 };
 #[cfg(feature = "parse")]
-pub use app::{main, try_run, try_run_from};
+pub use app::{
+    main,
+    try_run,
+    try_run_from,
+};
 pub use error::{
     Error,
     Result,

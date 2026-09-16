@@ -78,10 +78,12 @@ impl Decoder {
 
             let first = self.pending[0];
             match first {
-                ESC => match self.decode_escape() {
-                    EscapeResult::Event(event) => events.push(event),
-                    EscapeResult::Pending => break,
-                    EscapeResult::Unknown(bytes) => events.push(Event::UnknownEscape(bytes)),
+                ESC => {
+                    match self.decode_escape() {
+                        EscapeResult::Event(event) => events.push(event),
+                        EscapeResult::Pending => break,
+                        EscapeResult::Unknown(bytes) => events.push(Event::UnknownEscape(bytes)),
+                    }
                 },
                 CR | LF => {
                     self.pending.drain(..1);
@@ -110,15 +112,17 @@ impl Decoder {
                 0x00..=0x1F => {
                     self.pending.drain(..1);
                 },
-                _ => match decode_utf8_prefix(&self.pending) {
-                    Utf8Result::Char(value, len) => {
-                        self.pending.drain(..len);
-                        events.push(Event::char(value));
-                    },
-                    Utf8Result::Pending => break,
-                    Utf8Result::Invalid => {
-                        self.pending.drain(..1);
-                    },
+                _ => {
+                    match decode_utf8_prefix(&self.pending) {
+                        Utf8Result::Char(value, len) => {
+                            self.pending.drain(..len);
+                            events.push(Event::char(value));
+                        },
+                        Utf8Result::Pending => break,
+                        Utf8Result::Invalid => {
+                            self.pending.drain(..1);
+                        },
+                    }
                 },
             }
         }
@@ -126,7 +130,8 @@ impl Decoder {
         events
     }
 
-    /// Drain buffered input at EOF, resolving ambiguous prefixes as timeout would.
+    /// Drain buffered input at EOF, resolving ambiguous prefixes as timeout
+    /// would.
     pub fn flush(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         if self.in_paste {
@@ -173,9 +178,11 @@ impl Decoder {
             // A CSI with parameters but no final byte, or a truncated SS3, can
             // only be finished by the bytes still in flight.
             Some(b'[' | b'O') => EscapeState::Incomplete,
-            Some(_) => match decode_utf8_prefix(&self.pending[1..]) {
-                Utf8Result::Pending => EscapeState::Incomplete,
-                Utf8Result::Char(..) | Utf8Result::Invalid => EscapeState::None,
+            Some(_) => {
+                match decode_utf8_prefix(&self.pending[1..]) {
+                    Utf8Result::Pending => EscapeState::Incomplete,
+                    Utf8Result::Char(..) | Utf8Result::Invalid => EscapeState::None,
+                }
             },
         }
     }
@@ -192,10 +199,12 @@ impl Decoder {
         }
         let event = match self.pending.get(1) {
             None => Event::key(Key::Esc),
-            Some(&byte) => Event::Key(KeyEvent::with_modifiers(
-                Key::Char(char::from(byte)),
-                Modifiers::ALT,
-            )),
+            Some(&byte) => {
+                Event::Key(KeyEvent::with_modifiers(
+                    Key::Char(char::from(byte)),
+                    Modifiers::ALT,
+                ))
+            },
         };
         self.pending.clear();
         Some(event)
@@ -217,12 +226,14 @@ impl Decoder {
                 let value = char::from(b'a' + self.pending[1] - 1);
                 self.consume_modified_key(2, Key::Char(value), Modifiers::ALT | Modifiers::CONTROL)
             },
-            _ => match decode_utf8_prefix(&self.pending[1..]) {
-                Utf8Result::Char(value, len) => {
-                    self.consume_modified_key(len + 1, Key::Char(value), Modifiers::ALT)
-                },
-                Utf8Result::Pending => EscapeResult::Pending,
-                Utf8Result::Invalid => EscapeResult::Unknown(self.pending.drain(..1).collect()),
+            _ => {
+                match decode_utf8_prefix(&self.pending[1..]) {
+                    Utf8Result::Char(value, len) => {
+                        self.consume_modified_key(len + 1, Key::Char(value), Modifiers::ALT)
+                    },
+                    Utf8Result::Pending => EscapeResult::Pending,
+                    Utf8Result::Invalid => EscapeResult::Unknown(self.pending.drain(..1).collect()),
+                }
             },
         }
     }
@@ -561,41 +572,37 @@ mod tests {
         assert!(decoder.feed(b"\x1b[1;5").is_empty());
         assert_eq!(decoder.escape_state(), EscapeState::Incomplete);
         assert_eq!(decoder.flush_escape(), None);
-        assert_eq!(
-            decoder.feed(b"C"),
-            vec![modified(Key::Right, Modifiers::CONTROL)],
-        );
+        assert_eq!(decoder.feed(b"C"), vec![modified(
+            Key::Right,
+            Modifiers::CONTROL
+        )],);
     }
 
     #[test]
     fn eof_drains_partial_sequences_the_way_a_deadline_would() {
-        assert_eq!(
-            decode_all(b"\x1b["),
-            vec![modified(Key::Char('['), Modifiers::ALT)],
-        );
-        assert_eq!(
-            decode_all(b"\x1bO"),
-            vec![modified(Key::Char('O'), Modifiers::ALT)],
-        );
+        assert_eq!(decode_all(b"\x1b["), vec![modified(
+            Key::Char('['),
+            Modifiers::ALT
+        )],);
+        assert_eq!(decode_all(b"\x1bO"), vec![modified(
+            Key::Char('O'),
+            Modifiers::ALT
+        )],);
         assert_eq!(decode_all(b"\x1b"), vec![Event::key(Key::Esc)]);
-        assert_eq!(
-            decode_all(b"\x1b[1;"),
-            vec![
-                Event::key(Key::Esc),
-                Event::char('['),
-                Event::char('1'),
-                Event::char(';'),
-            ],
-        );
+        assert_eq!(decode_all(b"\x1b[1;"), vec![
+            Event::key(Key::Esc),
+            Event::char('['),
+            Event::char('1'),
+            Event::char(';'),
+        ],);
     }
 
     #[test]
     fn complete_unknown_sequences_are_not_reported_as_escape_keys() {
         for bytes in [b"\x1b[15~".as_slice(), b"\x1bOP".as_slice()] {
-            assert_eq!(
-                decode_all(bytes),
-                vec![Event::UnknownEscape(bytes.to_vec())],
-            );
+            assert_eq!(decode_all(bytes), vec![Event::UnknownEscape(
+                bytes.to_vec()
+            )],);
         }
     }
 }

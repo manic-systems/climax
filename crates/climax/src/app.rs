@@ -1,5 +1,8 @@
 #[cfg(feature = "parse")]
-use std::{io, process::ExitCode};
+use std::{
+    io,
+    process::ExitCode,
+};
 
 use crate::Result;
 
@@ -92,18 +95,22 @@ where
     F: FnOnce(Context, C) -> Result<()>,
 {
     match parsed {
-        Ok(command) => match run_with(command, f) {
-            Ok(()) => Completion::success(),
-            Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
-                Completion::cancelled()
-            },
-            Err(error) => Completion::error(1, error),
+        Ok(command) => {
+            match run_with(command, f) {
+                Ok(()) => Completion::success(),
+                Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
+                    Completion::cancelled()
+                },
+                Err(error) => Completion::error(1, error),
+            }
         },
         Err(error) if error.is_exit() => Completion::output(error.render()),
-        Err(error) => Completion {
-            code: 2,
-            stream: Some(CompletionStream::Stderr),
-            message: Some(error.render()),
+        Err(error) => {
+            Completion {
+                code:    2,
+                stream:  Some(CompletionStream::Stderr),
+                message: Some(error.render()),
+            }
         },
     }
 }
@@ -111,8 +118,8 @@ where
 #[cfg(feature = "parse")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Completion {
-    code: u8,
-    stream: Option<CompletionStream>,
+    code:    u8,
+    stream:  Option<CompletionStream>,
     message: Option<String>,
 }
 
@@ -127,24 +134,24 @@ enum CompletionStream {
 impl Completion {
     const fn success() -> Self {
         Self {
-            code: 0,
-            stream: None,
+            code:    0,
+            stream:  None,
             message: None,
         }
     }
 
     const fn cancelled() -> Self {
         Self {
-            code: 130,
-            stream: None,
+            code:    130,
+            stream:  None,
             message: None,
         }
     }
 
     const fn output(message: String) -> Self {
         Self {
-            code: 0,
-            stream: Some(CompletionStream::Stdout),
+            code:    0,
+            stream:  Some(CompletionStream::Stdout),
             message: Some(message),
         }
     }
@@ -179,15 +186,15 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 /// Application policy and access to the composed command-line facilities.
 #[derive(Clone, Debug)]
 pub struct Context {
-    output: crate::output::Output,
-    diagnostic: crate::output::Output,
-    terminal: crate::terminal::TerminalPolicy,
+    output:             crate::output::Output,
+    diagnostic:         crate::output::Output,
+    terminal:           crate::terminal::TerminalPolicy,
     #[cfg(feature = "interactive")]
-    interaction: bang::Interaction,
+    interaction:        bang::Interaction,
     #[cfg(feature = "interactive")]
     custom_interaction: bool,
     #[cfg(feature = "render")]
-    statuses: crate::status::StatusCoordinator,
+    statuses:           crate::status::StatusCoordinator,
 }
 
 impl Default for Context {
@@ -281,8 +288,8 @@ impl Context {
 
     /// Sideband output for human-facing context (stderr in text mode).
     ///
-    /// Shares the same result/stream lifecycle as [`Self::output`] but writes to
-    /// the diagnostic stream; `execute` commits both lifecycles.
+    /// Shares the same result/stream lifecycle as [`Self::output`] but writes
+    /// to the diagnostic stream; `execute` commits both lifecycles.
     #[must_use]
     pub fn diagnostic(&self) -> crate::output::Output {
         self.diagnostic.clone()
@@ -558,7 +565,10 @@ mod tests {
     #[cfg(all(feature = "interactive", feature = "render"))]
     #[test]
     fn terminal_application_accepts_caller_supplied_handles() {
-        use std::{io::Write as _, os::unix::net::UnixStream};
+        use std::{
+            io::Write as _,
+            os::unix::net::UnixStream,
+        };
 
         let (input, _peer) = UnixStream::pair().unwrap();
         let mut output = Vec::new();
@@ -632,8 +642,8 @@ mod tests {
 
         let parse = complete::<(), _>(
             Err(pound::Error {
-                kind: pound::ErrorKind::Unknown {
-                    arg: "--wat".to_owned(),
+                kind:  pound::ErrorKind::Unknown {
+                    arg:     "--wat".to_owned(),
                     closest: Some("--watch".to_owned()),
                 },
                 usage: Some("Usage: demo [OPTION]...".to_owned()),
@@ -644,7 +654,10 @@ mod tests {
         assert_eq!(parse.stream, Some(CompletionStream::Stderr));
         assert_eq!(
             parse.message.as_deref(),
-            Some("error: unrecognized argument '--wat'\n\n  tip: did you mean '--watch'\n\nUsage: demo [OPTION]...\n\nFor more information, try '--help'.")
+            Some(
+                "error: unrecognized argument '--wat'\n\n  tip: did you mean '--watch'\n\nUsage: \
+                 demo [OPTION]...\n\nFor more information, try '--help'."
+            )
         );
 
         let application = complete(Ok(()), |_, ()| Err(crate::Error::message("boom")));

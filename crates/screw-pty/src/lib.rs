@@ -4,8 +4,11 @@
 
 mod ansi;
 
-pub use ansi::{EmittedScreen, ScreenCell, ScreenError};
-
+pub use ansi::{
+    EmittedScreen,
+    ScreenCell,
+    ScreenError,
+};
 use screw::{
     RenderCtx,
     Style,

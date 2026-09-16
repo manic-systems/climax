@@ -4,8 +4,7 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// what a parse attempt ran into, or which early exit it was asked for
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +13,7 @@ pub enum ErrorKind {
     InvalidSpecification(String),
     /// unrecognized `--flag` or `-x`
     Unknown {
-        arg: String,
+        arg:     String,
         closest: Option<String>,
     },
     /// an option that takes a value got none
@@ -27,37 +26,29 @@ pub enum ErrorKind {
     UnexpectedValue(String),
     /// first positional named a subcommand that does not exist
     UnknownSubcommand {
-        name: String,
+        name:    String,
         closest: Option<String>,
     },
     /// a subcommand was required but none given
     MissingSubcommand,
     /// a value failed to parse into its target type
     Value {
-        arg: String,
+        arg:   String,
         value: String,
-        msg: String,
+        msg:   String,
     },
     /// two members of a mutually-exclusive group were both set
     Conflict {
-        group: String,
-        first: String,
+        group:  String,
+        first:  String,
         second: String,
     },
     /// an arg was set without the other arg it obliges
     Requires { arg: String, needs: String },
     /// a list arg got fewer values than it accepts
-    TooFewValues {
-        arg: String,
-        min: usize,
-        got: usize,
-    },
+    TooFewValues { arg: String, min: usize, got: usize },
     /// a list arg got more values than it accepts
-    TooManyValues {
-        arg: String,
-        max: usize,
-        got: usize,
-    },
+    TooManyValues { arg: String, max: usize, got: usize },
     /// a required group had none of its members set
     MissingGroup { group: String, options: String },
     /// `-h` / `--help`, payload is rendered help
@@ -125,7 +116,7 @@ impl fmt::Display for ErrorKind {
 /// command in the tree raised it
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
-    pub kind: ErrorKind,
+    pub kind:  ErrorKind,
     pub usage: Option<String>,
 }
 

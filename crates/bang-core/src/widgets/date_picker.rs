@@ -2,7 +2,15 @@
 
 use super::navigation::no_modifiers;
 use crate::{
-    CalendarDay, CalendarView, CalendarWeek, Context, Date, Event, Key, Reaction, Role,
+    CalendarDay,
+    CalendarView,
+    CalendarWeek,
+    Context,
+    Date,
+    Event,
+    Key,
+    Reaction,
+    Role,
     Span,
     Value,
     View,

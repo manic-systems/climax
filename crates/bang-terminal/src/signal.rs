@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
-    fmt, io,
-    os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd},
-    sync::atomic::{AtomicI32, Ordering},
+    fmt,
+    io,
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        OwnedFd,
+    },
+    sync::atomic::{
+        AtomicI32,
+        Ordering,
+    },
 };
 
 static SIGNAL_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
@@ -48,10 +56,10 @@ impl std::error::Error for SignalFailures {
 /// convert signals into events
 #[derive(Debug)]
 pub struct SignalGuard {
-    read_fd: OwnedFd,
+    read_fd:   OwnedFd,
     _write_fd: OwnedFd,
-    previous: Vec<(libc::c_int, libc::sigaction)>,
-    active: bool,
+    previous:  Vec<(libc::c_int, libc::sigaction)>,
+    active:    bool,
 }
 
 impl SignalGuard {

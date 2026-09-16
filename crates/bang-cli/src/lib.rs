@@ -15,7 +15,13 @@ use bang_core::{
     Widget,
     format_output,
     widgets::{
-        DatePicker, Form, MultiSelect, ReviewActionBinding, ReviewList, SearchSelect, Select,
+        DatePicker,
+        Form,
+        MultiSelect,
+        ReviewActionBinding,
+        ReviewList,
+        SearchSelect,
+        Select,
         SelectItem,
         TextInput,
     },
@@ -177,41 +183,49 @@ fn run_command(command: Command) -> Result<Value, String> {
             input_bytes,
             page_size,
             action,
-        } => run_widget(
-            Select::new("select", choice_items(option)?).with_page_size(page_size),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                Select::new("select", choice_items(option)?).with_page_size(page_size),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::MultiSelect {
             option,
             input_bytes,
             page_size,
             action,
-        } => run_widget(
-            MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::Text {
             input_bytes,
             value,
             prompt,
             action,
-        } => run_widget(
-            TextInput::new("text").with_prompt(prompt).with_value(value),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                TextInput::new("text").with_prompt(prompt).with_value(value),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::Search {
             option,
             input_bytes,
             page_size,
             action,
-        } => run_widget(
-            SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
-            input_bytes,
-            action_bindings(action)?,
-        ),
+        } => {
+            run_widget(
+                SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
+                input_bytes,
+                action_bindings(action)?,
+            )
+        },
         Command::ReviewList {
             option,
             input_bytes,
@@ -262,11 +276,13 @@ fn run_config(config: WidgetConfig) -> Result<Value, String> {
             }
             run_widget(widget, config.input_bytes, config.actions)
         },
-        WidgetKind::Text => run_widget(
-            text_from_config(&config),
-            config.input_bytes,
-            config.actions,
-        ),
+        WidgetKind::Text => {
+            run_widget(
+                text_from_config(&config),
+                config.input_bytes,
+                config.actions,
+            )
+        },
         WidgetKind::Search => {
             let mut widget = SearchSelect::new("search", config.options)
                 .with_page_size(config.page_size.unwrap_or(9))

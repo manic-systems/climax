@@ -5,7 +5,16 @@ pub use crate::{
     Error,
     Result,
     run_with,
-    terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
+    terminal::{
+        InteractionMode,
+        StatusMode,
+        TerminalCapabilities,
+        TerminalPolicy,
+    },
 };
 #[cfg(feature = "parse")]
-pub use crate::{main, try_run, try_run_from};
+pub use crate::{
+    main,
+    try_run,
+    try_run_from,
+};

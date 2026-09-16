@@ -1,17 +1,36 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::os::fd::{AsFd, AsRawFd as _};
 use std::{
     collections::VecDeque,
-    io::{self, Read},
-    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    io::{
+        self,
+        Read,
+    },
+    os::fd::{
+        AsFd,
+        AsRawFd as _,
+    },
+    sync::mpsc::{
+        self,
+        Receiver,
+        RecvTimeoutError,
+    },
     thread,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use bang_core::Event;
 
-use crate::{Decoder, EscapeState, SignalGuard, TerminalSize, terminal_size};
+use crate::{
+    Decoder,
+    EscapeState,
+    SignalGuard,
+    TerminalSize,
+    terminal_size,
+};
 
 const DEFAULT_ESCAPE_TIMEOUT: Duration = Duration::from_millis(35);
 const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -114,18 +133,18 @@ enum InputReadiness {
 }
 
 pub struct TerminalEvents<R, S = NoSignals, Z = NoTerminalSize, C = SystemClock> {
-    input: Option<R>,
-    signals: S,
-    sizes: Z,
-    clock: C,
-    wait: WaitMode,
-    decoder: Decoder,
-    pending: VecDeque<TerminalPoll>,
-    last_size: Option<TerminalSize>,
+    input:            Option<R>,
+    signals:          S,
+    sizes:            Z,
+    clock:            C,
+    wait:             WaitMode,
+    decoder:          Decoder,
+    pending:          VecDeque<TerminalPoll>,
+    last_size:        Option<TerminalSize>,
     size_initialized: bool,
-    escape_timeout: Duration,
-    escape_since: Option<Instant>,
-    ended: bool,
+    escape_timeout:   Duration,
+    escape_since:     Option<Instant>,
+    ended:            bool,
 }
 
 impl<R> TerminalEvents<R>
@@ -322,21 +341,25 @@ where
 
     fn wait_for_input(&self) -> io::Result<InputReadiness> {
         match &self.wait {
-            WaitMode::Threaded(receiver) => match receiver.recv_timeout(self.wait_timeout()) {
-                Ok(ReadMessage::Bytes(bytes)) => Ok(InputReadiness::Bytes(bytes)),
-                Ok(ReadMessage::End) | Err(RecvTimeoutError::Disconnected) => {
-                    Ok(InputReadiness::End)
-                },
-                Ok(ReadMessage::Error(error)) => Err(error),
-                Err(RecvTimeoutError::Timeout) => Ok(InputReadiness::Timeout),
-            },
-            WaitMode::Tty(fd) => wait_for_fd(*fd, self.wait_timeout()).map(|ready| {
-                if ready {
-                    InputReadiness::TtyReady
-                } else {
-                    InputReadiness::Timeout
+            WaitMode::Threaded(receiver) => {
+                match receiver.recv_timeout(self.wait_timeout()) {
+                    Ok(ReadMessage::Bytes(bytes)) => Ok(InputReadiness::Bytes(bytes)),
+                    Ok(ReadMessage::End) | Err(RecvTimeoutError::Disconnected) => {
+                        Ok(InputReadiness::End)
+                    },
+                    Ok(ReadMessage::Error(error)) => Err(error),
+                    Err(RecvTimeoutError::Timeout) => Ok(InputReadiness::Timeout),
                 }
-            }),
+            },
+            WaitMode::Tty(fd) => {
+                wait_for_fd(*fd, self.wait_timeout()).map(|ready| {
+                    if ready {
+                        InputReadiness::TtyReady
+                    } else {
+                        InputReadiness::Timeout
+                    }
+                })
+            },
         }
     }
 
@@ -415,7 +438,8 @@ fn wait_for_fd(fd: libc::c_int, timeout: Duration) -> io::Result<bool> {
         revents: 0,
     };
     let timeout = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
-    // SAFETY: descriptor points to one initialized pollfd for the duration of the call.
+    // SAFETY: descriptor points to one initialized pollfd for the duration of the
+    // call.
     let result = unsafe { libc::poll(&raw mut descriptor, 1, timeout) };
     if result < 0 {
         let error = io::Error::last_os_error();
@@ -443,8 +467,13 @@ fn wait_for_fd(fd: libc::c_int, timeout: Duration) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::{io::Write as _, os::unix::net::UnixStream};
+    use std::{
+        io::{
+            Cursor,
+            Write as _,
+        },
+        os::unix::net::UnixStream,
+    };
 
     use bang_core::Key;
 
@@ -494,7 +523,7 @@ mod tests {
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize {
                 cols: 100,
-                rows: 30
+                rows: 30,
             }),
         );
         assert_eq!(

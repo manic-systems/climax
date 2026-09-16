@@ -2,11 +2,25 @@
 
 use std::{
     fs::File,
-    io::{self, Read, Write},
-    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
-    process::{Command, Stdio},
+    io::{
+        self,
+        Read,
+        Write,
+    },
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        RawFd,
+    },
+    process::{
+        Command,
+        Stdio,
+    },
     thread,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -135,8 +149,8 @@ fn open_pty(rows: u16) -> (File, File) {
     let mut master: RawFd = -1;
     let mut slave: RawFd = -1;
     let size = libc::winsize {
-        ws_row: rows,
-        ws_col: 80,
+        ws_row:    rows,
+        ws_col:    80,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };

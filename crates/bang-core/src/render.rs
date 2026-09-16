@@ -2,7 +2,11 @@
 
 use std::ops::Range;
 
-use crate::{CursorAnchor, Date, ViewId};
+use crate::{
+    CursorAnchor,
+    Date,
+    ViewId,
+};
 
 /// Renderer-independent context supplied while a widget describes its view.
 ///
@@ -18,11 +22,11 @@ pub struct ViewContext {}
 /// actual terminal rows without depending on terminal measurement.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ListPresentation {
-    pub id: ViewId,
-    pub visible: Range<usize>,
+    pub id:            ViewId,
+    pub visible:       Range<usize>,
     pub fully_visible: Range<usize>,
-    pub page_up: Option<usize>,
-    pub page_down: Option<usize>,
+    pub page_up:       Option<usize>,
+    pub page_down:     Option<usize>,
 }
 
 /// Feedback returned by a renderer after laying out a semantic view.
@@ -101,19 +105,19 @@ pub enum Role {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ListView {
     /// Stable identity used to associate renderer feedback with this list.
-    pub id:       Option<ViewId>,
-    pub header:   Vec<Span>,
+    pub id:              Option<ViewId>,
+    pub header:          Vec<Span>,
     /// Logical candidates, before physical clipping or wrapping.
-    pub rows:     Vec<ListRow>,
+    pub rows:            Vec<ListRow>,
     /// Selected candidate, indexed within `rows`.
-    pub selected: Option<usize>,
+    pub selected:        Option<usize>,
     /// Logical start requested by the widget's retained scroll intent.
     pub requested_start: usize,
     /// Total logical candidates represented by this view.
-    pub total: usize,
+    pub total:           usize,
     /// Optional policy cap on candidates, independent of physical height.
-    pub max_visible: Option<usize>,
-    pub help:     Vec<Span>,
+    pub max_visible:     Option<usize>,
+    pub help:            Vec<Span>,
 }
 
 /// One renderer-neutral row in a [`ListView`].
@@ -267,10 +271,21 @@ fn render_spans(spans: &[Span]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CalendarDay, CalendarView, CalendarWeek, ListRow, ListView, Role, Span, TextInputView,
-        View, plain_snapshot,
+        CalendarDay,
+        CalendarView,
+        CalendarWeek,
+        ListRow,
+        ListView,
+        Role,
+        Span,
+        TextInputView,
+        View,
+        plain_snapshot,
     };
-    use crate::{CursorAnchor, Date};
+    use crate::{
+        CursorAnchor,
+        Date,
+    };
 
     fn date(day: u8) -> Date {
         Date::new(2026, 7, day).expect("test date is valid")
@@ -279,27 +294,27 @@ mod tests {
     #[test]
     fn list_snapshot_exposes_selection_and_check_state() {
         let view = View::List(ListView {
-            id: None,
-            header: vec![Span::new("Pick one", Role::Prompt)],
-            rows: vec![
+            id:              None,
+            header:          vec![Span::new("Pick one", Role::Prompt)],
+            rows:            vec![
                 ListRow {
-                    id: None,
-                    spans: vec![Span::normal("Alpha")],
+                    id:       None,
+                    spans:    vec![Span::normal("Alpha")],
                     selected: true,
-                    checked: Some(true),
+                    checked:  Some(true),
                 },
                 ListRow {
-                    id: None,
-                    spans: vec![Span::normal("Beta")],
+                    id:       None,
+                    spans:    vec![Span::normal("Beta")],
                     selected: false,
-                    checked: Some(false),
+                    checked:  Some(false),
                 },
             ],
-            selected: Some(0),
+            selected:        Some(0),
             requested_start: 0,
-            total: 2,
-            max_visible: None,
-            help: vec![Span::new("enter to select", Role::Dim)],
+            total:           2,
+            max_visible:     None,
+            help:            vec![Span::new("enter to select", Role::Dim)],
         });
 
         assert_eq!(
@@ -311,13 +326,13 @@ mod tests {
     #[test]
     fn text_input_snapshot_uses_value_and_reports_error() {
         let view = View::TextInput(TextInputView {
-            id: None,
-            prompt: vec![Span::new("Name: ", Role::Prompt)],
-            value: "Ada".to_owned(),
-            placeholder: Some("anonymous".to_owned()),
-            cursor: 3,
+            id:            None,
+            prompt:        vec![Span::new("Name: ", Role::Prompt)],
+            value:         "Ada".to_owned(),
+            placeholder:   Some("anonymous".to_owned()),
+            cursor:        3,
             cursor_anchor: CursorAnchor::borrowed("name"),
-            error: Some("already taken".to_owned()),
+            error:         Some("already taken".to_owned()),
         });
 
         assert_eq!(plain_snapshot(&view), "Name: Ada\nalready taken");
@@ -326,38 +341,38 @@ mod tests {
     #[test]
     fn calendar_snapshot_exposes_selected_today_and_outside_month_days() {
         let view = View::Calendar(CalendarView {
-            id: None,
-            year: 2026,
-            month: 7,
+            id:          None,
+            year:        2026,
+            month:       7,
             month_label: "July 2026".to_owned(),
-            weekdays: vec!["Mo".to_owned(), "Tu".to_owned(), "We".to_owned()],
-            weeks: vec![CalendarWeek {
+            weekdays:    vec!["Mo".to_owned(), "Tu".to_owned(), "We".to_owned()],
+            weeks:       vec![CalendarWeek {
                 days: vec![
                     CalendarDay {
-                        date: date(1),
-                        label: "1".to_owned(),
+                        date:     date(1),
+                        label:    "1".to_owned(),
                         in_month: true,
                         selected: true,
-                        today: false,
+                        today:    false,
                     },
                     CalendarDay {
-                        date: date(2),
-                        label: "2".to_owned(),
+                        date:     date(2),
+                        label:    "2".to_owned(),
                         in_month: true,
                         selected: false,
-                        today: true,
+                        today:    true,
                     },
                     CalendarDay {
-                        date: date(3),
-                        label: "3".to_owned(),
+                        date:     date(3),
+                        label:    "3".to_owned(),
                         in_month: false,
                         selected: false,
-                        today: false,
+                        today:    false,
                     },
                 ],
             }],
-            selected: date(1),
-            help: vec![],
+            selected:    date(1),
+            help:        vec![],
         });
 
         assert_eq!(plain_snapshot(&view), "July 2026\nMo Tu We\n> 1 * 2 . 3");

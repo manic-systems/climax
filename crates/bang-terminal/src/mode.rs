@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io;
-use std::os::fd::{AsFd, AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::{
+    io,
+    os::fd::{
+        AsFd,
+        AsRawFd as _,
+        FromRawFd as _,
+        OwnedFd,
+    },
+};
 
 /// Read behavior installed alongside the usual raw terminal flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RawModeOptions {
-    minimum_bytes: u8,
+    minimum_bytes:       u8,
     timeout_deciseconds: u8,
 }
 
@@ -16,7 +23,7 @@ impl RawModeOptions {
     #[must_use]
     pub const fn blocking() -> Self {
         Self {
-            minimum_bytes: 1,
+            minimum_bytes:       1,
             timeout_deciseconds: 0,
         }
     }
@@ -51,8 +58,8 @@ impl Default for RawModeOptions {
 /// TODO - should we catch job control then drop and reinstate on resume ?
 #[derive(Debug)]
 pub struct TerminalModeGuard {
-    fd: OwnedFd,
-    saved: libc::termios,
+    fd:     OwnedFd,
+    saved:  libc::termios,
     active: bool,
 }
 

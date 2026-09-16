@@ -1,4 +1,12 @@
-use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
+use crate::{
+    InputAnchor,
+    Line,
+    LocalWidgetRef,
+    Stack,
+    WidgetRef,
+    local_widget,
+    widget,
+};
 
 #[derive(Clone)]
 pub struct LayoutBuilder<H = WidgetRef> {
@@ -78,7 +86,10 @@ pub fn local_layout<'a>() -> LayoutBuilder<LocalWidgetRef<'a>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+    };
 
     use super::*;
     use crate::{

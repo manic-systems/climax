@@ -2,7 +2,10 @@
 
 use std::{
     fmt,
-    io::{self, Write},
+    io::{
+        self,
+        Write,
+    },
 };
 
 const ENTER_ALTERNATE: &[u8] = b"\x1b[?1049h";
@@ -35,9 +38,9 @@ pub enum CursorPolicy {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScreenOptions {
-    kind: ScreenKind,
-    cursor: CursorPolicy,
-    bracketed_paste: bool,
+    kind:                  ScreenKind,
+    cursor:                CursorPolicy,
+    bracketed_paste:       bool,
     clear_inline_on_leave: bool,
 }
 
@@ -45,9 +48,9 @@ impl ScreenOptions {
     #[must_use]
     pub const fn inline() -> Self {
         Self {
-            kind: ScreenKind::Inline,
-            cursor: CursorPolicy::Hide,
-            bracketed_paste: true,
+            kind:                  ScreenKind::Inline,
+            cursor:                CursorPolicy::Hide,
+            bracketed_paste:       true,
             clear_inline_on_leave: true,
         }
     }
@@ -55,9 +58,9 @@ impl ScreenOptions {
     #[must_use]
     pub const fn full_screen() -> Self {
         Self {
-            kind: ScreenKind::Alternate,
-            cursor: CursorPolicy::Hide,
-            bracketed_paste: false,
+            kind:                  ScreenKind::Alternate,
+            cursor:                CursorPolicy::Hide,
+            bracketed_paste:       false,
             clear_inline_on_leave: false,
         }
     }
@@ -125,9 +128,9 @@ pub struct ScreenGuard<'a, W>
 where
     W: Write + ?Sized,
 {
-    output: &'a mut W,
+    output:  &'a mut W,
     options: ScreenOptions,
-    state: u8,
+    state:   u8,
 }
 
 impl<'a, W> ScreenGuard<'a, W>
@@ -144,8 +147,10 @@ where
         if let Err(error) = entered {
             return match guard.leave_active() {
                 Ok(()) => Err(error),
-                Err(rollback) => Err(failures_result(vec![error, rollback])
-                    .expect_err("two failures always produce an error")),
+                Err(rollback) => {
+                    Err(failures_result(vec![error, rollback])
+                        .expect_err("two failures always produce an error"))
+                },
             };
         }
         Ok(guard)
@@ -409,9 +414,9 @@ mod tests {
     }
 
     struct FailingWriter {
-        bytes: Vec<u8>,
+        bytes:    Vec<u8>,
         attempts: usize,
-        fail_at: usize,
+        fail_at:  usize,
     }
 
     impl FailingWriter {
@@ -447,7 +452,7 @@ mod tests {
 
     #[derive(Default)]
     struct PartialWriter {
-        bytes: Vec<u8>,
+        bytes:  Vec<u8>,
         writes: usize,
     }
 

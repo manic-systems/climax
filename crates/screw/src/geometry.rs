@@ -2,7 +2,7 @@ use crate::Position;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Size {
-    pub width: usize,
+    pub width:  usize,
     pub height: usize,
 }
 
@@ -19,14 +19,14 @@ impl Size {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Rect {
     pub origin: Position,
-    pub size: Size,
+    pub size:   Size,
 }
 
 impl Rect {
     pub const fn new(row: usize, col: usize, width: usize, height: usize) -> Self {
         Self {
             origin: Position { row, col },
-            size: Size { width, height },
+            size:   Size { width, height },
         }
     }
 
@@ -87,7 +87,7 @@ impl Rect {
                 row: self.origin.row.saturating_add(rows),
                 col: self.origin.col.saturating_add(columns),
             },
-            size: self.size,
+            size:   self.size,
         }
     }
 
@@ -100,8 +100,8 @@ impl Rect {
                 row: self.origin.row.saturating_add(insets.top),
                 col: self.origin.col.saturating_add(insets.left),
             },
-            size: Size {
-                width: self.size.width.saturating_sub(columns),
+            size:   Size {
+                width:  self.size.width.saturating_sub(columns),
                 height: self.size.height.saturating_sub(rows),
             },
         }
@@ -110,10 +110,10 @@ impl Rect {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Insets {
-    pub top: usize,
-    pub right: usize,
+    pub top:    usize,
+    pub right:  usize,
     pub bottom: usize,
-    pub left: usize,
+    pub left:   usize,
 }
 
 impl Insets {
@@ -142,7 +142,7 @@ impl Insets {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Viewport {
     pub columns: usize,
-    pub rows: usize,
+    pub rows:    usize,
 }
 
 impl Viewport {
@@ -181,12 +181,9 @@ mod tests {
         let rect = Rect::new(usize::MAX - 1, usize::MAX - 1, 8, 8);
         assert_eq!(rect.right(), usize::MAX);
         assert_eq!(rect.bottom(), usize::MAX);
-        assert_eq!(
-            rect.translate(9, 9).origin,
-            Position {
-                row: usize::MAX,
-                col: usize::MAX,
-            }
-        );
+        assert_eq!(rect.translate(9, 9).origin, Position {
+            row: usize::MAX,
+            col: usize::MAX,
+        });
     }
 }

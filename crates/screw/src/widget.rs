@@ -15,8 +15,15 @@ use std::{
 use unicode_width::UnicodeWidthChar as _;
 
 use crate::{
-    LayoutMode, Role, Style, Surface, Theme, Viewport, renderer::layout_surface,
-    surface::append_surface, sync::lock,
+    LayoutMode,
+    Role,
+    Style,
+    Surface,
+    Theme,
+    Viewport,
+    renderer::layout_surface,
+    surface::append_surface,
+    sync::lock,
 };
 
 /// A widget's vertical allocation behavior inside a [`Stack`].
@@ -38,21 +45,21 @@ pub enum TickInterest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
-    frame: u64,
-    columns: Option<usize>,
-    rows: Option<usize>,
+    frame:       u64,
+    columns:     Option<usize>,
+    rows:        Option<usize>,
     layout_mode: LayoutMode,
-    theme: Theme,
+    theme:       Theme,
 }
 
 impl RenderCtx {
     pub const fn new() -> Self {
         Self {
-            frame: 0,
-            columns: None,
-            rows: None,
+            frame:       0,
+            columns:     None,
+            rows:        None,
             layout_mode: LayoutMode::Clip,
-            theme: Theme::DEFAULT,
+            theme:       Theme::DEFAULT,
         }
     }
 

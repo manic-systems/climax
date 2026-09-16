@@ -300,11 +300,13 @@ enum OptionEntry {
 impl OptionEntry {
     fn finish(self) -> Result<FinishedOption, String> {
         match self {
-            Self::Label(label) => Ok(FinishedOption {
-                item: SelectItem::new(label.clone(), label),
-                selected: false,
-                review_state: ReviewState::Unconfirmed,
-            }),
+            Self::Label(label) => {
+                Ok(FinishedOption {
+                    item:         SelectItem::new(label.clone(), label),
+                    selected:     false,
+                    review_state: ReviewState::Unconfirmed,
+                })
+            },
             Self::Detailed(option) => option.finish(),
         }
     }
