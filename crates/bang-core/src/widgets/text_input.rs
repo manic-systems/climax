@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use super::navigation::no_modifiers;
 use crate::{
-    Context,
-    CursorAnchor,
-    Event,
-    Key,
-    KeyEvent,
-    Reaction,
-    Role,
-    Span,
-    TextInputView,
-    Value,
-    View,
+    Context, CursorAnchor, Event, Key, Reaction, Role, Span, TextInputView, Value, View,
     ViewContext,
     ViewId,
     Widget,
@@ -252,8 +243,4 @@ fn next_boundary(value: &str, cursor: usize) -> usize {
 
 fn char_count(value: &str) -> usize {
     value.chars().count()
-}
-
-const fn no_modifiers(key: &KeyEvent) -> bool {
-    key.modifiers.bits() == 0
 }
