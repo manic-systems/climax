@@ -1,0 +1,7 @@
+# Remaining work
+
+- Add a display-width-aware Screw table primitive and use it for structured
+  result text projections.
+- Continue the arbitrary-child PTY transport/emulation work in `screw-pty` and
+  `bang-screw-pty`; the focused emitted-ANSI acceptance model is complete.
+- Audit incidental public items independently in each crate before 1.0.
