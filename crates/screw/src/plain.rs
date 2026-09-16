@@ -30,11 +30,7 @@ where
 {
     let mut surface = Surface::new();
     widget.render(
-        &RenderCtx {
-            frame,
-            width: None,
-            theme,
-        },
+        &RenderCtx::new().with_frame(frame).with_theme(theme),
         &mut surface,
     );
     surface.plain_text()

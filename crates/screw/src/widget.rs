@@ -15,12 +15,19 @@ use std::{
 use unicode_width::UnicodeWidthChar as _;
 
 use crate::{
-    Role,
-    Style,
-    Surface,
-    Theme,
+    LayoutMode, Role, Style, Surface, Theme, Viewport, renderer::layout_surface,
+    surface::append_surface, sync::lock,
 };
-use crate::sync::lock;
+
+/// A widget's vertical allocation behavior inside a [`Stack`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VerticalSize {
+    /// Measure the widget from its content before allocating flexible space.
+    #[default]
+    Content,
+    /// Share the height left after content-sized siblings are measured.
+    Flexible,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
@@ -31,9 +38,86 @@ pub enum TickInterest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
-    pub frame: u64,
-    pub width: Option<usize>,
-    pub theme: Theme,
+    frame: u64,
+    columns: Option<usize>,
+    rows: Option<usize>,
+    layout_mode: LayoutMode,
+    theme: Theme,
+}
+
+impl RenderCtx {
+    pub const fn new() -> Self {
+        Self {
+            frame: 0,
+            columns: None,
+            rows: None,
+            layout_mode: LayoutMode::Clip,
+            theme: Theme::DEFAULT,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_frame(mut self, frame: u64) -> Self {
+        self.frame = frame;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_constraints(mut self, columns: Option<usize>, rows: Option<usize>) -> Self {
+        self.columns = columns;
+        self.rows = rows;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_layout_mode(mut self, layout_mode: LayoutMode) -> Self {
+        self.layout_mode = layout_mode;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    pub const fn frame(self) -> u64 {
+        self.frame
+    }
+
+    pub const fn available_columns(self) -> Option<usize> {
+        self.columns
+    }
+
+    pub const fn available_rows(self) -> Option<usize> {
+        self.rows
+    }
+
+    pub const fn viewport(self) -> Option<Viewport> {
+        match (self.columns, self.rows) {
+            (Some(columns), Some(rows)) => Some(Viewport::new(columns, rows)),
+            _ => None,
+        }
+    }
+
+    pub const fn layout_mode(self) -> LayoutMode {
+        self.layout_mode
+    }
+
+    pub const fn theme(self) -> Theme {
+        self.theme
+    }
+
+    pub(crate) const fn with_rows(mut self, rows: Option<usize>) -> Self {
+        self.rows = rows;
+        self
+    }
+}
+
+impl Default for RenderCtx {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub trait Widget {
@@ -42,14 +126,24 @@ pub trait Widget {
     fn tick_interest(&self) -> TickInterest {
         TickInterest::Never
     }
+
+    /// Describe how a vertical container should allocate height to this widget.
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Content
+    }
 }
 
+/// A cloneable widget reference suitable for sharing with a background
+/// renderer.
 pub type SharedWidgetRef = Arc<dyn Widget + Send + Sync>;
 
+/// The historical name for Screw's shared widget reference.
 pub type WidgetRef = SharedWidgetRef;
 
+/// A cloneable widget reference for composition and rendering on one thread.
 pub type LocalWidgetRef<'a> = Rc<dyn Widget + 'a>;
 
+/// Erase a thread-safe widget into a shared reference.
 pub fn widget<W>(widget: W) -> WidgetRef
 where
     W: Widget + Send + Sync + 'static,
@@ -57,6 +151,7 @@ where
     Arc::new(widget)
 }
 
+/// Erase a widget into a local reference, retaining any borrowed lifetime.
 pub fn local_widget<'a, W>(widget: W) -> LocalWidgetRef<'a>
 where
     W: Widget + 'a,
@@ -64,6 +159,7 @@ where
     Rc::new(widget)
 }
 
+/// Explicitly erase a thread-safe widget into a shared reference.
 pub fn shared_widget<W>(widget: W) -> SharedWidgetRef
 where
     W: Widget + Send + Sync + 'static,
@@ -108,7 +204,7 @@ impl Widget for Text {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let style = match self.style {
             TextStyle::Concrete(style) => style,
-            TextStyle::Role(role) => ctx.theme.style(role),
+            TextStyle::Role(role) => ctx.theme().style(role),
         };
         out.write(&self.value, style);
     }
@@ -141,7 +237,7 @@ impl Widget for Looping {
             return;
         }
         let frame_count = u64::try_from(self.frames.len()).unwrap_or(u64::MAX);
-        let index = usize::try_from(ctx.frame % frame_count).unwrap_or(0);
+        let index = usize::try_from(ctx.frame() % frame_count).unwrap_or(0);
         out.write(&self.frames[index], self.style);
     }
 
@@ -267,7 +363,7 @@ impl Widget for List {
             } else {
                 self.normal
             };
-            out.write(&self.rows[row_index], ctx.theme.style(role));
+            out.write(&self.rows[row_index], ctx.theme().style(role));
         }
     }
 }
@@ -331,7 +427,7 @@ impl Widget for Grid {
                         out.write(" ", Style::default());
                     }
                 }
-                out.write(&cell.text, ctx.theme.style(cell.role));
+                out.write(&cell.text, ctx.theme().style(cell.role));
             }
         }
     }
@@ -454,7 +550,7 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        out.write(&self.prompt, ctx.theme.style(self.prompt_role));
+        out.write(&self.prompt, ctx.theme().style(self.prompt_role));
         let prompt_width = out.current_col();
         let cursor = self.cursor.min(self.value.chars().count());
         let value_cursor_width: usize = self
@@ -463,7 +559,7 @@ impl Widget for TextInput {
             .take(cursor)
             .map(|ch| ch.width().unwrap_or(0))
             .sum();
-        out.write(&self.value, ctx.theme.style(self.value_role));
+        out.write(&self.value, ctx.theme().style(self.value_role));
         out.set_cursor(crate::Position {
             row: out.height().saturating_sub(1),
             col: prompt_width + value_cursor_width,
@@ -472,22 +568,125 @@ impl Widget for TextInput {
 }
 
 #[derive(Clone)]
-pub struct Line {
-    children: Arc<[WidgetRef]>,
+pub struct Line<H = WidgetRef> {
+    children: Box<[H]>,
 }
 
-impl Line {
-    pub fn new(children: impl Into<Vec<WidgetRef>>) -> Self {
+impl<H> Line<H> {
+    pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
-            children: children.into().into(),
+            children: children.into().into_boxed_slice(),
         }
     }
 }
 
-impl Widget for Line {
+impl<H> Widget for Line<H>
+where
+    H: Widget,
+{
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        for child in self.children.iter() {
+        for child in &self.children {
             child.render(ctx, out);
+        }
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        combine_tick_interest(self.children.iter().map(Widget::tick_interest))
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        if self
+            .children
+            .iter()
+            .any(|child| child.vertical_size() == VerticalSize::Flexible)
+        {
+            VerticalSize::Flexible
+        } else {
+            VerticalSize::Content
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Stack<H = WidgetRef> {
+    children: Box<[H]>,
+}
+
+impl<H> Stack<H> {
+    pub fn new(children: impl Into<Vec<H>>) -> Self {
+        Self {
+            children: children.into().into_boxed_slice(),
+        }
+    }
+}
+
+impl<H> Widget for Stack<H>
+where
+    H: Widget,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        let flexible = self
+            .children
+            .iter()
+            .filter(|child| child.vertical_size() == VerticalSize::Flexible)
+            .count();
+        if ctx.available_rows().is_none() || flexible == 0 {
+            self.render_sequentially(ctx, out);
+            return;
+        }
+
+        let mut rendered = vec![None; self.children.len()];
+        let mut fixed_height = 0_usize;
+        for (index, child) in self.children.iter().enumerate() {
+            if child.vertical_size() == VerticalSize::Content {
+                let mut surface = Surface::new();
+                child.render(&ctx.with_rows(None), &mut surface);
+                let surface = layout_surface(surface, ctx.available_columns(), ctx.layout_mode());
+                fixed_height = fixed_height.saturating_add(surface.height());
+                let height = surface.height();
+                rendered[index] = Some((surface, height));
+            }
+        }
+
+        let available = ctx
+            .available_rows()
+            .unwrap_or_default()
+            .saturating_sub(out.height().saturating_sub(1))
+            .saturating_sub(fixed_height);
+        let each = available / flexible;
+        let mut extra = available % flexible;
+        let mut first = true;
+        for (index, child) in self.children.iter().enumerate() {
+            let (surface, limit) = rendered[index].take().unwrap_or_else(|| {
+                let allocation = each + usize::from(extra > 0);
+                extra = extra.saturating_sub(1);
+                let mut surface = Surface::new();
+                child.render(&ctx.with_rows(Some(allocation)), &mut surface);
+                (
+                    layout_surface(surface, ctx.available_columns(), ctx.layout_mode()),
+                    allocation,
+                )
+            });
+            if limit == 0 {
+                continue;
+            }
+            if !first {
+                out.newline();
+            }
+            append_surface(out, &surface, limit);
+            first = false;
+        }
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        if self
+            .children
+            .iter()
+            .any(|child| child.vertical_size() == VerticalSize::Flexible)
+        {
+            VerticalSize::Flexible
+        } else {
+            VerticalSize::Content
         }
     }
 
@@ -496,21 +695,11 @@ impl Widget for Line {
     }
 }
 
-#[derive(Clone)]
-pub struct Stack {
-    children: Arc<[WidgetRef]>,
-}
-
-impl Stack {
-    pub fn new(children: impl Into<Vec<WidgetRef>>) -> Self {
-        Self {
-            children: children.into().into(),
-        }
-    }
-}
-
-impl Widget for Stack {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+impl<H> Stack<H>
+where
+    H: Widget,
+{
+    fn render_sequentially(&self, ctx: &RenderCtx, out: &mut Surface) {
         for (index, child) in self.children.iter().enumerate() {
             if index > 0 {
                 out.newline();
@@ -518,18 +707,14 @@ impl Widget for Stack {
             child.render(ctx, out);
         }
     }
-
-    fn tick_interest(&self) -> TickInterest {
-        combine_tick_interest(self.children.iter().map(Widget::tick_interest))
-    }
 }
 
-pub struct Stateful<S> {
+pub struct Stateful<S, H = WidgetRef> {
     state: Arc<Mutex<S>>,
-    cases: HashMap<S, WidgetRef>,
+    cases: HashMap<S, H>,
 }
 
-impl<S> Stateful<S>
+impl<S, H> Stateful<S, H>
 where
     S: Clone + Eq + Hash,
 {
@@ -541,7 +726,7 @@ where
     }
 
     #[must_use]
-    pub fn case(mut self, state: S, widget: WidgetRef) -> Self {
+    pub fn case(mut self, state: S, widget: H) -> Self {
         self.cases.insert(state, widget);
         self
     }
@@ -555,9 +740,10 @@ where
     }
 }
 
-impl<S> Widget for Stateful<S>
+impl<S, H> Widget for Stateful<S, H>
 where
-    S: Clone + Eq + Hash + Send + Sync,
+    S: Clone + Eq + Hash,
+    H: Widget,
 {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         if let Some(widget) = self.cases.get(&self.state()) {
@@ -569,6 +755,12 @@ where
         self.cases
             .get(&self.state())
             .map_or(TickInterest::Never, Widget::tick_interest)
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.cases
+            .get(&self.state())
+            .map_or(VerticalSize::Content, Widget::vertical_size)
     }
 }
 
@@ -582,6 +774,44 @@ where
 
     fn tick_interest(&self) -> TickInterest {
         self.as_ref().tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
+}
+
+impl<T> Widget for Rc<T>
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.as_ref().render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.as_ref().tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
+}
+
+impl<T> Widget for Box<T>
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.as_ref().render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.as_ref().tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
     }
 }
 
