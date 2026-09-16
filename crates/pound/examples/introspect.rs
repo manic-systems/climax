@@ -143,3 +143,77 @@ fn metavar(a: &ArgSpec) -> String {
     };
     name.to_uppercase()
 }
+
+#[cfg(test)]
+mod tests {
+    use pound::{
+        Kind,
+        SubSpec,
+    };
+
+    use super::*;
+
+    #[test]
+    fn commands_parse_without_urls_swallowing_their_names() {
+        let grab = Grab::try_parse_from([
+            "fetch",
+            "https://example.com/a",
+            "https://example.com/b",
+            "--quiet",
+        ])
+        .unwrap();
+        assert!(grab.quiet);
+        let Some(Cmd::Fetch { url }) = grab.cmd else {
+            panic!("expected fetch");
+        };
+        assert_eq!(url, ["https://example.com/a", "https://example.com/b"]);
+
+        let grab = Grab::try_parse_from(["list", "--format=json"]).unwrap();
+        let Some(Cmd::List { format }) = grab.cmd else {
+            panic!("expected list");
+        };
+        assert_eq!(format.as_deref(), Some("json"));
+
+        let grab = Grab::try_parse_from(["clean", "--all"]).unwrap();
+        assert!(matches!(grab.cmd, Some(Cmd::Clean { all: true })));
+        assert_eq!(
+            Grab::SPEC
+                .subcommands()
+                .map(|sub| sub.name)
+                .collect::<Vec<_>>(),
+            ["fetch", "list", "clean"],
+        );
+    }
+
+    #[test]
+    fn hidden_globals_stay_hidden_in_child_output() {
+        const CHILD: CommandSpec = CommandSpec::new("child");
+        const ROOT: CommandSpec = CommandSpec::new("root")
+            .args(&[
+                ArgSpec::new(Kind::Flag).long("secret").global().hidden(),
+                ArgSpec::new(Kind::Flag).long("visible").global(),
+            ])
+            .subs(&[SubSpec::new("child", &CHILD)]);
+        let output = walk(&ROOT, 0, &[]);
+        assert!(!output.contains("--secret"));
+        assert!(output.contains("--visible    [inherited global]"));
+    }
+
+    #[test]
+    fn inherited_aliases_and_negations_shadow_builtin_spellings() {
+        const CHILD: CommandSpec = CommandSpec::new("child");
+        const ALIAS: ArgSpec = ArgSpec::new(Kind::Flag)
+            .long("assist")
+            .aliases(&["help"])
+            .global();
+        const NEGATED: ArgSpec = ArgSpec::new(Kind::Flag)
+            .long("normal")
+            .negate("version")
+            .global();
+        const SHORT: ArgSpec = ArgSpec::new(Kind::Flag).short('h').global();
+        assert_eq!(implicit(&CHILD, &[&ALIAS], 'h', "help"), ["-h"]);
+        assert_eq!(implicit(&CHILD, &[&NEGATED], 'V', "version"), ["-V"]);
+        assert_eq!(implicit(&CHILD, &[&SHORT], 'h', "help"), ["--help"]);
+        assert!(implicit(&CHILD, &[&ALIAS, &SHORT], 'h', "help").is_empty());
+    }
+}
