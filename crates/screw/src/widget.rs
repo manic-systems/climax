@@ -20,6 +20,7 @@ use crate::{
     Surface,
     Theme,
 };
+use crate::sync::lock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
@@ -172,7 +173,7 @@ impl WindowedLines {
     }
 
     pub fn push(&self, line: impl Into<String>) {
-        let mut lines = self.lines.lock().expect("windowed lines mutex poisoned");
+        let mut lines = lock(&self.lines);
         if self.capacity == 0 {
             return;
         }
@@ -183,12 +184,7 @@ impl WindowedLines {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        self.lines
-            .lock()
-            .expect("windowed lines mutex poisoned")
-            .iter()
-            .cloned()
-            .collect()
+        lock(&self.lines).iter().cloned().collect()
     }
 }
 
@@ -367,11 +363,11 @@ impl ProgressBar {
     }
 
     pub fn set_fraction(&self, fraction: f32) {
-        *self.fraction.lock().expect("progress bar mutex poisoned") = fraction.clamp(0.0, 1.0);
+        *lock(&self.fraction) = fraction.clamp(0.0, 1.0);
     }
 
     pub fn fraction(&self) -> f32 {
-        *self.fraction.lock().expect("progress bar mutex poisoned")
+        *lock(&self.fraction)
     }
 }
 
@@ -551,14 +547,11 @@ where
     }
 
     pub fn set_state(&self, state: S) {
-        *self.state.lock().expect("stateful widget mutex poisoned") = state;
+        *lock(&self.state) = state;
     }
 
     pub fn state(&self) -> S {
-        self.state
-            .lock()
-            .expect("stateful widget mutex poisoned")
-            .clone()
+        lock(&self.state).clone()
     }
 }
 

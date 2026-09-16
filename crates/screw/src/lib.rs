@@ -6,6 +6,7 @@ mod renderer;
 mod runtime;
 mod style;
 mod surface;
+mod sync;
 mod template;
 mod terminal;
 mod widget;
