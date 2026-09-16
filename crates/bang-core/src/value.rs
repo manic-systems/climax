@@ -105,6 +105,15 @@ pub enum Number {
     Float(f64),
 }
 
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integer(value) => write!(f, "{value}"),
+            Self::Float(value) => write!(f, "{value}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Date {
     pub year:  i32,

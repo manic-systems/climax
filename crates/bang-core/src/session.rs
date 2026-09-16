@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{Context, Event, FocusTarget, Reaction, Value, View, ViewContext, Widget};
+use crate::{
+    Context, Event, FocusTarget, Presentation, Reaction, Value, View, ViewContext, Widget,
+};
 
 pub struct Session {
     root: Box<dyn Widget>,
     focus: Option<FocusTarget>,
     status: SessionStatus,
     view_context: ViewContext,
+    presentation: Presentation,
     dirty: bool,
 }
 
@@ -18,6 +21,7 @@ impl Session {
             focus: None,
             status: SessionStatus::Running,
             view_context: ViewContext::default(),
+            presentation: Presentation::default(),
             dirty: true,
         }
     }
@@ -29,6 +33,7 @@ impl Session {
             focus: None,
             status: SessionStatus::Running,
             view_context: ViewContext::default(),
+            presentation: Presentation::default(),
             dirty: true,
         }
     }
@@ -38,8 +43,8 @@ impl Session {
             return Reaction::Ignored;
         }
 
-        let resized = self.record_resize(&event);
-        let mut context = Context::new();
+        let resized = matches!(event, Event::Resize { .. });
+        let mut context = Context::with_presentation(self.presentation.clone());
         let handled = self.root.handle(event, &mut context);
         let reaction = context
             .take_focus()
@@ -96,19 +101,8 @@ impl Session {
         self.dirty = false;
     }
 
-    fn record_resize(&mut self, event: &Event) -> bool {
-        let Event::Resize { cols, rows } = event else {
-            return false;
-        };
-
-        let width = Some(*cols);
-        let height = Some(*rows);
-        if self.view_context.width == width && self.view_context.height == height {
-            return false;
-        }
-
-        self.view_context = ViewContext { width, height };
-        true
+    pub fn set_presentation(&mut self, presentation: Presentation) {
+        self.presentation = presentation;
     }
 }
 

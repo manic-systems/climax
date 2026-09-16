@@ -125,15 +125,13 @@ impl Widget for Form {
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         match &event {
-            Event::Key(key) => {
-                match key.key {
-                    Key::Tab => return self.move_focus(1),
-                    Key::Backtab => return self.move_focus(-1),
-                    Key::Esc => return Reaction::Cancel,
-                    _ => {},
-                }
+            Event::Key(key) => match key.key {
+                Key::Tab => return self.move_focus(1),
+                Key::Backtab => return self.move_focus(-1),
+                Key::Esc => return Reaction::Cancel,
+                _ => {},
             },
-            Event::Resize { .. } | Event::Tick | Event::Paste(_) => {},
+            Event::Resize { .. } | Event::Tick | Event::Paste(_) | Event::UnknownEscape(_) => {},
         }
 
         let Some(field) = self.fields.get_mut(self.active) else {
@@ -148,14 +146,13 @@ impl Widget for Form {
             Reaction::Cancel => Reaction::Cancel,
             Reaction::Focus(FocusTarget::Next) => self.move_focus(1),
             Reaction::Focus(FocusTarget::Previous) => self.move_focus(-1),
-            Reaction::Focus(FocusTarget::Widget(id)) => {
-                self.fields
-                    .iter()
-                    .position(|field| field.widget.id() == id)
-                    .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
-                        self.set_active_index(index)
-                    })
-            },
+            Reaction::Focus(FocusTarget::Widget(id)) => self
+                .fields
+                .iter()
+                .position(|field| field.widget.id() == id)
+                .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
+                    self.set_active_index(index)
+                }),
             Reaction::Changed => Reaction::Changed,
             Reaction::Ignored => Reaction::Ignored,
         }

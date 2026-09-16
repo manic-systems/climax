@@ -202,22 +202,20 @@ impl Widget for TextInput {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         match event {
-            Event::Key(key) => {
-                match key.key {
-                    Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
-                    Key::Backspace => self.backspace(),
-                    Key::Delete => self.delete(),
-                    Key::Left => self.move_left(),
-                    Key::Right => self.move_right(),
-                    Key::Home => self.move_home(),
-                    Key::End => self.move_end(),
-                    Key::Enter => self.submit(),
-                    Key::Esc => Reaction::Cancel,
-                    _ => Reaction::Ignored,
-                }
+            Event::Key(key) => match key.key {
+                Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
+                Key::Backspace => self.backspace(),
+                Key::Delete => self.delete(),
+                Key::Left => self.move_left(),
+                Key::Right => self.move_right(),
+                Key::Home => self.move_home(),
+                Key::End => self.move_end(),
+                Key::Enter => self.submit(),
+                Key::Esc => Reaction::Cancel,
+                _ => Reaction::Ignored,
             },
             Event::Paste(value) => self.insert_str(&value),
-            Event::Resize { .. } | Event::Tick => Reaction::Ignored,
+            Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
         }
     }
 

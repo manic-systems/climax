@@ -143,6 +143,28 @@ impl Select {
         self.top
     }
 
+    fn list_id(&self) -> ViewId {
+        ViewId::owned(format!("{}/list", self.id.as_str()))
+    }
+
+    fn sync_presentation(&mut self, context: &Context) {
+        if let Some(presentation) = context.list_presentation(&self.list_id()) {
+            self.top = presentation.visible.start;
+        }
+    }
+
+    fn page_target(&self, context: &Context, down: bool) -> Option<usize> {
+        context
+            .list_presentation(&self.list_id())
+            .and_then(|presentation| {
+                if down {
+                    presentation.page_down
+                } else {
+                    presentation.page_up
+                }
+            })
+    }
+
     fn move_by(&mut self, delta: isize) -> Reaction {
         let Some(next) = move_index(self.selected, self.items.len(), delta, self.wrap) else {
             return Reaction::Ignored;
@@ -198,13 +220,10 @@ impl Select {
     }
 
     fn list_view(&self, checked: Option<&[bool]>) -> ListView {
-        let visible = self.visible_len();
         let rows = self
             .items
             .iter()
             .enumerate()
-            .skip(self.top)
-            .take(visible)
             .map(|(index, item)| {
                 let selected = Some(index) == self.selected_index();
                 ListRow {
@@ -217,7 +236,6 @@ impl Select {
                             Role::Normal
                         },
                     )],
-                    value: item.value.clone(),
                     selected,
                     checked: checked.map(|values| values[index]),
                 }
@@ -225,14 +243,13 @@ impl Select {
             .collect();
 
         ListView {
-            id: Some(ViewId::owned(format!("{}/list", self.id.as_str()))),
+            id: Some(self.list_id()),
             header: self.header.clone(),
             rows,
-            selected: self
-                .selected_index()
-                .map(|index| index.saturating_sub(self.top)),
-            offset: self.top,
+            selected: self.selected_index(),
+            requested_start: self.top,
             total: self.items.len(),
+            max_visible: Some(self.page_size),
             help: vec![Span::new("enter submit | esc cancel", Role::Dim)],
         }
     }
@@ -243,7 +260,8 @@ impl Widget for Select {
         self.id.clone()
     }
 
-    fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
+    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        self.sync_presentation(cx);
         let Event::Key(key) = event else {
             return Reaction::Ignored;
         };
@@ -253,8 +271,20 @@ impl Widget for Select {
             Key::Down => self.move_by(1),
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.items.len().saturating_sub(1)),
-            Key::PageUp => self.move_by(-visible_delta(self.visible_len())),
-            Key::PageDown => self.move_by(visible_delta(self.visible_len())),
+            Key::PageUp => {
+                if let Some(target) = self.page_target(cx, false) {
+                    self.move_to(target)
+                } else {
+                    self.move_by(-visible_delta(self.visible_len()))
+                }
+            },
+            Key::PageDown => {
+                if let Some(target) = self.page_target(cx, true) {
+                    self.move_to(target)
+                } else {
+                    self.move_by(visible_delta(self.visible_len()))
+                }
+            },
             Key::Char('k' | 'K') if no_modifiers(&key) => self.move_by(-1),
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_by(1),
             Key::Enter => self.submit(),
