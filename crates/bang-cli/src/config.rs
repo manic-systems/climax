@@ -300,13 +300,11 @@ enum OptionEntry {
 impl OptionEntry {
     fn finish(self) -> Result<FinishedOption, String> {
         match self {
-            Self::Label(label) => {
-                Ok(FinishedOption {
-                    item:         SelectItem::new(label.clone(), label),
-                    selected:     false,
-                    review_state: ReviewState::Unconfirmed,
-                })
-            },
+            Self::Label(label) => Ok(FinishedOption {
+                item: SelectItem::new(label.clone(), label),
+                selected: false,
+                review_state: ReviewState::Unconfirmed,
+            }),
             Self::Detailed(option) => option.finish(),
         }
     }
@@ -431,7 +429,10 @@ fn finish_review_actions(actions: Vec<RawAction>) -> Result<Vec<ReviewActionBind
                 action.key()
             ));
         }
-        if seen.contains(&action.key()) {
+        if seen
+            .iter()
+            .any(|seen: &char| seen.eq_ignore_ascii_case(&action.key()))
+        {
             return Err(format!("duplicate review action key '{}'", action.key()));
         }
         seen.push(action.key());
@@ -555,12 +556,8 @@ const fn is_reserved_action_key(key: char) -> bool {
     matches!(
         key,
         ' ' | '\t'
-            | 'a'
-            | 'A'
             | 'c'
             | 'C'
-            | 'g'
-            | 'G'
             | 'j'
             | 'J'
             | 'k'
@@ -569,8 +566,6 @@ const fn is_reserved_action_key(key: char) -> bool {
             | 'N'
             | 'r'
             | 'R'
-            | 's'
-            | 'S'
             | 'u'
             | 'U'
             | 'x'
