@@ -13,12 +13,20 @@
 //! | `Vec<T>`    | variadic/repeatable  |
 //!
 //! `#[pound(short)]` / `#[pound(long)]` promote these to a named option
+//! and `#[pound(flatten)]` embeds a reusable parsed struct at the same command
+//! level.
 //!
 //! ```ignore
 //! use pound::Parse;
 //!
 //! #[derive(Parse)]
+//! struct Common {
+//!     #[pound(long)] verbose: bool,
+//! }
+//!
+//! #[derive(Parse)]
 //! struct Add {
+//!     #[pound(flatten)] common: Common,
 //!     name: String,                          // required positional
 //!     url:  String,                          // required positional
 //!     #[pound(long)] unpack:  Option<String>,
@@ -67,6 +75,9 @@ pub use pound_derive::{
 };
 pub use spec::{
     ArgSpec,
+    ArgumentOrder,
+    Arguments,
+    CommandChildren,
     CommandSpec,
     GroupSpec,
     Kind,
@@ -82,8 +93,8 @@ pub use value::{
 ///
 /// a type carries its static [`CommandSpec`] and reads itself out of
 /// [`Matches`]. [`Self::parse`] is the common "parse argv or exit" path, the
-/// `try_*` variants hand back the [`Error`] (including the [`Error::Help`] /
-/// [`Error::Version`] signals).
+/// `try_*` variants hand back the [`Error`] (including the [`ErrorKind::Help`]
+/// / [`ErrorKind::Version`] signals).
 pub trait Parse: Sized {
     /// this command's static description.
     const SPEC: &'static CommandSpec;
@@ -138,6 +149,9 @@ pub trait Parse: Sized {
         }
     }
 }
+
+#[cfg_attr(feature = "derive", doc = include_str!("../FLATTENING.md"))]
+pub trait Subcommands: Parse {}
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.
 ///

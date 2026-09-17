@@ -13,8 +13,8 @@
 //! - match [`Kind`] with a `_` arm
 //! - construct spec types through their `const fn` builders
 //!
-//! `-h`/`--help` (always) and `-V`/`--version` are always present,
-//! either implemented by user or generated on their behalf
+//! `-h`/`--help` are generated unless a local argument or inherited global
+//! claims the spelling. `-V`/`--version` also require version or hash metadata
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
@@ -286,6 +286,8 @@ pub struct SubSpec {
     pub spec: &'static CommandSpec,
     /// kept out of help output, still selectable on the command line
     pub hidden: bool,
+    /// contributes the referenced command choices at this level
+    pub flattened: bool,
 }
 
 impl SubSpec {
@@ -298,6 +300,7 @@ impl SubSpec {
             about: "",
             spec,
             hidden: false,
+            flattened: false,
         }
     }
 
@@ -318,6 +321,12 @@ impl SubSpec {
         self.hidden = true;
         self
     }
+
+    #[must_use]
+    pub const fn flattened(mut self) -> Self {
+        self.flattened = true;
+        self
+    }
 }
 
 /// a command or subcommand: identity, args, groups, children
@@ -332,6 +341,11 @@ pub struct CommandSpec {
     /// fuller description shown by `--help`, empty when it adds nothing
     pub long_about: &'static str,
     pub args: &'static [ArgSpec],
+    /// embedded parsed types
+    pub flattened: &'static [&'static Self],
+    /// source order for direct and flattened fields
+    #[doc(hidden)]
+    pub argument_order: &'static [ArgumentOrder],
     pub groups: &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
     pub conflicts: &'static [(usize, usize)],
@@ -340,6 +354,93 @@ pub struct CommandSpec {
     pub subs: &'static [SubSpec],
     /// when true, a missing subcommand is allowed rather than showing help
     pub sub_optional: bool,
+}
+
+/// direct or flattened field in source order
+/// public for derive output
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArgumentOrder {
+    Direct(usize),
+    Flattened(usize),
+}
+
+/// arguments in effective declaration order
+pub struct Arguments<'a> {
+    pending: Vec<ArgumentEntry<'a>>,
+}
+
+/// effective subcommands in declaration order
+pub struct CommandChildren<'a> {
+    pending: Vec<&'a SubSpec>,
+}
+
+impl<'a> Iterator for CommandChildren<'a> {
+    type Item = &'a SubSpec;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(sub) = self.pending.pop() {
+            if sub.flattened {
+                self.pending.extend(sub.spec.subs.iter().rev());
+            } else {
+                return Some(sub);
+            }
+        }
+        None
+    }
+}
+
+enum ArgumentEntry<'a> {
+    Direct(&'a ArgSpec),
+    Flattened(&'a CommandSpec),
+}
+
+impl<'a> Arguments<'a> {
+    fn new(spec: &'a CommandSpec) -> Self {
+        let mut pending = Vec::new();
+        push_argument_entries(&mut pending, spec);
+        Self { pending }
+    }
+}
+
+impl<'a> Iterator for Arguments<'a> {
+    type Item = &'a ArgSpec;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(entry) = self.pending.pop() {
+            match entry {
+                ArgumentEntry::Direct(argument) => return Some(argument),
+                ArgumentEntry::Flattened(spec) => push_argument_entries(&mut self.pending, spec),
+            }
+        }
+        None
+    }
+}
+
+fn push_argument_entries<'a>(pending: &mut Vec<ArgumentEntry<'a>>, spec: &'a CommandSpec) {
+    if spec.argument_order.is_empty() {
+        pending.extend(
+            spec.flattened
+                .iter()
+                .rev()
+                .copied()
+                .map(ArgumentEntry::Flattened),
+        );
+        pending.extend(spec.args.iter().rev().map(ArgumentEntry::Direct));
+        return;
+    }
+
+    pending.extend(spec.argument_order.iter().rev().filter_map(|entry| {
+        match *entry {
+            ArgumentOrder::Direct(index) => spec.args.get(index).map(ArgumentEntry::Direct),
+            ArgumentOrder::Flattened(index) => {
+                spec.flattened
+                    .get(index)
+                    .copied()
+                    .map(ArgumentEntry::Flattened)
+            },
+        }
+    }));
 }
 
 impl CommandSpec {
@@ -353,6 +454,8 @@ impl CommandSpec {
             about: "",
             long_about: "",
             args: &[],
+            flattened: &[],
+            argument_order: &[],
             groups: &[],
             conflicts: &[],
             requires: &[],
@@ -396,6 +499,21 @@ impl CommandSpec {
         self
     }
 
+    /// embed another parsed type at this command level
+    #[must_use]
+    pub const fn flattened(mut self, flattened: &'static [&'static Self]) -> Self {
+        self.flattened = flattened;
+        self
+    }
+
+    /// set source order for direct and flattened fields
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn argument_order(mut self, order: &'static [ArgumentOrder]) -> Self {
+        self.argument_order = order;
+        self
+    }
+
     #[must_use]
     pub const fn groups(mut self, groups: &'static [GroupSpec]) -> Self {
         self.groups = groups;
@@ -430,34 +548,81 @@ impl CommandSpec {
     /// whether this command dispatches to subcommands
     #[must_use]
     pub const fn has_subs(&self) -> bool {
-        !self.subs.is_empty()
+        self.subcommand_owner().is_some()
     }
 
-    /// index of the arg with this long name
+    pub(crate) const fn subcommand_owner(&self) -> Option<&Self> {
+        if !self.subs.is_empty() {
+            return Some(self);
+        }
+        let mut index = 0;
+        while index < self.flattened.len() {
+            if let Some(owner) = self.flattened[index].subcommand_owner() {
+                return Some(owner);
+            }
+            index += 1;
+        }
+        None
+    }
+
+    /// whether a missing subcommand is allowed
+    #[must_use]
+    pub const fn subcommand_optional(&self) -> bool {
+        match self.subcommand_owner() {
+            Some(owner) => owner.sub_optional,
+            None => true,
+        }
+    }
+
+    /// subcommands at this command level
+    pub fn subcommands(&self) -> CommandChildren<'_> {
+        CommandChildren {
+            pending: self
+                .subcommand_owner()
+                .map(|owner| owner.subs.iter().rev().collect())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// arguments at this command level
+    pub fn arguments(&self) -> Arguments<'_> {
+        Arguments::new(self)
+    }
+
+    /// find a long argument including flattened fields
     #[must_use]
     #[allow(clippy::manual_contains)]
-    pub fn find_long(&self, name: &str) -> Option<usize> {
-        self.args
-            .iter()
-            .position(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
+    pub fn find_long(&self, name: &str) -> Option<&ArgSpec> {
+        self.arguments()
+            .find(|arg| arg.long == Some(name) || arg.aliases.iter().any(|&alias| alias == name))
     }
 
+    /// find a short argument including flattened fields
     #[must_use]
-    pub fn find_short(&self, ch: char) -> Option<usize> {
-        self.args.iter().position(|a| a.short == Some(ch))
+    pub fn find_short(&self, ch: char) -> Option<&ArgSpec> {
+        self.arguments().find(|arg| arg.short == Some(ch))
     }
 
-    /// index of the flag this long name switches off
+    /// find a negation name including flattened fields
     #[must_use]
-    pub fn find_negate(&self, name: &str) -> Option<usize> {
-        self.args.iter().position(|a| a.negate == Some(name))
+    pub fn find_negate(&self, name: &str) -> Option<&ArgSpec> {
+        self.arguments().find(|arg| arg.negate == Some(name))
     }
 
     #[must_use]
     #[allow(clippy::manual_contains)]
-    pub fn find_sub(&self, name: &str) -> Option<usize> {
-        self.subs
-            .iter()
-            .position(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
+    pub fn find_sub(&self, name: &str) -> Option<&SubSpec> {
+        self.subcommands()
+            .find(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
     }
+}
+
+pub(crate) fn accepts_long<'a>(mut args: impl Iterator<Item = &'a ArgSpec>, name: &str) -> bool {
+    args.any(|arg| {
+        arg.long == Some(name) || arg.aliases.contains(&name) || arg.negate == Some(name)
+    })
+}
+
+pub(crate) fn accepts_short<'a>(mut args: impl Iterator<Item = &'a ArgSpec>, short: char) -> bool {
+    args.any(|arg| arg.short == Some(short))
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! derive macros for pound. `#[derive(Parse)]` turns a struct into a flat
+//! derive macros for pound. `#[derive(Parse)]` turns a struct into a
 //! command and an enum into a subcommand tree, `#[derive(ValueEnum)]` wires a
 //! unit enum up as a `FromArg` choice type. all of it just emits the static
 //! `CommandSpec` plus a `from_matches` reader, the runtime does the work.
@@ -112,8 +112,30 @@ struct SubField {
     optional: bool,
 }
 
+struct FlattenField {
+    ident: proc_macro2::Ident,
+    ty:    TokenStream2,
+}
+
+struct FieldPlan {
+    args:      Vec<Plan>,
+    flattened: Vec<FlattenField>,
+    order:     Vec<FieldOrder>,
+    sub:       Option<SubField>,
+}
+
+enum FieldOrder {
+    Direct(usize),
+    Flattened(usize),
+}
+
 fn parse_struct(s: &venial::Struct) -> TokenStream {
-    let (plans, sub) = match analyze(&s.fields) {
+    let FieldPlan {
+        args: plans,
+        flattened,
+        order,
+        sub,
+    } = match analyze(&s.fields) {
         Ok(v) => v,
         Err(e) => return err(&e),
     };
@@ -133,6 +155,11 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     };
     let args = plans.iter().map(arg_expr);
     let default_asserts = plans.iter().filter_map(default_assert);
+    let flattened_specs = flattened.iter().map(|field| {
+        let ty = &field.ty;
+        quote! { <#ty as ::pound::Parse>::SPEC }
+    });
+    let argument_order = order.iter().map(argument_order_expr);
     let groups = group_exprs(&plans, &item.required_groups);
     let conflicts = index_pairs(&conflicts);
     let (subs, sub_optional) = sub_parts(sub.as_ref());
@@ -144,6 +171,16 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let m = quote!(m);
     let sp = quote!(spec);
     let readers = plans.iter().enumerate().map(|(i, p)| reader(p, i, &m, &sp));
+    let flattened_readers = flattened.iter().enumerate().map(|(i, field)| {
+        let ident = &field.ident;
+        let ty = &field.ty;
+        quote! {
+            #ident: <#ty as ::pound::Parse>::from_matches(
+                <#ty as ::pound::Parse>::SPEC,
+                ::pound::Matches::flattened(#m, #i),
+            )?
+        }
+    });
     let sub_reader = sub.as_ref().map(|sf| sub_reader(sf, &m));
 
     // avoid unused-param warnings when a command carries only a subcommand.
@@ -152,7 +189,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     } else {
         quote!(spec)
     };
-    let m_param = if plans.is_empty() && sub.is_none() {
+    let m_param = if plans.is_empty() && flattened.is_empty() && sub.is_none() {
         quote!(_m)
     } else {
         quote!(m)
@@ -170,6 +207,8 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#default_asserts)*
                 const ARGS: &[::pound::ArgSpec] = &[ #(#args),* ];
+                const FLATTENED: &[&::pound::CommandSpec] = &[ #(#flattened_specs),* ];
+                const ARGUMENT_ORDER: &[::pound::ArgumentOrder] = &[ #(#argument_order),* ];
                 const GROUPS: &[::pound::GroupSpec] = &[ #(#groups),* ];
                 const CONFLICTS: &[(usize, usize)] = #conflicts;
                 const REQUIRES: &[(usize, usize)] = #requires;
@@ -179,6 +218,8 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                     #about
                     #long_about
                     .args(ARGS)
+                    .flattened(FLATTENED)
+                    .argument_order(ARGUMENT_ORDER)
                     .groups(GROUPS)
                     .conflicts(CONFLICTS)
                     .requires(REQUIRES)
@@ -190,7 +231,9 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
             fn from_matches(#spec_param: &'static ::pound::CommandSpec, #m_param: &::pound::Matches)
                 -> ::core::result::Result<Self, ::pound::Error>
             {
-                ::core::result::Result::Ok(Self { #(#readers,)* #sub_reader })
+                ::core::result::Result::Ok(Self {
+                    #(#readers,)* #(#flattened_readers,)* #sub_reader
+                })
             }
         }
     }
@@ -202,6 +245,9 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     reason = "one cohesive codegen pass reads best whole"
 )]
 fn parse_enum(e: &venial::Enum) -> TokenStream {
+    if e.variants.items().next().is_none() {
+        return err("pound: a command enum must have at least one variant");
+    }
     let item = attr::pound(&e.attributes);
     let name = &e.name;
     let name_expr = name_expr(&item);
@@ -217,12 +263,56 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     let mut last_spec_index = 0;
 
     for (idx, variant) in e.variants.items().enumerate() {
-        let (plans, sub) = match analyze(&variant.fields) {
+        let vattr = attr::pound(&variant.attributes);
+        let vname = &variant.name;
+        if vattr.flatten {
+            if !attr::only_flatten(&variant.attributes) {
+                return err("pound: a flattened variant only accepts #[pound(flatten)]");
+            }
+            let Fields::Tuple(fields) = &variant.fields else {
+                return err("pound: a flattened variant must have exactly one tuple field");
+            };
+            let mut fields = fields.fields.items();
+            let Some(field) = fields.next() else {
+                return err("pound: a flattened variant must have exactly one tuple field");
+            };
+            if fields.next().is_some() {
+                return err("pound: a flattened variant must have exactly one tuple field");
+            }
+            if attr::has_pound(&field.attributes) {
+                return err(
+                    "pound: a flattened variant's tuple field cannot have pound attributes",
+                );
+            }
+            let ty: TokenStream2 = field.ty.tokens.iter().cloned().collect();
+            sub_specs.push(quote! {
+                {
+                    const fn require_subcommands<T: ::pound::Subcommands>() {}
+                    require_subcommands::<#ty>();
+                    ::pound::SubSpec::new("", <#ty as ::pound::Parse>::SPEC).flattened()
+                }
+            });
+            arms.push(quote! {
+                ::core::option::Option::Some((#idx, __sm)) => {
+                    ::core::result::Result::Ok(Self::#vname(
+                        <#ty as ::pound::Parse>::from_matches(
+                            <#ty as ::pound::Parse>::SPEC,
+                            __sm,
+                        )?
+                    ))
+                },
+            });
+            continue;
+        }
+        let FieldPlan {
+            args: plans,
+            flattened,
+            order,
+            sub,
+        } = match analyze(&variant.fields) {
             Ok(v) => v,
             Err(msg) => return err(&msg),
         };
-        let vattr = attr::pound(&variant.attributes);
-        let vname = &variant.name;
         let sub_name = vattr
             .name
             .clone()
@@ -245,10 +335,17 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         };
         let args = plans.iter().map(arg_expr);
         let default_asserts = plans.iter().filter_map(default_assert);
+        let flattened_specs = flattened.iter().map(|field| {
+            let ty = &field.ty;
+            quote! { <#ty as ::pound::Parse>::SPEC }
+        });
+        let argument_order = order.iter().map(argument_order_expr);
         let groups = group_exprs(&plans, &vattr.required_groups);
         let conflicts = index_pairs(&conflicts);
         let (subs, sub_optional) = sub_parts(sub.as_ref());
         let ak = format_ident!("ARGS{}", idx);
+        let fk = format_ident!("FLATTENED{}", idx);
+        let ok = format_ident!("ARGUMENT_ORDER{}", idx);
         let gk = format_ident!("GROUPS{}", idx);
         let xk = format_ident!("CONFLICTS{}", idx);
         let rk = format_ident!("REQUIRES{}", idx);
@@ -263,6 +360,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         sub_consts.push(quote! {
             #(#default_asserts)*
             const #ak: &[::pound::ArgSpec] = &[ #(#args),* ];
+            const #fk: &[&::pound::CommandSpec] = &[ #(#flattened_specs),* ];
+            const #ok: &[::pound::ArgumentOrder] = &[ #(#argument_order),* ];
             const #gk: &[::pound::GroupSpec] = &[ #(#groups),* ];
             const #xk: &[(usize, usize)] = #conflicts;
             const #rk: &[(usize, usize)] = #requires;
@@ -270,6 +369,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 #about_call
                 #long_about_call
                 .args(#ak)
+                .flattened(#fk)
+                .argument_order(#ok)
                 .groups(#gk)
                 .conflicts(#xk)
                 .requires(#rk)
@@ -286,10 +387,20 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
 
         let m = quote!(__sm);
         let sp = quote!(__s);
-        arms.push(if plans.is_empty() && sub.is_none() {
+        arms.push(if plans.is_empty() && flattened.is_empty() && sub.is_none() {
             quote! { ::core::option::Option::Some((#idx, _)) => ::core::result::Result::Ok(Self::#vname), }
         } else {
             let readers = plans.iter().enumerate().map(|(i, p)| reader(p, i, &m, &sp));
+            let flattened_readers = flattened.iter().enumerate().map(|(i, field)| {
+                let ident = &field.ident;
+                let ty = &field.ty;
+                quote! {
+                    #ident: <#ty as ::pound::Parse>::from_matches(
+                        <#ty as ::pound::Parse>::SPEC,
+                        ::pound::Matches::flattened(#m, #i),
+                    )?
+                }
+            });
             let sub_r = sub.as_ref().map(|sf| sub_reader(sf, &m));
             let bind = if plans.is_empty() {
                 quote! {}
@@ -302,7 +413,9 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             quote! {
                 ::core::option::Option::Some((#idx, __sm)) => {
                     #bind
-                    ::core::result::Result::Ok(Self::#vname { #(#readers,)* #sub_r })
+                    ::core::result::Result::Ok(Self::#vname {
+                        #(#readers,)* #(#flattened_readers,)* #sub_r
+                    })
                 },
             }
         });
@@ -321,6 +434,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     };
 
     quote! {
+        impl ::pound::Subcommands for #name {}
+
         impl ::pound::Parse for #name {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#sub_consts)*
@@ -387,27 +502,72 @@ fn value_enum(e: &venial::Enum) -> TokenStream {
 
 // split a struct/variant's fields into regular args and an optional single
 // `#[pound(subcommand)]` field.
-fn analyze(fields: &Fields) -> Result<(Vec<Plan>, Option<SubField>), String> {
+fn analyze(fields: &Fields) -> Result<FieldPlan, String> {
     let named = match fields {
-        Fields::Unit => return Ok((Vec::new(), None)),
+        Fields::Unit => {
+            return Ok(FieldPlan {
+                args:      Vec::new(),
+                flattened: Vec::new(),
+                order:     Vec::new(),
+                sub:       None,
+            });
+        },
         Fields::Tuple(_) => {
             return Err("pound: tuple fields are not supported, use named fields".into());
         },
         Fields::Named(named) => named,
     };
     let mut args = Vec::new();
+    let mut flattened = Vec::new();
+    let mut order = Vec::new();
     let mut sub = None;
     for field in named.fields.items() {
-        if attr::pound(&field.attributes).subcommand {
+        let attributes = attr::pound(&field.attributes);
+        if attributes.subcommand && attributes.flatten {
+            return Err(
+                "pound: a field cannot be both #[pound(subcommand)] and #[pound(flatten)]".into(),
+            );
+        }
+        if attributes.subcommand {
             if sub.is_some() {
                 return Err("pound: only one #[pound(subcommand)] field is allowed".into());
             }
             sub = Some(sub_field(field)?);
+        } else if attributes.flatten {
+            order.push(FieldOrder::Flattened(flattened.len()));
+            flattened.push(flatten_field(field)?);
         } else {
+            order.push(FieldOrder::Direct(args.len()));
             args.push(plan_field(field)?);
         }
     }
-    Ok((args, sub))
+    Ok(FieldPlan {
+        args,
+        flattened,
+        order,
+        sub,
+    })
+}
+
+fn argument_order_expr(order: &FieldOrder) -> TokenStream2 {
+    match order {
+        FieldOrder::Direct(index) => quote! { ::pound::ArgumentOrder::Direct(#index) },
+        FieldOrder::Flattened(index) => quote! { ::pound::ArgumentOrder::Flattened(#index) },
+    }
+}
+
+fn flatten_field(field: &NamedField) -> Result<FlattenField, String> {
+    if !attr::only_flatten(&field.attributes) {
+        return Err("pound: a flattened field only accepts #[pound(flatten)]".into());
+    }
+    let (is_bool, card, ty) = classify(&field.ty);
+    if is_bool || card != Card::One {
+        return Err("pound: #[pound(flatten)] must be a non-optional parsed field".into());
+    }
+    Ok(FlattenField {
+        ident: field.name.clone(),
+        ty,
+    })
 }
 
 fn sub_field(field: &NamedField) -> Result<SubField, String> {
