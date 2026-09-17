@@ -9,7 +9,12 @@ use core::fmt::Write as _;
 use crate::alloc_prelude::*;
 use crate::spec::{ArgSpec, CommandSpec};
 #[cfg(feature = "help")]
-use crate::spec::{Kind, SubSpec};
+use crate::spec::{
+    Kind,
+    SubSpec,
+    accepts_long,
+    accepts_short,
+};
 
 pub(crate) fn version_line(spec: &CommandSpec) -> String {
     let mut out = spec.name.to_owned();
@@ -135,12 +140,13 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
 #[cfg(feature = "help")]
 fn builtin_row(
     spec: &CommandSpec,
+    globals: &[&ArgSpec],
     short: char,
     long: &'static str,
     help: &'static str,
 ) -> Option<(String, String)> {
-    let free_short = spec.find_short(short).is_none();
-    let free_long = spec.find_long(long).is_none();
+    let free_short = !accepts_short(spec.arguments().chain(globals.iter().copied()), short);
+    let free_long = !accepts_long(spec.arguments().chain(globals.iter().copied()), long);
     if !free_short && !free_long {
         return None;
     }
@@ -157,7 +163,7 @@ fn builtin_row(
 
 #[cfg(feature = "help")]
 pub(crate) fn usage_line(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
-    let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
+    let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|a| !a.hidden).collect();
 
     let mut out = String::from("Usage: ");
     out.push_str(spec.name);
@@ -188,7 +194,7 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
         out.push_str("\n\n");
     }
 
-    let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
+    let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|a| !a.hidden).collect();
     let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
 
     out.push_str(&usage_line(spec, globals));
@@ -219,12 +225,13 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
     }
 
     let builtins = &mut sections[0].1;
-    if let Some(row) = builtin_row(spec, 'h', "help", "display this help and exit") {
+    if let Some(row) = builtin_row(spec, globals, 'h', "help", "display this help and exit") {
         builtins.push(row);
     }
     if spec.has_version_info()
         && let Some(row) = builtin_row(
             spec,
+            globals,
             'V',
             "version",
             "output version information and exit",

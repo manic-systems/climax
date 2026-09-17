@@ -3,6 +3,8 @@
 //! walk a program's `CommandSpec`
 //! this demonstrates how a manpage/completions/etc generator might work
 
+use std::fmt::Write as _;
+
 use pound::{
     Parse,
     spec::{
@@ -16,8 +18,6 @@ use pound::{
 #[pound(name = "grab", version = "0.1.0")]
 #[allow(dead_code, reason = "not a runnable example")]
 struct Grab {
-    /// urls to fetch
-    url:    Vec<String>,
     /// download directory
     #[pound(short, long)]
     output: Option<String>,
@@ -32,6 +32,10 @@ struct Grab {
 #[derive(Parse)]
 #[allow(dead_code, reason = "not a runnable example")]
 enum Cmd {
+    Fetch {
+        /// urls to fetch
+        url: Vec<String>,
+    },
     /// list cached files
     List {
         /// output format
@@ -47,52 +51,63 @@ enum Cmd {
 }
 
 fn main() {
-    walk(Grab::SPEC, 0, &[]);
+    print!("{}", walk(Grab::SPEC, 0, &[]));
 }
 
 /// print one command then recurse
 /// all walkers must pass down their globals
-fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
+fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) -> String {
     let pad = "  ".repeat(depth);
     let version = if spec.version.is_empty() {
         String::new()
     } else {
         format!(" {}", spec.version)
     };
-    println!("{pad}{}{version}  {}", spec.name, spec.about);
+    let mut output = format!("{pad}{}{version}  {}\n", spec.name, spec.about);
 
-    for arg in spec.args.iter().filter(|a| !a.hidden) {
-        println!("{pad}  {}", row(arg));
+    for arg in spec.arguments().filter(|a| !a.hidden) {
+        writeln!(output, "{pad}  {}", row(arg)).unwrap();
     }
-    for arg in inherited {
-        println!("{pad}  {}  [inherited global]", row(arg));
+    for arg in inherited.iter().filter(|arg| !arg.hidden) {
+        writeln!(output, "{pad}  {}  [inherited global]", row(arg)).unwrap();
     }
     // help/version are accepted without living in `args`, and each spelling is
     // dropped on its own when the command claims it, so check them separately.
-    for spelling in implicit(spec, 'h', "help") {
-        println!("{pad}  {spelling}  [implicit]");
+    for spelling in implicit(spec, inherited, 'h', "help") {
+        writeln!(output, "{pad}  {spelling}  [implicit]").unwrap();
     }
     if spec.has_version_info() {
-        for spelling in implicit(spec, 'V', "version") {
-            println!("{pad}  {spelling}  [implicit]");
+        for spelling in implicit(spec, inherited, 'V', "version") {
+            writeln!(output, "{pad}  {spelling}  [implicit]").unwrap();
         }
     }
 
     // globals accumulate down the tree
     let mut globals = inherited.to_vec();
-    globals.extend(spec.args.iter().filter(|a| a.global));
+    globals.extend(spec.arguments().filter(|a| a.global));
     for sub in spec.subs.iter().filter(|s| !s.hidden) {
-        walk(sub.spec, depth + 1, &globals);
+        output.push_str(&walk(sub.spec, depth + 1, &globals));
     }
+    output
 }
 
 /// whichever spellings of a builtin this command has not claimed for itself
-fn implicit(spec: &CommandSpec, short: char, long: &str) -> Vec<String> {
+fn implicit(spec: &CommandSpec, inherited: &[&ArgSpec], short: char, long: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if spec.find_short(short).is_none() {
+    if !spec
+        .arguments()
+        .chain(inherited.iter().copied())
+        .any(|arg| arg.short == Some(short))
+    {
         out.push(format!("-{short}"));
     }
-    if spec.find_long(long).is_none() {
+    if !spec
+        .arguments()
+        .chain(inherited.iter().copied())
+        .any(|arg| {
+            arg.long == Some(long) || arg.aliases.contains(&long) || arg.negate == Some(long)
+        })
+    {
         out.push(format!("--{long}"));
     }
     out
