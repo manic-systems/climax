@@ -11,8 +11,8 @@ readme               = "../../README.md"
 repository.workspace = true
 
 [dependencies]
-bang-core  = { path = "../bang-core", version = "0.0.1" }
-bang-screw = { path = "../bang-screw", version = "0.0.1" }
+bang-core.workspace  = true
+bang-screw.workspace = true
 
 [lints]
 workspace = true

@@ -20,6 +20,16 @@ edition    = "2024"
 license    = "EUPL-1.2"
 repository = "https://github.com/manic-systems/climax"
 
+[workspace.dependencies]
+bang          = { path = "crates/bang", version = "0.0.1" }
+bang-core     = { path = "crates/bang-core", version = "0.0.1" }
+bang-screw    = { path = "crates/bang-screw", version = "0.0.1" }
+bang-terminal = { path = "crates/bang-terminal", version = "0.0.1" }
+pound         = { path = "crates/pound", version = "0.2.0", default-features = false }
+pound-derive  = { path = "crates/pound-derive", version = "0.2.0" }
+screw         = { path = "crates/screw", version = "0.0.1" }
+screw-pty     = { path = "crates/screw-pty", version = "0.0.1" }
+
 [workspace.lints.clippy]
 cargo    = { level = "warn", priority = -1 }
 nursery  = { level = "warn", priority = -1 }

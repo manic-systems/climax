@@ -11,12 +11,12 @@ readme               = "../../README.md"
 repository.workspace = true
 
 [dependencies]
-bang          = { path = "../bang", version = "0.0.1" }
-bang-core     = { path = "../bang-core", version = "0.0.1" }
-bang-terminal = { path = "../bang-terminal", version = "0.0.1" }
-pound         = { path = "../pound", version = "0.2.0" }
-serde         = { version = "1", features = [ "derive" ] }
-toml          = "0.8"
+bang.workspace          = true
+bang-core.workspace     = true
+bang-terminal.workspace = true
+pound                   = { workspace = true, features = [ "std", "help", "derive" ] }
+serde                   = { version = "1", features = [ "derive" ] }
+toml                    = "0.8"
 
 [dev-dependencies]
 libc = "0.2"

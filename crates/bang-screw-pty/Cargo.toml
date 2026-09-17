@@ -11,11 +11,11 @@ readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
-bang-core     = { path = "../bang-core", version = "0.0.1" }
-bang-screw    = { path = "../bang-screw", version = "0.0.1" }
-bang-terminal = { path = "../bang-terminal", version = "0.0.1" }
-screw         = { path = "../screw", version = "0.0.1" }
-screw-pty     = { path = "../screw-pty", version = "0.0.1" }
+bang-core.workspace     = true
+bang-screw.workspace    = true
+bang-terminal.workspace = true
+screw.workspace         = true
+screw-pty.workspace     = true
 
 [lints]
 workspace = true

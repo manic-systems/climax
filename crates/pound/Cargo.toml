@@ -17,7 +17,7 @@ help    = [ "pound-derive?/help" ]
 derive  = [ "dep:pound-derive" ]
 
 [dependencies]
-pound-derive = { version = "0.2.0", path = "../pound-derive", optional = true }
+pound-derive = { workspace = true, optional = true }
 
 [[example]]
 name              = "grab"
