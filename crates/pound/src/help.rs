@@ -174,8 +174,12 @@ pub(crate) fn usage_line(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
         out.push(' ');
         out.push_str(&usage_positional(a));
     }
-    if spec.subs.iter().any(|s| !s.hidden) {
-        out.push_str(" COMMAND");
+    if spec.subcommands().any(|s| !s.hidden) {
+        out.push_str(if spec.subcommand_optional() {
+            " [COMMAND]"
+        } else {
+            " COMMAND"
+        });
     }
     out
 }
@@ -195,7 +199,7 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
     }
 
     let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|a| !a.hidden).collect();
-    let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
+    let visible_subs: Vec<&SubSpec> = spec.subcommands().filter(|s| !s.hidden).collect();
 
     out.push_str(&usage_line(spec, globals));
     out.push('\n');
@@ -299,7 +303,11 @@ fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
 pub(crate) fn usage_line(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
     let mut out = format!("Usage: {}", spec.name);
     if spec.has_subs() {
-        out.push_str(" COMMAND");
+        out.push_str(if spec.subcommand_optional() {
+            " [COMMAND]"
+        } else {
+            " COMMAND"
+        });
     }
     out
 }

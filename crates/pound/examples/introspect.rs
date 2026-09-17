@@ -85,7 +85,7 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) -> String {
     // globals accumulate down the tree
     let mut globals = inherited.to_vec();
     globals.extend(spec.arguments().filter(|a| a.global));
-    for sub in spec.subs.iter().filter(|s| !s.hidden) {
+    for sub in spec.subcommands().filter(|s| !s.hidden) {
         output.push_str(&walk(sub.spec, depth + 1, &globals));
     }
     output

@@ -97,6 +97,10 @@ pub fn only_flatten(attrs: &[Attribute]) -> bool {
         })
 }
 
+pub fn has_pound(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| path_is(attr, "pound"))
+}
+
 /// the doc comment of an item or field, empty when none. lines are joined into
 /// paragraphs, and a blank line stays a paragraph break so `--help` can show
 /// more than `-h` does.

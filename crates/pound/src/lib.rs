@@ -77,6 +77,7 @@ pub use spec::{
     ArgSpec,
     ArgumentOrder,
     Arguments,
+    CommandChildren,
     CommandSpec,
     GroupSpec,
     Kind,
@@ -148,6 +149,9 @@ pub trait Parse: Sized {
         }
     }
 }
+
+#[cfg_attr(feature = "derive", doc = include_str!("../FLATTENING.md"))]
+pub trait Subcommands: Parse {}
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.
 ///

@@ -45,6 +45,29 @@ struct ArgTarget {
     arg:   &'static ArgSpec,
 }
 
+struct SubTarget<'s> {
+    path:     Vec<usize>,
+    variants: Vec<(usize, &'s SubSpec)>,
+}
+
+impl SubTarget<'_> {
+    fn store<'a>(self, matches: &mut Matches<'a>, mut selected: Matches<'a>) {
+        let mut owner = matches;
+        for index in self.path {
+            owner = &mut owner.flattened[index];
+        }
+        let mut variants = self.variants.into_iter().rev();
+        let (mut index, _) = variants.next().expect("a selected command");
+        for (outer_index, wrapper) in variants {
+            let mut shell = Matches::new(wrapper.spec);
+            shell.sub = Some((index, Box::new(selected)));
+            selected = shell;
+            index = outer_index;
+        }
+        owner.sub = Some((index, Box::new(selected)));
+    }
+}
+
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
     index:   usize,
@@ -220,6 +243,7 @@ pub(crate) fn parse_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
+    validate_spec(spec, &mut Vec::new())?;
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     let mut hits = Vec::new();
     parse_cmd(spec, &mut it, &[], &mut hits)
@@ -243,7 +267,6 @@ fn walk_cmd<'a>(
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
     let targets = arg_targets(spec);
-    validate_targets(&targets)?;
     let mut m = Matches::new(spec);
     let positionals = targets
         .iter()
@@ -310,7 +333,7 @@ fn walk_cmd<'a>(
                 // not an option (negative numbers, lone values) -> positional
                 positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             }
-        } else if let Some(sidx) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
+        } else if let Some(target) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
             child_globals.extend(
                 targets
@@ -318,8 +341,9 @@ fn walk_cmd<'a>(
                     .filter(|target| target.arg.global)
                     .map(|target| target.arg),
             );
-            let sub_m = parse_cmd(spec.subs[sidx].spec, it, &child_globals, hits)?;
-            m.sub = Some((sidx, Box::new(sub_m)));
+            let child = target.variants.last().expect("a selected command").1.spec;
+            let sub_m = parse_cmd(child, it, &child_globals, hits)?;
+            target.store(&mut m, sub_m);
             break; // subcommand owns the rest
         } else {
             positional(&mut m, &positionals, &mut pos_cursor, tok)?;
@@ -334,12 +358,12 @@ fn walk_cmd<'a>(
 
 /// a bare token names a subcommand only once every required positional is filled,
 /// and never past a variadic one, which stays greedy so its tail can fill
-fn sub_dispatch(
-    spec: &CommandSpec,
+fn sub_dispatch<'s>(
+    spec: &'s CommandSpec,
     positionals: &[ArgTarget],
     cursor: usize,
     tok: &str,
-) -> Result<Option<usize>, Error> {
+) -> Result<Option<SubTarget<'s>>, Error> {
     if !spec.has_subs() {
         return Ok(None);
     }
@@ -354,13 +378,13 @@ fn sub_dispatch(
     {
         return Ok(None);
     }
-    match spec.find_sub(tok) {
-        Some(sidx) => Ok(Some(sidx)),
+    match find_sub_target(spec, tok) {
+        Some(target) => Ok(Some(target)),
         None if next.is_some() => Ok(None), // an open optional slot can still take it
         None => {
             Err(ErrorKind::UnknownSubcommand {
                 name:    tok.to_owned(),
-                closest: closest(spec.subs.iter().flat_map(sub_names), tok),
+                closest: closest(spec.subcommands().flat_map(sub_names), tok),
             }
             .into())
         },
@@ -666,6 +690,19 @@ fn finalise(
     m: &Matches,
     globals: &[&'static ArgSpec],
 ) -> Result<(), ErrorKind> {
+    finalise_arguments(spec, m)?;
+    if spec.has_subs() && !has_selected_subcommand(m) && !spec.subcommand_optional() {
+        // empty/sub-less invocation shows help rather than a bare error
+        return Err(ErrorKind::Help(help::render(spec, globals, false)));
+    }
+    Ok(())
+}
+
+fn has_selected_subcommand(matches: &Matches) -> bool {
+    matches.sub.is_some() || matches.flattened.iter().any(has_selected_subcommand)
+}
+
+fn finalise_arguments(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
     for (i, a) in spec.args.iter().enumerate() {
         if !supplied(spec, m, i) && a.required {
             return Err(ErrorKind::MissingRequired(a.display_name()));
@@ -723,12 +760,7 @@ fn finalise(
     }
 
     for (flattened_spec, flattened_matches) in spec.flattened.iter().zip(&m.flattened) {
-        finalise(flattened_spec, flattened_matches, globals)?;
-    }
-
-    if spec.has_subs() && m.sub.is_none() && !spec.sub_optional {
-        // empty/sub-less invocation shows help rather than a bare error
-        return Err(ErrorKind::Help(help::render(spec, globals, false)));
+        finalise_arguments(flattened_spec, flattened_matches)?;
     }
 
     Ok(())
@@ -778,6 +810,120 @@ fn arg_targets(spec: &CommandSpec) -> Vec<ArgTarget> {
     let mut out = Vec::new();
     collect(spec, &mut Vec::new(), &mut out);
     out
+}
+
+fn find_sub_target<'s>(spec: &'s CommandSpec, name: &str) -> Option<SubTarget<'s>> {
+    fn find_variant<'s>(
+        spec: &'s CommandSpec,
+        name: &str,
+        variants: &mut Vec<(usize, &'s SubSpec)>,
+    ) -> bool {
+        for (index, sub) in spec.subs.iter().enumerate() {
+            variants.push((index, sub));
+            if if sub.flattened {
+                find_variant(sub.spec, name, variants)
+            } else {
+                sub.name == name || sub.aliases.contains(&name)
+            } {
+                return true;
+            }
+            variants.pop();
+        }
+        false
+    }
+
+    if !spec.subs.is_empty() {
+        let mut variants = Vec::new();
+        return find_variant(spec, name, &mut variants).then_some(SubTarget {
+            path: Vec::new(),
+            variants,
+        });
+    }
+    for (index, flattened) in spec.flattened.iter().enumerate() {
+        if let Some(mut target) = find_sub_target(flattened, name) {
+            target.path.insert(0, index);
+            return Some(target);
+        }
+    }
+    None
+}
+
+fn selector_count(spec: &CommandSpec) -> usize {
+    usize::from(!spec.subs.is_empty())
+        + spec
+            .flattened
+            .iter()
+            .map(|child| selector_count(child))
+            .sum::<usize>()
+}
+
+fn validate_spec(
+    spec: &CommandSpec,
+    ancestors: &mut Vec<*const CommandSpec>,
+) -> Result<(), ErrorKind> {
+    let address = core::ptr::from_ref(spec);
+    if ancestors.contains(&address) {
+        return Err(ErrorKind::InvalidSpecification(
+            "command specifications contain a cycle".to_owned(),
+        ));
+    }
+    ancestors.push(address);
+    for child in spec.flattened {
+        validate_spec(child, ancestors)?;
+    }
+    for sub in spec.subs {
+        if sub.flattened
+            && (!sub.name.is_empty()
+                || !sub.aliases.is_empty()
+                || !sub.about.is_empty()
+                || sub.hidden)
+        {
+            return Err(ErrorKind::InvalidSpecification(
+                "a flattened subcommand variant cannot define names, help, or visibility"
+                    .to_owned(),
+            ));
+        }
+        if sub.flattened && (!sub.spec.args.is_empty() || !sub.spec.flattened.is_empty()) {
+            return Err(ErrorKind::InvalidSpecification(
+                "a flattened subcommand variant must contain only command choices".to_owned(),
+            ));
+        }
+        if sub.flattened
+            && (!sub.spec.groups.is_empty()
+                || !sub.spec.conflicts.is_empty()
+                || !sub.spec.requires.is_empty())
+        {
+            return Err(ErrorKind::InvalidSpecification(
+                "a flattened subcommand variant cannot define argument constraints".to_owned(),
+            ));
+        }
+        if sub.flattened && sub.spec.subs.is_empty() {
+            return Err(ErrorKind::InvalidSpecification(
+                "a flattened subcommand variant must contribute at least one command".to_owned(),
+            ));
+        }
+        validate_spec(sub.spec, ancestors)?;
+    }
+    ancestors.pop();
+    if selector_count(spec) > 1 {
+        return Err(ErrorKind::InvalidSpecification(
+            "multiple subcommand fields contribute selectors at the same command level".to_owned(),
+        ));
+    }
+    let commands = spec.subcommands().collect::<Vec<_>>();
+    for (index, command) in commands.iter().enumerate() {
+        for other in &commands[index + 1..] {
+            if let Some(name) =
+                sub_names(command).find(|name| other.name == *name || other.aliases.contains(name))
+            {
+                return Err(ErrorKind::InvalidSpecification(format!(
+                    "subcommand name '{name}' is used by {} and {}",
+                    command.name, other.name,
+                )));
+            }
+        }
+    }
+    validate_targets(&arg_targets(spec))
 }
 
 fn validate_targets(targets: &[ArgTarget]) -> Result<(), ErrorKind> {
@@ -1251,7 +1397,8 @@ mod tests {
         aliases: &[],
         about: "add a pin",
         spec: &ADD,
-        hidden: false,
+        hidden:    false,
+        flattened: false,
     }];
     const ROOT: CommandSpec = CommandSpec {
         name: "prog",

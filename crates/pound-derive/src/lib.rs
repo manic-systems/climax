@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! derive macros for pound. `#[derive(Parse)]` turns a struct into a flat
+//! derive macros for pound. `#[derive(Parse)]` turns a struct into a
 //! command and an enum into a subcommand tree, `#[derive(ValueEnum)]` wires a
 //! unit enum up as a `FromArg` choice type. all of it just emits the static
 //! `CommandSpec` plus a `from_matches` reader, the runtime does the work.
@@ -245,6 +245,9 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     reason = "one cohesive codegen pass reads best whole"
 )]
 fn parse_enum(e: &venial::Enum) -> TokenStream {
+    if e.variants.items().next().is_none() {
+        return err("pound: a command enum must have at least one variant");
+    }
     let item = attr::pound(&e.attributes);
     let name = &e.name;
     let name_expr = name_expr(&item);
@@ -260,6 +263,47 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     let mut last_spec_index = 0;
 
     for (idx, variant) in e.variants.items().enumerate() {
+        let vattr = attr::pound(&variant.attributes);
+        let vname = &variant.name;
+        if vattr.flatten {
+            if !attr::only_flatten(&variant.attributes) {
+                return err("pound: a flattened variant only accepts #[pound(flatten)]");
+            }
+            let Fields::Tuple(fields) = &variant.fields else {
+                return err("pound: a flattened variant must have exactly one tuple field");
+            };
+            let mut fields = fields.fields.items();
+            let Some(field) = fields.next() else {
+                return err("pound: a flattened variant must have exactly one tuple field");
+            };
+            if fields.next().is_some() {
+                return err("pound: a flattened variant must have exactly one tuple field");
+            }
+            if attr::has_pound(&field.attributes) {
+                return err(
+                    "pound: a flattened variant's tuple field cannot have pound attributes",
+                );
+            }
+            let ty: TokenStream2 = field.ty.tokens.iter().cloned().collect();
+            sub_specs.push(quote! {
+                {
+                    const fn require_subcommands<T: ::pound::Subcommands>() {}
+                    require_subcommands::<#ty>();
+                    ::pound::SubSpec::new("", <#ty as ::pound::Parse>::SPEC).flattened()
+                }
+            });
+            arms.push(quote! {
+                ::core::option::Option::Some((#idx, __sm)) => {
+                    ::core::result::Result::Ok(Self::#vname(
+                        <#ty as ::pound::Parse>::from_matches(
+                            <#ty as ::pound::Parse>::SPEC,
+                            __sm,
+                        )?
+                    ))
+                },
+            });
+            continue;
+        }
         let FieldPlan {
             args: plans,
             flattened,
@@ -269,8 +313,6 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             Ok(v) => v,
             Err(msg) => return err(&msg),
         };
-        let vattr = attr::pound(&variant.attributes);
-        let vname = &variant.name;
         let sub_name = vattr
             .name
             .clone()
@@ -392,6 +434,8 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     };
 
     quote! {
+        impl ::pound::Subcommands for #name {}
+
         impl ::pound::Parse for #name {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#sub_consts)*

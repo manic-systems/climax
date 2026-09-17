@@ -286,6 +286,8 @@ pub struct SubSpec {
     pub spec: &'static CommandSpec,
     /// kept out of help output, still selectable on the command line
     pub hidden: bool,
+    /// contributes the referenced command choices at this level
+    pub flattened: bool,
 }
 
 impl SubSpec {
@@ -298,6 +300,7 @@ impl SubSpec {
             about: "",
             spec,
             hidden: false,
+            flattened: false,
         }
     }
 
@@ -318,6 +321,12 @@ impl SubSpec {
         self.hidden = true;
         self
     }
+
+    #[must_use]
+    pub const fn flattened(mut self) -> Self {
+        self.flattened = true;
+        self
+    }
 }
 
 /// a command or subcommand: identity, args, groups, children
@@ -332,7 +341,7 @@ pub struct CommandSpec {
     /// fuller description shown by `--help`, empty when it adds nothing
     pub long_about: &'static str,
     pub args: &'static [ArgSpec],
-    /// embedded argument structs
+    /// embedded parsed types
     pub flattened: &'static [&'static Self],
     /// source order for direct and flattened fields
     #[doc(hidden)]
@@ -359,6 +368,26 @@ pub enum ArgumentOrder {
 /// arguments in effective declaration order
 pub struct Arguments<'a> {
     pending: Vec<ArgumentEntry<'a>>,
+}
+
+/// effective subcommands in declaration order
+pub struct CommandChildren<'a> {
+    pending: Vec<&'a SubSpec>,
+}
+
+impl<'a> Iterator for CommandChildren<'a> {
+    type Item = &'a SubSpec;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(sub) = self.pending.pop() {
+            if sub.flattened {
+                self.pending.extend(sub.spec.subs.iter().rev());
+            } else {
+                return Some(sub);
+            }
+        }
+        None
+    }
 }
 
 enum ArgumentEntry<'a> {
@@ -470,7 +499,7 @@ impl CommandSpec {
         self
     }
 
-    /// embed another struct's arguments
+    /// embed another parsed type at this command level
     #[must_use]
     pub const fn flattened(mut self, flattened: &'static [&'static Self]) -> Self {
         self.flattened = flattened;
@@ -519,7 +548,40 @@ impl CommandSpec {
     /// whether this command dispatches to subcommands
     #[must_use]
     pub const fn has_subs(&self) -> bool {
-        !self.subs.is_empty()
+        self.subcommand_owner().is_some()
+    }
+
+    pub(crate) const fn subcommand_owner(&self) -> Option<&Self> {
+        if !self.subs.is_empty() {
+            return Some(self);
+        }
+        let mut index = 0;
+        while index < self.flattened.len() {
+            if let Some(owner) = self.flattened[index].subcommand_owner() {
+                return Some(owner);
+            }
+            index += 1;
+        }
+        None
+    }
+
+    /// whether a missing subcommand is allowed
+    #[must_use]
+    pub const fn subcommand_optional(&self) -> bool {
+        match self.subcommand_owner() {
+            Some(owner) => owner.sub_optional,
+            None => true,
+        }
+    }
+
+    /// subcommands at this command level
+    pub fn subcommands(&self) -> CommandChildren<'_> {
+        CommandChildren {
+            pending: self
+                .subcommand_owner()
+                .map(|owner| owner.subs.iter().rev().collect())
+                .unwrap_or_default(),
+        }
     }
 
     /// arguments at this command level
@@ -549,10 +611,9 @@ impl CommandSpec {
 
     #[must_use]
     #[allow(clippy::manual_contains)]
-    pub fn find_sub(&self, name: &str) -> Option<usize> {
-        self.subs
-            .iter()
-            .position(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
+    pub fn find_sub(&self, name: &str) -> Option<&SubSpec> {
+        self.subcommands()
+            .find(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
     }
 }
 
