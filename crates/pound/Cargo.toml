@@ -21,11 +21,11 @@ pound-derive = { version = "0.1.8", path = "../pound-derive", optional = true }
 
 [[example]]
 name              = "grab"
-required-features = [ "derive" ]
+required-features = [ "std", "derive" ]
 
 [[example]]
 name              = "vault"
-required-features = [ "derive" ]
+required-features = [ "std", "derive" ]
 
 [[example]]
 name              = "introspect"
