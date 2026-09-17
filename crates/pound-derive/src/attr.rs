@@ -19,6 +19,7 @@ pub struct Pound {
     pub count: bool,
     /// field delegates to its type's subcommand tree
     pub subcommand: bool,
+    pub flatten: bool,
     /// keep this arg/variant out of help output
     pub hidden: bool,
     /// named flag/option that descendant subcommands also accept
@@ -82,6 +83,24 @@ pub fn pound(attrs: &[Attribute]) -> Pound {
     out
 }
 
+pub fn only_flatten(attrs: &[Attribute]) -> bool {
+    attrs
+        .iter()
+        .filter(|attr| path_is(attr, "pound"))
+        .all(|attr| {
+            let AttributeValue::Group(_, tokens) = &attr.value else {
+                return false;
+            };
+            split_commas(tokens).iter().all(|segment| {
+                matches!(segment.as_slice(), [TokenTree::Ident(name)] if *name == "flatten")
+            })
+        })
+}
+
+pub fn has_pound(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| path_is(attr, "pound"))
+}
+
 /// the doc comment of an item or field, empty when none. lines are joined into
 /// paragraphs, and a blank line stays a paragraph break so `--help` can show
 /// more than `-h` does.
@@ -138,6 +157,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "trailing" => out.trailing = true,
             "count" => out.count = true,
             "subcommand" => out.subcommand = true,
+            "flatten" => out.flatten = true,
             "hidden" => out.hidden = true,
             "global" => out.global = true,
             "group" => out.group = value,

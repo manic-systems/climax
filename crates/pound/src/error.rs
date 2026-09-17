@@ -10,6 +10,8 @@ use crate::alloc_prelude::*;
 /// what a parse attempt ran into, or which early exit it was asked for
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorKind {
+    /// invalid command specification
+    InvalidSpecification(String),
     /// unrecognized `--flag` or `-x`
     Unknown {
         arg: String,
@@ -80,6 +82,9 @@ impl ErrorKind {
 impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidSpecification(message) => {
+                write!(f, "invalid command specification: {message}")
+            },
             Self::Unknown { arg, .. } => write!(f, "unrecognized argument '{arg}'"),
             Self::MissingValue(a) => write!(f, "'{a}' needs a value"),
             Self::MissingRequired(a) => write!(f, "missing required argument {a}"),
