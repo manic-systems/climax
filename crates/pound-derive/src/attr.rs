@@ -37,7 +37,8 @@ pub struct Pound {
     /// help section this arg is listed under
     pub heading: Option<String>,
     pub name: Option<String>,
-    pub version: Option<String>,
+    /// any expression, not just a literal
+    pub version: Option<Vec<TokenTree>>,
     /// field-level: minimum accepted parsed value
     pub min: Option<String>,
     /// field-level: maximum accepted parsed value
@@ -152,7 +153,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             "long_help" => out.long_help = value,
             "heading" => out.heading = value,
             "name" => out.name = value,
-            "version" => out.version = value,
+            "version" => out.version = expr(&seg),
             "min" => out.min = value,
             "max" => out.max = value,
             "max_len" => out.max_len = value,
@@ -182,6 +183,18 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
             },
             _ => {},
         }
+    }
+}
+
+/// everything after `key =`, left as tokens. [`None`] for a bare `key`, which
+/// asks for the inferred value.
+fn expr(seg: &[TokenTree]) -> Option<Vec<TokenTree>> {
+    match seg.get(1) {
+        Some(TokenTree::Punct(p)) if p.as_char() == '=' => {
+            let rest = &seg[2..];
+            (!rest.is_empty()).then(|| rest.to_vec())
+        },
+        _ => None,
     }
 }
 
