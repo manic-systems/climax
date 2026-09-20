@@ -977,7 +977,7 @@ fn name_expr(item: &Pound) -> TokenStream2 {
 fn version_expr(item: &Pound) -> TokenStream2 {
     item.version.as_ref().map_or_else(
         || quote! { ::core::env!("CARGO_PKG_VERSION") },
-        |v| quote! { #v },
+        |tokens| tokens.iter().cloned().collect::<TokenStream2>(),
     )
 }
 
