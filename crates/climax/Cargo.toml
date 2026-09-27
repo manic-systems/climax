@@ -17,6 +17,14 @@ parse       = [ "dep:pound" ]
 pty-overlay = [ "parse", "interactive", "dep:bang-screw-pty" ]
 render      = [ "dep:screw" ]
 
+[[example]]
+name              = "prompt"
+required-features = [ "interactive" ]
+
+[[example]]
+name              = "status"
+required-features = [ "render" ]
+
 [dependencies]
 bang-core = { path = "../bang-core", version = "0.0.1", optional = true }
 bang-screw = { path = "../bang-screw", version = "0.0.1", optional = true }
