@@ -84,6 +84,7 @@ pub use spec::{
     commands_unique,
     group_has_members,
     names_unique,
+    positionals_reachable,
     selector_count,
 };
 pub use value::{

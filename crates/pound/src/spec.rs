@@ -560,6 +560,26 @@ impl CommandSpec {
         out.into_iter()
     }
 
+    const fn order_len(&self) -> usize {
+        if self.argument_order.is_empty() {
+            self.args.len() + self.flattened.len()
+        } else {
+            self.argument_order.len()
+        }
+    }
+
+    /// the field declared at `position`, with direct args first when no
+    /// `argument_order` was given
+    const fn order_entry(&self, position: usize) -> ArgumentOrder {
+        if !self.argument_order.is_empty() {
+            self.argument_order[position]
+        } else if position < self.args.len() {
+            ArgumentOrder::Direct(position)
+        } else {
+            ArgumentOrder::Flattened(position - self.args.len())
+        }
+    }
+
     /// call `f` on each arg in declaration order, with the flattened indices
     /// leading to the spec that owns it and its index there
     pub(crate) fn visit(
@@ -568,18 +588,8 @@ impl CommandSpec {
         f: &mut impl FnMut(&[usize], usize, &'static ArgSpec),
     ) {
         let args: &'static [ArgSpec] = self.args;
-        let fallback: Vec<ArgumentOrder>;
-        let order = if self.argument_order.is_empty() {
-            fallback = (0..args.len())
-                .map(ArgumentOrder::Direct)
-                .chain((0..self.flattened.len()).map(ArgumentOrder::Flattened))
-                .collect();
-            &fallback
-        } else {
-            self.argument_order
-        };
-        for &entry in order {
-            match entry {
+        for position in 0..self.order_len() {
+            match self.order_entry(position) {
                 ArgumentOrder::Direct(i) => f(path, i, &args[i]),
                 ArgumentOrder::Flattened(i) => {
                     path.push(i);
@@ -723,6 +733,55 @@ const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
         i += 1;
     }
     count
+}
+
+/// whether no positional or subcommand is stuck behind a variadic or trailing
+/// positional. the derive asserts this.
+#[doc(hidden)]
+#[must_use]
+pub const fn positionals_reachable(spec: &CommandSpec) -> bool {
+    let mut scan = PositionalScan {
+        greedy:            false,
+        previous_required: None,
+        dispatchable:      true,
+    };
+    scan_positionals(spec, &mut scan) && (scan.dispatchable || !spec.has_subs())
+}
+
+struct PositionalScan {
+    greedy:            bool,
+    previous_required: Option<bool>,
+    dispatchable:      bool,
+}
+
+/// walk positionals in declaration order, false once one follows a greedy one
+const fn scan_positionals(spec: &CommandSpec, scan: &mut PositionalScan) -> bool {
+    let mut position = 0;
+    while position < spec.order_len() {
+        match spec.order_entry(position) {
+            ArgumentOrder::Direct(i) => {
+                let arg = &spec.args[i];
+                if arg.is_positional() {
+                    if scan.greedy {
+                        return false;
+                    }
+                    if arg.multi || matches!(arg.kind, Kind::Trailing) {
+                        scan.greedy = true;
+                        scan.dispatchable =
+                            !arg.required && matches!(scan.previous_required, Some(false));
+                    }
+                    scan.previous_required = Some(arg.required);
+                }
+            },
+            ArgumentOrder::Flattened(i) => {
+                if !scan_positionals(spec.flattened[i], scan) {
+                    return false;
+                }
+            },
+        }
+        position += 1;
+    }
+    true
 }
 
 /// whether any arg in `spec`, flattened structs included, belongs to `group`.
