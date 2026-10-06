@@ -32,6 +32,38 @@ use venial::{
 
 use crate::attr::Pound;
 
+const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group"];
+const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group"];
+const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name"];
+const FIELD_ATTRIBUTES: &[&str] = &[
+    "short",
+    "long",
+    "positional",
+    "trailing",
+    "count",
+    "hidden",
+    "global",
+    "group",
+    "default",
+    "default_missing",
+    "env",
+    "negate",
+    "value_name",
+    "help",
+    "long_help",
+    "heading",
+    "min",
+    "max",
+    "max_len",
+    "min_values",
+    "max_values",
+    "parse",
+    "validate",
+    "conflicts_with",
+    "requires",
+    "alias",
+];
+
 #[proc_macro_derive(Parse, attributes(pound))]
 pub fn derive_parse(input: TokenStream) -> TokenStream {
     match parse_item(input.into()) {
@@ -42,7 +74,7 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
     }
 }
 
-#[proc_macro_derive(ValueEnum)]
+#[proc_macro_derive(ValueEnum, attributes(pound))]
 pub fn derive_value_enum(input: TokenStream) -> TokenStream {
     match parse_item(input.into()) {
         Ok(Item::Enum(e)) => value_enum(&e),
@@ -57,6 +89,25 @@ enum Card {
     One,
     Opt,
     Many,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgKind {
+    Flag,
+    Count,
+    Opt,
+    Positional,
+    Trailing,
+}
+
+impl ArgKind {
+    const fn is_named(self) -> bool {
+        matches!(self, Self::Flag | Self::Count | Self::Opt)
+    }
+
+    const fn takes_value(self) -> bool {
+        matches!(self, Self::Opt | Self::Positional | Self::Trailing)
+    }
 }
 
 // how one raw value becomes the field's inner type.
@@ -78,7 +129,7 @@ enum Conversion {
 #[allow(clippy::struct_excessive_bools)]
 struct Plan {
     ident:           proc_macro2::Ident,
-    kind:            &'static str,
+    kind:            ArgKind,
     long:            Option<String>,
     short:           Option<char>,
     required:        bool,
@@ -117,10 +168,13 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
         Ok(v) => v,
         Err(e) => return err(&e),
     };
-    let item = attr::pound(&s.attributes);
+    let item = match command_attributes(&s.attributes) {
+        Ok(item) => item,
+        Err(e) => return err(&e),
+    };
     let name = &s.name;
 
-    if let Err(e) = validate_globals(&plans) {
+    if let Err(e) = validate_fields(&plans, &item.required_groups) {
         return err(&e);
     }
     let conflicts = match conflict_pairs(&plans) {
@@ -202,7 +256,10 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     reason = "one cohesive codegen pass reads best whole"
 )]
 fn parse_enum(e: &venial::Enum) -> TokenStream {
-    let item = attr::pound(&e.attributes);
+    let item = match command_attributes(&e.attributes) {
+        Ok(item) => item,
+        Err(e) => return err(&e),
+    };
     let name = &e.name;
     let name_expr = name_expr(&item);
     let version_expr = version_expr(&item);
@@ -221,7 +278,10 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             Ok(v) => v,
             Err(msg) => return err(&msg),
         };
-        let vattr = attr::pound(&variant.attributes);
+        let vattr = match attr::pound(&variant.attributes) {
+            Ok(attributes) => attributes,
+            Err(e) => return err(&e),
+        };
         let vname = &variant.name;
         let sub_name = vattr
             .name
@@ -232,7 +292,10 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         let (about_call, long_about_call) = about_calls(&variant_doc);
         let hidden = vattr.hidden;
 
-        if let Err(msg) = validate_globals(&plans) {
+        if let Err(e) = vattr.allow_only(VARIANT_ATTRIBUTES) {
+            return err(&e);
+        }
+        if let Err(msg) = validate_fields(&plans, &vattr.required_groups) {
             return err(&msg);
         }
         let conflicts = match conflict_pairs(&plans) {
@@ -349,6 +412,13 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
 }
 
 fn value_enum(e: &venial::Enum) -> TokenStream {
+    let item = match attr::pound(&e.attributes) {
+        Ok(item) => item,
+        Err(e) => return err(&e),
+    };
+    if let Err(e) = item.allow_only(&[]) {
+        return err(&e);
+    }
     let name = &e.name;
     let mut names = Vec::new();
     let mut arms = Vec::new();
@@ -357,7 +427,13 @@ fn value_enum(e: &venial::Enum) -> TokenStream {
             return err("pound: ValueEnum needs unit variants only");
         }
         let vname = &variant.name;
-        let vattr = attr::pound(&variant.attributes);
+        let vattr = match attr::pound(&variant.attributes) {
+            Ok(attributes) => attributes,
+            Err(e) => return err(&e),
+        };
+        if let Err(e) = vattr.allow_only(VALUE_VARIANT_ATTRIBUTES) {
+            return err(&e);
+        }
         let label = vattr
             .name
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
@@ -398,16 +474,25 @@ fn analyze(fields: &Fields) -> Result<(Vec<Plan>, Option<SubField>), String> {
     let mut args = Vec::new();
     let mut sub = None;
     for field in named.fields.items() {
-        if attr::pound(&field.attributes).subcommand {
+        let attributes = attr::pound(&field.attributes)?;
+        if attributes.subcommand {
+            attributes.allow_only(&["subcommand"])?;
             if sub.is_some() {
                 return Err("pound: only one #[pound(subcommand)] field is allowed".into());
             }
             sub = Some(sub_field(field)?);
         } else {
-            args.push(plan_field(field)?);
+            attributes.allow_only(FIELD_ATTRIBUTES)?;
+            args.push(plan_field(field, attributes)?);
         }
     }
     Ok((args, sub))
+}
+
+fn command_attributes(attributes: &[venial::Attribute]) -> Result<Pound, String> {
+    let item = attr::pound(attributes)?;
+    item.allow_only(ITEM_ATTRIBUTES)?;
+    Ok(item)
 }
 
 fn sub_field(field: &NamedField) -> Result<SubField, String> {
@@ -455,20 +540,28 @@ fn sub_reader(sf: &SubField, m: &TokenStream2) -> TokenStream2 {
 
 fn negation(
     a: &Pound,
-    kind: &str,
+    kind: ArgKind,
     long: Option<&str>,
     ident: &proc_macro2::Ident,
 ) -> Result<Option<String>, String> {
     let Some(spelling) = &a.negate else {
         return Ok(None);
     };
-    if kind != "Flag" {
-        return Err(format!("pound: #[pound(negate)] needs a bool field (`{ident}`)"));
+    if kind != ArgKind::Flag {
+        return Err(format!(
+            "pound: #[pound(negate)] needs a bool field (`{ident}`)"
+        ));
     }
     let Some(name) = long else {
         return Err(format!("pound: #[pound(negate)] needs a long name (`{ident}`)"));
     };
-    Ok(Some(spelling.clone().unwrap_or_else(|| format!("no-{name}"))))
+    let spelling = spelling.clone().unwrap_or_else(|| format!("no-{name}"));
+    if spelling == name || a.aliases.contains(&spelling) {
+        return Err(format!(
+            "pound: negation `{spelling}` is also a positive spelling (`{ident}`)"
+        ));
+    }
+    Ok(Some(spelling))
 }
 
 // the `min_values`/`max_values` bounds, which only a `Vec` field can satisfy.
@@ -500,43 +593,101 @@ fn arity(
     Ok((min, max))
 }
 
-fn check_kind(a: &Pound, kind: &str, ident: &proc_macro2::Ident) -> Result<(), String> {
-    if a.heading.is_some() && !matches!(kind, "Flag" | "Count" | "Opt") {
+fn check_kind(a: &Pound, kind: ArgKind, ident: &proc_macro2::Ident) -> Result<(), String> {
+    if a.heading.is_some() && !kind.is_named() {
         return Err(format!(
             "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
              Arguments (`{ident}`)"
         ));
     }
-    if a.default_missing.is_some() && kind != "Opt" {
+    if a.default_missing.is_some() && kind != ArgKind::Opt {
         return Err(format!(
             "pound: #[pound(default_missing)] needs a value option (short/long) (`{ident}`)"
+        ));
+    }
+    if !kind.takes_value()
+        && let Some(name) = [
+            ("min", a.min.is_some()),
+            ("max", a.max.is_some()),
+            ("max_len", a.max_len.is_some()),
+            ("parse", a.parse.is_some()),
+            ("validate", a.validate.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(name, present)| present.then_some(name))
+    {
+        return Err(format!(
+            "pound: #[pound({name})] needs a value field (`{ident}`)"
         ));
     }
     Ok(())
 }
 
-fn plan_field(field: &NamedField) -> Result<Plan, String> {
-    let a = attr::pound(&field.attributes);
+fn field_kind(
+    a: &Pound,
+    is_bool: bool,
+    card: Card,
+    ident: &proc_macro2::Ident,
+) -> Result<ArgKind, String> {
+    let shape_count = usize::from(a.positional) + usize::from(a.trailing) + usize::from(a.count);
+    if shape_count > 1 {
+        return Err(format!(
+            "pound: positional, trailing, and count are mutually exclusive (`{ident}`)"
+        ));
+    }
+    if is_bool && shape_count > 0 {
+        return Err(format!(
+            "pound: bool fields cannot be positional, trailing, or counted (`{ident}`)"
+        ));
+    }
+    if (a.positional || a.trailing) && a.is_named() {
+        return Err(format!(
+            "pound: positional fields cannot have short or long names (`{ident}`)"
+        ));
+    }
+    if a.trailing && card != Card::Many {
+        return Err(format!(
+            "pound: #[pound(trailing)] needs a `Vec` field (`{ident}`)"
+        ));
+    }
+    if a.count && card != Card::One {
+        return Err(format!(
+            "pound: #[pound(count)] needs a scalar field (`{ident}`)"
+        ));
+    }
+
+    let kind = if is_bool {
+        ArgKind::Flag
+    } else if a.count {
+        ArgKind::Count
+    } else if a.trailing {
+        ArgKind::Trailing
+    } else if a.is_named() {
+        ArgKind::Opt
+    } else {
+        ArgKind::Positional
+    };
+    if !kind.is_named() && !a.aliases.is_empty() {
+        return Err(format!("pound: aliases need a flag or option (`{ident}`)"));
+    }
+    if kind == ArgKind::Count && (a.default.is_some() || a.env.is_some()) {
+        return Err(format!(
+            "pound: counted fields cannot use a fallback (`{ident}`)"
+        ));
+    }
+    Ok(kind)
+}
+
+fn plan_field(field: &NamedField, a: Pound) -> Result<Plan, String> {
     let (is_bool, card, inner_ty) = classify(&field.ty);
     let full_ty: TokenStream2 = field.ty.tokens.iter().cloned().collect();
     let fname = field.name.to_string();
-
-    let kind = if is_bool {
-        "Flag"
-    } else if a.count {
-        "Count"
-    } else if a.trailing {
-        "Trailing"
-    } else if a.is_named() {
-        "Opt"
-    } else {
-        "Positional"
-    };
+    let kind = field_kind(&a, is_bool, card, &field.name)?;
 
     // long/short only for named kinds, defaulting a long name when neither
     // given.
     let (mut long, mut short) = (None, None);
-    if matches!(kind, "Flag" | "Count" | "Opt") {
+    if kind.is_named() {
         if let Some(l) = &a.long {
             long = Some(l.clone().unwrap_or_else(|| fname.replace('_', "-")));
         }
@@ -556,21 +707,11 @@ fn plan_field(field: &NamedField) -> Result<Plan, String> {
     let (min_values, max_values) = arity(&a, card == Card::Many, &field.name)?;
     let negate = negation(&a, kind, long.as_deref(), &field.name)?;
 
-    let required = matches!(kind, "Opt" | "Positional" | "Trailing")
-        && card == Card::One
-        && a.default.is_none();
-    let value_field = matches!(kind, "Opt" | "Positional" | "Trailing");
-    let conversion = if value_field {
-        Some(conversion_for(&a, &field.name)?)
-    } else {
-        if a.parse.is_some() {
-            return Err(format!(
-                "pound: #[pound(parse = \"...\")] needs a value field (`{}`)",
-                field.name
-            ));
-        }
-        None
-    };
+    let required = kind.takes_value() && card == Card::One && a.default.is_none();
+    let conversion = kind
+        .takes_value()
+        .then(|| conversion_for(&a, &field.name))
+        .transpose()?;
 
     Ok(Plan {
         ident: field.name.clone(),
@@ -680,8 +821,14 @@ fn default_assert(p: &Plan) -> Option<TokenStream2> {
 }
 
 fn arg_expr(p: &Plan) -> TokenStream2 {
-    let kind = format_ident!("{}", p.kind);
-    let mut e = quote! { ::pound::ArgSpec::new(::pound::Kind::#kind) };
+    let kind = match p.kind {
+        ArgKind::Flag => quote! { ::pound::Kind::Flag },
+        ArgKind::Count => quote! { ::pound::Kind::Count },
+        ArgKind::Opt => quote! { ::pound::Kind::Opt },
+        ArgKind::Positional => quote! { ::pound::Kind::Positional },
+        ArgKind::Trailing => quote! { ::pound::Kind::Trailing },
+    };
+    let mut e = quote! { ::pound::ArgSpec::new(#kind) };
     if let Some(l) = &p.long {
         e = quote! { #e.long(#l) };
     }
@@ -751,8 +898,8 @@ fn arg_expr(p: &Plan) -> TokenStream2 {
 fn reader(p: &Plan, i: usize, m: &TokenStream2, spec: &TokenStream2) -> TokenStream2 {
     let fname = &p.ident;
     let body = match p.kind {
-        "Flag" => quote! { #m.switch(#spec, #i) },
-        "Count" => {
+        ArgKind::Flag => quote! { #m.switch(#spec, #i) },
+        ArgKind::Count => {
             let ty = &p.full_ty;
             quote! { #m.count(#i) as #ty }
         },
@@ -901,15 +1048,21 @@ fn group_exprs(plans: &[Plan], required: &[String]) -> Vec<TokenStream2> {
 }
 
 // `global` only makes sense on a named flag/option, never a positional.
-fn validate_globals(plans: &[Plan]) -> Result<(), String> {
+fn validate_fields(plans: &[Plan], required_groups: &[String]) -> Result<(), String> {
     for p in plans {
-        if p.global && !matches!(p.kind, "Flag" | "Count" | "Opt") {
+        if p.global && !p.kind.is_named() {
             return Err(format!(
                 "pound: #[pound(global)] needs a flag or option (short/long), not a positional \
                  (`{}`)",
                 p.ident
             ));
         }
+    }
+    if let Some(name) = required_groups
+        .iter()
+        .find(|name| !plans.iter().any(|plan| plan.group.as_ref() == Some(name)))
+    {
+        return Err(format!("pound: required group `{name}` has no members"));
     }
     Ok(())
 }
