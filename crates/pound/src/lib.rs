@@ -13,7 +13,9 @@
 //! | `Vec<T>`    | variadic/repeatable  |
 //!
 //! `#[pound(short)]` / `#[pound(long)]` promote these to a named option, and
-//! `#[pound(flatten)]` embeds another `Parse` struct's args at the same level
+//! `#[pound(flatten)]` embeds another `Parse` struct's args at the same level.
+//! on an enum, `#[pound(flatten)] Variant(Other)` offers every command of the
+//! `Other` enum as if it were declared here.
 //!
 //! ```ignore
 //! use pound::Parse;
@@ -79,8 +81,10 @@ pub use spec::{
     GroupSpec,
     Kind,
     SubSpec,
+    commands_unique,
     group_has_members,
     names_unique,
+    selector_count,
 };
 pub use value::{
     FromArg,
@@ -150,6 +154,20 @@ pub trait Parse: Sized {
             Err(err) => err.exit(),
         }
     }
+}
+
+/// a [`Parse`] enum whose variants are commands, which is what a
+/// `#[pound(subcommand)]` field or a `#[pound(flatten)]` variant must hold.
+/// the derive implements it for every enum.
+pub trait Subcommands: Parse {}
+
+/// `T`'s spec, available only once `T` is known to be a command enum. the
+/// derive reaches subcommand and spliced specs through this, so a struct in
+/// either place fails to compile instead of offering no commands.
+#[doc(hidden)]
+#[must_use]
+pub const fn subcommand_spec<T: Subcommands>() -> &'static CommandSpec {
+    T::SPEC
 }
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.
