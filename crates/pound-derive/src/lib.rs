@@ -275,6 +275,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let unique_message = format!("pound: two args of `{name}` answer to the same spelling");
     let group_asserts = group_asserts(plans, &item.required_groups, &format_ident!("CMD"));
     let selector_assert = fields.selector_assert(&name.to_string(), &format_ident!("CMD"));
+    let positional_assert = positional_assert(&name.to_string(), &format_ident!("CMD"));
 
     // avoid unused-param warnings when a command carries only a subcommand.
     let spec_param = if plans.is_empty() {
@@ -318,6 +319,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                 const _: () = ::core::assert!(::pound::names_unique(&CMD), #unique_message);
                 #group_asserts
                 #selector_assert
+                #positional_assert
                 &CMD
             };
 
@@ -434,6 +436,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         );
         let group_asserts = group_asserts(plans, &vattr.required_groups, &ck);
         let selector_assert = fields.selector_assert(&format!("{name}::{vname}"), &ck);
+        let positional_assert = positional_assert(&format!("{name}::{vname}"), &ck);
         // parameterless builders, so only chain them when the flag is set.
         let sub_optional_call = if sub_optional {
             quote!(.sub_optional())
@@ -460,6 +463,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             const _: () = ::core::assert!(::pound::names_unique(&#ck), #unique_message);
             #group_asserts
             #selector_assert
+            #positional_assert
         });
         let valias = &vattr.aliases;
         sub_specs.push(quote! {
@@ -645,6 +649,15 @@ fn command_attributes(
     let item = attr::pound(attributes)?;
     item.allow_only(ITEM_ATTRIBUTES, owner)?;
     Ok(item)
+}
+
+fn positional_assert(owner: &str, spec: &proc_macro2::Ident) -> TokenStream2 {
+    let message = format!(
+        "pound: `{owner}` has a positional or subcommand after a variadic or trailing positional"
+    );
+    quote! {
+        const _: () = ::core::assert!(::pound::positionals_reachable(&#spec), #message);
+    }
 }
 
 // the one tuple field of a `#[pound(flatten)]` enum variant

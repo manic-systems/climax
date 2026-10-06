@@ -16,8 +16,6 @@ use pound::{
 #[pound(name = "grab", version = "0.1.0")]
 #[allow(dead_code, reason = "not a runnable example")]
 struct Grab {
-    /// urls to fetch
-    url:    Vec<String>,
     /// download directory
     #[pound(short, long)]
     output: Option<String>,
@@ -32,6 +30,11 @@ struct Grab {
 #[derive(Parse)]
 #[allow(dead_code, reason = "not a runnable example")]
 enum Cmd {
+    /// download urls
+    Fetch {
+        /// urls to fetch
+        url: Vec<String>,
+    },
     /// list cached files
     List {
         /// output format
