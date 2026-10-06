@@ -58,6 +58,7 @@ mod alloc_prelude {
     };
 }
 
+#[doc(hidden)] pub mod checks;
 mod error;
 mod help;
 mod parse;
@@ -81,16 +82,10 @@ pub use spec::{
     GroupSpec,
     Kind,
     SubSpec,
-    commands_unique,
-    group_has_members,
-    names_unique,
-    positionals_reachable,
-    selector_count,
 };
 pub use value::{
     FromArg,
     ValueError,
-    default_allowed,
 };
 
 /// the trait the derive targets
@@ -161,15 +156,6 @@ pub trait Parse: Sized {
 /// `#[pound(subcommand)]` field or a `#[pound(flatten)]` variant must hold.
 /// the derive implements it for every enum.
 pub trait Subcommands: Parse {}
-
-/// `T`'s spec, available only once `T` is known to be a command enum. the
-/// derive reaches subcommand and spliced specs through this, so a struct in
-/// either place fails to compile instead of offering no commands.
-#[doc(hidden)]
-#[must_use]
-pub const fn subcommand_spec<T: Subcommands>() -> &'static CommandSpec {
-    T::SPEC
-}
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.
 ///

@@ -201,7 +201,7 @@ impl FieldPlan {
         }
         let message = format!("pound: `{owner}` has more than one subcommand field");
         quote! {
-            const _: () = ::core::assert!(::pound::selector_count(&#spec) <= 1, #message);
+            const _: () = ::core::assert!(::pound::checks::selector_count(&#spec) <= 1, #message);
         }
     }
 
@@ -316,7 +316,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                     .requires(REQUIRES)
                     .subs(#subs)
                     #sub_optional_call;
-                const _: () = ::core::assert!(::pound::names_unique(&CMD), #unique_message);
+                const _: () = ::core::assert!(::pound::checks::names_unique(&CMD), #unique_message);
                 #group_asserts
                 #selector_assert
                 #positional_assert
@@ -375,7 +375,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 Err(e) => return err(&e),
             };
             sub_specs.push(quote! {
-                ::pound::SubSpec::flatten(::pound::subcommand_spec::<#ty>())
+                ::pound::SubSpec::flatten(::pound::checks::subcommand_spec::<#ty>())
             });
             arms.push(quote! {
                 ::core::option::Option::Some((#idx, __sm)) => ::core::result::Result::Ok(
@@ -460,7 +460,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 .requires(#rk)
                 .subs(#subs)
                 #sub_optional_call;
-            const _: () = ::core::assert!(::pound::names_unique(&#ck), #unique_message);
+            const _: () = ::core::assert!(::pound::checks::names_unique(&#ck), #unique_message);
             #group_asserts
             #selector_assert
             #positional_assert
@@ -521,7 +521,10 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#sub_consts)*
                 const SUBS: &[::pound::SubSpec] = &[ #(#sub_specs),* ];
-                const _: () = ::core::assert!(::pound::commands_unique(SUBS), #unique_message);
+                const _: () = ::core::assert!(
+                    ::pound::checks::commands_unique(SUBS),
+                    #unique_message
+                );
                 const ROOT: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
@@ -656,7 +659,7 @@ fn positional_assert(owner: &str, spec: &proc_macro2::Ident) -> TokenStream2 {
         "pound: `{owner}` has a positional or subcommand after a variadic or trailing positional"
     );
     quote! {
-        const _: () = ::core::assert!(::pound::positionals_reachable(&#spec), #message);
+        const _: () = ::core::assert!(::pound::checks::positionals_reachable(&#spec), #message);
     }
 }
 
@@ -697,7 +700,7 @@ fn sub_parts(sub: Option<&SubField>) -> (TokenStream2, bool) {
         Some(sf) => {
             let ty = &sf.ty;
             (
-                quote! { ::pound::subcommand_spec::<#ty>().subs },
+                quote! { ::pound::checks::subcommand_spec::<#ty>().subs },
                 sf.optional,
             )
         },
@@ -1000,7 +1003,7 @@ fn default_assert(p: &Plan) -> Option<TokenStream2> {
     );
     Some(quote! {
         const _: () = ::core::assert!(
-            ::pound::default_allowed(#default, <#inner as ::pound::FromArg>::POSSIBLE),
+            ::pound::checks::default_allowed(#default, <#inner as ::pound::FromArg>::POSSIBLE),
             #message
         );
     })
@@ -1282,7 +1285,10 @@ fn group_asserts(
         .map(|name| {
             let message = format!("pound: required group `{name}` has no members");
             quote! {
-                const _: () = ::core::assert!(::pound::group_has_members(&#spec, #name), #message);
+                const _: () = ::core::assert!(
+                    ::pound::checks::group_has_members(&#spec, #name),
+                    #message
+                );
             }
         })
         .collect()
