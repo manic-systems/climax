@@ -61,7 +61,7 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
     };
     println!("{pad}{}{version}  {}", spec.name, spec.about);
 
-    for arg in spec.args.iter().filter(|a| !a.hidden) {
+    for arg in spec.arguments().filter(|a| !a.hidden) {
         println!("{pad}  {}", row(arg));
     }
     for arg in inherited.iter().filter(|a| !a.hidden) {
@@ -80,7 +80,7 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
 
     // globals accumulate down the tree
     let mut globals = inherited.to_vec();
-    globals.extend(spec.args.iter().filter(|a| a.global));
+    globals.extend(spec.arguments().filter(|a| a.global));
     for sub in spec.subs.iter().filter(|s| !s.hidden) {
         walk(sub.spec, depth + 1, &globals);
     }
@@ -90,7 +90,7 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
 /// global has claimed
 fn implicit(spec: &CommandSpec, inherited: &[&ArgSpec], short: char, long: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let claimants = || spec.args.iter().chain(inherited.iter().copied());
+    let claimants = || spec.arguments().chain(inherited.iter().copied());
     if !claimants().any(|a| a.answers_short(short)) {
         out.push(format!("-{short}"));
     }

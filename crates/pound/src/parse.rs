@@ -36,23 +36,45 @@ struct Slot<'a> {
 /// a successful parse
 #[derive(Debug)]
 pub struct Matches<'a> {
-    slots: Vec<Slot<'a>>,
-    sub: Option<(usize, Box<Self>)>,
+    slots:     Vec<Slot<'a>>,
+    flattened: Vec<Self>,
+    sub:       Option<(usize, Box<Self>)>,
+}
+
+/// an arg this command parses, and where its slot lives
+struct ArgTarget {
+    /// flattened indices leading from this command's matches to the owner's
+    path:  Vec<usize>,
+    index: usize,
+    arg:   &'static ArgSpec,
 }
 
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
-    arg: &'static ArgSpec,
-    value: Option<&'a str>,
+    /// position in the descendant's inherited globals, which every ancestor's
+    /// own list is a prefix of
+    index:   usize,
+    value:   Option<&'a str>,
     negated: bool,
 }
 
 impl<'a> Matches<'a> {
-    fn new(len: usize) -> Self {
+    fn new(spec: &CommandSpec) -> Self {
         Self {
-            slots: vec![Slot::default(); len],
-            sub: None,
+            slots:     vec![Slot::default(); spec.args.len()],
+            flattened: spec
+                .flattened
+                .iter()
+                .map(|inner| Self::new(inner))
+                .collect(),
+            sub:       None,
         }
+    }
+
+    /// matches for the flattened struct at `index`
+    #[must_use]
+    pub fn flattened(&self, index: usize) -> &Self {
+        &self.flattened[index]
     }
 
     /// was a flag (or any value) supplied at least once
@@ -227,9 +249,10 @@ fn parse_cmd<'a>(
 
 /// the spelling that still reaches `spec`'s generated help, if any does
 pub(crate) fn help_flag(spec: &CommandSpec, globals: &[&ArgSpec]) -> Option<&'static str> {
-    if !claims_long(spec, globals, "help") {
+    let own: Vec<&ArgSpec> = spec.arguments().collect();
+    if !claims_long(&own, globals, "help") {
         Some("--help")
-    } else if !claims_short(spec, globals, 'h') {
+    } else if !claims_short(&own, globals, 'h') {
         Some("-h")
     } else {
         None
@@ -242,21 +265,23 @@ fn walk_cmd<'a>(
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
-    let mut m = Matches::new(spec.args.len());
+    let mut targets = Vec::new();
+    spec.visit(&mut Vec::new(), &mut |path, index, arg| {
+        targets.push(ArgTarget {
+            path: path.to_vec(),
+            index,
+            arg,
+        });
+    });
+    let mut m = Matches::new(spec);
 
-    let positionals: Vec<usize> = spec
-        .args
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| a.is_positional())
-        .map(|(i, _)| i)
-        .collect();
+    let positionals: Vec<&ArgTarget> = targets.iter().filter(|t| t.arg.is_positional()).collect();
     let mut pos_cursor = 0_usize;
     let mut only_positional = false;
 
     while let Some(tok) = it.next() {
         if only_positional {
-            positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
+            positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             continue;
         }
 
@@ -267,22 +292,25 @@ fn walk_cmd<'a>(
                 Some((n, v)) => (n, Some(v)),
                 None => (long, None),
             };
-            if let Some(sig) = builtin_long(spec, name, globals) {
+            if let Some(sig) = builtin_long(spec, &targets, name, globals) {
                 return Err(sig.into());
             }
-            if let Some(idx) = spec.find_long(name) {
-                apply_named(spec, &mut m, idx, inline, it)?;
-            } else if let Some(idx) = spec.find_negate(name) {
-                apply_negation(&mut m.slots[idx], name, inline)?;
-            } else if let Some(g) = find_global_long(globals, name) {
+            if let Some(target) = targets
+                .iter()
+                .find(|t| t.arg.answers_long(name) && t.arg.negate != Some(name))
+            {
+                apply_named(&mut m, target, inline, it)?;
+            } else if let Some(target) = targets.iter().find(|t| t.arg.negate == Some(name)) {
+                apply_negation(target_slot_mut(&mut m, target), name, inline)?;
+            } else if let Some((index, g)) = find_global_long(globals, name) {
                 if g.negate != Some(name) {
-                    record_global(g, inline, it, hits)?;
+                    record_global(index, g, inline, it, hits)?;
                 } else if inline.is_some() {
                     return Err(ErrorKind::UnexpectedValue(format!("--{name}")).into());
                 } else {
                     hits.push(GlobalHit {
-                        arg:     g,
-                        value:   None,
+                        index,
+                        value: None,
                         negated: true,
                     });
                 }
@@ -295,28 +323,28 @@ fn walk_cmd<'a>(
             }
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             let first = rest.chars().next().unwrap_or('-');
-            let known = spec.find_short(first).is_some()
-                || builtin_short(spec, first, globals).is_some()
+            let known = targets.iter().any(|t| t.arg.answers_short(first))
+                || builtin_short(spec, &targets, first, globals).is_some()
                 || find_global_short(globals, first).is_some();
             if known {
-                shorts(spec, &mut m, rest, it, globals, hits)?;
+                shorts(spec, &targets, &mut m, rest, it, globals, hits)?;
             } else {
                 // not an option (negative numbers, lone values) -> positional
-                positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
+                positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             }
         } else if let Some(sidx) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
-            child_globals.extend(spec.args.iter().filter(|a| a.global));
+            child_globals.extend(targets.iter().map(|t| t.arg).filter(|a| a.global));
             let sub_m = parse_cmd(spec.subs[sidx].spec, it, &child_globals, hits)?;
             m.sub = Some((sidx, Box::new(sub_m)));
             break; // subcommand owns the rest
         } else {
-            positional(spec, &mut m, &positionals, &mut pos_cursor, tok)?;
+            positional(&mut m, &positionals, &mut pos_cursor, tok)?;
         }
     }
 
     // must run before finalise so owned globals count toward required/group checks
-    apply_global_hits(spec, &mut m, hits);
+    apply_global_hits(&targets, globals.len(), &mut m, hits);
     finalise(spec, &m, globals)?;
     Ok(m)
 }
@@ -325,22 +353,18 @@ fn walk_cmd<'a>(
 /// and never past a variadic one, which stays greedy so its tail can fill
 fn sub_dispatch(
     spec: &CommandSpec,
-    positionals: &[usize],
+    positionals: &[&ArgTarget],
     cursor: usize,
     tok: &str,
 ) -> Result<Option<usize>, Error> {
     if !spec.has_subs() {
         return Ok(None);
     }
-    let next = positionals.get(cursor).map(|&i| spec.args[i]);
+    let next = positionals.get(cursor).map(|t| t.arg);
     if next.is_some_and(|a| a.multi || a.kind == Kind::Trailing) {
         return Ok(None);
     }
-    if positionals
-        .iter()
-        .skip(cursor)
-        .any(|&i| spec.args[i].required)
-    {
+    if positionals.iter().skip(cursor).any(|t| t.arg.required) {
         return Ok(None);
     }
     match spec.find_sub(tok) {
@@ -356,33 +380,33 @@ fn sub_dispatch(
 
 /// apply a long option
 fn apply_named<'a>(
-    spec: &CommandSpec,
     m: &mut Matches<'a>,
-    idx: usize,
+    target: &ArgTarget,
     inline: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
 ) -> Result<(), ErrorKind> {
-    let a = spec.args[idx];
+    let a = target.arg;
+    let slot = target_slot_mut(m, target);
     match a.kind {
         Kind::Flag => {
             if inline.is_some() {
                 return Err(ErrorKind::UnexpectedValue(a.display_name()));
             }
-            m.slots[idx].count = 1;
-            m.slots[idx].negated = false;
+            slot.count = 1;
+            slot.negated = false;
         },
         Kind::Count => {
             if inline.is_some() {
                 return Err(ErrorKind::UnexpectedValue(a.display_name()));
             }
-            m.slots[idx].count += 1;
+            slot.count += 1;
         },
         Kind::Opt => {
             let value = match inline {
                 Some(v) => v,
-                None => detached_value(&a, it)?,
+                None => detached_value(a, it)?,
             };
-            push_value(&a, &mut m.slots[idx], value);
+            push_value(a, slot, value);
         },
         Kind::Positional | Kind::Trailing => return Err(unknown(a.display_name())),
     }
@@ -392,6 +416,7 @@ fn apply_named<'a>(
 /// apply a cluster of short args
 fn shorts<'a>(
     spec: &CommandSpec,
+    targets: &[ArgTarget],
     m: &mut Matches<'a>,
     cluster: &'a str,
     it: &mut IntoIter<&'a str>,
@@ -399,37 +424,40 @@ fn shorts<'a>(
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), ErrorKind> {
     for (off, ch) in cluster.char_indices() {
-        if let Some(sig) = builtin_short(spec, ch, globals) {
+        if let Some(sig) = builtin_short(spec, targets, ch, globals) {
             return Err(sig);
         }
-        if let Some(idx) = spec.find_short(ch) {
-            let a = spec.args[idx];
+        if let Some(target) = targets.iter().find(|t| t.arg.answers_short(ch)) {
+            let a = target.arg;
+            let slot = target_slot_mut(m, target);
             match a.kind {
                 Kind::Flag => {
-                    m.slots[idx].count = 1;
-                    m.slots[idx].negated = false;
+                    slot.count = 1;
+                    slot.negated = false;
                 },
-                Kind::Count => m.slots[idx].count += 1,
+                Kind::Count => slot.count += 1,
                 Kind::Opt => {
-                    let value = cluster_value(cluster, off, ch, it, &a)?;
-                    push_value(&a, &mut m.slots[idx], value);
+                    let value = cluster_value(cluster, off, ch, it, a)?;
+                    push_value(a, slot, value);
                     return Ok(()); // option swallowed the cluster tail
                 },
                 Kind::Positional | Kind::Trailing => {
                     return Err(unknown(format!("-{ch}")));
                 },
             }
-        } else if let Some(g) = find_global_short(globals, ch) {
+        } else if let Some((index, g)) = find_global_short(globals, ch) {
             match g.kind {
-                Kind::Flag | Kind::Count => hits.push(GlobalHit {
-                    arg: g,
-                    value: None,
-                    negated: false,
-                }),
+                Kind::Flag | Kind::Count => {
+                    hits.push(GlobalHit {
+                        index,
+                        value: None,
+                        negated: false,
+                    });
+                },
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
                     hits.push(GlobalHit {
-                        arg: g,
+                        index,
                         value: Some(value),
                         negated: false,
                     });
@@ -481,8 +509,13 @@ fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
 }
 
 /// the nearest ancestor's global wins when several answer to the same spelling
-fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
-    globals.iter().rev().copied().find(|a| a.answers_long(name))
+fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<(usize, &'static ArgSpec)> {
+    globals
+        .iter()
+        .copied()
+        .enumerate()
+        .rev()
+        .find(|(_, a)| a.answers_long(name))
 }
 
 /// switch a flag back off, so the last spelling on the line wins
@@ -495,11 +528,17 @@ fn apply_negation(slot: &mut Slot<'_>, name: &str, inline: Option<&str>) -> Resu
     Ok(())
 }
 
-fn find_global_short(globals: &[&'static ArgSpec], ch: char) -> Option<&'static ArgSpec> {
-    globals.iter().rev().copied().find(|a| a.answers_short(ch))
+fn find_global_short(globals: &[&'static ArgSpec], ch: char) -> Option<(usize, &'static ArgSpec)> {
+    globals
+        .iter()
+        .copied()
+        .enumerate()
+        .rev()
+        .find(|(_, a)| a.answers_short(ch))
 }
 
 fn record_global<'a>(
+    index: usize,
     g: &'static ArgSpec,
     inline: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
@@ -511,7 +550,7 @@ fn record_global<'a>(
                 return Err(ErrorKind::UnexpectedValue(g.display_name()));
             }
             hits.push(GlobalHit {
-                arg: g,
+                index,
                 value: None,
                 negated: false,
             });
@@ -522,7 +561,7 @@ fn record_global<'a>(
                 None => detached_value(g, it)?,
             };
             hits.push(GlobalHit {
-                arg: g,
+                index,
                 value: Some(value),
                 negated: false,
             });
@@ -532,22 +571,33 @@ fn record_global<'a>(
     Ok(())
 }
 
-/// apply the hits this `spec` owns into its slots, leaving the rest to bubble up
-fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec<GlobalHit<'a>>) {
+/// apply the hits this `spec` owns into its slots, leaving the rest to bubble
+/// up
+fn apply_global_hits<'a>(
+    targets: &[ArgTarget],
+    inherited: usize,
+    m: &mut Matches<'a>,
+    hits: &mut Vec<GlobalHit<'a>>,
+) {
     hits.retain(|h| {
-        let Some(idx) = spec.args.iter().position(|a| core::ptr::eq(a, h.arg)) else {
+        let Some(target) = h
+            .index
+            .checked_sub(inherited)
+            .and_then(|own| targets.iter().filter(|t| t.arg.global).nth(own))
+        else {
             return true;
         };
-        let a = spec.args[idx];
+        let a = target.arg;
+        let slot = target_slot_mut(m, target);
         match a.kind {
             Kind::Flag => {
-                m.slots[idx].count = u32::from(!h.negated);
-                m.slots[idx].negated = h.negated;
+                slot.count = u32::from(!h.negated);
+                slot.negated = h.negated;
             },
-            Kind::Count => m.slots[idx].count += 1,
+            Kind::Count => slot.count += 1,
             Kind::Opt => {
                 if let Some(v) = h.value {
-                    push_value(&a, &mut m.slots[idx], v);
+                    push_value(a, slot, v);
                 }
             },
             Kind::Positional | Kind::Trailing => {},
@@ -558,16 +608,15 @@ fn apply_global_hits<'a>(spec: &CommandSpec, m: &mut Matches<'a>, hits: &mut Vec
 
 /// assign a bare token to the next positional, or a trailing/variadic sink
 fn positional<'a>(
-    spec: &CommandSpec,
     m: &mut Matches<'a>,
-    positionals: &[usize],
+    positionals: &[&ArgTarget],
     cursor: &mut usize,
     tok: &'a str,
 ) -> Result<(), ErrorKind> {
-    let idx = if *cursor < positionals.len() {
+    let target = if *cursor < positionals.len() {
         positionals[*cursor]
     } else if let Some(&last) = positionals.last() {
-        let a = spec.args[last];
+        let a = last.arg;
         if a.multi || a.kind == Kind::Trailing {
             last // overflow lands in the variadic tail
         } else {
@@ -577,9 +626,10 @@ fn positional<'a>(
         return Err(ErrorKind::UnexpectedPositional(tok.to_owned()));
     };
 
-    let a = spec.args[idx];
-    m.slots[idx].values.push(tok);
-    m.slots[idx].count += 1;
+    let a = target.arg;
+    let slot = target_slot_mut(m, target);
+    slot.values.push(tok);
+    slot.count += 1;
     // single positional advances the cursor, a variadic one keeps eating
     if !(a.multi || a.kind == Kind::Trailing) {
         *cursor += 1;
@@ -647,12 +697,11 @@ fn finalise(
     }
 
     for g in spec.groups {
-        let set: Vec<String> = spec
-            .args
+        let members = group_members(spec, m, g.name);
+        let set: Vec<String> = members
             .iter()
-            .enumerate()
-            .filter(|(i, a)| a.group == Some(g.name) && m.slots[*i].count > 0)
-            .map(|(_, a)| a.display_name())
+            .filter(|(_, slot)| slot.count > 0)
+            .map(|(a, _)| a.display_name())
             .collect();
         if set.len() > 1 {
             return Err(ErrorKind::Conflict {
@@ -662,11 +711,9 @@ fn finalise(
             });
         }
         if set.is_empty() && g.required {
-            let options = spec
-                .args
+            let options = members
                 .iter()
-                .filter(|a| a.group == Some(g.name))
-                .map(ArgSpec::display_name)
+                .map(|(a, _)| a.display_name())
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(ErrorKind::MissingGroup {
@@ -686,6 +733,10 @@ fn finalise(
         }
     }
 
+    for (inner, inner_matches) in spec.flattened.iter().zip(&m.flattened) {
+        finalise(inner, inner_matches, globals)?;
+    }
+
     if spec.has_subs() && m.sub.is_none() && !spec.sub_optional {
         // empty/sub-less invocation shows help rather than a bare error
         return Err(ErrorKind::Help(help::render(spec, globals, false)));
@@ -694,8 +745,39 @@ fn finalise(
     Ok(())
 }
 
-fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) -> Option<ErrorKind> {
-    if claims_long(spec, globals, name) {
+/// the args in `group` across `spec` and its flattened structs, with their
+/// slots
+fn group_members<'m, 'a>(
+    spec: &CommandSpec,
+    m: &'m Matches<'a>,
+    group: &str,
+) -> Vec<(&'static ArgSpec, &'m Slot<'a>)> {
+    let mut members = Vec::new();
+    spec.visit(&mut Vec::new(), &mut |path, index, arg| {
+        if arg.group == Some(group) {
+            let owner = path.iter().fold(m, |owner, &i| &owner.flattened[i]);
+            members.push((arg, &owner.slots[index]));
+        }
+    });
+    members
+}
+
+fn target_slot_mut<'m, 'a>(m: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mut Slot<'a> {
+    let owner = target
+        .path
+        .iter()
+        .fold(m, |owner, &i| &mut owner.flattened[i]);
+    &mut owner.slots[target.index]
+}
+
+fn builtin_long(
+    spec: &CommandSpec,
+    targets: &[ArgTarget],
+    name: &str,
+    globals: &[&'static ArgSpec],
+) -> Option<ErrorKind> {
+    let mut claimants = targets.iter().map(|t| t.arg).chain(globals.iter().copied());
+    if claimants.any(|a| a.answers_long(name)) {
         return None;
     }
     match name {
@@ -705,8 +787,14 @@ fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) ->
     }
 }
 
-fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> Option<ErrorKind> {
-    if claims_short(spec, globals, ch) {
+fn builtin_short(
+    spec: &CommandSpec,
+    targets: &[ArgTarget],
+    ch: char,
+    globals: &[&'static ArgSpec],
+) -> Option<ErrorKind> {
+    let mut claimants = targets.iter().map(|t| t.arg).chain(globals.iter().copied());
+    if claimants.any(|a| a.answers_short(ch)) {
         return None;
     }
     match ch {
@@ -726,11 +814,11 @@ fn long_names<'s>(
     spec: &'s CommandSpec,
     globals: &'s [&'static ArgSpec],
 ) -> impl Iterator<Item = &'s str> {
-    let help = !claims_long(spec, globals, "help");
-    let version = spec.has_version_info() && !claims_long(spec, globals, "version");
-    spec.args
-        .iter()
-        .chain(globals.iter().map(|a| &**a))
+    let own: Vec<&'static ArgSpec> = spec.arguments().collect();
+    let help = !claims_long(&own, globals, "help");
+    let version = spec.has_version_info() && !claims_long(&own, globals, "version");
+    own.into_iter()
+        .chain(globals.iter().copied())
         .filter(|a| !a.hidden)
         .flat_map(|a| {
             a.long
@@ -801,17 +889,19 @@ mod tests {
         ArgSpec::new(Kind::Positional).value_name("rest").multi(), // 4
     ];
     const FLAT: CommandSpec = CommandSpec {
-        name: "flat",
-        version: "0.1.0",
-        hash: None,
-        long_about: "",
-        about: "a flat command",
-        args: FLAT_ARGS,
-        groups: &[],
-        conflicts: &[],
-        requires: &[],
-        subs: &[],
-        sub_optional: false,
+        name:           "flat",
+        version:        "0.1.0",
+        hash:           None,
+        long_about:     "",
+        about:          "a flat command",
+        args:           FLAT_ARGS,
+        flattened:      &[],
+        argument_order: &[],
+        groups:         &[],
+        conflicts:      &[],
+        requires:       &[],
+        subs:           &[],
+        sub_optional:   false,
     };
 
     fn parse<'a>(spec: &CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, ErrorKind> {
@@ -885,6 +975,9 @@ mod tests {
 
     #[test]
     fn help_and_version_signals() {
+        const HASHED: CommandSpec = CommandSpec::new("flat").version("0.1.0").hash("abc123");
+        const HASH_ONLY: CommandSpec = CommandSpec::new("flat").hash("abc123");
+
         assert!(matches!(parse(&FLAT, &["--help"]), Err(ErrorKind::Help(_))));
         assert!(matches!(parse(&FLAT, &["-h"]), Err(ErrorKind::Help(_))));
         match parse(&FLAT, &["--version"]) {
@@ -892,13 +985,11 @@ mod tests {
             other => panic!("expected version, got {other:?}"),
         }
 
-        const HASHED: CommandSpec = CommandSpec::new("flat").version("0.1.0").hash("abc123");
         match parse(&HASHED, &["--version"]) {
             Err(ErrorKind::Version(v)) => assert_eq!(v, "flat 0.1.0 (abc123)"),
             other => panic!("expected version, got {other:?}"),
         }
 
-        const HASH_ONLY: CommandSpec = CommandSpec::new("flat").hash("abc123");
         match parse(&HASH_ONLY, &["-V"]) {
             Err(ErrorKind::Version(v)) => assert_eq!(v, "flat (abc123)"),
             other => panic!("expected version, got {other:?}"),
@@ -909,17 +1000,19 @@ mod tests {
     fn defaults_resolve_in_readers() {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("level").default("info")];
         const SPEC: CommandSpec = CommandSpec {
-            name: "d",
-            version: "",
-            hash: None,
-            long_about: "",
-            about: "",
-            args: ARGS,
-            groups: &[],
-            conflicts: &[],
-            requires: &[],
-            subs: &[],
-            sub_optional: false,
+            name:           "d",
+            version:        "",
+            hash:           None,
+            long_about:     "",
+            about:          "",
+            args:           ARGS,
+            flattened:      &[],
+            argument_order: &[],
+            groups:         &[],
+            conflicts:      &[],
+            requires:       &[],
+            subs:           &[],
+            sub_optional:   false,
         };
         // unset: the reader falls back to the default
         let m = parse(&SPEC, &[]).unwrap();
@@ -979,17 +1072,19 @@ mod tests {
             ArgSpec::new(Kind::Flag).long("fetch").group("mode"),
         ];
         const OPT: CommandSpec = CommandSpec {
-            name: "g",
-            version: "",
-            hash: None,
-            long_about: "",
-            about: "",
-            args: ARGS,
-            groups: &[GroupSpec::new("mode")],
-            conflicts: &[],
-            requires: &[],
-            subs: &[],
-            sub_optional: false,
+            name:           "g",
+            version:        "",
+            hash:           None,
+            long_about:     "",
+            about:          "",
+            args:           ARGS,
+            flattened:      &[],
+            argument_order: &[],
+            groups:         &[GroupSpec::new("mode")],
+            conflicts:      &[],
+            requires:       &[],
+            subs:           &[],
+            sub_optional:   false,
         };
         const REQ: CommandSpec = CommandSpec {
             groups: &[GroupSpec::new("mode").required()],
@@ -1049,17 +1144,19 @@ mod tests {
             ArgSpec::new(Kind::Flag).long("b"),
         ];
         const SPEC: CommandSpec = CommandSpec {
-            name: "c",
-            version: "",
-            hash: None,
-            long_about: "",
-            about: "",
-            args: ARGS,
-            groups: &[],
-            conflicts: &[(0, 1)],
-            requires: &[],
-            subs: &[],
-            sub_optional: false,
+            name:           "c",
+            version:        "",
+            hash:           None,
+            long_about:     "",
+            about:          "",
+            args:           ARGS,
+            flattened:      &[],
+            argument_order: &[],
+            groups:         &[],
+            conflicts:      &[(0, 1)],
+            requires:       &[],
+            subs:           &[],
+            sub_optional:   false,
         };
         assert!(parse(&SPEC, &["--a"]).is_ok());
         assert!(matches!(
@@ -1075,17 +1172,19 @@ mod tests {
         ArgSpec::new(Kind::Flag).long("force").short('f'),
     ];
     const ADD: CommandSpec = CommandSpec {
-        name: "add",
-        version: "",
-        hash: None,
-        long_about: "",
-        about: "add a pin",
-        args: ADD_ARGS,
-        groups: &[],
-        conflicts: &[],
-        requires: &[],
-        subs: &[],
-        sub_optional: false,
+        name:           "add",
+        version:        "",
+        hash:           None,
+        long_about:     "",
+        about:          "add a pin",
+        args:           ADD_ARGS,
+        flattened:      &[],
+        argument_order: &[],
+        groups:         &[],
+        conflicts:      &[],
+        requires:       &[],
+        subs:           &[],
+        sub_optional:   false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
         name: "add",
@@ -1095,17 +1194,19 @@ mod tests {
         hidden: false,
     }];
     const ROOT: CommandSpec = CommandSpec {
-        name: "prog",
-        version: "1.0.0",
-        hash: None,
-        long_about: "",
-        about: "demo",
-        args: &[],
-        groups: &[],
-        conflicts: &[],
-        requires: &[],
-        subs: ROOT_SUBS,
-        sub_optional: false,
+        name:           "prog",
+        version:        "1.0.0",
+        hash:           None,
+        long_about:     "",
+        about:          "demo",
+        args:           &[],
+        flattened:      &[],
+        argument_order: &[],
+        groups:         &[],
+        conflicts:      &[],
+        requires:       &[],
+        subs:           ROOT_SUBS,
+        sub_optional:   false,
     };
 
     #[test]

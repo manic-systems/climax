@@ -20,6 +20,8 @@ pub struct Pound {
     pub count: bool,
     /// field delegates to its type's subcommand tree
     pub subcommand: bool,
+    /// field embeds another `Parse` type's args at this command level
+    pub flatten: bool,
     /// keep this arg/variant out of help output
     pub hidden: bool,
     /// named flag/option that descendant subcommands also accept
@@ -95,6 +97,7 @@ impl Pound {
             "trailing"        => self.trailing        = bare(key, value.is_some())?,
             "count"           => self.count           = bare(key, value.is_some())?,
             "subcommand"      => self.subcommand      = bare(key, value.is_some())?,
+            "flatten"         => self.flatten         = bare(key, value.is_some())?,
             "hidden"          => self.hidden          = bare(key, value.is_some())?,
             "global"          => self.global          = bare(key, value.is_some())?,
             "group"           => self.group           = Some(needed(key, value)?),
