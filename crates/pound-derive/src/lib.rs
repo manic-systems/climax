@@ -233,7 +233,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
         Ok(v) => v,
         Err(e) => return err(&e),
     };
-    let item = match command_attributes(&s.attributes) {
+    let item = match command_attributes(&s.attributes, &s.name) {
         Ok(item) => item,
         Err(e) => return err(&e),
     };
@@ -341,7 +341,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     if e.variants.is_empty() {
         return err("pound: a command enum needs at least one variant");
     }
-    let item = match command_attributes(&e.attributes) {
+    let item = match command_attributes(&e.attributes, &e.name) {
         Ok(item) => item,
         Err(e) => return err(&e),
     };
@@ -366,7 +366,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         let vname = &variant.name;
         if vattr.flatten {
             let ty = match vattr
-                .allow_only(&["flatten"])
+                .allow_only(&["flatten"], vname)
                 .and_then(|()| flattened_variant(variant))
             {
                 Ok(ty) => ty,
@@ -401,7 +401,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         let (about_call, long_about_call) = about_calls(&variant_doc);
         let hidden = vattr.hidden;
 
-        if let Err(e) = vattr.allow_only(VARIANT_ATTRIBUTES) {
+        if let Err(e) = vattr.allow_only(VARIANT_ATTRIBUTES, vname) {
             return err(&e);
         }
         if let Err(msg) =
@@ -546,10 +546,10 @@ fn value_enum(e: &venial::Enum) -> TokenStream {
         Ok(item) => item,
         Err(e) => return err(&e),
     };
-    if let Err(e) = item.allow_only(&[]) {
+    let name = &e.name;
+    if let Err(e) = item.allow_only(&[], name) {
         return err(&e);
     }
-    let name = &e.name;
     let mut names = Vec::new();
     let mut arms = Vec::new();
     for (variant, _) in &e.variants.inner {
@@ -561,7 +561,7 @@ fn value_enum(e: &venial::Enum) -> TokenStream {
             Ok(attributes) => attributes,
             Err(e) => return err(&e),
         };
-        if let Err(e) = vattr.allow_only(VALUE_VARIANT_ATTRIBUTES) {
+        if let Err(e) = vattr.allow_only(VALUE_VARIANT_ATTRIBUTES, vname) {
             return err(&e);
         }
         let label = vattr
@@ -610,13 +610,13 @@ fn analyze(fields: &Fields) -> Result<FieldPlan, String> {
     for field in named.fields.items() {
         let attributes = attr::pound(&field.attributes)?;
         if attributes.subcommand {
-            attributes.allow_only(&["subcommand"])?;
+            attributes.allow_only(&["subcommand"], &field.name)?;
             if plan.sub.is_some() {
                 return Err("pound: only one #[pound(subcommand)] field is allowed".into());
             }
             plan.sub = Some(sub_field(field)?);
         } else if attributes.flatten {
-            attributes.allow_only(&["flatten"])?;
+            attributes.allow_only(&["flatten"], &field.name)?;
             let (is_bool, card, ty) = classify(&field.ty);
             if is_bool || card != Card::One {
                 return Err(format!(
@@ -630,7 +630,7 @@ fn analyze(fields: &Fields) -> Result<FieldPlan, String> {
                 ty,
             });
         } else {
-            attributes.allow_only(FIELD_ATTRIBUTES)?;
+            attributes.allow_only(FIELD_ATTRIBUTES, &field.name)?;
             plan.order.push(FieldOrder::Direct(plan.args.len()));
             plan.args.push(plan_field(field, attributes)?);
         }
@@ -638,9 +638,12 @@ fn analyze(fields: &Fields) -> Result<FieldPlan, String> {
     Ok(plan)
 }
 
-fn command_attributes(attributes: &[venial::Attribute]) -> Result<Pound, String> {
+fn command_attributes(
+    attributes: &[venial::Attribute],
+    owner: &proc_macro2::Ident,
+) -> Result<Pound, String> {
     let item = attr::pound(attributes)?;
-    item.allow_only(ITEM_ATTRIBUTES)?;
+    item.allow_only(ITEM_ATTRIBUTES, owner)?;
     Ok(item)
 }
 
