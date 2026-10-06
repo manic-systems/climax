@@ -71,7 +71,7 @@ impl<'a> Matches<'a> {
         self.slots[i].count
     }
 
-    /// first raw value (or injected default), if any
+    /// first raw command-line value, if any
     #[must_use]
     pub fn raw(&self, i: usize) -> Option<&'a str> {
         self.slots[i].values.first().copied()
@@ -607,8 +607,8 @@ fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
         || a.env.is_some()
 }
 
-/// enforce `required` and group constraints. defaults are injected separately
-/// by `apply_defaults`, so a defaulted arg never counts as missing here.
+/// enforce `required` and group constraints. defaults resolve when a value is
+/// read, so a defaulted arg never counts as missing here.
 fn finalise(
     spec: &CommandSpec,
     m: &Matches,

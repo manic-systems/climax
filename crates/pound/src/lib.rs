@@ -81,9 +81,9 @@ pub use value::{
 /// the trait the derive targets
 ///
 /// a type carries its static [`CommandSpec`] and reads itself out of
-/// [`Matches`]. [`Self::parse`] is the common "parse argv or exit" path, the
-/// `try_*` variants hand back the [`Error`] (including the [`Error::Help`] /
-/// [`Error::Version`] signals).
+/// [`Matches`]. `parse` is the common "parse argv or exit" path, the
+/// `try_*` variants hand back the [`Error`] (including the [`ErrorKind::Help`]
+/// / [`ErrorKind::Version`] signals).
 pub trait Parse: Sized {
     /// this command's static description.
     const SPEC: &'static CommandSpec;
