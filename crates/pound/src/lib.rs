@@ -12,13 +12,20 @@
 //! | `Option<T>` | optional positional  |
 //! | `Vec<T>`    | variadic/repeatable  |
 //!
-//! `#[pound(short)]` / `#[pound(long)]` promote these to a named option
+//! `#[pound(short)]` / `#[pound(long)]` promote these to a named option, and
+//! `#[pound(flatten)]` embeds another `Parse` struct's args at the same level
 //!
 //! ```ignore
 //! use pound::Parse;
 //!
 //! #[derive(Parse)]
+//! struct Common {
+//!     #[pound(long)] verbose: bool,
+//! }
+//!
+//! #[derive(Parse)]
 //! struct Add {
+//!     #[pound(flatten)] common: Common,
 //!     name: String,                          // required positional
 //!     url:  String,                          // required positional
 //!     #[pound(long)] unpack:  Option<String>,
@@ -67,10 +74,13 @@ pub use pound_derive::{
 };
 pub use spec::{
     ArgSpec,
+    ArgumentOrder,
     CommandSpec,
     GroupSpec,
     Kind,
     SubSpec,
+    group_has_members,
+    names_unique,
 };
 pub use value::{
     FromArg,

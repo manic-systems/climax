@@ -19,6 +19,8 @@
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
+use alloc::vec::IntoIter;
+
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::value::const_eq;
 
@@ -305,6 +307,14 @@ impl GroupSpec {
     }
 }
 
+/// a direct arg or a flattened struct, by its index in the owning spec
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgumentOrder {
+    Direct(usize),
+    Flattened(usize),
+}
+
 /// a child command plus the name that selects it
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -354,22 +364,29 @@ impl SubSpec {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct CommandSpec {
-    pub name: &'static str,
-    pub version: &'static str,
+    pub name:           &'static str,
+    pub version:        &'static str,
     /// commit hash for the compiled program's source
-    pub hash: Option<&'static str>,
-    pub about: &'static str,
+    pub hash:           Option<&'static str>,
+    pub about:          &'static str,
     /// fuller description shown by `--help`, empty when it adds nothing
-    pub long_about: &'static str,
-    pub args: &'static [ArgSpec],
-    pub groups: &'static [GroupSpec],
+    pub long_about:     &'static str,
+    pub args:           &'static [ArgSpec],
+    /// structs embedded with `#[pound(flatten)]`, whose args parse at this
+    /// level
+    pub flattened:      &'static [&'static Self],
+    /// where each direct arg and flattened struct was declared, empty to put
+    /// the direct args first
+    #[doc(hidden)]
+    pub argument_order: &'static [ArgumentOrder],
+    pub groups:         &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
-    pub conflicts: &'static [(usize, usize)],
+    pub conflicts:      &'static [(usize, usize)],
     /// pairs where setting the first arg obliges the second
-    pub requires: &'static [(usize, usize)],
-    pub subs: &'static [SubSpec],
+    pub requires:       &'static [(usize, usize)],
+    pub subs:           &'static [SubSpec],
     /// when true, a missing subcommand is allowed rather than showing help
-    pub sub_optional: bool,
+    pub sub_optional:   bool,
 }
 
 impl CommandSpec {
@@ -383,6 +400,8 @@ impl CommandSpec {
             about: "",
             long_about: "",
             args: &[],
+            flattened: &[],
+            argument_order: &[],
             groups: &[],
             conflicts: &[],
             requires: &[],
@@ -427,6 +446,19 @@ impl CommandSpec {
     }
 
     #[must_use]
+    pub const fn flattened(mut self, flattened: &'static [&'static Self]) -> Self {
+        self.flattened = flattened;
+        self
+    }
+
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn argument_order(mut self, order: &'static [ArgumentOrder]) -> Self {
+        self.argument_order = order;
+        self
+    }
+
+    #[must_use]
     pub const fn groups(mut self, groups: &'static [GroupSpec]) -> Self {
         self.groups = groups;
         self
@@ -463,24 +495,42 @@ impl CommandSpec {
         !self.subs.is_empty()
     }
 
-    /// index of the arg with this long name
-    #[must_use]
-    #[allow(clippy::manual_contains)]
-    pub fn find_long(&self, name: &str) -> Option<usize> {
-        self.args
-            .iter()
-            .position(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
+    /// every arg this command parses, flattened structs included, in
+    /// declaration order
+    pub fn arguments(&self) -> IntoIter<&'static ArgSpec> {
+        let mut out = Vec::new();
+        self.visit(&mut Vec::new(), &mut |_, _, arg| out.push(arg));
+        out.into_iter()
     }
 
-    #[must_use]
-    pub fn find_short(&self, ch: char) -> Option<usize> {
-        self.args.iter().position(|a| a.short == Some(ch))
-    }
-
-    /// index of the flag this long name switches off
-    #[must_use]
-    pub fn find_negate(&self, name: &str) -> Option<usize> {
-        self.args.iter().position(|a| a.negate == Some(name))
+    /// call `f` on each arg in declaration order, with the flattened indices
+    /// leading to the spec that owns it and its index there
+    pub(crate) fn visit(
+        &self,
+        path: &mut Vec<usize>,
+        f: &mut impl FnMut(&[usize], usize, &'static ArgSpec),
+    ) {
+        let args: &'static [ArgSpec] = self.args;
+        let fallback: Vec<ArgumentOrder>;
+        let order = if self.argument_order.is_empty() {
+            fallback = (0..args.len())
+                .map(ArgumentOrder::Direct)
+                .chain((0..self.flattened.len()).map(ArgumentOrder::Flattened))
+                .collect();
+            &fallback
+        } else {
+            self.argument_order
+        };
+        for &entry in order {
+            match entry {
+                ArgumentOrder::Direct(i) => f(path, i, &args[i]),
+                ArgumentOrder::Flattened(i) => {
+                    path.push(i);
+                    self.flattened[i].visit(path, f);
+                    path.pop();
+                },
+            }
+        }
     }
 
     #[must_use]
@@ -492,17 +542,109 @@ impl CommandSpec {
     }
 }
 
-/// whether `--name` reaches one of `spec`'s args or a global it inherits
-pub(crate) fn claims_long(spec: &CommandSpec, globals: &[&ArgSpec], name: &str) -> bool {
-    spec.args
-        .iter()
-        .chain(globals.iter().copied())
-        .any(|a| a.answers_long(name))
+/// whether `--name` reaches one of a command's own args or a global it inherits
+pub(crate) fn claims_long(own: &[&ArgSpec], globals: &[&ArgSpec], name: &str) -> bool {
+    own.iter().chain(globals).any(|a| a.answers_long(name))
 }
 
-pub(crate) fn claims_short(spec: &CommandSpec, globals: &[&ArgSpec], short: char) -> bool {
-    spec.args
-        .iter()
-        .chain(globals.iter().copied())
-        .any(|a| a.answers_short(short))
+pub(crate) fn claims_short(own: &[&ArgSpec], globals: &[&ArgSpec], short: char) -> bool {
+    own.iter().chain(globals).any(|a| a.answers_short(short))
+}
+
+/// whether every spelling in `spec`, flattened structs included, reaches a
+/// single arg. the derive asserts this, since the parser would otherwise give
+/// a clashing spelling to whichever arg it meets first.
+#[doc(hidden)]
+#[must_use]
+pub const fn names_unique(spec: &CommandSpec) -> bool {
+    names_unique_within(spec, spec)
+}
+
+const fn names_unique_within(root: &CommandSpec, spec: &CommandSpec) -> bool {
+    let mut i = 0;
+    while i < spec.args.len() {
+        let arg = &spec.args[i];
+        if let Some(short) = arg.short
+            && claimants(root, Spelling::Short(short)) > 1
+        {
+            return false;
+        }
+        if let Some(long) = arg.long
+            && claimants(root, Spelling::Long(long)) > 1
+        {
+            return false;
+        }
+        if let Some(negate) = arg.negate
+            && claimants(root, Spelling::Long(negate)) > 1
+        {
+            return false;
+        }
+        let mut alias = 0;
+        while alias < arg.aliases.len() {
+            if claimants(root, Spelling::Long(arg.aliases[alias])) > 1 {
+                return false;
+            }
+            alias += 1;
+        }
+        i += 1;
+    }
+    let mut inner = 0;
+    while inner < spec.flattened.len() {
+        if !names_unique_within(root, spec.flattened[inner]) {
+            return false;
+        }
+        inner += 1;
+    }
+    true
+}
+
+/// whether any arg in `spec`, flattened structs included, belongs to `group`.
+/// the derive asserts this for a required group whose members it cannot see.
+#[doc(hidden)]
+#[must_use]
+pub const fn group_has_members(spec: &CommandSpec, group: &str) -> bool {
+    let mut i = 0;
+    while i < spec.args.len() {
+        if let Some(own) = spec.args[i].group
+            && const_eq(own, group)
+        {
+            return true;
+        }
+        i += 1;
+    }
+    let mut inner = 0;
+    while inner < spec.flattened.len() {
+        if group_has_members(spec.flattened[inner], group) {
+            return true;
+        }
+        inner += 1;
+    }
+    false
+}
+
+#[derive(Clone, Copy)]
+enum Spelling<'a> {
+    Short(char),
+    Long(&'a str),
+}
+
+const fn claimants(spec: &CommandSpec, spelling: Spelling<'_>) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < spec.args.len() {
+        let answers = match spelling {
+            Spelling::Short(short) => spec.args[i].answers_short(short),
+            Spelling::Long(long) => spec.args[i].answers_long(long),
+        };
+        if answers {
+            count += 1;
+        }
+        i += 1;
+    }
+    let mut inner = 0;
+    while inner < spec.flattened.len() {
+        count += claimants(spec.flattened[inner], spelling);
+        inner += 1;
+    }
+    count
 }

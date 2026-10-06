@@ -141,14 +141,14 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
 /// gets `--help`, and the row has to say so.
 #[cfg(feature = "help")]
 fn builtin_row(
-    spec: &CommandSpec,
+    own: &[&ArgSpec],
     globals: &[&ArgSpec],
     short: char,
     long: &'static str,
     help: &'static str,
 ) -> Option<(String, String)> {
-    let free_short = !claims_short(spec, globals, short);
-    let free_long = !claims_long(spec, globals, long);
+    let free_short = !claims_short(own, globals, short);
+    let free_long = !claims_long(own, globals, long);
     if !free_short && !free_long {
         return None;
     }
@@ -166,7 +166,7 @@ fn builtin_row(
 /// the inherited globals as this command shows them, each stripped of the
 /// spellings that a nearer arg answers to instead
 #[cfg(feature = "help")]
-fn visible_globals(spec: &CommandSpec, globals: &[&ArgSpec]) -> Vec<ArgSpec> {
+fn visible_globals(own: &[&ArgSpec], globals: &[&ArgSpec]) -> Vec<ArgSpec> {
     globals
         .iter()
         .enumerate()
@@ -174,9 +174,9 @@ fn visible_globals(spec: &CommandSpec, globals: &[&ArgSpec]) -> Vec<ArgSpec> {
         .filter_map(|(i, &&global)| {
             let nearer = &globals[i + 1..];
             let mut shown = global;
-            shown.short = shown.short.filter(|&c| !claims_short(spec, nearer, c));
-            shown.long = shown.long.filter(|l| !claims_long(spec, nearer, l));
-            shown.negate = shown.negate.filter(|n| !claims_long(spec, nearer, n));
+            shown.short = shown.short.filter(|&c| !claims_short(own, nearer, c));
+            shown.long = shown.long.filter(|l| !claims_long(own, nearer, l));
+            shown.negate = shown.negate.filter(|n| !claims_long(own, nearer, n));
             if shown.long.is_none() {
                 shown.long = shown.negate.take();
             }
@@ -187,13 +187,20 @@ fn visible_globals(spec: &CommandSpec, globals: &[&ArgSpec]) -> Vec<ArgSpec> {
 
 #[cfg(feature = "help")]
 pub(crate) fn usage_line(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
-    let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
+    let own: Vec<&ArgSpec> = spec.arguments().collect();
+    let visible_args: Vec<&ArgSpec> = own.iter().copied().filter(|a| !a.hidden).collect();
+    usage(
+        spec,
+        &visible_args,
+        !visible_globals(&own, globals).is_empty(),
+    )
+}
 
+#[cfg(feature = "help")]
+fn usage(spec: &CommandSpec, visible_args: &[&ArgSpec], has_globals: bool) -> String {
     let mut out = String::from("Usage: ");
     out.push_str(spec.name);
-    let has_options = visible_args.iter().any(|a| !a.is_positional())
-        || !visible_globals(spec, globals).is_empty();
-    if has_options {
+    if has_globals || visible_args.iter().any(|a| !a.is_positional()) {
         out.push_str(" [OPTION]...");
     }
     for a in visible_args.iter().filter(|a| a.is_positional()) {
@@ -220,10 +227,15 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
         out.push_str("\n\n");
     }
 
-    let visible_args: Vec<&ArgSpec> = spec.args.iter().filter(|a| !a.hidden).collect();
+    let own: Vec<&ArgSpec> = spec.arguments().collect();
+    let visible_args: Vec<&ArgSpec> = own.iter().copied().filter(|a| !a.hidden).collect();
     let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
+    let grows: Vec<(String, String)> = visible_globals(&own, globals)
+        .iter()
+        .map(|a| (invocation(a), help_text(a, long)))
+        .collect();
 
-    out.push_str(&usage_line(spec, globals));
+    out.push_str(&usage(spec, &visible_args, !grows.is_empty()));
     out.push('\n');
 
     if !visible_subs.is_empty() {
@@ -251,12 +263,12 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
     }
 
     let builtins = &mut sections[0].1;
-    if let Some(row) = builtin_row(spec, globals, 'h', "help", "display this help and exit") {
+    if let Some(row) = builtin_row(&own, globals, 'h', "help", "display this help and exit") {
         builtins.push(row);
     }
     if spec.has_version_info()
         && let Some(row) = builtin_row(
-            spec,
+            &own,
             globals,
             'V',
             "version",
@@ -265,11 +277,6 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
     {
         builtins.push(row);
     }
-
-    let grows: Vec<(String, String)> = visible_globals(spec, globals)
-        .iter()
-        .map(|a| (invocation(a), help_text(a, long)))
-        .collect();
 
     // one width across every section, so the help column lines up throughout
     let width = positionals
