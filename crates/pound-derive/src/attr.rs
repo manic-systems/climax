@@ -10,6 +10,7 @@ use venial::{Attribute, AttributeValue};
 #[allow(clippy::option_option, clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct Pound {
+    keys: Vec<String>,
     /// `None` absent, `Some(None)` bare `short`, `Some(Some(c))` `short = 'c'`
     pub short: Option<Option<char>>,
     /// `None` absent, `Some(None)` bare `long`, `Some(Some(s))` `long = "s"`
@@ -68,19 +69,73 @@ impl Pound {
     pub const fn is_named(&self) -> bool {
         self.short.is_some() || self.long.is_some()
     }
+
+    pub fn allow_only(&self, allowed: &[&str]) -> Result<(), String> {
+        if let Some(key) = self
+            .keys
+            .iter()
+            .find(|key| !allowed.contains(&key.as_str()))
+        {
+            return Err(format!("pound: `{key}` is not valid here"));
+        }
+        Ok(())
+    }
+
+    /// apply one `key` or `key = value` meta
+    #[rustfmt::skip]
+    fn set(&mut self, key: &str, value: Option<String>, seg: &[TokenTree]) -> Result<(), String> {
+        match key {
+            "short" => self.short = Some(value.as_deref().map(single_char).transpose()?),
+            "negate" => {
+                self.negate = Some(value.map(|v| v.trim_start_matches('-').to_owned()));
+            },
+            "long"            => self.long            = Some(value),
+            "version"         => self.version         = expr(seg),
+            "positional"      => self.positional      = bare(key, value.is_some())?,
+            "trailing"        => self.trailing        = bare(key, value.is_some())?,
+            "count"           => self.count           = bare(key, value.is_some())?,
+            "subcommand"      => self.subcommand      = bare(key, value.is_some())?,
+            "hidden"          => self.hidden          = bare(key, value.is_some())?,
+            "global"          => self.global          = bare(key, value.is_some())?,
+            "group"           => self.group           = Some(needed(key, value)?),
+            "default"         => self.default         = Some(needed(key, value)?),
+            "default_missing" => self.default_missing = Some(needed(key, value)?),
+            "env"             => self.env             = Some(needed(key, value)?),
+            "value_name"      => self.value_name      = Some(needed(key, value)?),
+            "help"            => self.help            = Some(needed(key, value)?),
+            "long_help"       => self.long_help       = Some(needed(key, value)?),
+            "heading"         => self.heading         = Some(needed(key, value)?),
+            "name"            => self.name            = Some(needed(key, value)?),
+            "min"             => self.min             = Some(needed(key, value)?),
+            "max"             => self.max             = Some(needed(key, value)?),
+            "max_len"         => self.max_len         = Some(needed(key, value)?),
+            "min_values"      => self.min_values      = Some(needed(key, value)?),
+            "max_values"      => self.max_values      = Some(needed(key, value)?),
+            "parse"           => self.parse           = Some(needed(key, value)?),
+            "validate"        => self.validate        = Some(needed(key, value)?),
+            "required_group"  => self.required_groups.push(needed(key, value)?),
+            "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, value)?)),
+            "requires"        => self.requires.extend(csv(&needed(key, value)?)),
+            "alias"           => self.aliases.extend(csv(&needed(key, value)?)),
+            _                 => return Err(format!("pound: unknown attribute `{key}`")),
+        }
+        Ok(())
+    }
 }
 
 /// collect `#[pound(...)]` options from a set of attributes
-pub fn pound(attrs: &[Attribute]) -> Pound {
+pub fn pound(attrs: &[Attribute]) -> Result<Pound, String> {
     let mut out = Pound::default();
     for attr in attrs {
-        if path_is(attr, "pound")
-            && let AttributeValue::Group(_, tokens) = &attr.value
-        {
-            apply_metas(&mut out, tokens);
+        if !path_is(attr, "pound") {
+            continue;
         }
+        let AttributeValue::Group(_, tokens) = &attr.value else {
+            return Err("pound: attributes must use #[pound(...)]".to_owned());
+        };
+        apply_metas(&mut out, tokens)?;
     }
-    out
+    Ok(out)
 }
 
 /// the doc comment of an item or field, empty when none. lines are joined into
@@ -122,67 +177,40 @@ fn path_is(attr: &Attribute, name: &str) -> bool {
 }
 
 /// split the comma-separated metas inside `pound(...)` and apply each
-fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) {
+fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
     for seg in split_commas(tokens) {
-        let Some(TokenTree::Ident(key)) = seg.first() else {
-            continue;
+        let Some(TokenTree::Ident(ident)) = seg.first() else {
+            return Err("pound: expected `key` or `key = value`".to_owned());
         };
-        // `key = value`?
-        let value = match seg.get(1) {
-            Some(TokenTree::Punct(p)) if p.as_char() == '=' => seg.get(2).map(unquote),
-            _ => None,
+        let key = ident.to_string();
+        let value = match seg.as_slice() {
+            [_] => None,
+            [_, TokenTree::Punct(p), value] if p.as_char() == '=' => Some(unquote(value)),
+            _ if key == "version" && expr(&seg).is_some() => None,
+            _ => return Err(format!("pound: malformed `{key}` attribute")),
         };
-        match key.to_string().as_str() {
-            "short" => out.short = Some(value.and_then(|v| v.chars().next())),
-            "long" => out.long = Some(value),
-            "positional" => out.positional = true,
-            "trailing" => out.trailing = true,
-            "count" => out.count = true,
-            "subcommand" => out.subcommand = true,
-            "hidden" => out.hidden = true,
-            "global" => out.global = true,
-            "group" => out.group = value,
-            "default" => out.default = value,
-            "default_missing" => out.default_missing = value,
-            "env" => out.env = value,
-            "negate" => {
-                out.negate = Some(value.map(|v| v.trim_start_matches('-').to_owned()));
-            },
-            "value_name" => out.value_name = value,
-            "help" => out.help = value,
-            "long_help" => out.long_help = value,
-            "heading" => out.heading = value,
-            "name" => out.name = value,
-            "version" => out.version = expr(&seg),
-            "min" => out.min = value,
-            "max" => out.max = value,
-            "max_len" => out.max_len = value,
-            "min_values" => out.min_values = value,
-            "max_values" => out.max_values = value,
-            "parse" => out.parse = value,
-            "validate" => out.validate = value,
-            "required_group" => {
-                if let Some(v) = value {
-                    out.required_groups.push(v);
-                }
-            },
-            "conflicts_with" => {
-                if let Some(v) = value {
-                    out.conflicts_with.extend(csv(&v));
-                }
-            },
-            "requires" => {
-                if let Some(v) = value {
-                    out.requires.extend(csv(&v));
-                }
-            },
-            "alias" => {
-                if let Some(v) = value {
-                    out.aliases.extend(csv(&v));
-                }
-            },
-            _ => {},
-        }
+        out.set(&key, value, &seg)?;
+        out.keys.push(key);
+    }
+    Ok(())
+}
+
+fn bare(key: &str, has_value: bool) -> Result<bool, String> {
+    if has_value {
+        return Err(format!("pound: `{key}` does not take a value"));
+    }
+    Ok(true)
+}
+
+fn needed(key: &str, value: Option<String>) -> Result<String, String> {
+    value.ok_or_else(|| format!("pound: `{key}` needs a value"))
+}
+
+fn single_char(value: &str) -> Result<char, String> {
+    let mut chars = value.chars();
+    match (chars.next(), chars.next()) {
+        (Some(short), None) => Ok(short),
+        _ => Err("pound: `short` needs one character".to_owned()),
     }
 }
 
