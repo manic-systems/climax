@@ -13,13 +13,14 @@
 //! - match [`Kind`] with a `_` arm
 //! - construct spec types through their `const fn` builders
 //!
-//! `-h`/`--help` (always) and `-V`/`--version` are always present,
-//! either implemented by user or generated on their behalf
+//! `-h`/`--help` and `-V`/`--version` are generated unless a local arg or an
+//! inherited global claims the spelling, and `-V`/`--version` also need version
+//! or hash metadata
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+use crate::value::const_eq;
 
 /// what shape of argument a spec entry describes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,6 +235,35 @@ impl ArgSpec {
     #[must_use]
     pub const fn is_positional(&self) -> bool {
         matches!(self.kind, Kind::Positional | Kind::Trailing)
+    }
+
+    /// whether `--name` reaches this arg, as its long name, an alias, or its
+    /// negation
+    #[must_use]
+    pub const fn answers_long(&self, name: &str) -> bool {
+        if let Some(long) = self.long
+            && const_eq(long, name)
+        {
+            return true;
+        }
+        if let Some(negate) = self.negate
+            && const_eq(negate, name)
+        {
+            return true;
+        }
+        let mut i = 0;
+        while i < self.aliases.len() {
+            if const_eq(self.aliases[i], name) {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
+    #[must_use]
+    pub const fn answers_short(&self, short: char) -> bool {
+        matches!(self.short, Some(own) if own == short)
     }
 
     #[must_use]
@@ -460,4 +490,19 @@ impl CommandSpec {
             .iter()
             .position(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
     }
+}
+
+/// whether `--name` reaches one of `spec`'s args or a global it inherits
+pub(crate) fn claims_long(spec: &CommandSpec, globals: &[&ArgSpec], name: &str) -> bool {
+    spec.args
+        .iter()
+        .chain(globals.iter().copied())
+        .any(|a| a.answers_long(name))
+}
+
+pub(crate) fn claims_short(spec: &CommandSpec, globals: &[&ArgSpec], short: char) -> bool {
+    spec.args
+        .iter()
+        .chain(globals.iter().copied())
+        .any(|a| a.answers_short(short))
 }
