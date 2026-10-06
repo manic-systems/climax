@@ -396,9 +396,11 @@ fn walk_cmd<'a>(
                 || find_global_short(globals, first).is_some();
             if known {
                 shorts(spec, &targets, &mut m, rest, it, globals, hits)?;
-            } else {
-                // not an option (negative numbers, lone values) -> positional
+            } else if first.is_ascii_digit() || first == '.' {
+                // a negative number is a value, not a flag
                 positional(&mut m, &positionals, &mut pos_cursor, tok)?;
+            } else {
+                return Err(unknown(format!("-{first}")).into());
             }
         } else if let Some(target) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
@@ -1053,6 +1055,8 @@ mod tests {
     #[test]
     fn errors() {
         assert!(matches!(parse(&FLAT, &["--nope"]), Err(ErrorKind::Unknown { .. })));
+        assert!(matches!(parse(&FLAT, &["-q"]), Err(ErrorKind::Unknown { .. })));
+        assert_eq!(parse(&FLAT, &["-5"]).unwrap().raw(3), Some("-5"));
         assert!(matches!(
             parse(&FLAT, &["name", "--dir"]),
             Err(ErrorKind::MissingValue(_))
