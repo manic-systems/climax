@@ -712,8 +712,8 @@ fn positional<'a>(
 
 /// enforce a list arg's arity. an absent arg with a fallback is left alone,
 /// since the fallback supplies the one value the reader will see.
-fn count_values(a: &ArgSpec, got: usize) -> Result<(), ErrorKind> {
-    let filled_by_fallback = got == 0 && (a.default.is_some() || a.env.is_some());
+fn count_values(a: &ArgSpec, got: usize, has_fallback: bool) -> Result<(), ErrorKind> {
+    let filled_by_fallback = got == 0 && has_fallback;
     if let Some(min) = a.min_values
         && got < min
         && !filled_by_fallback
@@ -736,14 +736,10 @@ fn count_values(a: &ArgSpec, got: usize) -> Result<(), ErrorKind> {
     Ok(())
 }
 
-/// whether an arg will have a value by the time it is read. a fallback is
-/// resolved later, so declaring one already counts.
+/// whether an arg will have a value by the time it is read, counting an env
+/// var only when it is actually set
 fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
-    let a = spec.args[i];
-    m.slots[i].count > 0
-        || !m.slots[i].values.is_empty()
-        || a.default.is_some()
-        || a.env.is_some()
+    m.slots[i].count > 0 || !m.slots[i].values.is_empty() || fallback(spec, i).is_some()
 }
 
 /// enforce `required` and group constraints. defaults resolve when a value is
@@ -771,7 +767,7 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
         if !supplied(spec, m, i) && a.required {
             return Err(ErrorKind::MissingRequired(a.display_name()));
         }
-        count_values(a, m.slots[i].values.len())?;
+        count_values(a, m.slots[i].values.len(), fallback(spec, i).is_some())?;
     }
 
     for &(a, b) in spec.requires {
@@ -1076,6 +1072,20 @@ mod tests {
             Err(ErrorKind::Version(v)) => assert_eq!(v, "flat (abc123)"),
             other => panic!("expected version, got {other:?}"),
         }
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn an_unset_env_var_supplies_nothing() {
+        const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt)
+            .long("token")
+            .env("POUND_TEST_UNSET_TOKEN")
+            .required()];
+        const SPEC: CommandSpec = CommandSpec::new("e").args(ARGS);
+        assert_eq!(
+            parse(&SPEC, &[]).unwrap_err(),
+            ErrorKind::MissingRequired("--token".to_owned())
+        );
     }
 
     #[test]
