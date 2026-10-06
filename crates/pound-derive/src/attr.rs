@@ -2,6 +2,8 @@
 
 //! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
+use std::fmt::Display;
+
 use proc_macro2::{Delimiter, TokenTree};
 use venial::{Attribute, AttributeValue};
 
@@ -72,13 +74,13 @@ impl Pound {
         self.short.is_some() || self.long.is_some()
     }
 
-    pub fn allow_only(&self, allowed: &[&str]) -> Result<(), String> {
+    pub fn allow_only(&self, allowed: &[&str], owner: &impl Display) -> Result<(), String> {
         if let Some(key) = self
             .keys
             .iter()
             .find(|key| !allowed.contains(&key.as_str()))
         {
-            return Err(format!("pound: `{key}` is not valid here"));
+            return Err(format!("pound: `{key}` is not valid here (`{owner}`)"));
         }
         Ok(())
     }
