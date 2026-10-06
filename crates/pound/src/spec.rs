@@ -9,6 +9,9 @@
 //!
 //! a walker implementation should:
 //! - access root with [`crate::Parse::SPEC`], or take a `&CommandSpec`.
+//! - read a command through [`CommandSpec::arguments`] and
+//!   [`CommandSpec::subcommands`], which follow flattening, not the raw `args`
+//!   and `subs` fields
 //! - propagate globals downward
 //! - match [`Kind`] with a `_` arm
 //! - construct spec types through their `const fn` builders
@@ -396,6 +399,8 @@ pub struct CommandSpec {
     pub conflicts:      &'static [(usize, usize)],
     /// pairs where setting the first arg obliges the second
     pub requires:       &'static [(usize, usize)],
+    /// declared subcommands, including the nameless entries that splice in
+    /// another enum, see [`Self::subcommands`] for the commands themselves
     pub subs:           &'static [SubSpec],
     /// when true, a missing subcommand is allowed rather than showing help
     pub sub_optional:   bool,
