@@ -13,13 +13,12 @@ use crate::spec::{
 #[cfg(feature = "help")]
 use crate::spec::{
     Kind,
-    SubSpec,
     claims_long,
     claims_short,
 };
 
 const fn command_placeholder(spec: &CommandSpec) -> &'static str {
-    if spec.sub_optional {
+    if spec.subcommand_optional() {
         " [COMMAND]"
     } else {
         " COMMAND"
@@ -215,7 +214,7 @@ fn usage(spec: &CommandSpec, visible_args: &[&ArgSpec], has_globals: bool) -> St
         out.push(' ');
         out.push_str(&usage_positional(a));
     }
-    if spec.subs.iter().any(|s| !s.hidden) {
+    if spec.subcommands().any(|s| !s.hidden) {
         out.push_str(command_placeholder(spec));
     }
     out
@@ -237,7 +236,7 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
 
     let own: Vec<&ArgSpec> = spec.arguments().collect();
     let visible_args: Vec<&ArgSpec> = own.iter().copied().filter(|a| !a.hidden).collect();
-    let visible_subs: Vec<&SubSpec> = spec.subs.iter().filter(|s| !s.hidden).collect();
+    let visible_subs = spec.subcommands().filter(|s| !s.hidden).collect::<Vec<_>>();
     let grows: Vec<(String, String)> = visible_globals(&own, globals)
         .iter()
         .map(|a| (invocation(a), help_text(a, long)))

@@ -319,13 +319,15 @@ pub enum ArgumentOrder {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct SubSpec {
-    pub name: &'static str,
+    pub name:      &'static str,
     /// extra names that also select this subcommand, kept out of help
-    pub aliases: &'static [&'static str],
-    pub about: &'static str,
-    pub spec: &'static CommandSpec,
+    pub aliases:   &'static [&'static str],
+    pub about:     &'static str,
+    pub spec:      &'static CommandSpec,
     /// kept out of help output, still selectable on the command line
-    pub hidden: bool,
+    pub hidden:    bool,
+    /// offers `spec`'s subcommands at this level in place of a named command
+    pub flattened: bool,
 }
 
 impl SubSpec {
@@ -338,6 +340,17 @@ impl SubSpec {
             about: "",
             spec,
             hidden: false,
+            flattened: false,
+        }
+    }
+
+    /// an entry offering every subcommand of `spec` as if declared here. it is
+    /// never matched by name, so `aliases`, `about` and `hidden` are ignored.
+    #[must_use]
+    pub const fn flatten(spec: &'static CommandSpec) -> Self {
+        Self {
+            flattened: true,
+            ..Self::new("", spec)
         }
     }
 
@@ -492,7 +505,51 @@ impl CommandSpec {
     /// whether this command dispatches to subcommands
     #[must_use]
     pub const fn has_subs(&self) -> bool {
-        !self.subs.is_empty()
+        self.selector().is_some()
+    }
+
+    /// the spec whose `subs` this command selects from, its own or the one
+    /// inside a flattened struct
+    pub(crate) const fn selector(&self) -> Option<&Self> {
+        if !self.subs.is_empty() {
+            return Some(self);
+        }
+        let mut i = 0;
+        while i < self.flattened.len() {
+            if let Some(owner) = self.flattened[i].selector() {
+                return Some(owner);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// whether a command line may stop before naming a subcommand
+    #[must_use]
+    pub const fn subcommand_optional(&self) -> bool {
+        match self.selector() {
+            Some(owner) => owner.sub_optional,
+            None => true,
+        }
+    }
+
+    /// the subcommands this command offers, with flattened enums spliced in
+    pub fn subcommands(&self) -> IntoIter<&'static SubSpec> {
+        fn expand(subs: &'static [SubSpec], out: &mut Vec<&'static SubSpec>) {
+            for sub in subs {
+                if sub.flattened {
+                    expand(sub.spec.subs, out);
+                } else {
+                    out.push(sub);
+                }
+            }
+        }
+
+        let mut out = Vec::new();
+        if let Some(owner) = self.selector() {
+            expand(owner.subs, &mut out);
+        }
+        out.into_iter()
     }
 
     /// every arg this command parses, flattened structs included, in
@@ -533,12 +590,11 @@ impl CommandSpec {
         }
     }
 
+    /// the subcommand `name` selects, by name or alias
     #[must_use]
-    #[allow(clippy::manual_contains)]
-    pub fn find_sub(&self, name: &str) -> Option<usize> {
-        self.subs
-            .iter()
-            .position(|s| s.name == name || s.aliases.iter().any(|&al| al == name))
+    pub fn find_sub(&self, name: &str) -> Option<&'static SubSpec> {
+        self.subcommands()
+            .find(|s| s.name == name || s.aliases.contains(&name))
     }
 }
 
@@ -596,6 +652,77 @@ const fn names_unique_within(root: &CommandSpec, spec: &CommandSpec) -> bool {
         inner += 1;
     }
     true
+}
+
+/// how many places in `spec` and its flattened structs declare subcommands.
+/// the derive asserts at most one, since only one of them could be selected.
+#[doc(hidden)]
+#[must_use]
+pub const fn selector_count(spec: &CommandSpec) -> usize {
+    let mut count = if spec.subs.is_empty() { 0 } else { 1 };
+    let mut i = 0;
+    while i < spec.flattened.len() {
+        count += selector_count(spec.flattened[i]);
+        i += 1;
+    }
+    count
+}
+
+/// whether every name and alias among `subs`, flattened enums spliced in,
+/// selects a single command. the derive asserts this for every command enum.
+#[doc(hidden)]
+#[must_use]
+pub const fn commands_unique(subs: &[SubSpec]) -> bool {
+    commands_unique_within(subs, subs)
+}
+
+const fn commands_unique_within(root: &[SubSpec], subs: &[SubSpec]) -> bool {
+    let mut i = 0;
+    while i < subs.len() {
+        let sub = &subs[i];
+        if sub.flattened {
+            if !commands_unique_within(root, sub.spec.subs) {
+                return false;
+            }
+        } else {
+            if command_claimants(root, sub.name) > 1 {
+                return false;
+            }
+            let mut alias = 0;
+            while alias < sub.aliases.len() {
+                if command_claimants(root, sub.aliases[alias]) > 1 {
+                    return false;
+                }
+                alias += 1;
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < subs.len() {
+        let sub = &subs[i];
+        if sub.flattened {
+            count += command_claimants(sub.spec.subs, name);
+        } else {
+            if const_eq(sub.name, name) {
+                count += 1;
+            }
+            let mut alias = 0;
+            while alias < sub.aliases.len() {
+                if const_eq(sub.aliases[alias], name) {
+                    count += 1;
+                }
+                alias += 1;
+            }
+        }
+        i += 1;
+    }
+    count
 }
 
 /// whether any arg in `spec`, flattened structs included, belongs to `group`.

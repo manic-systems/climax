@@ -49,6 +49,74 @@ struct ArgTarget {
     arg:   &'static ArgSpec,
 }
 
+/// the command a name selected, plus the flattened structs and spliced enums
+/// between it and the command being parsed
+struct SubTarget {
+    path:     Vec<usize>,
+    wrappers: Vec<(usize, &'static SubSpec)>,
+    index:    usize,
+    command:  &'static SubSpec,
+}
+
+impl SubTarget {
+    fn find(spec: &CommandSpec, name: &str) -> Option<Self> {
+        fn search(
+            subs: &'static [SubSpec],
+            name: &str,
+            chain: &mut Vec<(usize, &'static SubSpec)>,
+        ) -> bool {
+            for (i, sub) in subs.iter().enumerate() {
+                chain.push((i, sub));
+                let hit = if sub.flattened {
+                    search(sub.spec.subs, name, chain)
+                } else {
+                    sub.name == name || sub.aliases.contains(&name)
+                };
+                if hit {
+                    return true;
+                }
+                chain.pop();
+            }
+            false
+        }
+
+        if spec.subs.is_empty() {
+            return spec.flattened.iter().enumerate().find_map(|(i, inner)| {
+                let mut target = Self::find(inner, name)?;
+                target.path.insert(0, i);
+                Some(target)
+            });
+        }
+        let mut wrappers = Vec::new();
+        if !search(spec.subs, name, &mut wrappers) {
+            return None;
+        }
+        let (index, command) = wrappers.pop()?;
+        Some(Self {
+            path: Vec::new(),
+            wrappers,
+            index,
+            command,
+        })
+    }
+
+    /// each spliced enum reads its own level of `Matches`, so the selected
+    /// command's matches get wrapped once per enum it was spliced through
+    fn store<'a>(self, m: &mut Matches<'a>, selected: Matches<'a>) {
+        let owner = self
+            .path
+            .iter()
+            .fold(m, |owner, &i| &mut owner.flattened[i]);
+        let mut sub = (self.index, Box::new(selected));
+        for (i, wrapper) in self.wrappers.into_iter().rev() {
+            let mut shell = Matches::new(wrapper.spec);
+            shell.sub = Some(sub);
+            sub = (i, Box::new(shell));
+        }
+        owner.sub = Some(sub);
+    }
+}
+
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
     /// position in the descendant's inherited globals, which every ancestor's
@@ -332,11 +400,11 @@ fn walk_cmd<'a>(
                 // not an option (negative numbers, lone values) -> positional
                 positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             }
-        } else if let Some(sidx) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
+        } else if let Some(target) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
             child_globals.extend(targets.iter().map(|t| t.arg).filter(|a| a.global));
-            let sub_m = parse_cmd(spec.subs[sidx].spec, it, &child_globals, hits)?;
-            m.sub = Some((sidx, Box::new(sub_m)));
+            let sub_m = parse_cmd(target.command.spec, it, &child_globals, hits)?;
+            target.store(&mut m, sub_m);
             break; // subcommand owns the rest
         } else {
             positional(&mut m, &positionals, &mut pos_cursor, tok)?;
@@ -356,7 +424,7 @@ fn sub_dispatch(
     positionals: &[&ArgTarget],
     cursor: usize,
     tok: &str,
-) -> Result<Option<usize>, Error> {
+) -> Result<Option<SubTarget>, Error> {
     if !spec.has_subs() {
         return Ok(None);
     }
@@ -367,14 +435,19 @@ fn sub_dispatch(
     if positionals.iter().skip(cursor).any(|t| t.arg.required) {
         return Ok(None);
     }
-    match spec.find_sub(tok) {
-        Some(sidx) => Ok(Some(sidx)),
+    match SubTarget::find(spec, tok) {
+        Some(target) => Ok(Some(target)),
         None if next.is_some() => Ok(None), // an open optional slot can still take it
-        None => Err(ErrorKind::UnknownSubcommand {
-            name: tok.to_owned(),
-            closest: closest(spec.subs.iter().flat_map(sub_names), tok),
-        }
-        .into()),
+        None => {
+            Err(ErrorKind::UnknownSubcommand {
+                name:    tok.to_owned(),
+                closest: closest(
+                    spec.subcommands().filter(|s| !s.hidden).flat_map(sub_names),
+                    tok,
+                ),
+            }
+            .into())
+        },
     }
 }
 
@@ -680,6 +753,20 @@ fn finalise(
     m: &Matches,
     globals: &[&'static ArgSpec],
 ) -> Result<(), ErrorKind> {
+    finalise_args(spec, m)?;
+    if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
+        // empty/sub-less invocation shows help rather than a bare error
+        return Err(ErrorKind::Help(help::render(spec, globals, false)));
+    }
+    Ok(())
+}
+
+/// whether a subcommand was chosen here or inside a flattened struct
+fn selected_command(m: &Matches) -> bool {
+    m.sub.is_some() || m.flattened.iter().any(selected_command)
+}
+
+fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
     for (i, a) in spec.args.iter().enumerate() {
         if !supplied(spec, m, i) && a.required {
             return Err(ErrorKind::MissingRequired(a.display_name()));
@@ -734,12 +821,7 @@ fn finalise(
     }
 
     for (inner, inner_matches) in spec.flattened.iter().zip(&m.flattened) {
-        finalise(inner, inner_matches, globals)?;
-    }
-
-    if spec.has_subs() && m.sub.is_none() && !spec.sub_optional {
-        // empty/sub-less invocation shows help rather than a bare error
-        return Err(ErrorKind::Help(help::render(spec, globals, false)));
+        finalise_args(inner, inner_matches)?;
     }
 
     Ok(())
@@ -1187,11 +1269,12 @@ mod tests {
         sub_optional:   false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
-        name: "add",
-        aliases: &[],
-        about: "add a pin",
-        spec: &ADD,
-        hidden: false,
+        name:      "add",
+        aliases:   &[],
+        about:     "add a pin",
+        spec:      &ADD,
+        hidden:    false,
+        flattened: false,
     }];
     const ROOT: CommandSpec = CommandSpec {
         name:           "prog",

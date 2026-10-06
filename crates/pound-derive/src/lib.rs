@@ -193,22 +193,16 @@ struct FieldPlan {
 }
 
 impl FieldPlan {
-    /// the parser never descends into a flattened type's subcommands, so one
-    /// that has them could never parse
-    fn flatten_asserts(&self) -> TokenStream2 {
-        self.flattened
-            .iter()
-            .map(|field| {
-                let ty = &field.ty;
-                let message = format!("pound: `{ty}` has subcommands and cannot be flattened");
-                quote! {
-                    const _: () = ::core::assert!(
-                        <#ty as ::pound::Parse>::SPEC.subs.is_empty(),
-                        #message
-                    );
-                }
-            })
-            .collect()
+    /// a flattened struct may bring its own subcommand field, and only one of
+    /// those can be selected at a level
+    fn selector_assert(&self, owner: &str, spec: &proc_macro2::Ident) -> TokenStream2 {
+        if self.flattened.is_empty() {
+            return TokenStream2::new();
+        }
+        let message = format!("pound: `{owner}` has more than one subcommand field");
+        quote! {
+            const _: () = ::core::assert!(::pound::selector_count(&#spec) <= 1, #message);
+        }
     }
 
     /// the builder calls that embed the flattened fields, absent when there
@@ -260,7 +254,6 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     };
     let args = plans.iter().map(arg_expr);
     let default_asserts = plans.iter().filter_map(default_assert);
-    let flatten_asserts = fields.flatten_asserts();
     let groups = group_exprs(plans, &item.required_groups);
     let conflicts = index_pairs(&conflicts);
     let (subs, sub_optional) = sub_parts(sub.as_ref());
@@ -281,6 +274,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     let flatten_calls = fields.flatten_calls();
     let unique_message = format!("pound: two args of `{name}` answer to the same spelling");
     let group_asserts = group_asserts(plans, &item.required_groups, &format_ident!("CMD"));
+    let selector_assert = fields.selector_assert(&name.to_string(), &format_ident!("CMD"));
 
     // avoid unused-param warnings when a command carries only a subcommand.
     let spec_param = if plans.is_empty() {
@@ -305,7 +299,6 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
         impl ::pound::Parse for #name {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#default_asserts)*
-                #flatten_asserts
                 const ARGS: &[::pound::ArgSpec] = &[ #(#args),* ];
                 const GROUPS: &[::pound::GroupSpec] = &[ #(#groups),* ];
                 const CONFLICTS: &[(usize, usize)] = #conflicts;
@@ -324,6 +317,7 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
                     #sub_optional_call;
                 const _: () = ::core::assert!(::pound::names_unique(&CMD), #unique_message);
                 #group_asserts
+                #selector_assert
                 &CMD
             };
 
@@ -365,17 +359,39 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
     let mut last_spec_index = 0;
 
     for (idx, variant) in e.variants.items().enumerate() {
+        let vattr = match attr::pound(&variant.attributes) {
+            Ok(attributes) => attributes,
+            Err(e) => return err(&e),
+        };
+        let vname = &variant.name;
+        if vattr.flatten {
+            let ty = match vattr
+                .allow_only(&["flatten"])
+                .and_then(|()| flattened_variant(variant))
+            {
+                Ok(ty) => ty,
+                Err(e) => return err(&e),
+            };
+            sub_specs.push(quote! {
+                ::pound::SubSpec::flatten(::pound::subcommand_spec::<#ty>())
+            });
+            arms.push(quote! {
+                ::core::option::Option::Some((#idx, __sm)) => ::core::result::Result::Ok(
+                    Self::#vname(<#ty as ::pound::Parse>::from_matches(
+                        <#ty as ::pound::Parse>::SPEC,
+                        __sm,
+                    )?),
+                ),
+            });
+            continue;
+        }
+
         let fields = match analyze(&variant.fields) {
             Ok(v) => v,
             Err(msg) => return err(&msg),
         };
         let plans = &fields.args;
         let sub = &fields.sub;
-        let vattr = match attr::pound(&variant.attributes) {
-            Ok(attributes) => attributes,
-            Err(e) => return err(&e),
-        };
-        let vname = &variant.name;
         let sub_name = vattr
             .name
             .clone()
@@ -403,7 +419,6 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         };
         let args = plans.iter().map(arg_expr);
         let default_asserts = plans.iter().filter_map(default_assert);
-        let flatten_asserts = fields.flatten_asserts();
         let groups = group_exprs(plans, &vattr.required_groups);
         let conflicts = index_pairs(&conflicts);
         let (subs, sub_optional) = sub_parts(sub.as_ref());
@@ -418,6 +433,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
             variant.name
         );
         let group_asserts = group_asserts(plans, &vattr.required_groups, &ck);
+        let selector_assert = fields.selector_assert(&format!("{name}::{vname}"), &ck);
         // parameterless builders, so only chain them when the flag is set.
         let sub_optional_call = if sub_optional {
             quote!(.sub_optional())
@@ -427,7 +443,6 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         let hidden_call = if hidden { quote!(.hidden()) } else { quote!() };
         sub_consts.push(quote! {
             #(#default_asserts)*
-            #flatten_asserts
             const #ak: &[::pound::ArgSpec] = &[ #(#args),* ];
             const #gk: &[::pound::GroupSpec] = &[ #(#groups),* ];
             const #xk: &[(usize, usize)] = #conflicts;
@@ -444,6 +459,7 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
                 #sub_optional_call;
             const _: () = ::core::assert!(::pound::names_unique(&#ck), #unique_message);
             #group_asserts
+            #selector_assert
         });
         let valias = &vattr.aliases;
         sub_specs.push(quote! {
@@ -493,11 +509,15 @@ fn parse_enum(e: &venial::Enum) -> TokenStream {
         quote! {}
     };
 
+    let unique_message = format!("pound: two commands of `{name}` share a name or alias");
     quote! {
+        impl ::pound::Subcommands for #name {}
+
         impl ::pound::Parse for #name {
             const SPEC: &'static ::pound::CommandSpec = {
                 #(#sub_consts)*
                 const SUBS: &[::pound::SubSpec] = &[ #(#sub_specs),* ];
+                const _: () = ::core::assert!(::pound::commands_unique(SUBS), #unique_message);
                 const ROOT: ::pound::CommandSpec = ::pound::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
@@ -624,6 +644,24 @@ fn command_attributes(attributes: &[venial::Attribute]) -> Result<Pound, String>
     Ok(item)
 }
 
+// the one tuple field of a `#[pound(flatten)]` enum variant
+fn flattened_variant(variant: &venial::EnumVariant) -> Result<TokenStream2, String> {
+    let message = format!(
+        "pound: #[pound(flatten)] needs exactly one unattributed tuple field (`{}`)",
+        variant.name
+    );
+    let Fields::Tuple(tuple) = &variant.fields else {
+        return Err(message);
+    };
+    let mut fields = tuple.fields.items();
+    match (fields.next(), fields.next()) {
+        (Some(field), None) if field.attributes.is_empty() => {
+            Ok(field.ty.tokens.iter().cloned().collect())
+        },
+        _ => Err(message),
+    }
+}
+
 fn sub_field(field: &NamedField) -> Result<SubField, String> {
     let (is_bool, card, inner) = classify(&field.ty);
     if is_bool || card == Card::Many {
@@ -642,7 +680,10 @@ fn sub_parts(sub: Option<&SubField>) -> (TokenStream2, bool) {
     match sub {
         Some(sf) => {
             let ty = &sf.ty;
-            (quote! { <#ty as ::pound::Parse>::SPEC.subs }, sf.optional)
+            (
+                quote! { ::pound::subcommand_spec::<#ty>().subs },
+                sf.optional,
+            )
         },
         None => (quote! { &[] }, false),
     }
