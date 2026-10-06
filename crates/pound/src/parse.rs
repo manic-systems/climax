@@ -750,6 +750,7 @@ fn finalise(
     globals: &[&'static ArgSpec],
 ) -> Result<(), ErrorKind> {
     finalise_args(spec, m)?;
+    finalise_groups(spec, m)?;
     if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
         // empty/sub-less invocation shows help rather than a bare error
         return Err(ErrorKind::Help(help::render(spec, globals, false)));
@@ -779,33 +780,6 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
         }
     }
 
-    for g in spec.groups {
-        let members = group_members(spec, m, g.name);
-        let set: Vec<String> = members
-            .iter()
-            .filter(|(_, slot)| slot.count > 0)
-            .map(|(a, _)| a.display_name())
-            .collect();
-        if set.len() > 1 {
-            return Err(ErrorKind::Conflict {
-                group: g.name.to_owned(),
-                first: set[0].clone(),
-                second: set[1].clone(),
-            });
-        }
-        if set.is_empty() && g.required {
-            let options = members
-                .iter()
-                .map(|(a, _)| a.display_name())
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(ErrorKind::MissingGroup {
-                group: g.name.to_owned(),
-                options,
-            });
-        }
-    }
-
     for &(a, b) in spec.conflicts {
         if m.slots[a].count > 0 && m.slots[b].count > 0 {
             return Err(ErrorKind::Conflict {
@@ -821,6 +795,56 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
     }
 
     Ok(())
+}
+
+/// a group spans every flattened struct at a command level, so each name is
+/// checked once against all its members, required if any declaration says so
+fn finalise_groups(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
+    for (name, required) in command_groups(spec) {
+        let members = group_members(spec, m, name);
+        let set: Vec<String> = members
+            .iter()
+            .filter(|(_, slot)| slot.count > 0)
+            .map(|(a, _)| a.display_name())
+            .collect();
+        if set.len() > 1 {
+            return Err(ErrorKind::Conflict {
+                group: name.to_owned(),
+                first: set[0].clone(),
+                second: set[1].clone(),
+            });
+        }
+        if set.is_empty() && required {
+            let options = members
+                .iter()
+                .map(|(a, _)| a.display_name())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ErrorKind::MissingGroup {
+                group: name.to_owned(),
+                options,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn command_groups(spec: &CommandSpec) -> Vec<(&'static str, bool)> {
+    fn collect(spec: &CommandSpec, out: &mut Vec<(&'static str, bool)>) {
+        for group in spec.groups {
+            match out.iter_mut().find(|(name, _)| *name == group.name) {
+                Some((_, required)) => *required |= group.required,
+                None => out.push((group.name, group.required)),
+            }
+        }
+        for inner in spec.flattened {
+            collect(inner, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    collect(spec, &mut out);
+    out
 }
 
 /// the args in `group` across `spec` and its flattened structs, with their

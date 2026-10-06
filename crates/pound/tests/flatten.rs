@@ -81,26 +81,30 @@ fn a_reused_flattened_global_belongs_to_the_scope_that_parsed_it() {
 }
 
 #[derive(Debug, Parse)]
-struct Modes {
+#[pound(required_group = "mode")]
+struct Fast {
     #[pound(long, group = "mode")]
     fast: bool,
-    #[pound(long, group = "mode")]
-    safe: bool,
 }
 
 #[derive(Debug, Parse)]
-#[pound(required_group = "mode")]
 struct Grouped {
+    #[pound(long, group = "mode")]
+    safe: bool,
     #[pound(flatten)]
-    modes: Modes,
+    fast: Fast,
 }
 
 #[test]
-fn a_required_group_reaches_into_flattened_members() {
-    let modes = Grouped::try_parse_from(["--fast"]).unwrap().modes;
-    assert!(modes.fast && !modes.safe);
+fn a_group_spans_every_flattened_struct_at_its_level() {
+    let parsed = Grouped::try_parse_from(["--safe"]).unwrap();
+    assert!(parsed.safe && !parsed.fast.fast);
     assert!(matches!(
         Grouped::try_parse_from([]).unwrap_err().kind,
         ErrorKind::MissingGroup { .. }
+    ));
+    assert!(matches!(
+        Grouped::try_parse_from(["--safe", "--fast"]).unwrap_err().kind,
+        ErrorKind::Conflict { .. }
     ));
 }
