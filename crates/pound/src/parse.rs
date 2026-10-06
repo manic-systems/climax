@@ -9,8 +9,18 @@ use crate::alloc_prelude::*;
 use crate::{
     error::{Error, ErrorKind},
     help,
-    spec::{ArgSpec, CommandSpec, Kind, SubSpec},
-    value::{FromArg, ValueError},
+    spec::{
+        ArgSpec,
+        CommandSpec,
+        Kind,
+        SubSpec,
+        claims_long,
+        claims_short,
+    },
+    value::{
+        FromArg,
+        ValueError,
+    },
 };
 
 /// what a single arg collected during a parse
@@ -211,7 +221,19 @@ fn parse_cmd<'a>(
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
-    walk_cmd(spec, it, globals, hits).map_err(|e| e.or_usage(|| help::usage_line(spec, globals)))
+    walk_cmd(spec, it, globals, hits)
+        .map_err(|e| e.or_usage(|| (help::usage_line(spec, globals), help_flag(spec, globals))))
+}
+
+/// the spelling that still reaches `spec`'s generated help, if any does
+pub(crate) fn help_flag(spec: &CommandSpec, globals: &[&ArgSpec]) -> Option<&'static str> {
+    if !claims_long(spec, globals, "help") {
+        Some("--help")
+    } else if !claims_short(spec, globals, 'h') {
+        Some("-h")
+    } else {
+        None
+    }
 }
 
 fn walk_cmd<'a>(
@@ -253,16 +275,17 @@ fn walk_cmd<'a>(
             } else if let Some(idx) = spec.find_negate(name) {
                 apply_negation(&mut m.slots[idx], name, inline)?;
             } else if let Some(g) = find_global_long(globals, name) {
-                record_global(g, inline, it, hits)?;
-            } else if let Some(g) = find_global_negate(globals, name) {
-                if inline.is_some() {
+                if g.negate != Some(name) {
+                    record_global(g, inline, it, hits)?;
+                } else if inline.is_some() {
                     return Err(ErrorKind::UnexpectedValue(format!("--{name}")).into());
+                } else {
+                    hits.push(GlobalHit {
+                        arg:     g,
+                        value:   None,
+                        negated: true,
+                    });
                 }
-                hits.push(GlobalHit {
-                    arg: g,
-                    value: None,
-                    negated: true,
-                });
             } else {
                 return Err(ErrorKind::Unknown {
                     arg: format!("--{name}"),
@@ -457,16 +480,9 @@ fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
     slot.count += 1;
 }
 
-#[allow(clippy::manual_contains)]
+/// the nearest ancestor's global wins when several answer to the same spelling
 fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
-    globals
-        .iter()
-        .copied()
-        .find(|a| a.long == Some(name) || a.aliases.iter().any(|&al| al == name))
-}
-
-fn find_global_negate(globals: &[&'static ArgSpec], name: &str) -> Option<&'static ArgSpec> {
-    globals.iter().copied().find(|a| a.negate == Some(name))
+    globals.iter().rev().copied().find(|a| a.answers_long(name))
 }
 
 /// switch a flag back off, so the last spelling on the line wins
@@ -480,7 +496,7 @@ fn apply_negation(slot: &mut Slot<'_>, name: &str, inline: Option<&str>) -> Resu
 }
 
 fn find_global_short(globals: &[&'static ArgSpec], ch: char) -> Option<&'static ArgSpec> {
-    globals.iter().copied().find(|a| a.short == Some(ch))
+    globals.iter().rev().copied().find(|a| a.answers_short(ch))
 }
 
 fn record_global<'a>(
@@ -679,25 +695,23 @@ fn finalise(
 }
 
 fn builtin_long(spec: &CommandSpec, name: &str, globals: &[&'static ArgSpec]) -> Option<ErrorKind> {
+    if claims_long(spec, globals, name) {
+        return None;
+    }
     match name {
-        "help" if spec.find_long("help").is_none() => {
-            Some(ErrorKind::Help(help::render(spec, globals, true)))
-        },
-        "version" if spec.has_version_info() && spec.find_long("version").is_none() => {
-            Some(ErrorKind::Version(help::version_line(spec)))
-        },
+        "help" => Some(ErrorKind::Help(help::render(spec, globals, true))),
+        "version" if spec.has_version_info() => Some(ErrorKind::Version(help::version_line(spec))),
         _ => None,
     }
 }
 
 fn builtin_short(spec: &CommandSpec, ch: char, globals: &[&'static ArgSpec]) -> Option<ErrorKind> {
+    if claims_short(spec, globals, ch) {
+        return None;
+    }
     match ch {
-        'h' if spec.find_short('h').is_none() => {
-            Some(ErrorKind::Help(help::render(spec, globals, false)))
-        },
-        'V' if spec.has_version_info() && spec.find_short('V').is_none() => {
-            Some(ErrorKind::Version(help::version_line(spec)))
-        },
+        'h' => Some(ErrorKind::Help(help::render(spec, globals, false))),
+        'V' if spec.has_version_info() => Some(ErrorKind::Version(help::version_line(spec))),
         _ => None,
     }
 }
@@ -712,16 +726,20 @@ fn long_names<'s>(
     spec: &'s CommandSpec,
     globals: &'s [&'static ArgSpec],
 ) -> impl Iterator<Item = &'s str> {
+    let help = !claims_long(spec, globals, "help");
+    let version = spec.has_version_info() && !claims_long(spec, globals, "version");
     spec.args
         .iter()
         .chain(globals.iter().map(|a| &**a))
+        .filter(|a| !a.hidden)
         .flat_map(|a| {
             a.long
                 .into_iter()
                 .chain(a.negate)
                 .chain(a.aliases.iter().copied())
         })
-        .chain(["help", "version"])
+        .chain(help.then_some("help"))
+        .chain(version.then_some("version"))
 }
 
 fn sub_names(s: &SubSpec) -> impl Iterator<Item = &str> {

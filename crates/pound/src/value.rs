@@ -90,7 +90,7 @@ pub const fn default_allowed(default: &str, possible: Option<&[&str]>) -> bool {
 }
 
 // `str` has no const `PartialEq`, so compare the bytes by hand.
-const fn const_eq(a: &str, b: &str) -> bool {
+pub(crate) const fn const_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len() != b.len() {
         return false;

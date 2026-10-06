@@ -120,8 +120,10 @@ impl fmt::Display for ErrorKind {
 /// command in the tree raised it
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
-    pub kind: ErrorKind,
-    pub usage: Option<String>,
+    pub kind:      ErrorKind,
+    pub usage:     Option<String>,
+    /// the spelling that still reaches the generated help, if any does
+    pub help_flag: Option<&'static str>,
 }
 
 impl Error {
@@ -131,11 +133,16 @@ impl Error {
         matches!(self.kind, ErrorKind::Help(_) | ErrorKind::Version(_))
     }
 
-    /// remember the usage line of the command being parsed, unless a nested
-    /// command already claimed the failure as its own
-    pub(crate) fn or_usage(mut self, usage: impl FnOnce() -> String) -> Self {
+    /// remember the usage line and help spelling of the command being parsed,
+    /// unless a nested command already claimed the failure as its own
+    pub(crate) fn or_usage(
+        mut self,
+        usage: impl FnOnce() -> (String, Option<&'static str>),
+    ) -> Self {
         if self.usage.is_none() && !self.is_exit() {
-            self.usage = Some(usage());
+            let (usage, help_flag) = usage();
+            self.usage = Some(usage);
+            self.help_flag = help_flag;
         }
         self
     }
@@ -158,7 +165,11 @@ impl Error {
             out.push_str("\n\n");
             out.push_str(usage);
         }
-        out.push_str("\n\nFor more information, try '--help'.");
+        if let Some(flag) = self.help_flag {
+            out.push_str("\n\nFor more information, try '");
+            out.push_str(flag);
+            out.push_str("'.");
+        }
         out
     }
 
@@ -176,7 +187,11 @@ impl Error {
 
 impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
-        Self { kind, usage: None }
+        Self {
+            kind,
+            usage: None,
+            help_flag: None,
+        }
     }
 }
 
