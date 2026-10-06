@@ -344,6 +344,9 @@ fn parse_struct(s: &venial::Struct) -> TokenStream {
     reason = "one cohesive codegen pass reads best whole"
 )]
 fn parse_enum(e: &venial::Enum) -> TokenStream {
+    if e.variants.is_empty() {
+        return err("pound: a command enum needs at least one variant");
+    }
     let item = match command_attributes(&e.attributes) {
         Ok(item) => item,
         Err(e) => return err(&e),
