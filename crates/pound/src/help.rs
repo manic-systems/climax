@@ -18,6 +18,14 @@ use crate::spec::{
     claims_short,
 };
 
+const fn command_placeholder(spec: &CommandSpec) -> &'static str {
+    if spec.sub_optional {
+        " [COMMAND]"
+    } else {
+        " COMMAND"
+    }
+}
+
 pub(crate) fn version_line(spec: &CommandSpec) -> String {
     let mut out = spec.name.to_owned();
     if !spec.version.is_empty() {
@@ -208,7 +216,7 @@ fn usage(spec: &CommandSpec, visible_args: &[&ArgSpec], has_globals: bool) -> St
         out.push_str(&usage_positional(a));
     }
     if spec.subs.iter().any(|s| !s.hidden) {
-        out.push_str(" COMMAND");
+        out.push_str(command_placeholder(spec));
     }
     out
 }
@@ -331,7 +339,7 @@ fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
 pub(crate) fn usage_line(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
     let mut out = format!("Usage: {}", spec.name);
     if spec.has_subs() {
-        out.push_str(" COMMAND");
+        out.push_str(command_placeholder(spec));
     }
     out
 }
