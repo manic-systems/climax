@@ -14,7 +14,7 @@ use core::fmt;
 use crate::alloc_prelude::*;
 
 /// a value that would not parse, plus context for the message. the parser wraps
-/// it into [`crate::Error::Value`] once it knows which arg it came from.
+/// it into [`crate::ErrorKind::Value`] once it knows which arg it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueError {
     pub value: String,
@@ -116,7 +116,7 @@ const fn const_eq(a: &str, b: &str) -> bool {
 /// pound::from_str!(Uuid);
 /// ```
 ///
-/// [`FromStr`]: std::str::FromStr
+/// [`FromStr`]: core::str::FromStr
 #[macro_export]
 macro_rules! from_str {
     ($($t:ty),+ $(,)?) => {$(
