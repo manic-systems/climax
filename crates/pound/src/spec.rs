@@ -307,8 +307,8 @@ impl GroupSpec {
     }
 }
 
-/// a direct arg or a flattened struct, by its index in the owning spec
-#[doc(hidden)]
+/// one entry of [`CommandSpec::argument_order`], an index into `args` or
+/// `flattened`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArgumentOrder {
     Direct(usize),
@@ -390,7 +390,6 @@ pub struct CommandSpec {
     pub flattened:      &'static [&'static Self],
     /// where each direct arg and flattened struct was declared, empty to put
     /// the direct args first
-    #[doc(hidden)]
     pub argument_order: &'static [ArgumentOrder],
     pub groups:         &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
@@ -464,7 +463,8 @@ impl CommandSpec {
         self
     }
 
-    #[doc(hidden)]
+    /// interleave the direct args and flattened structs in source order, which
+    /// decides the order positionals fill in
     #[must_use]
     pub const fn argument_order(mut self, order: &'static [ArgumentOrder]) -> Self {
         self.argument_order = order;
