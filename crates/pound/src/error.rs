@@ -176,12 +176,20 @@ impl Error {
     /// print and exit
     #[cfg(feature = "std")]
     pub fn exit(self) -> ! {
-        if self.is_exit() {
-            println!("{}", self.render());
-            std::process::exit(0);
-        }
-        eprintln!("{}", self.render());
-        std::process::exit(2);
+        use std::io::Write as _;
+
+        let code = if self.is_exit() {
+            match writeln!(std::io::stdout(), "{}", self.render()) {
+                Ok(()) => 0,
+                // 128 + SIGPIPE, what a shell reports for a killed writer
+                Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => 141,
+                Err(_) => 1,
+            }
+        } else {
+            let _ = writeln!(std::io::stderr(), "{}", self.render());
+            2
+        };
+        std::process::exit(code);
     }
 }
 
