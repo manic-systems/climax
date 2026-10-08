@@ -1,0 +1,135 @@
+// SPDX-License-Identifier: EUPL-1.2
+
+use std::io::{self, IsTerminal as _};
+
+/// How prompt interaction should use detected terminal capabilities.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InteractionMode {
+    /// Interact only when stdin and the transient stream are suitable
+    /// terminals.
+    #[default]
+    Auto,
+    /// Attempt interaction regardless of capability detection.
+    Force,
+    /// Reject all interactive prompts without touching the terminal.
+    Disabled,
+}
+
+/// How transient status presentation should behave.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StatusMode {
+    /// Animate on a suitable terminal and otherwise remain silent.
+    #[default]
+    Auto,
+    /// Animate regardless of terminal capability detection.
+    Live,
+    /// Emit one plain status line when an operation finishes.
+    Plain,
+    /// Do not render status output.
+    Silent,
+}
+
+fn ansi_available() -> bool {
+    std::env::var_os("TERM").is_none_or(|term| term != "dumb")
+}
+
+/// Terminal facts observed by the application facade.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalCapabilities {
+    input_terminal: bool,
+    transient_terminal: bool,
+    ansi: bool,
+}
+
+impl TerminalCapabilities {
+    #[must_use]
+    pub const fn new(input_terminal: bool, transient_terminal: bool, ansi: bool) -> Self {
+        Self {
+            input_terminal,
+            transient_terminal,
+            ansi,
+        }
+    }
+
+    #[must_use]
+    pub fn detect() -> Self {
+        Self::new(io::stdin().is_terminal(), io::stderr().is_terminal(), ansi_available())
+    }
+
+    #[must_use]
+    pub const fn input_terminal(self) -> bool {
+        self.input_terminal
+    }
+
+    #[must_use]
+    pub const fn transient_terminal(self) -> bool {
+        self.transient_terminal
+    }
+
+    #[must_use]
+    pub const fn ansi(self) -> bool {
+        self.ansi
+    }
+
+    #[must_use]
+    pub const fn interaction_available(self) -> bool {
+        self.input_terminal && self.transient_terminal && self.ansi
+    }
+
+    #[must_use]
+    pub const fn live_status_available(self) -> bool {
+        self.transient_terminal && self.ansi
+    }
+}
+
+/// Terminal capability and override policy carried by [`crate::Context`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalPolicy {
+    capabilities: TerminalCapabilities,
+    interaction: InteractionMode,
+    status: StatusMode,
+}
+
+impl TerminalPolicy {
+    #[must_use]
+    pub(crate) fn process() -> Self {
+        Self {
+            capabilities: TerminalCapabilities::detect(),
+            interaction: InteractionMode::Auto,
+            status: StatusMode::Auto,
+        }
+    }
+
+    #[must_use]
+    pub const fn capabilities(self) -> TerminalCapabilities {
+        self.capabilities
+    }
+
+    #[must_use]
+    pub const fn interaction_mode(self) -> InteractionMode {
+        self.interaction
+    }
+
+    #[must_use]
+    pub const fn status_mode(self) -> StatusMode {
+        self.status
+    }
+
+    #[must_use]
+    pub const fn interaction_available(self) -> bool {
+        match self.interaction {
+            InteractionMode::Auto => self.capabilities.interaction_available(),
+            InteractionMode::Force => true,
+            InteractionMode::Disabled => false,
+        }
+    }
+
+    #[must_use]
+    pub const fn effective_status_mode(self) -> StatusMode {
+        match self.status {
+            StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
+            StatusMode::Auto => StatusMode::Silent,
+            status => status,
+        }
+    }
+}
