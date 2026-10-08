@@ -65,7 +65,7 @@ impl BangView {
 
 impl Widget for BangView {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        render_into_with_theme(&self.view, ctx.theme, out);
+        render_into_with_theme(&self.view, ctx.theme(), out);
     }
 }
 

@@ -1,10 +1,10 @@
-use alloc::sync::Arc;
 use core::{
     error::Error,
     fmt,
     iter::Peekable,
     mem,
 };
+use std::sync::Arc;
 
 use crate::{
     Line,
