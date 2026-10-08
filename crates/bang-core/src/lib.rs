@@ -15,6 +15,7 @@
 
 extern crate alloc;
 
+mod action;
 mod event;
 mod ids;
 mod output;
@@ -24,6 +25,10 @@ mod widget;
 /// the built-in widgets
 pub mod widgets;
 
+pub use action::{
+    ActionBinding,
+    ActionLayer,
+};
 pub use event::{
     Event,
     Key,
