@@ -2,7 +2,6 @@
 
 #[cfg(feature = "interactive")] use bang_core::Value;
 
-use crate::Result;
 #[cfg(feature = "interactive")]
 use crate::output::{
     Format,
@@ -16,6 +15,10 @@ use crate::output::{
 use crate::status::{
     Status,
     message as status_message,
+};
+use crate::{
+    Result,
+    terminal::TerminalPolicy,
 };
 
 /// # Errors
@@ -44,6 +47,7 @@ where
 
 #[derive(Clone, Debug)]
 pub struct Context {
+    terminal:      crate::terminal::TerminalPolicy,
     #[cfg(feature = "interactive")]
     output_format: Format,
 }
@@ -56,8 +60,10 @@ impl Default for Context {
 
 impl Context {
     #[must_use]
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
+            terminal:                                      crate::terminal::TerminalPolicy::process(
+            ),
             #[cfg(feature = "interactive")]
             output_format:                                 Format::Text,
         }
@@ -99,6 +105,16 @@ impl Context {
     #[cfg(feature = "interactive")]
     pub const fn set_output_format(&mut self, format: Format) {
         self.output_format = format;
+    }
+
+    #[must_use]
+    pub const fn terminal(&self) -> crate::terminal::TerminalPolicy {
+        self.terminal
+    }
+
+    #[must_use]
+    pub const fn interaction_available(&self) -> bool {
+        self.terminal.interaction_available()
     }
 }
 

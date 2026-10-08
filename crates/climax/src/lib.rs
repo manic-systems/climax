@@ -7,6 +7,7 @@ pub mod error;
 #[cfg(feature = "complete")] pub mod install;
 pub mod output;
 pub mod prelude;
+pub mod terminal;
 
 #[cfg(feature = "interactive")] pub mod prompt;
 
