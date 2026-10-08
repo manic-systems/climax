@@ -11,15 +11,24 @@ use crate::{
     renderer::layout_surface, surface::append_surface, widget::combine_tick_interest,
 };
 
+/// A set of edges of a canvas, combined with `|`.
+///
+/// In a [`Floating`] policy the edges say where the child sits. Naming opposite edges stretches the
+/// child across that axis, and naming none centres it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Edge(u8);
 
 impl Edge {
+    /// The top edge.
     pub const TOP: Self = Self(1 << 0);
+    /// The right edge.
     pub const RIGHT: Self = Self(1 << 1);
+    /// The bottom edge.
     pub const BOTTOM: Self = Self(1 << 2);
+    /// The left edge.
     pub const LEFT: Self = Self(1 << 3);
 
+    /// Whether every edge in `edge` is also in this set.
     pub const fn contains(self, edge: Self) -> bool {
         self.0 & edge.0 == edge.0
     }
@@ -39,6 +48,7 @@ impl BitOrAssign for Edge {
     }
 }
 
+/// Placement and compositing policy for one floating child of [`Layers`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Floating {
     edges: Edge,
@@ -49,6 +59,8 @@ pub struct Floating {
 }
 
 impl Floating {
+    /// Creates a policy that anchors the child to `edges` with no margin, no size limit, a
+    /// transparent fill and the base cursor kept.
     pub const fn new(edges: Edge) -> Self {
         Self {
             edges,
@@ -59,24 +71,28 @@ impl Floating {
         }
     }
 
+    /// Reserves `margin` cells around the area the child may occupy.
     #[must_use]
     pub const fn margin(mut self, margin: Insets) -> Self {
         self.margin = margin;
         self
     }
 
+    /// Caps the size of the child on any axis that is not stretched.
     #[must_use]
     pub const fn max_size(mut self, max_size: Size) -> Self {
         self.max_size = max_size;
         self
     }
 
+    /// Sets whether the child hides the base underneath it.
     #[must_use]
     pub const fn fill(mut self, fill: Fill) -> Self {
         self.fill = fill;
         self
     }
 
+    /// Sets how the child's cursor combines with the base cursor.
     #[must_use]
     pub const fn cursor(mut self, cursor: CursorMerge) -> Self {
         self.cursor = cursor;
@@ -89,6 +105,11 @@ struct FloatingChild<H> {
     policy: Floating,
 }
 
+/// A base widget with floating children composited over it.
+///
+/// Each child is rendered with the size left after its margin, placed by its [`Edge`] set and
+/// overlaid on the base. Create one with [`Layers::new`] for thread-safe children or
+/// [`Layers::local`] for children that may borrow local data.
 pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
     base: B,
     floating: Vec<FloatingChild<H>>,
@@ -105,6 +126,7 @@ impl<B, H> fmt::Debug for Layers<'_, B, H> {
 }
 
 impl<'a, B> Layers<'a, B> {
+    /// Creates a layer stack whose floating widgets are `Send + Sync`.
     pub const fn new(base: B) -> Self {
         Self {
             base,
@@ -113,6 +135,7 @@ impl<'a, B> Layers<'a, B> {
         }
     }
 
+    /// Adds a floating child drawn above the base and earlier children.
     #[must_use]
     pub fn float<W>(mut self, child: W, policy: Floating) -> Self
     where
@@ -137,6 +160,7 @@ impl<'a, B> Layers<'a, B, Box<dyn Widget + 'a>> {
         }
     }
 
+    /// Adds a floating child drawn above the base and earlier children.
     #[must_use]
     pub fn float<W>(mut self, child: W, policy: Floating) -> Self
     where

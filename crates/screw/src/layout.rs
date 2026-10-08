@@ -4,6 +4,10 @@ use std::fmt;
 
 use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
 
+/// Collects rows into a vertical [`Stack`].
+///
+/// Create one with [`layout`] for thread-safe widgets or [`local_layout`] for
+/// widgets that stay on the current thread.
 #[derive(Clone)]
 pub struct LayoutBuilder<H = WidgetRef> {
     rows: Vec<H>,
@@ -19,22 +23,26 @@ impl<H> fmt::Debug for LayoutBuilder<H> {
 }
 
 impl LayoutBuilder<WidgetRef> {
+    /// Creates an empty builder for thread-safe widgets.
     pub fn new() -> Self {
         Self { rows: Vec::new() }
     }
 
+    /// Adds a row whose children are laid out side by side.
     #[must_use]
     pub fn line(mut self, children: impl Into<Vec<WidgetRef>>) -> Self {
         self.rows.push(widget(Line::new(children)));
         self
     }
 
+    /// Adds a row that places the terminal cursor.
     #[must_use]
     pub fn input(mut self, input: InputAnchor) -> Self {
         self.rows.push(widget(input));
         self
     }
 
+    /// Builds the stack and erases it into a shared widget.
     pub fn into_widget(self) -> WidgetRef {
         widget(self.build())
     }
@@ -47,39 +55,46 @@ impl Default for LayoutBuilder<WidgetRef> {
 }
 
 impl<'a> LayoutBuilder<LocalWidgetRef<'a>> {
+    /// Creates an empty builder for widgets that stay on the current thread.
     pub fn new_local() -> Self {
         Self { rows: Vec::new() }
     }
 
+    /// Adds a row whose children are laid out side by side.
     #[must_use]
     pub fn line(mut self, children: impl Into<Vec<LocalWidgetRef<'a>>>) -> Self {
         self.rows.push(local_widget(Line::new(children)));
         self
     }
 
+    /// Adds a row that places the terminal cursor.
     #[must_use]
     pub fn input(mut self, input: InputAnchor) -> Self {
         self.rows.push(local_widget(input));
         self
     }
 
+    /// Builds the stack and erases it into a local widget.
     pub fn into_widget(self) -> LocalWidgetRef<'a> {
         local_widget(self.build())
     }
 }
 
 impl<H> LayoutBuilder<H> {
+    /// Adds a widget as its own row.
     #[must_use]
     pub fn widget(mut self, child: H) -> Self {
         self.rows.push(child);
         self
     }
 
+    /// Builds the rows into a [`Stack`].
     pub fn build(self) -> Stack<H> {
         Stack::new(self.rows)
     }
 }
 
+/// Starts a layout of thread-safe widgets.
 pub fn layout() -> LayoutBuilder {
     LayoutBuilder::new()
 }

@@ -7,11 +7,16 @@ use std::{
 
 use crate::{Line, LocalWidgetRef, Stack, Text, WidgetRef, local_widget, widget};
 
+/// Why a template failed to parse.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TemplateError {
+    /// A slot was written as `{}`.
     EmptySlotName,
+    /// A slot names a widget that was not provided.
     MissingSlot(String),
+    /// A slot opened with `{` and never closed.
     UnclosedSlot(String),
+    /// A lone `}` appeared outside a slot.
     UnmatchedCloseBrace,
 }
 
@@ -32,6 +37,11 @@ impl fmt::Display for TemplateError {
 
 impl Error for TemplateError {}
 
+/// Parses a template into a [`Stack`] of lines.
+///
+/// Each newline starts a row. `{name}` is replaced by the widget bound to `name` in `slots`, and a
+/// later binding of the same name wins. `{{` and `}}` write a literal brace. All other text becomes
+/// plain [`Text`](crate::Text).
 pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, TemplateError> {
     template_with(source, slots, widget, widget)
 }
