@@ -95,8 +95,7 @@ pub use viewport::{
     ViewportReportHandle,
 };
 pub use widget::{
-    Grid,
-    GridCell,
+    CellOverflow,
     InputAnchor,
     Line,
     List,
@@ -108,6 +107,7 @@ pub use widget::{
     Spans,
     Stack,
     Stateful,
+    Table,
     Text,
     TextInput,
     TickInterest,
@@ -115,6 +115,7 @@ pub use widget::{
     Widget,
     WidgetRef,
     WindowedLines,
+    combine_tick_interest,
     local_widget,
     widget,
 };

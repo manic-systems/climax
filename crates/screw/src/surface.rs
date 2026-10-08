@@ -117,6 +117,7 @@ impl Default for Row {
 pub struct Surface {
     rows:   Vec<Row>,
     cursor: Option<Position>,
+    sealed: bool,
 }
 
 impl Default for Surface {
@@ -130,6 +131,7 @@ impl Surface {
         Self {
             rows:   vec![Row::new()],
             cursor: None,
+            sealed: false,
         }
     }
 
@@ -165,8 +167,10 @@ impl Surface {
     /// controls are dropped
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
         let mut col = self.current_col();
+        let mut first = true;
+        let sealed = std::mem::take(&mut self.sealed);
         let mut text = text.as_ref();
-        if let Some(consumed) = self.extend_last_cell(text) {
+        if !sealed && let Some(consumed) = self.extend_last_cell(text) {
             text = &text[consumed..];
             col = self.current_col();
         }
@@ -178,8 +182,9 @@ impl Surface {
                         self.current_row_mut().cells.push(space(style));
                     }
                 },
-                Segment::Cluster { text, width } => {
+                Segment::Cluster { text, width, .. } => {
                     let joined = width == 0
+                        && !(sealed && first)
                         && self.current_row_mut().cells.last_mut().is_some_and(|last| {
                             let before = last.width;
                             last.attach(text);
@@ -194,10 +199,12 @@ impl Surface {
                         });
                     }
                     if joined {
+                        first = false;
                         continue;
                     }
                 },
             }
+            first = false;
             col = segment.advance(col);
         }
     }
@@ -221,12 +228,20 @@ impl Surface {
         Some(consumed)
     }
 
+    pub(crate) fn push_cell(&mut self, cell: &Cell) {
+        self.current_row_mut().cells.push(cell.clone());
+    }
+
     pub(crate) fn harden_soft_breaks(&mut self) {
         for row in &mut self.rows {
             if row.break_after() == RowBreak::Soft {
                 row.set_break_after(RowBreak::Hard);
             }
         }
+    }
+
+    pub(crate) const fn seal(&mut self) {
+        self.sealed = true;
     }
 
     pub fn newline(&mut self) {
@@ -561,7 +576,7 @@ pub(crate) fn append_surface(out: &mut Surface, surface: &Surface, limit: usize)
             out.newline_with_break(previous_break);
         }
         for cell in row.cells() {
-            out.write(&cell.text, cell.style);
+            out.push_cell(cell);
         }
         out.current_row_mut().set_break_after(row.break_after());
         written += 1;
