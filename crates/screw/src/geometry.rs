@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use std::{io, os::fd::AsFd};
+
+use rustix::termios::tcgetwinsize;
+
 use crate::Position;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -148,8 +152,25 @@ pub struct Viewport {
 }
 
 impl Viewport {
+    /// The size assumed when a terminal cannot be measured, 80 columns by 24 rows.
+    pub const FALLBACK: Self = Self::new(80, 24);
+
     pub const fn new(columns: usize, rows: usize) -> Self {
         Self { columns, rows }
+    }
+
+    /// Measures the terminal behind `terminal`.
+    ///
+    /// Fails when the descriptor is not a terminal or reports a zero-sized viewport.
+    pub fn of(terminal: &impl AsFd) -> io::Result<Self> {
+        let size = tcgetwinsize(terminal)?;
+        if size.ws_col == 0 || size.ws_row == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "terminal reported a zero-sized viewport",
+            ));
+        }
+        Ok(Self::new(usize::from(size.ws_col), usize::from(size.ws_row)))
     }
 
     pub const fn size(self) -> Size {

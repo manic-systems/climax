@@ -29,7 +29,6 @@ pub use runtime::{
 pub use style::{Color, Role, Style, Theme};
 pub use surface::{Cell, CursorMerge, Fill, Position, Row, RowBreak, Surface};
 pub use template::{TemplateError, local_template, template};
-pub use terminal::{FALLBACK_WIDTH, stderr_is_terminal, terminal_width, terminal_width_or_default};
 pub use viewport::{VerticalViewport, ViewportReport, ViewportReportHandle};
 pub use widget::{
     CellOverflow, InputAnchor, Line, List, LocalWidgetRef, Looping, ProgressBar, RenderCtx,
