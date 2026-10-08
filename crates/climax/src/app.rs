@@ -1,55 +1,54 @@
 #[cfg(feature = "interactive")] use std::io::Write;
+use std::marker::PhantomData;
 
 #[cfg(feature = "interactive")] use bang_core::Value;
 
-#[cfg(feature = "interactive")]
-use crate::output::{
-    Format,
-    json,
-    print_value,
-    text,
-    write_value,
-};
-#[cfg(feature = "interactive")] use crate::prompt;
-#[cfg(feature = "render")]
-use crate::status::{
-    Status,
-    message as status_message,
-};
+#[cfg(feature = "render")] use crate::status::Status;
 use crate::{
     Result,
-    terminal::TerminalPolicy,
+    output::Format,
+    terminal::{
+        InteractionMode,
+        TerminalPolicy,
+    },
 };
 
-/// # Errors
-///
-/// fails with whatever `main` returns.
 #[cfg(feature = "parse")]
-pub fn run<C, F>(main: F) -> Result<()>
+pub fn run<C, F>(f: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    #[cfg(feature = "complete")]
-    caress::handle(C::SPEC);
-    run_with(C::parse(), main)
+    run_with(C::try_parse()?, f)
 }
 
-/// # Errors
-///
-/// fails with whatever `main` returns.
-pub fn run_with<C, F>(command: C, main: F) -> Result<()>
+pub fn run_with<C, F>(command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
-    main(Context::new(), command)
+    f(Context::new(), command)
 }
 
-#[derive(Clone, Debug)]
+/// application policy and access to the composed command-line facilities
+///
+/// not cloneable, since interaction and terminal policy share one owner, and
+/// not `Send` in any feature configuration, so it stays on the thread that
+/// built it
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// assert_send::<climax::Context>();
+/// ```
+#[derive(Debug)]
 pub struct Context {
-    terminal:      crate::terminal::TerminalPolicy,
+    terminal:           crate::terminal::TerminalPolicy,
     #[cfg(feature = "interactive")]
-    output_format: Format,
+    interaction:        bang::Interaction,
+    #[cfg(feature = "interactive")]
+    custom_interaction: bool,
+    #[cfg(feature = "interactive")]
+    output_format:      crate::output::Format,
+    _not_send:          PhantomData<std::rc::Rc<()>>,
 }
 
 impl Default for Context {
@@ -61,24 +60,81 @@ impl Default for Context {
 impl Context {
     #[must_use]
     pub fn new() -> Self {
+        let terminal = crate::terminal::TerminalPolicy::process();
         Self {
-            terminal:                                      crate::terminal::TerminalPolicy::process(
-            ),
+            terminal,
             #[cfg(feature = "interactive")]
-            output_format:                                 Format::Text,
+            interaction: interaction_for(terminal),
+            #[cfg(feature = "interactive")]
+            custom_interaction: false,
+            #[cfg(feature = "interactive")]
+            output_format: crate::output::Format::Text,
+            _not_send: PhantomData,
         }
     }
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn prompt(&self) -> PromptContext {
-        PromptContext
+    pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
+        bang::select(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
+        bang::multi_select(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
+        bang::search(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
+        bang::review(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
+        bang::text(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
+        bang::password(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
+        bang::confirm(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
+        bang::date(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
+    where
+        T: std::str::FromStr + 'static,
+        T::Err: std::fmt::Display,
+    {
+        bang::number(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "render")]
     #[must_use]
-    pub fn status(&self, message: impl Into<String>) -> Status {
-        status_message(message)
+    pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
+        crate::status::message(message)
     }
 
     #[cfg(feature = "interactive")]
@@ -91,19 +147,19 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn output_format(&self) -> Format {
+    pub const fn output_format(&self) -> crate::output::Format {
         self.output_format
     }
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn with_output_format(mut self, format: Format) -> Self {
+    pub const fn with_output_format(mut self, format: crate::output::Format) -> Self {
         self.output_format = format;
         self
     }
 
     #[cfg(feature = "interactive")]
-    pub const fn set_output_format(&mut self, format: Format) {
+    pub const fn set_output_format(&mut self, format: crate::output::Format) {
         self.output_format = format;
     }
 
@@ -116,46 +172,68 @@ impl Context {
     pub const fn interaction_available(&self) -> bool {
         self.terminal.interaction_available()
     }
+
+    #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
+    pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
+        self.terminal.set_interaction_mode(mode);
+        #[cfg(feature = "interactive")]
+        {
+            self.interaction = interaction_for(self.terminal);
+            self.custom_interaction = false;
+        }
+    }
+
+    #[cfg(feature = "interactive")]
+    pub fn set_interaction(&mut self, interaction: bang::Interaction) {
+        self.terminal
+            .set_interaction_mode(crate::terminal::InteractionMode::Force);
+        self.interaction = interaction;
+        self.custom_interaction = true;
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
+        self.set_interaction(interaction);
+        self
+    }
+
+    #[must_use]
+    pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
+        self.set_interaction_mode(mode);
+        self
+    }
+
+    #[cfg(feature = "interactive")]
+    fn prompt_interaction(&self) -> bang::Interaction {
+        self.interaction.clone()
+    }
 }
 
 #[cfg(feature = "interactive")]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PromptContext;
-
-#[cfg(feature = "interactive")]
-impl PromptContext {
-    #[must_use]
-    pub fn select(self, id: impl Into<String>) -> prompt::SelectPrompt {
-        prompt::select(id)
-    }
-
-    #[must_use]
-    pub fn multi_select(self, id: impl Into<String>) -> prompt::MultiSelectPrompt {
-        prompt::multi_select(id)
-    }
-
-    #[must_use]
-    pub fn search(self, id: impl Into<String>) -> prompt::SearchPrompt {
-        prompt::search(id)
-    }
-
-    #[must_use]
-    pub fn text(self, prompt: impl Into<String>) -> prompt::TextPrompt {
-        prompt::text(prompt)
+fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interaction {
+    match terminal.interaction_mode() {
+        crate::terminal::InteractionMode::Auto if terminal.interaction_available() => {
+            bang::Interaction::live()
+        },
+        crate::terminal::InteractionMode::Auto | crate::terminal::InteractionMode::Disabled => {
+            bang::Interaction::disabled()
+        },
+        crate::terminal::InteractionMode::Force => bang::Interaction::forced(),
     }
 }
 
 #[cfg(feature = "interactive")]
 #[derive(Clone, Copy, Debug)]
 pub struct OutputContext {
-    format: Format,
+    format: crate::output::Format,
 }
 
 #[cfg(feature = "interactive")]
 impl Default for OutputContext {
     fn default() -> Self {
         Self {
-            format: Format::Text,
+            format: crate::output::Format::Text,
         }
     }
 }
@@ -163,51 +241,44 @@ impl Default for OutputContext {
 #[cfg(feature = "interactive")]
 impl OutputContext {
     #[must_use]
-    pub const fn format(&self) -> Format {
+    pub const fn format(&self) -> crate::output::Format {
         self.format
     }
 
     #[must_use]
-    pub const fn with_format(mut self, format: Format) -> Self {
+    pub const fn with_format(mut self, format: crate::output::Format) -> Self {
         self.format = format;
         self
     }
 
-    /// # Errors
-    ///
-    /// fails with [`crate::Error::Draw`] when writing to `writer` fails.
     pub fn write_value(self, writer: impl Write, value: &Value) -> Result<()> {
-        write_value(writer, value, self.format)
+        crate::output::write_value(writer, value, self.format)
     }
 
-    /// # Errors
-    ///
-    /// fails with [`crate::Error::Draw`] when writing to `writer` fails.
-    pub fn write_value_as(self, writer: impl Write, value: &Value, format: Format) -> Result<()> {
-        write_value(writer, value, format)
+    pub fn write_value_as(
+        self,
+        writer: impl Write,
+        value: &Value,
+        format: crate::output::Format,
+    ) -> Result<()> {
+        crate::output::write_value(writer, value, format)
     }
 
-    /// # Errors
-    ///
-    /// fails with [`crate::Error::Draw`] when writing to stdout fails.
     pub fn print_value(self, value: &Value) -> Result<()> {
-        print_value(value, self.format)
+        crate::output::print_value(value, self.format)
     }
 
-    /// # Errors
-    ///
-    /// fails with [`crate::Error::Draw`] when writing to stdout fails.
-    pub fn print_value_as(self, value: &Value, format: Format) -> Result<()> {
-        print_value(value, format)
+    pub fn print_value_as(self, value: &Value, format: crate::output::Format) -> Result<()> {
+        crate::output::print_value(value, format)
     }
 
     #[must_use]
     pub fn text(self, value: &Value) -> String {
-        text(value)
+        crate::output::text(value)
     }
 
     #[must_use]
     pub fn json(self, value: &Value) -> String {
-        json(value)
+        crate::output::json(value)
     }
 }
