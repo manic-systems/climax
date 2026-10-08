@@ -30,11 +30,12 @@ pub(crate) fn is_dropped_control(ch: char) -> bool {
 pub(crate) enum Segment<'a> {
     Newline,
     Tab,
-    /// An extended grapheme cluster. A zero width means it attaches to the
-    /// prior cell.
+    /// extended grapheme cluster, zero width means it joins the prior cell and
+    /// `grow` adds width
     Cluster {
         text:  &'a str,
         width: usize,
+        grow:  usize,
     },
 }
 
@@ -44,7 +45,7 @@ impl Segment<'_> {
         match self {
             Self::Newline => 0,
             Self::Tab => col + TAB_STOP - col % TAB_STOP,
-            Self::Cluster { width, .. } => col + *width,
+            Self::Cluster { width, grow, .. } => col + *width + *grow,
         }
     }
 }
@@ -65,27 +66,79 @@ pub(crate) fn join_window_start(text: &str) -> usize {
         .map_or(0, |(index, _)| index)
 }
 
-/// Splits `text` into the segments [`Surface::write`](crate::Surface::write)
-/// lays out, each with its byte offset. Dropped controls produce nothing.
+/// the segments [`Surface::write`](crate::Surface::write) lays out, with byte
+/// offsets
 pub(crate) fn segments(text: &str) -> impl Iterator<Item = (usize, Segment<'_>)> {
-    text.grapheme_indices(true).filter_map(|(index, cluster)| {
-        let segment = match cluster {
-            "\n" | "\r\n" => Segment::Newline,
-            "\t" => Segment::Tab,
-            _ if cluster.chars().next().is_some_and(is_dropped_control) => return None,
-            _ => {
-                Segment::Cluster {
-                    text:  cluster,
-                    width: if cluster == "\u{ad}" {
+    let mut base: Option<usize> = None;
+    let mut window = String::new();
+    text.grapheme_indices(true)
+        .filter_map(move |(index, cluster)| {
+            let segment = match cluster {
+                "\n" | "\r\n" => {
+                    base = None;
+                    Segment::Newline
+                },
+                "\t" => {
+                    base = None;
+                    Segment::Tab
+                },
+                _ if cluster.chars().next().is_some_and(is_dropped_control) => return None,
+                _ => {
+                    let width = if cluster == "\u{ad}" {
                         1
                     } else {
                         cluster.width()
-                    },
-                }
-            },
-        };
-        Some((index, segment))
-    })
+                    };
+                    let mut grow = 0;
+                    if width > 0 {
+                        base = Some(width);
+                        window.clear();
+                        window.push_str(&cluster[join_window_start(cluster)..]);
+                    } else if let Some(head_width) = base {
+                        let before = window.width();
+                        window.push_str(cluster);
+                        grow = window.width().saturating_sub(before);
+                        base = Some(head_width + grow);
+                        window.drain(..join_window_start(&window));
+                    }
+                    Segment::Cluster {
+                        text: cluster,
+                        width,
+                        grow,
+                    }
+                },
+            };
+            Some((index, segment))
+        })
+}
+
+/// expands tabs in one row from column zero and drops the controls
+/// `Surface::write` drops
+pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
+    if !text.contains('\t') && !text.chars().any(is_dropped_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut expanded = String::with_capacity(text.len());
+    let mut col = 0;
+    for (_, segment) in segments(text) {
+        match segment {
+            Segment::Newline => {},
+            Segment::Tab => expanded.extend(std::iter::repeat_n(' ', segment.advance(col) - col)),
+            Segment::Cluster { text, .. } => expanded.push_str(text),
+        }
+        col = segment.advance(col);
+    }
+    Cow::Owned(expanded)
+}
+
+/// byte offset just past the first visible segment of `text`, or its length
+/// when it has none
+pub(crate) fn first_segment_end(text: &str) -> usize {
+    let mut visible = segments(text);
+    visible.next();
+    visible
+        .find(|(_, segment)| !matches!(segment, Segment::Cluster { width: 0, .. }))
+        .map_or(text.len(), |(index, _)| index)
 }
 
 /// display width of `text` in terminal columns, that of its widest row
@@ -108,35 +161,65 @@ pub fn width(text: &str) -> usize {
 #[must_use]
 pub fn truncate(text: &str, columns: usize) -> &str {
     let mut used = 0;
+    let mut start = 0;
     for (index, segment) in segments(text) {
         if matches!(segment, Segment::Newline) {
             return &text[..index];
         }
         let next = segment.advance(used);
+        let widens = matches!(segment, Segment::Cluster {
+            width: 0,
+            grow: 1..,
+            ..
+        });
         if next > columns {
-            return &text[..index];
+            return &text[..if widens { start } else { index }];
+        }
+        if !matches!(segment, Segment::Cluster { width: 0, .. }) {
+            start = index;
         }
         used = next;
     }
     text
 }
 
-/// Pads `text` with spaces to `columns` according to `align`.
-///
-/// Text that is already `columns` wide or wider is returned unchanged. Use
-/// [`truncate`] first to enforce a maximum.
-#[must_use]
-pub fn pad(text: &str, columns: usize, align: Align) -> Cow<'_, str> {
-    let missing = columns.saturating_sub(width(text));
-    if missing == 0 {
-        return Cow::Borrowed(text);
-    }
-    let (before, after) = match align {
+/// `missing` columns of padding split into the amounts before and after text
+pub(crate) const fn split_padding(missing: usize, align: Align) -> (usize, usize) {
+    match align {
         Align::Left => (0, missing),
         Align::Right => (missing, 0),
         Align::Center => (missing / 2, missing - missing / 2),
+    }
+}
+
+/// pads each row of `text` with spaces to `columns` according to `align`
+///
+/// rows already `columns` wide are unchanged, use [`truncate`] first to enforce
+/// a maximum
+#[must_use]
+pub fn pad(text: &str, columns: usize, align: Align) -> Cow<'_, str> {
+    let rows: Vec<Cow<'_, str>> = text
+        .split('\n')
+        .map(|row| pad_row(row, columns, align))
+        .collect();
+    if rows.iter().all(|row| matches!(row, Cow::Borrowed(_))) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(rows.join("\n"))
+}
+
+fn pad_row(row: &str, columns: usize, align: Align) -> Cow<'_, str> {
+    let missing = columns.saturating_sub(width(row));
+    if missing == 0 {
+        return Cow::Borrowed(row);
+    }
+    let (before, after) = split_padding(missing, align);
+    let row = if before > 0 && row.contains('\t') {
+        expand_tabs(row)
+    } else {
+        Cow::Borrowed(row)
     };
-    Cow::Owned(format!("{}{text}{}", " ".repeat(before), " ".repeat(after)))
+    Cow::Owned(format!("{}{row}{}", " ".repeat(before), " ".repeat(after)))
 }
 
 #[cfg(test)]
@@ -204,6 +287,20 @@ mod tests {
     }
 
     #[test]
+    fn marks_join_their_base_across_dropped_controls() {
+        let text = "\u{2764}\u{1b}\u{fe0f}X";
+        let mut surface = Surface::new();
+        surface.write(text, Style::PLAIN);
+        assert_eq!(width(text), 3);
+        assert_eq!(width(text), surface.display_width());
+        assert_eq!(truncate(text, 1), "");
+        assert_eq!(truncate(text, 2), "\u{2764}\u{1b}\u{fe0f}");
+        assert_eq!(truncate(text, 3), text);
+        assert_eq!(pad(text, 5, Align::Left), format!("{text}  "));
+        assert_eq!(pad(text, 5, Align::Right), format!("  {text}"));
+    }
+
+    #[test]
     fn a_soft_hyphen_takes_one_column_like_xterm_draws_it() {
         assert_eq!(width("co\u{ad}op"), 5);
         let mut surface = Surface::new();
@@ -218,6 +315,15 @@ mod tests {
         assert_eq!(width("ab\tc"), 9);
         assert_eq!(width("12345678\tx"), 17);
         assert_eq!(width("ab\n\tc"), 9);
+    }
+
+    #[test]
+    fn pad_expands_tabs_before_prepending_padding() {
+        let right = pad("a\tb", 12, Align::Right);
+        assert_eq!(width(&right), 12);
+        assert_eq!(right, "   a       b");
+        assert_eq!(width(&pad("a\tb", 12, Align::Center)), 12);
+        assert_eq!(pad("a\tb", 12, Align::Left), "a\tb   ");
     }
 
     #[test]
@@ -264,6 +370,13 @@ mod tests {
         assert_eq!(pad("ab", 5, Align::Center), " ab  ");
         assert_eq!(pad("世", 4, Align::Left), "世  ");
         assert_eq!(pad("e\u{301}", 3, Align::Right), "  e\u{301}");
+    }
+
+    #[test]
+    fn pad_fills_every_row_of_multiline_text() {
+        assert_eq!(pad("a\nbbb\nc", 5, Align::Left), "a    \nbbb  \nc    ");
+        assert_eq!(pad("a\nbbb", 5, Align::Right), "    a\n  bbb");
+        assert_eq!(pad("a\nbbb", 5, Align::Center), "  a  \n bbb ");
     }
 
     #[test]

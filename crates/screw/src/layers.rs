@@ -383,6 +383,16 @@ mod tests {
     }
 
     #[test]
+    fn composition_keeps_sealed_table_cells_apart() {
+        let table = crate::Table::new([["👩\u{200d}", "💻", "B"]]).gap(0);
+        let mut surface = Surface::new();
+        Layers::new(table).render(&context(5, 3), &mut surface);
+        assert_eq!(surface.rows()[0].cells().len(), 3);
+        assert_eq!(surface.rows()[0].cells()[2].text, "B");
+        assert_eq!(surface.display_width(), 5);
+    }
+
+    #[test]
     fn an_overlay_on_a_soft_wrapped_row_stays_on_its_row() {
         let layers = Layers::new("abc界").float("X", Floating::new(Edge::BOTTOM | Edge::LEFT));
         let mut surface = Surface::new();
