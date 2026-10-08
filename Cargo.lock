@@ -105,6 +105,13 @@ dependencies = [
 name = "pound-derive"
 version = "0.2.0"
 dependencies = [
+ "pound-derive-impl",
+]
+
+[[package]]
+name = "pound-derive-impl"
+version = "0.2.0"
+dependencies = [
  "proc-macro2",
  "quote",
  "venial",

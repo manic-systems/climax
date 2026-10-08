@@ -1,7 +1,7 @@
 [package]
-name                 = "pound-derive"
+name                 = "pound-derive-impl"
 version              = "0.2.0"
-description          = "Derive macros for pound"
+description          = "Expansion behind pound's derive macros"
 keywords             = [ "cli", "args", "derive" ]
 categories           = [ "development-tools::procedural-macro-helpers" ]
 readme               = "README.md"
@@ -10,15 +10,10 @@ edition.workspace    = true
 license.workspace    = true
 repository.workspace = true
 
-[features]
-# forwarded from pound's `help` feature, see pound/Cargo.toml
-help = [  ]
-
-[lib]
-proc-macro = true
-
 [dependencies]
-pound-derive-impl = { version = "=0.2.0", path = "../pound-derive-impl" }
+proc-macro2 = "1"
+quote       = "1"
+venial      = "0.6"
 
 [lints]
 workspace = true
