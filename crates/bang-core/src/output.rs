@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{
-    Number,
-    Value,
-};
+use crate::{Number, Value};
 
+/// How a submitted value is written out.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OutputFormat {
+    /// Plain lines, with strings unquoted.
     #[default]
     Text,
+    /// A single JSON document.
     Json,
 }
 
+/// Render `value` in `output`, ending with a newline.
 #[must_use]
 pub fn format_output(value: &Value, output: OutputFormat) -> String {
     match output {
@@ -20,47 +21,42 @@ pub fn format_output(value: &Value, output: OutputFormat) -> String {
     }
 }
 
+/// Render `value` as plain text, ending with a newline.
+/// A list becomes one line per item and structured values fall back to JSON.
 #[must_use]
 pub fn format_text(value: &Value) -> String {
     match value {
         Value::Null => "\n".to_owned(),
-        Value::Bool(bool_value) => format!("{bool_value}\n"),
-        Value::String(string_value) => format!("{string_value}\n"),
-        Value::Number(number) => format!("{number:?}\n"),
+        Value::Bool(value) => format!("{value}\n"),
+        Value::String(value) => format!("{value}\n"),
+        Value::Number(number) => format!("{number}\n"),
         Value::Date(date) => format!("{date}\n"),
         Value::List(values) => {
-            let mut output = values
+            values
                 .iter()
-                .map(|item| {
-                    match item {
-                        Value::String(string_value) => string_value.clone(),
-                        Value::Null
-                        | Value::Bool(_)
-                        | Value::Number(_)
-                        | Value::Date(_)
-                        | Value::List(_)
-                        | Value::Object(_) => format_json(item),
-                    }
+                .map(|value| match value {
+                    Value::String(value) => value.clone(),
+                    _ => format_json(value),
                 })
                 .collect::<Vec<_>>()
-                .join("\n");
-            output.push('\n');
-            output
+                .join("\n")
+                + "\n"
         },
-        Value::Object(_) => format!("{}\n", format_json(value)),
+        _ => format!("{}\n", format_json(value)),
     }
 }
 
+/// Render `value` as JSON. Non-finite floats become `null` and dates become strings.
 #[must_use]
 pub fn format_json(value: &Value) -> String {
     match value {
-        Value::Bool(bool_value) => bool_value.to_string(),
-        Value::String(string_value) => format!("\"{}\"", escape_json(string_value)),
-        Value::Number(number) => {
-            match number {
-                Number::Integer(integer_value) => integer_value.to_string(),
-                Number::Float(float_value) => float_value.to_string(),
-            }
+        Value::Bool(value) => value.to_string(),
+        Value::String(value) => format!("\"{}\"", escape_json(value)),
+        Value::Number(number) => match number {
+            Number::Integer(value) => value.to_string(),
+            // JSON has no NaN/Infinity; emit null rather than invalid JSON.
+            Number::Float(value) if value.is_finite() => value.to_string(),
+            Number::Float(_) => "null".to_owned(),
         },
         Value::Date(date) => format!("\"{date}\""),
         Value::List(values) => {
@@ -74,30 +70,30 @@ pub fn format_json(value: &Value) -> String {
                 "{{{}}}",
                 values
                     .iter()
-                    .map(|(key, object_value)| {
-                        format!("\"{}\":{}", escape_json(key), format_json(object_value))
-                    })
+                    .map(|(key, value)| format!("\"{}\":{}", escape_json(key), format_json(value)))
                     .collect::<Vec<_>>()
                     .join(",")
             )
         },
-        Value::Null => "null".to_owned(),
+        _ => "null".to_owned(),
     }
 }
 
+/// Escape `value` for use inside a JSON string literal.
 #[must_use]
 pub fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|character| {
-            match character {
-                '"' => "\\\"".chars().collect::<Vec<_>>(),
-                '\\' => "\\\\".chars().collect(),
-                '\n' => "\\n".chars().collect(),
-                '\r' => "\\r".chars().collect(),
-                '\t' => "\\t".chars().collect(),
-                other => vec![other],
-            }
+        .flat_map(|value| match value {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect(),
+            '\n' => "\\n".chars().collect(),
+            '\r' => "\\r".chars().collect(),
+            '\t' => "\\t".chars().collect(),
+            '\u{08}' => "\\b".chars().collect(),
+            '\u{0C}' => "\\f".chars().collect(),
+            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
+            value => vec![value],
         })
         .collect()
 }
