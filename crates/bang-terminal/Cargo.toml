@@ -3,7 +3,7 @@ name                 = "bang-terminal"
 version              = "0.0.1"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
-description          = "bang input event decoding"
+description          = "Terminal input decoding, raw mode and event loop behind the bang prompts"
 edition.workspace    = true
 keywords             = [ "cli", "input", "terminal", "ansi" ]
 license.workspace    = true
@@ -11,8 +11,9 @@ readme               = "../../README.md"
 repository.workspace = true
 
 [dependencies]
-bang-core = { path = "../bang-core", version = "0.0.1" }
-libc      = "0.2"
+bang-core = { path = "../bang-core", version = "=0.0.1" }
+libc = "0.2"
+rustix = { version = "1.1", default-features = false, features = [ "event", "fs", "pipe", "process", "std", "termios" ] }
 
 [lints]
 workspace = true
