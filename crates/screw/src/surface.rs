@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 

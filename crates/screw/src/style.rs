@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 /// A terminal colour.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Color {

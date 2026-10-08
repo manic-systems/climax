@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 use std::fmt;
 
 use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
