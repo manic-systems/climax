@@ -97,6 +97,8 @@ pub use widget::{
     Looping,
     ProgressBar,
     RenderCtx,
+    Span,
+    Spans,
     Stack,
     Stateful,
     Text,
