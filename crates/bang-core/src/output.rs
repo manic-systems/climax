@@ -5,13 +5,17 @@ use crate::{
     Value,
 };
 
+/// how a submitted value is written out
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OutputFormat {
+    /// plain lines, strings unquoted
     #[default]
     Text,
+    /// a single JSON document
     Json,
 }
 
+/// renders `value` in `output`, ending with a newline
 #[must_use]
 pub fn format_output(value: &Value, output: OutputFormat) -> String {
     match output {
@@ -20,20 +24,22 @@ pub fn format_output(value: &Value, output: OutputFormat) -> String {
     }
 }
 
+/// renders `value` as plain text, a list becomes one line per item, structures
+/// fall back to JSON
 #[must_use]
 pub fn format_text(value: &Value) -> String {
     match value {
         Value::Null => "\n".to_owned(),
-        Value::Bool(bool_value) => format!("{bool_value}\n"),
-        Value::String(string_value) => format!("{string_value}\n"),
-        Value::Number(number) => format!("{number:?}\n"),
+        Value::Bool(flag) => format!("{flag}\n"),
+        Value::String(text) => format!("{text}\n"),
+        Value::Number(number) => format!("{number}\n"),
         Value::Date(date) => format!("{date}\n"),
         Value::List(values) => {
-            let mut output = values
+            let mut lines = values
                 .iter()
                 .map(|item| {
                     match item {
-                        Value::String(string_value) => string_value.clone(),
+                        Value::String(text) => text.clone(),
                         Value::Null
                         | Value::Bool(_)
                         | Value::Number(_)
@@ -44,22 +50,27 @@ pub fn format_text(value: &Value) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            output.push('\n');
-            output
+            lines.push('\n');
+            lines
         },
         Value::Object(_) => format!("{}\n", format_json(value)),
     }
 }
 
+/// renders `value` as JSON, non-finite floats become `null` and dates become
+/// strings
 #[must_use]
 pub fn format_json(value: &Value) -> String {
     match value {
-        Value::Bool(bool_value) => bool_value.to_string(),
-        Value::String(string_value) => format!("\"{}\"", escape_json(string_value)),
+        Value::Null => "null".to_owned(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::String(text) => format!("\"{}\"", escape_json(text)),
         Value::Number(number) => {
             match number {
-                Number::Integer(integer_value) => integer_value.to_string(),
-                Number::Float(float_value) => float_value.to_string(),
+                Number::Integer(integer) => integer.to_string(),
+                // JSON has no NaN or Infinity
+                Number::Float(float) if float.is_finite() => float.to_string(),
+                Number::Float(_) => "null".to_owned(),
             }
         },
         Value::Date(date) => format!("\"{date}\""),
@@ -74,28 +85,31 @@ pub fn format_json(value: &Value) -> String {
                 "{{{}}}",
                 values
                     .iter()
-                    .map(|(key, object_value)| {
-                        format!("\"{}\":{}", escape_json(key), format_json(object_value))
-                    })
+                    .map(|(key, item)| format!("\"{}\":{}", escape_json(key), format_json(item)))
                     .collect::<Vec<_>>()
                     .join(",")
             )
         },
-        Value::Null => "null".to_owned(),
     }
 }
 
+/// escapes `value` for use inside a JSON string literal
 #[must_use]
 pub fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|character| {
-            match character {
+        .flat_map(|ch| {
+            match ch {
                 '"' => "\\\"".chars().collect::<Vec<_>>(),
                 '\\' => "\\\\".chars().collect(),
                 '\n' => "\\n".chars().collect(),
                 '\r' => "\\r".chars().collect(),
                 '\t' => "\\t".chars().collect(),
+                '\u{08}' => "\\b".chars().collect(),
+                '\u{0C}' => "\\f".chars().collect(),
+                control if control.is_control() => {
+                    format!("\\u{:04x}", u32::from(control)).chars().collect()
+                },
                 other => vec![other],
             }
         })
