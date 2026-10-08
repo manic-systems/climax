@@ -2,13 +2,17 @@
 
 use crate::{Number, Value};
 
+/// How a submitted value is written out.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum OutputFormat {
+    /// Plain lines, with strings unquoted.
     #[default]
     Text,
+    /// A single JSON document.
     Json,
 }
 
+/// Render `value` in `output`, ending with a newline.
 #[must_use]
 pub fn format_output(value: &Value, output: OutputFormat) -> String {
     match output {
@@ -17,13 +21,15 @@ pub fn format_output(value: &Value, output: OutputFormat) -> String {
     }
 }
 
+/// Render `value` as plain text, ending with a newline.
+/// A list becomes one line per item and structured values fall back to JSON.
 #[must_use]
 pub fn format_text(value: &Value) -> String {
     match value {
         Value::Null => "\n".to_owned(),
         Value::Bool(value) => format!("{value}\n"),
         Value::String(value) => format!("{value}\n"),
-        Value::Number(number) => format!("{number:?}\n"),
+        Value::Number(number) => format!("{number}\n"),
         Value::Date(date) => format!("{date}\n"),
         Value::List(values) => {
             values
@@ -40,6 +46,7 @@ pub fn format_text(value: &Value) -> String {
     }
 }
 
+/// Render `value` as JSON. Non-finite floats become `null` and dates become strings.
 #[must_use]
 pub fn format_json(value: &Value) -> String {
     match value {
@@ -47,7 +54,9 @@ pub fn format_json(value: &Value) -> String {
         Value::String(value) => format!("\"{}\"", escape_json(value)),
         Value::Number(number) => match number {
             Number::Integer(value) => value.to_string(),
-            Number::Float(value) => value.to_string(),
+            // JSON has no NaN/Infinity; emit null rather than invalid JSON.
+            Number::Float(value) if value.is_finite() => value.to_string(),
+            Number::Float(_) => "null".to_owned(),
         },
         Value::Date(date) => format!("\"{date}\""),
         Value::List(values) => {
@@ -70,6 +79,7 @@ pub fn format_json(value: &Value) -> String {
     }
 }
 
+/// Escape `value` for use inside a JSON string literal.
 #[must_use]
 pub fn escape_json(value: &str) -> String {
     value
@@ -80,6 +90,9 @@ pub fn escape_json(value: &str) -> String {
             '\n' => "\\n".chars().collect(),
             '\r' => "\\r".chars().collect(),
             '\t' => "\\t".chars().collect(),
+            '\u{08}' => "\\b".chars().collect(),
+            '\u{0C}' => "\\f".chars().collect(),
+            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
             value => vec![value],
         })
         .collect()
