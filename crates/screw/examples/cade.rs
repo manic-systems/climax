@@ -1,5 +1,5 @@
 use std::{
-    io,
+    io::{self, IsTerminal as _},
     sync::Arc,
     thread,
     time::Duration,
@@ -113,7 +113,7 @@ fn linger<W>(runtime: &screw::AutoRuntime<W>) -> io::Result<()>
 where
     W: io::Write + Send + 'static,
 {
-    if !screw::stderr_is_terminal() {
+    if !io::stderr().is_terminal() {
         return Ok(());
     }
 

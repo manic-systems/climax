@@ -1,33 +1,22 @@
-use std::io::{self, IsTerminal as _};
+use std::io;
 
-pub const FALLBACK_WIDTH: usize = 80;
+use crate::Viewport;
 
-pub fn stderr_is_terminal() -> bool {
-    io::stderr().is_terminal()
+/// Columns and rows of standard error, with the width falling back to
+/// [`Viewport::FALLBACK`] when it is not a terminal.
+pub(crate) fn stderr_size() -> (usize, Option<usize>) {
+    Viewport::of(&io::stderr()).map_or((Viewport::FALLBACK.columns, None), |size| {
+        (size.columns, Some(size.rows))
+    })
 }
 
-pub fn terminal_width() -> Option<usize> {
-    terminal_width_from_stderr()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-pub fn terminal_width_or_default() -> usize {
-    terminal_width().unwrap_or(FALLBACK_WIDTH)
-}
-
-#[cfg(unix)]
-fn terminal_width_from_stderr() -> Option<usize> {
-    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
-    // SAFETY: ioctl writes a winsize into the valid out pointer when stderr is tty
-    let result = unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
-    if result == 0 {
-        // SAFETY: ioctl returned success, this is init
-        let size = unsafe { size.assume_init() };
-        terminal_width_from_cols(size.ws_col)
-    } else {
-        None
+    #[test]
+    fn measuring_a_non_terminal_fails() {
+        let null = std::fs::File::open("/dev/null").unwrap();
+        assert!(Viewport::of(&null).is_err());
     }
-}
-
-fn terminal_width_from_cols(cols: u16) -> Option<usize> {
-    (cols > 0).then_some(usize::from(cols))
 }
