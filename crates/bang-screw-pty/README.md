@@ -29,7 +29,7 @@ allowed:
 - `bang-terminal -> bang-core`
 - `bang-screw -> bang-core + bang-terminal + screw`
 - `screw-pty -> screw`
-- `bang-screw-pty -> bang-core + bang-terminal + bang-screw + screw + screw-pty`
+- `bang-screw-pty -> bang-core + bang-terminal + bang-screw + screw`
 - `climax -> optional deps on public components`
 
 forbidden:

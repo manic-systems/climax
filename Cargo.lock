@@ -37,7 +37,6 @@ dependencies = [
  "bang-screw",
  "bang-terminal",
  "screw",
- "screw-pty",
 ]
 
 [[package]]
@@ -179,6 +178,7 @@ name = "screw"
 version = "0.0.1"
 dependencies = [
  "rustix",
+ "screw-pty",
  "unicode-segmentation",
  "unicode-width",
 ]
