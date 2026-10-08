@@ -3,7 +3,10 @@ extern crate alloc;
 use alloc::sync::Arc;
 use core::time::Duration;
 use std::{
-    io,
+    io::{
+        self,
+        IsTerminal as _,
+    },
     sync::{
         Mutex,
         PoisonError,
@@ -300,7 +303,7 @@ fn linger<W>(runtime: &screw::AutoRuntime<W>) -> io::Result<()>
 where
     W: io::Write + Send + 'static,
 {
-    if !screw::stderr_is_terminal() {
+    if !io::stderr().is_terminal() {
         return Ok(());
     }
 

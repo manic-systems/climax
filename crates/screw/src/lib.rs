@@ -83,12 +83,6 @@ pub use template::{
     local_template,
     template,
 };
-pub use terminal::{
-    FALLBACK_WIDTH,
-    stderr_is_terminal,
-    terminal_width,
-    terminal_width_or_default,
-};
 pub use viewport::{
     VerticalViewport,
     ViewportReport,
