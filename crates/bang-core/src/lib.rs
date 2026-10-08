@@ -1,34 +1,34 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! widgets for bang.
+//! bang-core: widget state and interaction machinery for bang
+//!
+//! applications should use the `bang` crate instead
+
+#![warn(missing_docs)]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::non_ascii_literal,
+        reason = "terminal glyphs read better as themselves than as escapes"
+    )
+)]
 
 extern crate alloc;
 
-mod action;
 mod event;
 mod ids;
 mod output;
-mod render;
 mod session;
 mod value;
 mod widget;
-pub mod widgets;
 
-pub use action::{
-    ActionBinding,
-    ActionLayer,
-};
 pub use event::{
     Event,
     Key,
     KeyEvent,
     Modifiers,
 };
-pub use ids::{
-    CursorAnchor,
-    ViewId,
-    WidgetId,
-};
+pub use ids::WidgetId;
 pub use output::{
     OutputFormat,
     escape_json,
@@ -36,22 +36,9 @@ pub use output::{
     format_output,
     format_text,
 };
-pub use render::{
-    CalendarDay,
-    CalendarView,
-    CalendarWeek,
-    CursorPlacement,
-    ListRow,
-    ListView,
-    Role,
-    Span,
-    TextInputView,
-    View,
-    ViewContext,
-    plain_snapshot,
-};
 pub use session::{
     Session,
+    SessionReaction,
     SessionStatus,
 };
 pub use value::{
