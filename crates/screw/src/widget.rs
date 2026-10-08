@@ -201,6 +201,103 @@ impl Widget for Text {
     }
 }
 
+/// A run of text with one style or role, meant to be combined in [`Spans`].
+#[derive(Clone, Debug)]
+pub struct Span {
+    text: Text,
+}
+
+impl Span {
+    /// Creates an unstyled span.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            text: Text::new(value),
+        }
+    }
+
+    /// Sets a concrete style, replacing any role.
+    #[must_use]
+    pub fn style(mut self, style: Style) -> Self {
+        self.text = self.text.style(style);
+        self
+    }
+
+    /// Sets a role resolved through the active [`Theme`], replacing any style.
+    #[must_use]
+    pub fn role(mut self, role: Role) -> Self {
+        self.text = self.text.role(role);
+        self
+    }
+}
+
+impl From<Text> for Span {
+    fn from(text: Text) -> Self {
+        Self { text }
+    }
+}
+
+impl From<&str> for Span {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Span {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+/// Several [`Span`]s written one after another, so a line can mix styles
+/// without one widget allocation per span.
+///
+/// Spans are written exactly like [`Text`], so display width, clipping and
+/// wrapping behave the same.
+#[derive(Clone, Debug, Default)]
+pub struct Spans {
+    spans: Vec<Span>,
+}
+
+impl Spans {
+    /// Creates an empty sequence.
+    pub const fn empty() -> Self {
+        Self { spans: Vec::new() }
+    }
+
+    /// Creates a sequence from anything convertible to spans, including
+    /// [`Text`] and plain strings.
+    pub fn new<I>(spans: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Span>,
+    {
+        spans.into_iter().collect()
+    }
+
+    /// Appends one span.
+    #[must_use]
+    pub fn push(mut self, span: impl Into<Span>) -> Self {
+        self.spans.push(span.into());
+        self
+    }
+}
+
+impl<S: Into<Span>> FromIterator<S> for Spans {
+    fn from_iter<I: IntoIterator<Item = S>>(spans: I) -> Self {
+        Self {
+            spans: spans.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl Widget for Spans {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        for span in &self.spans {
+            span.text.render(ctx, out);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Looping {
     frames: Arc<[String]>,
@@ -829,4 +926,70 @@ pub fn combine_tick_interest(interests: impl IntoIterator<Item = TickInterest>) 
         }
     }
     every.map_or(TickInterest::Never, TickInterest::Every)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render_plain;
+
+    #[test]
+    fn spans_render_back_to_back_with_their_own_styles() {
+        let bold = Style::new().bold();
+        let red = Style::new().fg(crate::Color::Red);
+        let spans = Spans::new([
+            Span::new("ab").style(bold),
+            Span::new("cd"),
+            Span::new("ef").style(red),
+        ]);
+        let mut surface = Surface::new();
+        spans.render(&RenderCtx::new(), &mut surface);
+
+        let styles: Vec<Style> = surface.rows()[0]
+            .cells()
+            .iter()
+            .map(|cell| cell.style)
+            .collect();
+        assert_eq!(styles, [bold, bold, Style::new(), Style::new(), red, red]);
+        assert_eq!(surface.plain_text(), "abcdef");
+    }
+
+    #[test]
+    fn roles_resolve_through_the_context_theme() {
+        let theme = Theme::DEFAULT.with(Role::Error, Style::new().underline());
+        let spans = Spans::new([Span::new("bad").role(Role::Error)]);
+        let mut surface = Surface::new();
+        spans.render(&RenderCtx::new().with_theme(theme), &mut surface);
+        assert_eq!(surface.rows()[0].cells()[0].style, Style::new().underline());
+    }
+
+    #[test]
+    fn text_and_strings_convert_into_spans() {
+        let spans = Spans::new(["a"]).push(String::from("b")).push(Text::new("c").role(Role::Dim));
+        assert_eq!(render_plain(&spans), "abc");
+        assert_eq!(render_plain(&Spans::empty()), "");
+        let from_text: Spans = [Text::new("x"), Text::new("y")].into_iter().collect();
+        assert_eq!(render_plain(&from_text), "xy");
+    }
+
+    #[test]
+    fn spans_wrap_and_clip_like_the_equivalent_text() {
+        let spans = Spans::new([Span::new("ab").style(Style::new().bold()), Span::new("世界cd")]);
+        let text = Text::new("ab世界cd");
+
+        let laid_out = |widget: &dyn Widget, width, mode| {
+            let mut surface = Surface::new();
+            widget.render(&RenderCtx::new(), &mut surface);
+            layout_surface(surface, Some(width), mode).plain_text()
+        };
+        for mode in [LayoutMode::Wrap, LayoutMode::Clip] {
+            for width in [3, 4, 5] {
+                assert_eq!(
+                    laid_out(&spans, width, mode),
+                    laid_out(&text, width, mode),
+                    "{mode:?} at {width}"
+                );
+            }
+        }
+    }
 }
