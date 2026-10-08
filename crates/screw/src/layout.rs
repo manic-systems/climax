@@ -63,14 +63,7 @@ mod tests {
 
     fn render_cursor(widget: &impl crate::Widget) -> Option<crate::Position> {
         let mut surface = Surface::new();
-        widget.render(
-            &RenderCtx {
-                frame: 0,
-                width: None,
-                theme: crate::Theme::default(),
-            },
-            &mut surface,
-        );
+        widget.render(&RenderCtx::new(), &mut surface);
         surface.cursor()
     }
 

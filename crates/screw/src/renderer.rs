@@ -92,11 +92,10 @@ where
     {
         let mut next = Surface::new();
         widget.render(
-            &RenderCtx {
-                frame: self.frame,
-                width: self.width,
-                theme: self.theme,
-            },
+            &RenderCtx::new()
+                .with_frame(self.frame)
+                .with_columns(self.width)
+                .with_theme(self.theme),
             &mut next,
         );
         self.frame = self.frame.wrapping_add(1);

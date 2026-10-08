@@ -4,9 +4,14 @@ use std::{
         VecDeque,
     },
     hash::Hash,
+    rc::Rc,
     sync::{
         Arc,
         Mutex,
+        atomic::{
+            AtomicU32,
+            Ordering,
+        },
     },
     time::Duration,
 };
@@ -19,6 +24,7 @@ use crate::{
     Surface,
     Theme,
 };
+use crate::sync::lock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
@@ -29,12 +35,58 @@ pub enum TickInterest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
-    pub frame: u64,
-    pub width: Option<usize>,
-    pub theme: Theme,
+    frame: u64,
+    columns: Option<usize>,
+    theme: Theme,
 }
 
-pub trait Widget: Send + Sync {
+impl RenderCtx {
+    pub const fn new() -> Self {
+        Self {
+            frame: 0,
+            columns: None,
+            theme: Theme::DEFAULT,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_frame(mut self, frame: u64) -> Self {
+        self.frame = frame;
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn with_columns(mut self, columns: Option<usize>) -> Self {
+        self.columns = columns;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    pub const fn frame(self) -> u64 {
+        self.frame
+    }
+
+    pub const fn available_columns(self) -> Option<usize> {
+        self.columns
+    }
+
+    pub const fn theme(self) -> Theme {
+        self.theme
+    }
+}
+
+impl Default for RenderCtx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub trait Widget {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface);
 
     fn tick_interest(&self) -> TickInterest {
@@ -42,13 +94,22 @@ pub trait Widget: Send + Sync {
     }
 }
 
-pub type WidgetRef = Arc<dyn Widget>;
+pub type WidgetRef = Arc<dyn Widget + Send + Sync>;
+
+pub type LocalWidgetRef<'a> = Rc<dyn Widget + 'a>;
 
 pub fn widget<W>(widget: W) -> WidgetRef
 where
-    W: Widget + 'static,
+    W: Widget + Send + Sync + 'static,
 {
     Arc::new(widget)
+}
+
+pub fn local_widget<'a, W>(widget: W) -> LocalWidgetRef<'a>
+where
+    W: Widget + 'a,
+{
+    Rc::new(widget)
 }
 
 #[derive(Clone, Debug)]
@@ -88,7 +149,7 @@ impl Widget for Text {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let style = match self.style {
             TextStyle::Concrete(style) => style,
-            TextStyle::Role(role) => ctx.theme.style(role),
+            TextStyle::Role(role) => ctx.theme().style(role),
         };
         out.write(&self.value, style);
     }
@@ -121,7 +182,7 @@ impl Widget for Looping {
             return;
         }
         let frame_count = u64::try_from(self.frames.len()).unwrap_or(u64::MAX);
-        let index = usize::try_from(ctx.frame % frame_count).unwrap_or(0);
+        let index = usize::try_from(ctx.frame() % frame_count).unwrap_or(0);
         out.write(&self.frames[index], self.style);
     }
 
@@ -153,23 +214,19 @@ impl WindowedLines {
     }
 
     pub fn push(&self, line: impl Into<String>) {
-        let mut lines = self.lines.lock().expect("windowed lines mutex poisoned");
         if self.capacity == 0 {
             return;
         }
+        let line = line.into();
+        let mut lines = lock(&self.lines);
         if lines.len() == self.capacity {
             lines.pop_front();
         }
-        lines.push_back(line.into());
+        lines.push_back(line);
     }
 
     pub fn lines(&self) -> Vec<String> {
-        self.lines
-            .lock()
-            .expect("windowed lines mutex poisoned")
-            .iter()
-            .cloned()
-            .collect()
+        lock(&self.lines).iter().cloned().collect()
     }
 }
 
@@ -252,7 +309,7 @@ impl Widget for List {
             } else {
                 self.normal
             };
-            out.write(&self.rows[row_index], ctx.theme.style(role));
+            out.write(&self.rows[row_index], ctx.theme().style(role));
         }
     }
 }
@@ -316,7 +373,7 @@ impl Widget for Grid {
                         out.write(" ", Style::default());
                     }
                 }
-                out.write(&cell.text, ctx.theme.style(cell.role));
+                out.write(&cell.text, ctx.theme().style(cell.role));
             }
         }
     }
@@ -324,7 +381,7 @@ impl Widget for Grid {
 
 #[derive(Clone, Debug)]
 pub struct ProgressBar {
-    fraction: Arc<Mutex<f32>>,
+    fraction: Arc<AtomicU32>,
     width:    usize,
     filled:   Style,
     empty:    Style,
@@ -333,7 +390,7 @@ pub struct ProgressBar {
 impl ProgressBar {
     pub fn new(width: usize) -> Self {
         Self {
-            fraction: Arc::new(Mutex::new(0.0)),
+            fraction: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             width,
             filled: Style::default(),
             empty: Style::default(),
@@ -348,11 +405,12 @@ impl ProgressBar {
     }
 
     pub fn set_fraction(&self, fraction: f32) {
-        *self.fraction.lock().expect("progress bar mutex poisoned") = fraction.clamp(0.0, 1.0);
+        self.fraction
+            .store(fraction.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn fraction(&self) -> f32 {
-        *self.fraction.lock().expect("progress bar mutex poisoned")
+        f32::from_bits(self.fraction.load(Ordering::Relaxed))
     }
 }
 
@@ -439,7 +497,7 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        out.write(&self.prompt, ctx.theme.style(self.prompt_role));
+        out.write(&self.prompt, ctx.theme().style(self.prompt_role));
         let prompt_width = out.current_col();
         let cursor = self.cursor.min(self.value.chars().count());
         let value_cursor_width: usize = self
@@ -448,7 +506,7 @@ impl Widget for TextInput {
             .take(cursor)
             .map(|ch| ch.width().unwrap_or(0))
             .sum();
-        out.write(&self.value, ctx.theme.style(self.value_role));
+        out.write(&self.value, ctx.theme().style(self.value_role));
         out.set_cursor(crate::Position {
             row: out.height().saturating_sub(1),
             col: prompt_width + value_cursor_width,
@@ -510,7 +568,7 @@ impl Widget for Stack {
 }
 
 pub struct Stateful<S> {
-    state: Arc<Mutex<S>>,
+    state: Mutex<S>,
     cases: HashMap<S, WidgetRef>,
 }
 
@@ -520,7 +578,7 @@ where
 {
     pub fn new(initial: S) -> Self {
         Self {
-            state: Arc::new(Mutex::new(initial)),
+            state: Mutex::new(initial),
             cases: HashMap::new(),
         }
     }
@@ -532,14 +590,11 @@ where
     }
 
     pub fn set_state(&self, state: S) {
-        *self.state.lock().expect("stateful widget mutex poisoned") = state;
+        *lock(&self.state) = state;
     }
 
     pub fn state(&self) -> S {
-        self.state
-            .lock()
-            .expect("stateful widget mutex poisoned")
-            .clone()
+        lock(&self.state).clone()
     }
 }
 

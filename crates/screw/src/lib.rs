@@ -6,6 +6,7 @@ mod renderer;
 mod runtime;
 mod style;
 mod surface;
+mod sync;
 mod template;
 mod terminal;
 mod widget;
@@ -23,8 +24,8 @@ pub use surface::{Cell, Position, Row, RowBreak, Surface};
 pub use template::{TemplateError, template};
 pub use terminal::{FALLBACK_WIDTH, stderr_is_terminal, terminal_width, terminal_width_or_default};
 pub use widget::{
-    Grid, GridCell, InputAnchor, Line, List, Looping, ProgressBar, RenderCtx, Stack, Stateful,
-    Text, TextInput, TickInterest, Widget, WidgetRef, WindowedLines, widget,
+    Grid, GridCell, InputAnchor, Line, List, LocalWidgetRef, Looping, ProgressBar, RenderCtx, Stack,
+    Stateful, Text, TextInput, TickInterest, Widget, WidgetRef, WindowedLines, local_widget, widget,
 };
 
 #[macro_export]
