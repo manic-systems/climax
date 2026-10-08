@@ -121,6 +121,12 @@ impl Surface {
         self.cursor = Some(position);
     }
 
+    /// Removes any cursor a widget placed, so a child that does not own input can be rendered
+    /// without claiming the terminal cursor.
+    pub const fn clear_cursor(&mut self) {
+        self.cursor = None;
+    }
+
     pub fn set_cursor_here(&mut self) {
         self.cursor = Some(Position {
             row: self.rows.len().saturating_sub(1),

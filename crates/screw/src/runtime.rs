@@ -19,6 +19,7 @@ use std::{
 };
 
 use crate::{
+    CursorVisibility,
     LayoutMode,
     RenderCtx,
     RenderStats,
@@ -73,6 +74,12 @@ where
     #[must_use]
     pub fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.renderer = self.renderer.layout_mode(mode);
+        self
+    }
+
+    #[must_use]
+    pub fn cursor_visibility(mut self, visibility: CursorVisibility) -> Self {
+        self.renderer = self.renderer.cursor_visibility(visibility);
         self
     }
 
@@ -187,6 +194,7 @@ pub struct AutoRuntimeBuilder<W> {
     fps:          u16,
     width:        Option<usize>,
     layout_mode:  LayoutMode,
+    cursor_visibility: CursorVisibility,
     theme:        Theme,
     final_widget: Option<WidgetRef>,
 }
@@ -203,6 +211,7 @@ where
             fps: DEFAULT_FPS,
             width: None,
             layout_mode: LayoutMode::Clip,
+            cursor_visibility: CursorVisibility::Preserve,
             theme: Theme::default(),
             final_widget: None,
         }
@@ -227,6 +236,12 @@ where
     }
 
     #[must_use]
+    pub const fn cursor_visibility(mut self, visibility: CursorVisibility) -> Self {
+        self.cursor_visibility = visibility;
+        self
+    }
+
+    #[must_use]
     pub const fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
@@ -245,6 +260,7 @@ where
                 runtime = runtime.width(width);
             }
             runtime = runtime.layout_mode(self.layout_mode);
+            runtime = runtime.cursor_visibility(self.cursor_visibility);
             runtime = runtime.theme(self.theme);
             if let Some(final_widget) = self.final_widget {
                 runtime = runtime.final_widget(final_widget);
