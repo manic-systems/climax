@@ -10,8 +10,6 @@ use std::{
 
 use screw::{
     Color,
-    Grid,
-    GridCell,
     Line,
     List,
     Looping,
@@ -19,10 +17,12 @@ use screw::{
     RenderCtx,
     Role,
     Runtime,
+    Span,
     Stack,
     Stateful,
     Style,
     Surface,
+    Table,
     Text,
     TextInput,
     Widget,
@@ -105,13 +105,13 @@ impl Widget for Calendar {
                             Role::Normal
                         }
                     });
-                    GridCell::new(day).role(role)
+                    Span::new(day).role(role)
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
-        Grid::new(rows).gap(2).render(ctx, out);
+        Table::new(rows).gap(2).render(ctx, out);
     }
 }
 

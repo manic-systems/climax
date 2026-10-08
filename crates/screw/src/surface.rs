@@ -178,7 +178,7 @@ impl Surface {
                         self.current_row_mut().cells.push(space(style));
                     }
                 },
-                Segment::Cluster { text, width } => {
+                Segment::Cluster { text, width, .. } => {
                     let joined = (first || width == 0)
                         && self
                             .current_row_mut()

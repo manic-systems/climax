@@ -32,9 +32,9 @@ pub use template::{TemplateError, local_template, template};
 pub use terminal::{FALLBACK_WIDTH, stderr_is_terminal, terminal_width, terminal_width_or_default};
 pub use viewport::{VerticalViewport, ViewportReport, ViewportReportHandle};
 pub use widget::{
-    Grid, GridCell, InputAnchor, Line, List, LocalWidgetRef, Looping, ProgressBar, RenderCtx, Span,
-    Spans, Stack, Stateful, Text, TextInput, TickInterest, VerticalSize, Widget, WidgetRef,
-    WindowedLines, local_widget, widget,
+    CellOverflow, InputAnchor, Line, List, LocalWidgetRef, Looping, ProgressBar, RenderCtx,
+    Span, Spans, Stack, Stateful, Table, Text, TextInput, TickInterest, VerticalSize, Widget,
+    WidgetRef, WindowedLines, combine_tick_interest, local_widget, widget,
 };
 
 #[macro_export]

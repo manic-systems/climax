@@ -17,8 +17,12 @@ use std::{
 };
 
 use crate::{
-    LayoutMode, Role, Style, Surface, Theme, Viewport, renderer::layout_surface,
-    surface::append_surface, sync::lock,
+    Align, LayoutMode, Role, Style, Surface, Theme, Viewport,
+    measure::{drop_leading_zero_width, expand_tabs, first_segment_end, split_padding},
+    renderer::layout_surface,
+    surface::append_surface,
+    sync::lock,
+    truncate, width,
 };
 
 /// A widget's vertical allocation behavior inside a [`Stack`].
@@ -455,66 +459,233 @@ impl Widget for List {
     }
 }
 
+/// Rows of [`Span`] cells laid out in columns of a common display width.
+///
+/// Each column is as wide as its widest cell, measured with [`width`], and
+/// cells are aligned within it. A cell containing newlines spans several rows.
+/// When the columns do not fit the available width, the flexible columns
+/// shrink, widest first, and their cells overflow as [`CellOverflow`] says. A column never
+/// shrinks below one column, so a table with more columns than the width allows is clipped by the
+/// renderer, and a cluster wider than its column becomes an ellipsis. The final cell of a row is
+/// never padded on its trailing side. A table that follows other content on a row fits itself to
+/// the columns left and indents its continuation rows to where it started. Zero-width content at
+/// the start of a cell is dropped so it cannot widen the previous cell.
 #[derive(Clone, Debug)]
-pub struct Grid {
-    rows: Arc<[Arc<[GridCell]>]>,
-    gap:  usize,
+pub struct Table {
+    header: Option<Vec<String>>,
+    header_style: Style,
+    rows: Vec<Vec<Span>>,
+    aligns: Vec<Align>,
+    gap: usize,
+    flexible: Option<Vec<usize>>,
+    overflow: CellOverflow,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GridCell {
-    text: String,
-    role: Role,
+/// What a [`Table`] does with a cell wider than its shrunk column.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum CellOverflow {
+    /// Cut the cell and end it with an ellipsis.
+    #[default]
+    Truncate,
+    /// Continue the cell on the following rows of its column.
+    Wrap,
 }
 
-impl Grid {
-    pub fn new(rows: impl Into<Vec<Vec<GridCell>>>) -> Self {
+impl Table {
+    /// Creates a table from rows of cells, where a cell is anything that
+    /// converts into a [`Span`].
+    pub fn new<R, C>(rows: R) -> Self
+    where
+        R: IntoIterator,
+        R::Item: IntoIterator<Item = C>,
+        C: Into<Span>,
+    {
         Self {
+            header: None,
+            header_style: Style::new().bold(),
             rows: rows
-                .into()
                 .into_iter()
-                .map(|row| Arc::from(row.into_boxed_slice()))
-                .collect::<Vec<_>>()
-                .into(),
-            gap:  1,
+                .map(|row| row.into_iter().map(Into::into).collect())
+                .collect(),
+            aligns: Vec::new(),
+            gap: 1,
+            flexible: None,
+            overflow: CellOverflow::Truncate,
         }
     }
 
+    /// Adds a header row drawn above the others with the header style.
+    #[must_use]
+    pub fn header<I>(mut self, cells: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        self.header = Some(cells.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Sets the style of the header row, which is bold by default.
+    #[must_use]
+    pub const fn header_style(mut self, style: Style) -> Self {
+        self.header_style = style;
+        self
+    }
+
+    /// Sets the alignment of each column in order, leaving later columns
+    /// left-aligned.
+    #[must_use]
+    pub fn aligns(mut self, aligns: impl IntoIterator<Item = Align>) -> Self {
+        self.aligns = aligns.into_iter().collect();
+        self
+    }
+
+    /// Sets the number of spaces between columns, which is one by default.
     #[must_use]
     pub const fn gap(mut self, gap: usize) -> Self {
         self.gap = gap;
         self
     }
-}
 
-impl GridCell {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            role: Role::Normal,
+    /// Limits shrinking to these columns when the table is too wide, instead
+    /// of every column.
+    #[must_use]
+    pub fn flexible(mut self, columns: impl IntoIterator<Item = usize>) -> Self {
+        self.flexible = Some(columns.into_iter().collect());
+        self
+    }
+
+    /// Sets how a cell wider than its shrunk column overflows.
+    #[must_use]
+    pub const fn overflow(mut self, overflow: CellOverflow) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    fn fit(&self, widths: &mut [usize], available: usize) {
+        let gaps = self.gap * widths.len().saturating_sub(1);
+        let mut excess = (widths.iter().sum::<usize>() + gaps).saturating_sub(available);
+        while excess > 0 {
+            let widest = (0..widths.len())
+                .filter(|column| self.flexible.as_ref().is_none_or(|flexible| flexible.contains(column)))
+                .filter(|&column| widths[column] > 1)
+                .max_by_key(|&column| widths[column]);
+            let Some(column) = widest else {
+                return;
+            };
+            widths[column] -= 1;
+            excess -= 1;
         }
     }
 
-    #[must_use]
-    pub const fn role(mut self, role: Role) -> Self {
-        self.role = role;
-        self
+    fn cell_lines(&self, value: &str, columns: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        for line in value.split('\n') {
+            let line = expand_tabs(line);
+            let line = drop_leading_zero_width(&line);
+            if width(line) <= columns {
+                lines.push(line.to_owned());
+                continue;
+            }
+            match self.overflow {
+                CellOverflow::Truncate => {
+                    lines.push(format!("{}…", truncate(line, columns.saturating_sub(1))));
+                },
+                CellOverflow::Wrap => {
+                    let mut rest = line;
+                    while !rest.is_empty() {
+                        let head = truncate(rest, columns);
+                        if head.is_empty() {
+                            lines.push(if columns > 0 { "…" } else { "" }.to_owned());
+                            rest = &rest[first_segment_end(rest)..];
+                        } else {
+                            lines.push(head.to_owned());
+                            rest = &rest[head.len()..];
+                        }
+                    }
+                },
+            }
+        }
+        lines
     }
 }
 
-impl Widget for Grid {
+impl Widget for Table {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        for (row_index, row) in self.rows.iter().enumerate() {
-            if row_index > 0 {
-                out.newline();
-            }
-            for (cell_index, cell) in row.iter().enumerate() {
-                if cell_index > 0 {
-                    for _ in 0..self.gap {
-                        out.write(" ", Style::default());
+        let header: Option<Vec<Span>> = self.header.as_ref().map(|cells| {
+            cells
+                .iter()
+                .map(|cell| Span::new(cell.as_str()).style(self.header_style))
+                .collect()
+        });
+        let lines: Vec<&[Span]> = header
+            .iter()
+            .chain(&self.rows)
+            .map(Vec::as_slice)
+            .collect();
+
+        let columns = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .rposition(|cell| !cell.text.value.is_empty())
+                    .map_or(0, |last| last + 1)
+            })
+            .max()
+            .unwrap_or(0);
+        let mut widths: Vec<usize> = (0..columns)
+            .map(|column| {
+                lines
+                    .iter()
+                    .filter_map(|line| line.get(column))
+                    .flat_map(|cell| cell.text.value.split('\n'))
+                    .map(|line| width(&expand_tabs(line)))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let start = out.current_col();
+        if let Some(available) = ctx.available_columns() {
+            self.fit(&mut widths, available.saturating_sub(start));
+        }
+
+        let mut first = true;
+        for line in &lines {
+            let cells: Vec<Vec<String>> = line
+                .iter()
+                .enumerate()
+                .take(columns)
+                .map(|(column, cell)| self.cell_lines(&cell.text.value, widths[column]))
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(0).max(1);
+            for row in 0..height {
+                if !first {
+                    out.newline();
+                    out.write(" ".repeat(start), Style::new());
+                }
+                first = false;
+                let filled = cells
+                    .iter()
+                    .rposition(|cell| cell.get(row).is_some_and(|text| !text.is_empty()))
+                    .map_or(0, |column| column + 1);
+                for (column, cell) in line.iter().enumerate().take(filled) {
+                    if column > 0 {
+                        out.write(" ".repeat(self.gap), Style::new());
+                    }
+                    let text = cells[column].get(row).map_or("", String::as_str);
+                    let missing = widths[column].saturating_sub(width(text));
+                    let align = self.aligns.get(column).copied().unwrap_or_default();
+                    let (before, after) = split_padding(missing, align);
+                    out.write(" ".repeat(before), Style::new());
+                    Text {
+                        value: text.to_owned(),
+                        style: cell.text.style,
+                    }
+                    .render(ctx, out);
+                    if column + 1 < filled {
+                        out.write(" ".repeat(after), Style::new());
                     }
                 }
-                out.write(&cell.text, ctx.theme().style(cell.role));
             }
         }
     }
@@ -965,6 +1136,160 @@ mod tests {
         let mut surface = Surface::new();
         spans.render(&RenderCtx::new().with_theme(theme), &mut surface);
         assert_eq!(surface.rows()[0].cells()[0].style, Style::new().underline());
+    }
+
+    #[test]
+    fn table_pads_columns_to_a_common_display_width() {
+        let table = Table::new([["name", "qty"], ["apple", "3"], ["fig", "12"]])
+            .header(["item", "count"])
+            .aligns([Align::Left, Align::Right])
+            .gap(2);
+        assert_eq!(
+            render_plain(&table),
+            "item   count\nname     qty\napple      3\nfig       12"
+        );
+    }
+
+    #[test]
+    fn table_measures_wide_cells_by_display_width() {
+        let table = Table::new([["世界", "a"], ["ab", "b"]]).aligns([Align::Right]);
+        assert_eq!(render_plain(&table), "世界 a\n  ab b");
+
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.row_width(0), surface.row_width(1));
+    }
+
+    #[test]
+    fn table_styles_the_header_and_leaves_no_trailing_padding() {
+        let table = Table::new([["a", "bb"]]).header(["xxx", "y"]).header_style(Style::new().underline());
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.plain_text(), "xxx y\na   bb");
+        assert_eq!(surface.rows()[0].cells()[0].style, Style::new().underline());
+        assert_eq!(surface.rows()[1].cells()[0].style, Style::new());
+    }
+
+    #[test]
+    fn table_centres_cells_and_tolerates_ragged_rows() {
+        let table = Table::new([vec!["ab", "x"], vec!["abcde"]]).aligns([Align::Center]);
+        assert_eq!(render_plain(&table), " ab   x\nabcde");
+        assert_eq!(render_plain(&Table::new(Vec::<Vec<Span>>::new())), "");
+    }
+
+    fn render_within(table: &Table, columns: usize) -> String {
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new().with_constraints(Some(columns), None), &mut surface);
+        surface.plain_text()
+    }
+
+    #[test]
+    fn table_spans_rows_for_multiline_cells() {
+        let table = Table::new([["a\nbb", "x"], ["c", "y\nz"]]);
+        assert_eq!(render_plain(&table), "a  x\nbb\nc  y\n   z");
+    }
+
+    #[test]
+    fn table_shrinks_the_widest_column_to_fit() {
+        let table = Table::new([["abcdefgh", "xy"]]);
+        assert_eq!(render_within(&table, 8), "abcd… xy");
+        assert_eq!(render_within(&table, 20), "abcdefgh xy");
+
+        let wrapped = table.overflow(CellOverflow::Wrap);
+        assert_eq!(render_within(&wrapped, 8), "abcde xy\nfgh");
+    }
+
+    #[test]
+    fn table_shrinks_only_flexible_columns() {
+        let table = Table::new([["abcdef", "ghijkl"]]).flexible([1]);
+        assert_eq!(render_within(&table, 10), "abcdef gh…");
+    }
+
+    fn row_widths(surface: &Surface) -> Vec<usize> {
+        (0..surface.height()).map(|row| surface.row_width(row)).collect()
+    }
+
+    #[test]
+    fn table_wrap_replaces_a_cluster_wider_than_its_column() {
+        let table = Table::new([["世界世界", "x"], ["ab", "y"]])
+            .overflow(CellOverflow::Wrap)
+            .flexible([0]);
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new().with_constraints(Some(3), None), &mut surface);
+        assert_eq!(surface.plain_text(), "… x\n…\n…\n…\na y\nb");
+        assert!(row_widths(&surface).iter().all(|&columns| columns <= 3));
+    }
+
+    #[test]
+    fn table_cell_starting_with_zero_width_content_does_not_widen_the_previous_cell() {
+        let table = Table::new([["❤", "\u{fe0f}", "B"]]).gap(0);
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new().with_constraints(Some(2), None), &mut surface);
+        assert_eq!(surface.plain_text(), "❤B");
+        assert_eq!(surface.display_width(), 2);
+    }
+
+    #[test]
+    fn table_wrap_ignores_a_dropped_control_before_a_wide_cluster() {
+        let table = Table::new([["\u{1b}世世", "x"]])
+            .overflow(CellOverflow::Wrap)
+            .flexible([0]);
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new().with_constraints(Some(3), None), &mut surface);
+        assert_eq!(surface.plain_text(), "… x\n…");
+    }
+
+    #[test]
+    fn text_input_cursor_follows_tab_stops_from_the_prompt() {
+        let mut surface = Surface::new();
+        TextInput::new("> ", "a\tb").cursor(2).render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 8 }));
+    }
+
+    #[test]
+    fn text_input_cursor_inside_a_cluster_moves_past_it() {
+        let mut surface = Surface::new();
+        TextInput::new("", "\u{2764}\u{fe0f}x")
+            .cursor(1)
+            .render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 2 }));
+        assert_eq!(surface.plain_text(), "\u{2764}\u{fe0f}x");
+    }
+
+    #[test]
+    fn table_keeps_emitted_rows_within_the_fitted_widths_for_clusters() {
+        for overflow in [CellOverflow::Truncate, CellOverflow::Wrap] {
+            let table = Table::new([
+                ["\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}", "👩\u{200d}💻👩\u{200d}💻"],
+                ["a\tb", "🇯🇵🇺🇸"],
+            ])
+            .overflow(overflow);
+            for available in 2..14 {
+                let mut surface = Surface::new();
+                table.render(&RenderCtx::new().with_constraints(Some(available), None), &mut surface);
+                let widest = row_widths(&surface).into_iter().max().unwrap_or(0);
+                assert!(widest <= available.max(3), "{overflow:?} {available} {widest}");
+            }
+        }
+    }
+
+    #[test]
+    fn table_ignores_trailing_columns_that_are_empty_in_every_row() {
+        let table = Table::new([["long", ""]]);
+        assert_eq!(render_within(&table, 4), "long");
+    }
+
+    #[test]
+    fn table_honours_the_column_it_starts_at() {
+        let table = Table::new([["a\nb", "c"]]);
+        let line = Line::new(vec![widget("pre: "), widget(table)]);
+        assert_eq!(render_plain(&line), "pre: a c\n     b");
+
+        let mut surface = Surface::new();
+        let wide = Table::new([["abcdefgh", "xy"]]);
+        surface.write("pre: ", Style::new());
+        wide.render(&RenderCtx::new().with_constraints(Some(13), None), &mut surface);
+        assert_eq!(surface.plain_text(), "pre: abcd… xy");
     }
 
     #[test]
