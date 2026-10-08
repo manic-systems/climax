@@ -7,7 +7,7 @@ use screw::{
     Widget as ScrewWidget, local_widget,
 };
 
-use crate::{KeyEvent, Reaction};
+use crate::{KeyEvent, Modifiers, Reaction};
 
 pub(super) const DEFAULT_PAGE_SIZE: usize = 9;
 
@@ -34,6 +34,10 @@ pub(super) fn visible_delta(value: usize) -> isize {
 
 pub(super) const fn no_modifiers(key: &KeyEvent) -> bool {
     key.modifiers.bits() == 0
+}
+
+pub(super) const fn only_control(key: &KeyEvent) -> bool {
+    key.modifiers.bits() == Modifiers::CONTROL.bits()
 }
 
 /// Land a page key on `target`, moving both the scroll offset and the
