@@ -21,6 +21,8 @@ mod output;
 mod session;
 mod value;
 mod widget;
+/// the built-in widgets
+pub mod widgets;
 
 pub use event::{
     Event,
