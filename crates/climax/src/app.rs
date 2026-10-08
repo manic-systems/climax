@@ -4,6 +4,8 @@ use std::io::Write;
 #[cfg(feature = "interactive")]
 use bang_core::Value;
 
+use std::marker::PhantomData;
+
 use crate::Result;
 
 #[cfg(feature = "parse")]
@@ -22,11 +24,26 @@ where
     f(Context::new(), command)
 }
 
-#[derive(Clone, Debug)]
+/// Application policy and access to the composed command-line facilities.
+///
+/// Not cloneable, because interaction and terminal policy must share one owner.
+/// `Context` is not `Send`, in every feature configuration, and stays on the
+/// thread that built it.
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// assert_send::<climax::Context>();
+/// ```
+#[derive(Debug)]
 pub struct Context {
     terminal: crate::terminal::TerminalPolicy,
     #[cfg(feature = "interactive")]
+    interaction: bang::Interaction,
+    #[cfg(feature = "interactive")]
+    custom_interaction: bool,
+    #[cfg(feature = "interactive")]
     output_format: crate::output::Format,
+    _not_send: PhantomData<std::rc::Rc<()>>,
 }
 
 impl Default for Context {
@@ -38,17 +55,75 @@ impl Default for Context {
 impl Context {
     #[must_use]
     pub fn new() -> Self {
+        let terminal = crate::terminal::TerminalPolicy::process();
         Self {
-            terminal: crate::terminal::TerminalPolicy::process(),
+            terminal,
+            #[cfg(feature = "interactive")]
+            interaction: interaction_for(terminal),
+            #[cfg(feature = "interactive")]
+            custom_interaction: false,
             #[cfg(feature = "interactive")]
             output_format: crate::output::Format::Text,
+            _not_send: PhantomData,
         }
     }
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn prompt(&self) -> PromptContext {
-        PromptContext
+    pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
+        bang::select(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
+        bang::multi_select(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
+        bang::search(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
+        bang::review(header).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
+        bang::text(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
+        bang::password(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
+        bang::confirm(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
+        bang::date(prompt).interaction(self.prompt_interaction())
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
+    where
+        T: std::str::FromStr + 'static,
+        T::Err: std::fmt::Display,
+    {
+        bang::number(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "render")]
@@ -92,32 +167,54 @@ impl Context {
     pub const fn interaction_available(&self) -> bool {
         self.terminal.interaction_available()
     }
+
+    #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
+    pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
+        self.terminal.set_interaction_mode(mode);
+        #[cfg(feature = "interactive")]
+        {
+            self.interaction = interaction_for(self.terminal);
+            self.custom_interaction = false;
+        }
+    }
+
+    #[cfg(feature = "interactive")]
+    pub fn set_interaction(&mut self, interaction: bang::Interaction) {
+        self.terminal
+            .set_interaction_mode(crate::terminal::InteractionMode::Force);
+        self.interaction = interaction;
+        self.custom_interaction = true;
+    }
+
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
+        self.set_interaction(interaction);
+        self
+    }
+
+    #[must_use]
+    pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
+        self.set_interaction_mode(mode);
+        self
+    }
+
+    #[cfg(feature = "interactive")]
+    fn prompt_interaction(&self) -> bang::Interaction {
+        self.interaction.clone()
+    }
 }
 
 #[cfg(feature = "interactive")]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PromptContext;
-
-#[cfg(feature = "interactive")]
-impl PromptContext {
-    #[must_use]
-    pub fn select(self, id: impl Into<String>) -> crate::prompt::SelectPrompt {
-        crate::prompt::select(id)
-    }
-
-    #[must_use]
-    pub fn multi_select(self, id: impl Into<String>) -> crate::prompt::MultiSelectPrompt {
-        crate::prompt::multi_select(id)
-    }
-
-    #[must_use]
-    pub fn search(self, id: impl Into<String>) -> crate::prompt::SearchPrompt {
-        crate::prompt::search(id)
-    }
-
-    #[must_use]
-    pub fn text(self, prompt: impl Into<String>) -> crate::prompt::TextPrompt {
-        crate::prompt::text(prompt)
+fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interaction {
+    match terminal.interaction_mode() {
+        crate::terminal::InteractionMode::Auto if terminal.interaction_available() => {
+            bang::Interaction::live()
+        },
+        crate::terminal::InteractionMode::Auto | crate::terminal::InteractionMode::Disabled => {
+            bang::Interaction::disabled()
+        },
+        crate::terminal::InteractionMode::Force => bang::Interaction::forced(),
     }
 }
 

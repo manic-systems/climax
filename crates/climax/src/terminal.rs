@@ -132,4 +132,8 @@ impl TerminalPolicy {
             status => status,
         }
     }
+
+    pub(crate) const fn set_interaction_mode(&mut self, interaction: InteractionMode) {
+        self.interaction = interaction;
+    }
 }
