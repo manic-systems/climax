@@ -1,8 +1,17 @@
 # screw
 
-screw is a differential terminal renderer.
+differential terminal renderer, a tree of widgets drawn by writing only what changed since the
+previous frame
 
-it retains your previous output and diffs it against your new output to produce
-the minimum required control sequence to render it into your terminal.
+```rust,no_run
+use screw::{Runtime, Text, widget};
 
-it is a work in progress.
+fn main() -> std::io::Result<()> {
+    let runtime = Runtime::stderr(widget(Text::new("working"))).start();
+    runtime.mark_dirty()?;
+    runtime.finish()?;
+    Ok(())
+}
+```
+
+EUPL-1.2

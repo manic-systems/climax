@@ -26,15 +26,21 @@ use crate::{
     widget::combine_tick_interest,
 };
 
+/// a set of edges of a canvas, combined with `|`
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Edge(u8);
 
 impl Edge {
+    /// the top edge
     pub const TOP: Self = Self(1 << 0);
+    /// the right edge
     pub const RIGHT: Self = Self(1 << 1);
+    /// the bottom edge
     pub const BOTTOM: Self = Self(1 << 2);
+    /// the left edge
     pub const LEFT: Self = Self(1 << 3);
 
+    /// whether every edge in `edge` is also in this set
     pub const fn contains(self, edge: Self) -> bool {
         self.0 & edge.0 == edge.0
     }
@@ -54,6 +60,7 @@ impl BitOrAssign for Edge {
     }
 }
 
+/// placement and compositing policy for one floating child of [`Layers`]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Floating {
     edges:    Edge,
@@ -64,6 +71,8 @@ pub struct Floating {
 }
 
 impl Floating {
+    /// anchors the child to `edges`, opposite edges stretch it and none centres
+    /// it
     pub const fn new(edges: Edge) -> Self {
         Self {
             edges,
@@ -74,24 +83,28 @@ impl Floating {
         }
     }
 
+    /// reserves `margin` cells around the area the child may occupy
     #[must_use]
     pub const fn margin(mut self, margin: Insets) -> Self {
         self.margin = margin;
         self
     }
 
+    /// caps the size of the child on any axis that is not stretched
     #[must_use]
     pub const fn max_size(mut self, max_size: Size) -> Self {
         self.max_size = max_size;
         self
     }
 
+    /// sets whether the child hides the base underneath it
     #[must_use]
     pub const fn fill(mut self, fill: Fill) -> Self {
         self.fill = fill;
         self
     }
 
+    /// sets how the child's cursor combines with the base cursor
     #[must_use]
     pub const fn cursor(mut self, cursor: CursorMerge) -> Self {
         self.cursor = cursor;
@@ -104,6 +117,7 @@ struct FloatingChild<H> {
     policy: Floating,
 }
 
+/// a base widget with floating children composited over it
 pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
     base:     B,
     floating: Vec<FloatingChild<H>>,
@@ -119,6 +133,7 @@ impl<B, H> fmt::Debug for Layers<'_, B, H> {
 }
 
 impl<'a, B> Layers<'a, B> {
+    /// creates a layer stack whose floating widgets are `Send + Sync`
     pub const fn new(base: B) -> Self {
         Self {
             base,
@@ -127,6 +142,7 @@ impl<'a, B> Layers<'a, B> {
         }
     }
 
+    /// adds a floating child drawn above the base and earlier children
     #[must_use]
     pub fn float<W>(mut self, child: W, policy: Floating) -> Self
     where
@@ -150,6 +166,7 @@ impl<'a, B> Layers<'a, B, Box<dyn Widget + 'a>> {
         }
     }
 
+    /// adds a floating child drawn above the base and earlier children
     #[must_use]
     pub fn float<W>(mut self, child: W, policy: Floating) -> Self
     where

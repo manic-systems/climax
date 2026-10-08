@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::{
+    iter,
+    mem,
+};
+
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
@@ -14,33 +19,53 @@ use crate::{
     },
 };
 
+/// how an overlaid widget treats the cells it covers
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fill {
+    /// cells the source leaves blank show the base underneath
     Transparent,
+    /// the whole destination is blanked with this style before the source is
+    /// drawn
     Opaque(Style),
 }
 
+/// how an overlay combines its cursor with the base cursor
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CursorMerge {
+    /// keep the base cursor
     PreserveBase,
+    /// use the overlay cursor when it has one and it lands on the canvas
     PreferOverlay,
+    /// remove the cursor
     Hide,
 }
 
+/// what separates a row from the next one
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowBreak {
+    /// the row is the last or no break was recorded
     #[default]
     None,
+    /// an explicit newline
     Hard,
+    /// a wrap point, the next row continues the same logical line
     Soft,
 }
 
+/// a cell coordinate
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Position {
+    /// zero-based row
     pub row: usize,
+    /// zero-based column
     pub col: usize,
 }
 
+/// one terminal cell, or the leading cell of a wide character
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the renderer reads cells directly while the public API goes through getters"
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cell {
     pub(crate) text:  String,
@@ -67,6 +92,8 @@ impl Cell {
         self.style
     }
 
+    /// a cell for `text`, or `None` unless it is exactly one grapheme cluster
+    /// that takes columns
     pub fn new(text: &str, style: Style) -> Option<Self> {
         let mut clusters = segments(text);
         let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
@@ -96,6 +123,7 @@ impl Cell {
     }
 }
 
+/// a line of cells and the break that follows it
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Row {
     cells:       Vec<Cell>,
@@ -103,6 +131,7 @@ pub struct Row {
 }
 
 impl Row {
+    /// an empty row
     pub const fn new() -> Self {
         Self {
             cells:       Vec::new(),
@@ -110,18 +139,22 @@ impl Row {
         }
     }
 
+    /// the cells of the row in order
     pub fn cells(&self) -> &[Cell] {
         &self.cells
     }
 
+    /// whether the row has no cells
     pub const fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
 
+    /// the break that follows this row
     pub const fn break_after(&self) -> RowBreak {
         self.break_after
     }
 
+    /// sets the break that follows this row
     pub const fn set_break_after(&mut self, row_break: RowBreak) {
         self.break_after = row_break;
     }
@@ -133,6 +166,7 @@ impl Default for Row {
     }
 }
 
+/// a grid of styled rows that widgets render into, always at least one row
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Surface {
     rows:   Vec<Row>,
@@ -147,6 +181,7 @@ impl Default for Surface {
 }
 
 impl Surface {
+    /// a surface holding one empty row
     pub fn new() -> Self {
         Self {
             rows:   vec![Row::new()],
@@ -155,18 +190,22 @@ impl Surface {
         }
     }
 
+    /// the rows from top to bottom
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
+    /// number of rows
     pub const fn height(&self) -> usize {
         self.rows.len()
     }
 
+    /// where the terminal cursor should rest, if a widget asked for one
     pub const fn cursor(&self) -> Option<Position> {
         self.cursor
     }
 
+    /// places the cursor at `position`
     pub const fn set_cursor(&mut self, position: Position) {
         self.cursor = Some(position);
     }
@@ -176,6 +215,7 @@ impl Surface {
         self.cursor = None;
     }
 
+    /// places the cursor at the end of the current row
     pub fn set_cursor_here(&mut self) {
         self.cursor = Some(Position {
             row: self.rows.len().saturating_sub(1),
@@ -188,13 +228,13 @@ impl Surface {
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
         let mut col = self.current_col();
         let mut first = true;
-        let sealed = std::mem::take(&mut self.sealed);
-        let mut text = text.as_ref();
-        if !sealed && let Some(consumed) = self.extend_last_cell(text) {
-            text = &text[consumed..];
+        let sealed = mem::take(&mut self.sealed);
+        let mut remaining = text.as_ref();
+        if !sealed && let Some(consumed) = self.extend_last_cell(remaining) {
+            remaining = &remaining[consumed..];
             col = self.current_col();
         }
-        for (_, segment) in segments(text) {
+        for (_, segment) in segments(remaining) {
             match segment {
                 Segment::Newline => self.newline(),
                 Segment::Tab => {
@@ -202,18 +242,22 @@ impl Surface {
                         self.current_row_mut().cells.push(space(style));
                     }
                 },
-                Segment::Cluster { text, width, .. } => {
+                Segment::Cluster {
+                    text: cluster,
+                    width,
+                    ..
+                } => {
                     let joined = width == 0
                         && !(sealed && first)
                         && self.current_row_mut().cells.last_mut().is_some_and(|last| {
                             let before = last.width;
-                            last.attach(text);
+                            last.attach(cluster);
                             col = col + last.width - before;
                             true
                         });
                     if !joined && width > 0 {
                         self.current_row_mut().cells.push(Cell {
-                            text: text.to_owned(),
+                            text: cluster.to_owned(),
                             width,
                             style,
                         });
@@ -264,26 +308,31 @@ impl Surface {
         self.sealed = true;
     }
 
+    /// ends the current row with a hard break and starts another
     pub fn newline(&mut self) {
         self.newline_with_break(RowBreak::Hard);
     }
 
+    /// ends the current row with a soft break, the next row continues it
     pub fn soft_wrap(&mut self) {
         self.newline_with_break(RowBreak::Soft);
     }
 
+    /// display width of the row being written
     pub fn current_col(&self) -> usize {
         self.rows
             .last()
             .map_or(0, |row| row.cells().iter().map(|cell| cell.width).sum())
     }
 
+    /// display width of row `row`, zero if it does not exist
     pub fn row_width(&self, row: usize) -> usize {
         self.rows
             .get(row)
             .map_or(0, |found| found.cells().iter().map(|cell| cell.width).sum())
     }
 
+    /// display width of the widest row
     pub fn display_width(&self) -> usize {
         self.rows
             .iter()
@@ -292,6 +341,8 @@ impl Surface {
             .unwrap_or(0)
     }
 
+    /// draws `source` at `destination`, clipped to `canvas`, `fill` and
+    /// `cursor` pick what survives
     pub fn overlay(
         &mut self,
         source: &Self,
@@ -335,6 +386,7 @@ impl Surface {
         }
     }
 
+    /// clips every row to `max_columns` and clamps the cursor to that width
     pub fn fit_width(&mut self, max_columns: usize) {
         for row in &mut self.rows {
             let mut width = 0_usize;
@@ -370,6 +422,7 @@ impl Surface {
         }
     }
 
+    /// the text of every row without styles, joined by newlines
     pub fn plain_text(&self) -> String {
         self.rows
             .iter()
@@ -511,20 +564,26 @@ fn columns(row: &Row) -> Vec<Column> {
     for cell in row.cells() {
         let start = columns.len();
         columns.push(Column::Cell(cell.clone()));
-        columns.extend((1..cell.width).map(|_| Column::Continuation { start }));
+        columns.extend(iter::repeat_n(
+            Column::Continuation { start },
+            cell.width.saturating_sub(1),
+        ));
     }
     columns
 }
 
 fn ensure_columns(columns: &mut Vec<Column>, len: usize) {
-    columns.extend((columns.len()..len).map(|_| Column::Cell(space(Style::PLAIN))));
+    columns.extend(
+        iter::repeat_with(|| Column::Cell(space(Style::PLAIN)))
+            .take(len.saturating_sub(columns.len())),
+    );
 }
 
 fn clear_column(columns: &mut [Column], column: usize) {
-    let Some(slot) = columns.get(column) else {
+    let Some(target) = columns.get(column) else {
         return;
     };
-    let start = match slot {
+    let start = match target {
         Column::Cell(_) => column,
         Column::Continuation { start } => *start,
     };
@@ -619,6 +678,9 @@ pub(crate) fn append_surface(out: &mut Surface, surface: &Surface, limit: usize)
 
 #[cfg(test)]
 mod tests {
+    use core::time::Duration;
+    use std::time::Instant;
+
     use super::*;
     use crate::Color;
 
@@ -680,7 +742,7 @@ mod tests {
     #[test]
     fn long_runs_of_zero_width_characters_are_laid_out_in_linear_time() {
         let run = "\u{200b}".repeat(40_000);
-        let started = std::time::Instant::now();
+        let started = Instant::now();
 
         let mut one = Surface::new();
         one.write(format!("a{run}b"), Style::PLAIN);
@@ -693,7 +755,7 @@ mod tests {
         interleaved.write("ab\u{200b}".repeat(20_000), Style::PLAIN);
 
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(1),
             "{:?}",
             started.elapsed()
         );

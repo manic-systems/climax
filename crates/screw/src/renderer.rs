@@ -22,15 +22,20 @@ use crate::{
     terminal::stderr_size,
 };
 
+/// counters describing one draw
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RenderStats {
+    /// rows rewritten, zero when the frame matched the previous one
     pub changed_rows: usize,
 }
 
+/// how a surface wider than the terminal is fitted
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LayoutMode {
+    /// cut each row at the terminal width
     #[default]
     Clip,
+    /// continue overlong rows on the next line, kept as one logical line
     Wrap,
 }
 
@@ -45,6 +50,8 @@ pub enum CursorVisibility {
     FromSurface,
 }
 
+/// draws widgets to a terminal stream, writing only the rows that changed since
+/// the last draw
 #[derive(Debug)]
 pub struct Renderer<W> {
     writer:              Sink<W>,
@@ -67,6 +74,8 @@ impl<W> Renderer<W>
 where
     W: Write,
 {
+    /// Creates a renderer over `writer` with no width or height limit,
+    /// clipping, the default theme and untouched cursor visibility.
     pub const fn new(writer: W) -> Self {
         Self {
             writer:              Sink(Some(writer)),
@@ -86,18 +95,21 @@ where
         }
     }
 
+    /// terminal width in columns, rows are clipped or wrapped to it
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
         self
     }
 
+    /// terminal height in rows, the frame is clipped to it
     #[must_use]
     pub const fn height(mut self, height: usize) -> Self {
         self.height = Some(height);
         self
     }
 
+    /// clip or wrap overlong rows
     #[must_use]
     pub const fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.layout_mode = mode;
@@ -111,6 +123,7 @@ where
         self
     }
 
+    /// changes the width, the next draw repaints the whole frame
     pub const fn resize(&mut self, width: usize) {
         if matches!(self.width, Some(current) if current == width) {
             return;
@@ -119,6 +132,8 @@ where
         self.force_full = true;
     }
 
+    /// changes the width and height, repaints the whole frame when the width
+    /// changed or the frame is taller than the new height
     pub fn resize_viewport(&mut self, width: usize, height: usize) {
         if self
             .previous
@@ -131,12 +146,14 @@ where
         self.resize(width);
     }
 
+    /// theme that resolves [`Role`](crate::Role) styles
     #[must_use]
     pub const fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
+    /// renders `widget` and writes the difference from the previous frame
     pub fn draw<T>(&mut self, widget: &T) -> io::Result<RenderStats>
     where
         T: Widget + ?Sized,
@@ -154,6 +171,8 @@ where
         self.draw_surface(next)
     }
 
+    /// writes an already rendered surface after fitting it to the width and
+    /// height
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
         let next_physical = self.layout_surface(next_logical);
 
@@ -254,6 +273,7 @@ where
         }
     }
 
+    /// erases the last frame from the terminal and forgets it
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let reset_pending = self.rendition_uncertain;
         let result = self
@@ -305,6 +325,7 @@ where
         Ok(stats)
     }
 
+    /// the writer, the terminal is left untouched
     pub fn into_inner(mut self) -> W {
         self.writer
             .0
@@ -395,6 +416,8 @@ impl<W: Write> Write for Sink<W> {
 }
 
 impl Renderer<io::Stderr> {
+    /// renderer on standard error sized to the terminal, or 80 columns when the
+    /// size is unknown
     pub fn stderr() -> Self {
         let (width, height) = stderr_size();
         let mut renderer = Self::new(io::stderr()).width(width);
