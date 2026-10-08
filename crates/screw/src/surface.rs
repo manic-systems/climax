@@ -1,8 +1,15 @@
-use unicode_width::UnicodeWidthChar as _;
+use unicode_segmentation::UnicodeSegmentation as _;
+use unicode_width::UnicodeWidthStr as _;
 
 use crate::{
     Rect,
     Style,
+    measure::{
+        JOIN_CELL_LIMIT,
+        Segment,
+        join_window_start,
+        segments,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,15 +47,32 @@ pub struct Cell {
 }
 
 impl Cell {
-    pub fn new(ch: char, style: Style) -> Option<Self> {
-        let width = ch.width().unwrap_or(0);
-        (width > 0).then(|| {
+    pub fn new(text: &str, style: Style) -> Option<Self> {
+        let mut clusters = segments(text);
+        let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
+            return None;
+        };
+        (width > 0 && clusters.next().is_none() && text.graphemes(true).count() == 1).then(|| {
             Self {
-                text: ch.to_string(),
+                text: text.to_owned(),
                 width,
                 style,
             }
         })
+    }
+
+    fn attach(&mut self, text: &str) {
+        let window = &self.text[join_window_start(&self.text)..];
+        let mut probe = String::with_capacity(window.len() + text.len());
+        probe.push_str(window);
+        probe.push_str(text);
+        self.width += probe.width().saturating_sub(window.width());
+        self.text.push_str(text);
+    }
+
+    fn extend_cluster(&mut self, text: &str, consumed: usize) {
+        self.text.push_str(&text[..consumed]);
+        self.width = self.text.width();
     }
 }
 
@@ -80,18 +104,6 @@ impl Row {
 
     pub const fn set_break_after(&mut self, row_break: RowBreak) {
         self.break_after = row_break;
-    }
-
-    fn push(&mut self, cell: Cell) {
-        self.cells.push(cell);
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.cells.truncate(len);
-    }
-
-    fn last_mut(&mut self) -> Option<&mut Cell> {
-        self.cells.last_mut()
     }
 }
 
@@ -149,16 +161,64 @@ impl Surface {
         });
     }
 
+    /// writes text per grapheme cluster, tabs expand to eight columns, other
+    /// controls are dropped
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
-        for ch in text.as_ref().chars() {
-            if ch == '\n' {
-                self.newline();
-            } else if let Some(cell) = Cell::new(ch, style) {
-                self.current_row_mut().push(cell);
-            } else if let Some(last) = self.current_row_mut().last_mut() {
-                last.text.push(ch);
-            }
+        let mut col = self.current_col();
+        let mut text = text.as_ref();
+        if let Some(consumed) = self.extend_last_cell(text) {
+            text = &text[consumed..];
+            col = self.current_col();
         }
+        for (_, segment) in segments(text) {
+            match segment {
+                Segment::Newline => self.newline(),
+                Segment::Tab => {
+                    for _ in col..segment.advance(col) {
+                        self.current_row_mut().cells.push(space(style));
+                    }
+                },
+                Segment::Cluster { text, width } => {
+                    let joined = width == 0
+                        && self.current_row_mut().cells.last_mut().is_some_and(|last| {
+                            let before = last.width;
+                            last.attach(text);
+                            col = col + last.width - before;
+                            true
+                        });
+                    if !joined && width > 0 {
+                        self.current_row_mut().cells.push(Cell {
+                            text: text.to_owned(),
+                            width,
+                            style,
+                        });
+                    }
+                    if joined {
+                        continue;
+                    }
+                },
+            }
+            col = segment.advance(col);
+        }
+    }
+
+    /// joins the start of `text` onto the last cell when the two form one
+    /// grapheme cluster, returning the bytes of `text` taken
+    fn extend_last_cell(&mut self, text: &str) -> Option<usize> {
+        let last = self.current_row_mut().cells.last_mut()?;
+        if last.text.len() > JOIN_CELL_LIMIT {
+            return None;
+        }
+        let mut combined = String::with_capacity(last.text.len() + text.len());
+        combined.push_str(&last.text);
+        combined.push_str(text);
+        let cluster = combined.graphemes(true).next()?;
+        let consumed = cluster
+            .len()
+            .checked_sub(last.text.len())
+            .filter(|&taken| taken > 0)?;
+        last.extend_cluster(text, consumed);
+        Some(consumed)
     }
 
     pub(crate) fn harden_soft_breaks(&mut self) {
@@ -256,7 +316,7 @@ impl Surface {
                     }
                 })
                 .count();
-            row.truncate(keep);
+            row.cells.truncate(keep);
         }
 
         if let Some(cursor) = self.cursor {
@@ -531,6 +591,99 @@ mod tests {
         let mut surface = Surface::new();
         surface.write(text, Style::PLAIN);
         surface
+    }
+
+    #[test]
+    fn a_cluster_split_across_writes_is_measured_whole() {
+        for (first, second, text, width) in [
+            ("\u{2764}", "\u{fe0f}", "\u{2764}\u{fe0f}", 2),
+            ("e", "\u{301}", "e\u{301}", 1),
+            ("🇯", "🇵", "🇯🇵", 2),
+            ("👩\u{200d}", "💻", "👩\u{200d}💻", 2),
+        ] {
+            let mut split = Surface::new();
+            split.write(first, Style::PLAIN);
+            split.write(second, Style::PLAIN);
+            assert_eq!(split, surface(text), "{text:?}");
+            assert_eq!(split.display_width(), width, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_split_at_any_character_lays_out_like_the_whole_text() {
+        for text in [
+            "👩\u{200d}💻",
+            "👨\u{200d}👩\u{200d}👧\u{200d}👦x",
+            "🇯🇵🇺🇸",
+            "x🇯🇵🇺🇸🇩🇪y",
+            "\u{2764}\u{fe0f}x",
+            "1\u{fe0f}\u{20e3}2",
+            "👍🏽 ok",
+            "e\u{301}\u{302}x",
+            "한국어",
+            "a\u{200b}b",
+        ] {
+            let whole = surface(text);
+            for (at, _) in text.char_indices().skip(1) {
+                let mut split = Surface::new();
+                split.write(&text[..at], Style::PLAIN);
+                split.write(&text[at..], Style::PLAIN);
+                assert_eq!(split, whole, "{text:?} split at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_tab_after_a_joined_cluster_expands_from_the_widened_column() {
+        let mut split = Surface::new();
+        split.write("\u{2764}", Style::PLAIN);
+        split.write("\u{fe0f}\tX", Style::PLAIN);
+        assert_eq!(split, surface("\u{2764}\u{fe0f}\tX"));
+        assert_eq!(split.display_width(), 9);
+    }
+
+    #[test]
+    fn long_runs_of_zero_width_characters_are_laid_out_in_linear_time() {
+        let run = "\u{200b}".repeat(40_000);
+        let started = std::time::Instant::now();
+
+        let mut one = Surface::new();
+        one.write(format!("a{run}b"), Style::PLAIN);
+        let mut split = Surface::new();
+        split.write("a", Style::PLAIN);
+        for _ in 0..40_000 {
+            split.write("\u{200b}", Style::PLAIN);
+        }
+        let mut interleaved = Surface::new();
+        interleaved.write("ab\u{200b}".repeat(20_000), Style::PLAIN);
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(one.display_width(), 2);
+        assert_eq!(split.display_width(), 1);
+        assert_eq!(interleaved.display_width(), 40_000);
+        assert_eq!(crate::width(&format!("a{run}b")), 2);
+    }
+
+    #[test]
+    fn a_second_cluster_does_not_join_the_first() {
+        let mut split = Surface::new();
+        split.write("a", Style::PLAIN);
+        split.write("b", Style::PLAIN);
+        assert_eq!(split.rows[0].cells().len(), 2);
+    }
+
+    #[test]
+    fn a_cell_is_built_from_exactly_one_cluster() {
+        let heart = Cell::new("\u{2764}\u{fe0f}", Style::PLAIN).unwrap();
+        assert_eq!((heart.text.as_str(), heart.width), ("\u{2764}\u{fe0f}", 2));
+        assert!(Cell::new("ab", Style::PLAIN).is_none());
+        assert!(Cell::new("\u{301}", Style::PLAIN).is_none());
+        assert!(Cell::new("", Style::PLAIN).is_none());
+        assert!(Cell::new("\u{1b}", Style::PLAIN).is_none());
     }
 
     #[test]

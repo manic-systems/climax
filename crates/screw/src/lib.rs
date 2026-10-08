@@ -9,6 +9,7 @@ extern crate alloc;
 mod geometry;
 mod layers;
 mod layout;
+mod measure;
 mod plain;
 mod renderer;
 mod runtime;
@@ -35,6 +36,12 @@ pub use layout::{
     LayoutBuilder,
     layout,
     local_layout,
+};
+pub use measure::{
+    Align,
+    pad,
+    truncate,
+    width,
 };
 pub use plain::{
     render_plain,
