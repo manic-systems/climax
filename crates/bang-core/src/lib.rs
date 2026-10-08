@@ -18,6 +18,8 @@ mod output;
 mod session;
 mod value;
 mod widget;
+/// The built-in widgets.
+pub mod widgets;
 
 pub use event::{Event, Key, KeyEvent, Modifiers};
 pub use ids::WidgetId;
