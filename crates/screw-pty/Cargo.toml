@@ -7,13 +7,14 @@ description          = "A strict model of the terminal output screw emits, for t
 edition.workspace    = true
 keywords             = [ "terminal", "pty", "renderer", "tui" ]
 license.workspace    = true
+publish              = false
 readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
-screw                = { path = "../screw", version = "=0.0.1" }
+screw = { path = "../screw", version = "=0.0.1" }
 unicode-segmentation = "1.13"
-unicode-width        = "0.2.2"
+unicode-width = "0.2.2"
 
 [lints]
 workspace = true

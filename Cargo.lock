@@ -176,6 +176,7 @@ name = "screw"
 version = "0.0.1"
 dependencies = [
  "rustix",
+ "screw-pty",
  "unicode-segmentation",
  "unicode-width",
 ]
