@@ -4,6 +4,7 @@ pub mod app;
 pub mod error;
 pub mod output;
 pub mod prelude;
+pub mod terminal;
 
 #[cfg(feature = "interactive")] pub mod prompt;
 

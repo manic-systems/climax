@@ -50,6 +50,7 @@ pub use crate::{
     Error,
     Result,
     run_with,
+    terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
 };
 #[cfg(feature = "interactive")]
 pub use crate::{
