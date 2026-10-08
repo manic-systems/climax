@@ -21,6 +21,7 @@ use screw::{
 
 use crate::{
     KeyEvent,
+    Modifiers,
     Reaction,
 };
 
@@ -49,6 +50,10 @@ pub(super) fn visible_delta(value: usize) -> isize {
 
 pub(super) const fn no_modifiers(key: &KeyEvent) -> bool {
     key.modifiers.bits() == 0
+}
+
+pub(super) const fn only_control(key: &KeyEvent) -> bool {
+    key.modifiers.bits() == Modifiers::CONTROL.bits()
 }
 
 /// lands a page key on `target`, moving both the scroll offset and the
