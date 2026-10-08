@@ -9,29 +9,39 @@ use rustix::termios::tcgetwinsize;
 
 use crate::Position;
 
+/// a width and height in terminal cells
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Size {
+    /// columns
     pub width:  usize,
+    /// rows
     pub height: usize,
 }
 
 impl Size {
+    /// creates a size from a width and a height
     pub const fn new(width: usize, height: usize) -> Self {
         Self { width, height }
     }
 
+    /// whether either dimension is zero
     pub const fn is_empty(self) -> bool {
         self.width == 0 || self.height == 0
     }
 }
 
+/// a rectangle of terminal cells, anchored at its top-left origin
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Rect {
+    /// top-left cell
     pub origin: Position,
+    /// extent in columns and rows
     pub size:   Size,
 }
 
 impl Rect {
+    /// creates a rectangle from row, column, width and height, rows first
+    /// unlike `Size::new`
     pub const fn new(row: usize, col: usize, width: usize, height: usize) -> Self {
         Self {
             origin: Position { row, col },
@@ -39,18 +49,22 @@ impl Rect {
         }
     }
 
+    /// the column just past the right edge
     pub const fn right(self) -> usize {
         self.origin.col.saturating_add(self.size.width)
     }
 
+    /// the row just past the bottom edge
     pub const fn bottom(self) -> usize {
         self.origin.row.saturating_add(self.size.height)
     }
 
+    /// whether the rectangle covers no cells
     pub const fn is_empty(self) -> bool {
         self.size.is_empty()
     }
 
+    /// whether `position` lies inside the rectangle
     pub const fn contains(self, position: Position) -> bool {
         !self.is_empty()
             && position.row >= self.origin.row
@@ -59,6 +73,7 @@ impl Rect {
             && position.col < self.right()
     }
 
+    /// the overlap of two rectangles, which is empty when they do not meet
     #[must_use]
     pub const fn intersection(self, other: Self) -> Self {
         let top = if self.origin.row > other.origin.row {
@@ -89,6 +104,7 @@ impl Rect {
         )
     }
 
+    /// moves the rectangle down by `rows` and right by `columns`
     #[must_use]
     pub const fn translate(self, rows: usize, columns: usize) -> Self {
         Self {
@@ -100,6 +116,7 @@ impl Rect {
         }
     }
 
+    /// shrinks the rectangle by `insets` on each side, never below zero size
     #[must_use]
     pub const fn inset(self, insets: Insets) -> Self {
         let rows = insets.top.saturating_add(insets.bottom);
@@ -117,15 +134,21 @@ impl Rect {
     }
 }
 
+/// padding in cells on each side of a rectangle
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Insets {
+    /// rows above
     pub top:    usize,
+    /// columns to the right
     pub right:  usize,
+    /// rows below
     pub bottom: usize,
+    /// columns to the left
     pub left:   usize,
 }
 
 impl Insets {
+    /// creates insets in top, right, bottom, left order
     pub const fn new(top: usize, right: usize, bottom: usize, left: usize) -> Self {
         Self {
             top,
@@ -135,22 +158,28 @@ impl Insets {
         }
     }
 
+    /// insets of `value` on every side
     pub const fn all(value: usize) -> Self {
         Self::new(value, value, value, value)
     }
 
+    /// insets of `value` on the left and right only
     pub const fn horizontal(value: usize) -> Self {
         Self::new(0, value, 0, value)
     }
 
+    /// insets of `value` below only
     pub const fn bottom(value: usize) -> Self {
         Self::new(0, 0, value, 0)
     }
 }
 
+/// the size of the visible terminal area
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Viewport {
+    /// visible columns
     pub columns: usize,
+    /// visible rows
     pub rows:    usize,
 }
 
@@ -159,6 +188,7 @@ impl Viewport {
     /// rows
     pub const FALLBACK: Self = Self::new(80, 24);
 
+    /// creates a viewport from columns then rows
     pub const fn new(columns: usize, rows: usize) -> Self {
         Self { columns, rows }
     }
@@ -183,10 +213,12 @@ impl Viewport {
         ))
     }
 
+    /// the viewport as a [`Size`]
     pub const fn size(self) -> Size {
         Size::new(self.columns, self.rows)
     }
 
+    /// the viewport as a [`Rect`] anchored at the origin
     pub const fn rect(self) -> Rect {
         Rect::new(0, 0, self.columns, self.rows)
     }
