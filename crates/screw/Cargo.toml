@@ -11,8 +11,9 @@ readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
-libc.workspace = true
-unicode-width  = { workspace = true, default-features = true }
+libc.workspace       = true
+unicode-segmentation = "1.13"
+unicode-width        = { workspace = true, default-features = true }
 
 [lints]
 workspace = true
