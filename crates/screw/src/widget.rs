@@ -16,8 +16,6 @@ use std::{
     time::Duration,
 };
 
-use unicode_width::UnicodeWidthChar as _;
-
 use crate::{
     LayoutMode, Role, Style, Surface, Theme, Viewport, renderer::layout_surface,
     surface::append_surface, sync::lock,
@@ -640,20 +638,26 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        use unicode_segmentation::UnicodeSegmentation as _;
+
+        let value_style = ctx.theme().style(self.value_role);
         out.write(&self.prompt, ctx.theme().style(self.prompt_role));
-        let prompt_width = out.current_col();
-        let cursor = self.cursor.min(self.value.chars().count());
-        let value_cursor_width: usize = self
+        let char_index = self
             .value
-            .chars()
-            .take(cursor)
-            .map(|ch| ch.width().unwrap_or(0))
-            .sum();
-        out.write(&self.value, ctx.theme().style(self.value_role));
-        out.set_cursor(crate::Position {
-            row: out.height().saturating_sub(1),
-            col: prompt_width + value_cursor_width,
-        });
+            .char_indices()
+            .nth(self.cursor)
+            .map_or(self.value.len(), |(index, _)| index);
+        let split = self
+            .value
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .chain([self.value.len()])
+            .find(|&index| index >= char_index)
+            .unwrap_or(self.value.len());
+        let (before, after) = self.value.split_at(split);
+        out.write(before, value_style);
+        out.set_cursor_here();
+        out.write(after, value_style);
     }
 }
 

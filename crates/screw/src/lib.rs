@@ -3,6 +3,7 @@
 mod geometry;
 mod layers;
 mod layout;
+mod measure;
 mod plain;
 mod renderer;
 mod runtime;
@@ -17,6 +18,7 @@ mod widget;
 pub use geometry::{Insets, Rect, Size, Viewport};
 pub use layers::{Edge, Floating, Layers};
 pub use layout::{LayoutBuilder, layout, local_layout};
+pub use measure::{Align, pad, truncate, width};
 pub use plain::{
     render_plain, render_plain_with_frame, render_plain_with_frame_and_theme, write_plain,
 };

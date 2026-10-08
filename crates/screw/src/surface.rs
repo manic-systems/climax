@@ -1,6 +1,10 @@
-use unicode_width::UnicodeWidthChar as _;
+use unicode_segmentation::UnicodeSegmentation as _;
+use unicode_width::UnicodeWidthStr as _;
 
-use crate::{Rect, Style};
+use crate::{
+    Rect, Style,
+    measure::{Segment, segments},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fill {
@@ -37,15 +41,34 @@ pub struct Cell {
 }
 
 impl Cell {
-    pub fn new(ch: char, style: Style) -> Option<Self> {
-        let width = ch.width().unwrap_or(0);
-        (width > 0).then(|| {
+    pub fn new(text: &str, style: Style) -> Option<Self> {
+        let mut clusters = segments(text);
+        let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
+            return None;
+        };
+        (width > 0 && clusters.next().is_none() && text.graphemes(true).count() == 1).then(|| {
             Self {
-                text: ch.to_string(),
+                text: text.to_owned(),
                 width,
                 style,
             }
         })
+    }
+
+    fn join(&mut self, text: &str, attach: bool) -> bool {
+        let mut joined = String::with_capacity(self.text.len() + text.len());
+        joined.push_str(&self.text);
+        joined.push_str(text);
+        if !attach && joined.graphemes(true).count() != 1 {
+            return false;
+        }
+        self.width = if attach {
+            self.width.max(joined.width())
+        } else {
+            joined.width()
+        };
+        self.text = joined;
+        true
     }
 }
 
@@ -77,18 +100,6 @@ impl Row {
 
     pub const fn set_break_after(&mut self, row_break: RowBreak) {
         self.break_after = row_break;
-    }
-
-    fn push(&mut self, cell: Cell) {
-        self.cells.push(cell);
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.cells.truncate(len);
-    }
-
-    fn last_mut(&mut self) -> Option<&mut Cell> {
-        self.cells.last_mut()
     }
 }
 
@@ -147,15 +158,49 @@ impl Surface {
         });
     }
 
+    /// Write text into the surface.
+    ///
+    /// Text is laid out per extended grapheme cluster, so an emoji sequence or a base with its
+    /// combining marks occupies one cell of the cluster's display width. Tabs expand to spaces up
+    /// to the next multiple of eight columns. Escapes and other C0/C1 controls have no cell
+    /// representation and are dropped so they cannot leak into cell text or corrupt widths.
+    /// Zero-width clusters append to the prior cell.
+    ///
+    /// See [`Self::newline`] for the one control that does have a meaning here.
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
-        for ch in text.as_ref().chars() {
-            if ch == '\n' {
-                self.newline();
-            } else if let Some(cell) = Cell::new(ch, style) {
-                self.current_row_mut().push(cell);
-            } else if let Some(last) = self.current_row_mut().last_mut() {
-                last.text.push(ch);
+        let mut col = self.current_col();
+        let mut first = true;
+        for (_, segment) in segments(text.as_ref()) {
+            match segment {
+                Segment::Newline => self.newline(),
+                Segment::Tab => {
+                    for _ in col..segment.advance(col) {
+                        self.current_row_mut().cells.push(space(style));
+                    }
+                },
+                Segment::Cluster { text, width } => {
+                    let joined = (first || width == 0)
+                        && self
+                            .current_row_mut()
+                            .cells
+                            .last_mut()
+                            .is_some_and(|last| last.join(text, width == 0));
+                    if !joined && width > 0 {
+                        self.current_row_mut().cells.push(Cell {
+                            text: text.to_owned(),
+                            width,
+                            style,
+                        });
+                    }
+                    if joined {
+                        col = self.current_col();
+                        first = false;
+                        continue;
+                    }
+                },
             }
+            first = false;
+            col = segment.advance(col);
         }
     }
 
@@ -246,7 +291,7 @@ impl Surface {
                     }
                 })
                 .count();
-            row.truncate(keep);
+            row.cells.truncate(keep);
         }
 
         if let Some(cursor) = self.cursor {
@@ -517,6 +562,49 @@ mod tests {
         let mut surface = Surface::new();
         surface.write(text, Style::PLAIN);
         surface
+    }
+
+    #[test]
+    fn a_cluster_split_across_writes_is_measured_whole() {
+        for (first, second, text, width) in [
+            ("\u{2764}", "\u{fe0f}", "\u{2764}\u{fe0f}", 2),
+            ("e", "\u{301}", "e\u{301}", 1),
+            ("🇯", "🇵", "🇯🇵", 2),
+            ("👩\u{200d}", "💻", "👩\u{200d}💻", 2),
+        ] {
+            let mut split = Surface::new();
+            split.write(first, Style::PLAIN);
+            split.write(second, Style::PLAIN);
+            assert_eq!(split, surface(text), "{text:?}");
+            assert_eq!(split.display_width(), width, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_tab_after_a_joined_cluster_expands_from_the_widened_column() {
+        let mut split = Surface::new();
+        split.write("\u{2764}", Style::PLAIN);
+        split.write("\u{fe0f}\tX", Style::PLAIN);
+        assert_eq!(split, surface("\u{2764}\u{fe0f}\tX"));
+        assert_eq!(split.display_width(), 9);
+    }
+
+    #[test]
+    fn a_second_cluster_does_not_join_the_first() {
+        let mut split = Surface::new();
+        split.write("a", Style::PLAIN);
+        split.write("b", Style::PLAIN);
+        assert_eq!(split.rows[0].cells().len(), 2);
+    }
+
+    #[test]
+    fn a_cell_is_built_from_exactly_one_cluster() {
+        let heart = Cell::new("\u{2764}\u{fe0f}", Style::PLAIN).unwrap();
+        assert_eq!((heart.text.as_str(), heart.width), ("\u{2764}\u{fe0f}", 2));
+        assert!(Cell::new("ab", Style::PLAIN).is_none());
+        assert!(Cell::new("\u{301}", Style::PLAIN).is_none());
+        assert!(Cell::new("", Style::PLAIN).is_none());
+        assert!(Cell::new("\u{1b}", Style::PLAIN).is_none());
     }
 
     #[test]
