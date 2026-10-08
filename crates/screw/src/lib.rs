@@ -28,6 +28,7 @@ pub use plain::{
     write_plain,
 };
 pub use renderer::{
+    CursorVisibility,
     LayoutMode,
     RenderStats,
     Renderer,

@@ -26,6 +26,17 @@ pub enum LayoutMode {
     Wrap,
 }
 
+/// whether terminal cursor visibility is left alone or derived from the
+/// surface's cursor anchor
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CursorVisibility {
+    /// emit no cursor visibility controls
+    #[default]
+    Preserve,
+    /// show the cursor when the surface has an anchor, hide it otherwise
+    FromSurface,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RenderedFrame {
     logical:  Surface,
@@ -33,14 +44,16 @@ struct RenderedFrame {
 }
 
 pub struct Renderer<W> {
-    writer:         W,
-    previous:       Option<RenderedFrame>,
-    frame:          u64,
-    width:          Option<usize>,
-    layout_mode:    LayoutMode,
-    theme:          Theme,
-    force_full:     bool,
-    resize_pending: bool,
+    writer:            W,
+    previous:          Option<RenderedFrame>,
+    frame:             u64,
+    width:             Option<usize>,
+    layout_mode:       LayoutMode,
+    theme:             Theme,
+    cursor_visibility: CursorVisibility,
+    cursor_visible:    Option<bool>,
+    force_full:        bool,
+    resize_pending:    bool,
 }
 
 impl<W> Renderer<W>
@@ -55,6 +68,8 @@ where
             width: None,
             layout_mode: LayoutMode::Clip,
             theme: Theme::DEFAULT,
+            cursor_visibility: CursorVisibility::Preserve,
+            cursor_visible: None,
             force_full: false,
             resize_pending: false,
         }
@@ -69,6 +84,13 @@ where
     #[must_use]
     pub const fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.layout_mode = mode;
+        self
+    }
+
+    /// whether the surface's cursor anchor controls terminal cursor visibility
+    #[must_use]
+    pub const fn cursor_visibility(mut self, visibility: CursorVisibility) -> Self {
+        self.cursor_visibility = visibility;
         self
     }
 
@@ -153,6 +175,7 @@ where
         }
 
         cursor.move_to(&mut self.writer, final_position(&next_physical))?;
+        self.update_cursor_visibility(next_physical.cursor().is_some())?;
         self.writer.flush()?;
         self.previous = Some(RenderedFrame {
             logical:  next_logical,
@@ -190,6 +213,7 @@ where
             &mut stats,
         )?;
         cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
+        self.update_cursor_visibility(false)?;
         self.writer.flush()?;
         self.force_full = false;
         self.resize_pending = false;
@@ -202,6 +226,18 @@ where
 
     fn layout_surface(&self, surface: Surface) -> Surface {
         layout_surface(surface, self.width, self.layout_mode)
+    }
+
+    fn update_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
+        if !matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            || self.cursor_visible == Some(visible)
+        {
+            return Ok(());
+        }
+        self.writer
+            .write_all(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" })?;
+        self.cursor_visible = Some(visible);
+        Ok(())
     }
 }
 
