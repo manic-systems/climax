@@ -1,25 +1,27 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! widgets for bang.
+//! Widget state and interaction machinery for Bang.
+//!
+//! Bang is an interactive layer over `screw`. A [`Widget`] is a `screw`
+//! widget that also handles input, so it renders into the cell grid of a
+//! `screw` `Surface` and any terminal renderer can show it by copying cells.
+//! A list widget measures its own layout while it renders and keeps it for the
+//! next event, so paging follows the rows that physically fit.
+//!
+//! Most applications should use the user-facing `bang` crate.
 
-mod action;
+#![warn(missing_docs)]
+
 mod event;
 mod ids;
 mod output;
-mod render;
 mod session;
 mod value;
 mod widget;
-pub mod widgets;
 
-pub use action::{ActionBinding, ActionLayer};
 pub use event::{Event, Key, KeyEvent, Modifiers};
-pub use ids::{CursorAnchor, ViewId, WidgetId};
+pub use ids::WidgetId;
 pub use output::{OutputFormat, escape_json, format_json, format_output, format_text};
-pub use render::{
-    CalendarDay, CalendarView, CalendarWeek, CursorPlacement, ListRow, ListView, Role, Span,
-    TextInputView, View, ViewContext, plain_snapshot,
-};
-pub use session::{Session, SessionStatus};
+pub use session::{Session, SessionReaction, SessionStatus};
 pub use value::{Date, Number, Value};
 pub use widget::{Context, FocusTarget, Reaction, Widget};
