@@ -121,6 +121,11 @@ impl Surface {
         self.cursor = Some(position);
     }
 
+    /// removes any cursor a widget placed
+    pub const fn clear_cursor(&mut self) {
+        self.cursor = None;
+    }
+
     pub fn set_cursor_here(&mut self) {
         self.cursor = Some(Position {
             row: self.rows.len().saturating_sub(1),
