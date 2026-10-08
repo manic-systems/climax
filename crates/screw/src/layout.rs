@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::fmt;
+use core::fmt;
 
 use crate::{
     InputAnchor,
@@ -12,37 +12,41 @@ use crate::{
     widget,
 };
 
+/// collects rows into a vertical [`Stack`]
 #[derive(Clone)]
 pub struct LayoutBuilder<H = WidgetRef> {
     rows: Vec<H>,
 }
 
 impl<H> fmt::Debug for LayoutBuilder<H> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LayoutBuilder")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LayoutBuilder")
             .field("rows", &self.rows.len())
             .finish()
     }
 }
 
 impl LayoutBuilder<WidgetRef> {
+    /// empty builder for thread-safe widgets
     pub fn new() -> Self {
         Self { rows: Vec::new() }
     }
 
+    /// adds a row whose children are laid out side by side
     #[must_use]
     pub fn line(mut self, children: impl Into<Vec<WidgetRef>>) -> Self {
         self.rows.push(widget(Line::new(children)));
         self
     }
 
+    /// adds a row that places the terminal cursor
     #[must_use]
     pub fn input(mut self, input: InputAnchor) -> Self {
         self.rows.push(widget(input));
         self
     }
 
+    /// builds the stack and erases it into a shared widget
     pub fn into_widget(self) -> WidgetRef {
         widget(self.build())
     }
@@ -55,39 +59,46 @@ impl Default for LayoutBuilder<WidgetRef> {
 }
 
 impl<'a> LayoutBuilder<LocalWidgetRef<'a>> {
+    /// empty builder for widgets that stay on the current thread
     pub fn new_local() -> Self {
         Self { rows: Vec::new() }
     }
 
+    /// adds a row whose children are laid out side by side
     #[must_use]
     pub fn line(mut self, children: impl Into<Vec<LocalWidgetRef<'a>>>) -> Self {
         self.rows.push(local_widget(Line::new(children)));
         self
     }
 
+    /// adds a row that places the terminal cursor
     #[must_use]
     pub fn input(mut self, input: InputAnchor) -> Self {
         self.rows.push(local_widget(input));
         self
     }
 
+    /// builds the stack and erases it into a local widget
     pub fn into_widget(self) -> LocalWidgetRef<'a> {
         local_widget(self.build())
     }
 }
 
 impl<H> LayoutBuilder<H> {
+    /// adds a widget as its own row
     #[must_use]
     pub fn widget(mut self, child: H) -> Self {
         self.rows.push(child);
         self
     }
 
+    /// builds the rows into a [`Stack`]
     pub fn build(self) -> Stack<H> {
         Stack::new(self.rows)
     }
 }
 
+/// starts a layout of thread-safe widgets
 pub fn layout() -> LayoutBuilder {
     LayoutBuilder::new()
 }
@@ -99,10 +110,8 @@ pub fn local_layout<'a>() -> LayoutBuilder<LocalWidgetRef<'a>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::RefCell,
-        rc::Rc,
-    };
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
 
     use super::*;
     use crate::{
@@ -162,7 +171,7 @@ mod tests {
     fn local_builder_composes_rc_refcell_widgets() {
         let value = Rc::new(RefCell::new("before".to_owned()));
         let app = local_layout()
-            .line(vec![local_widget(LocalText(value.clone()))])
+            .line(vec![local_widget(LocalText(Rc::clone(&value)))])
             .widget(local_widget("tail"))
             .build();
 

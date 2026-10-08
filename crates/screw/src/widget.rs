@@ -50,13 +50,19 @@ pub enum VerticalSize {
     Flexible,
 }
 
+/// how often a widget needs a redraw without being marked dirty
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
+    /// changes only when the application marks the runtime dirty
     Never,
+    /// redraws on every frame, as an animation does, and [`RenderCtx::frame`]
+    /// advances each time
     EveryFrame,
+    /// redraws at most this often, for content such as a clock
     Every(Duration),
 }
 
+/// per-draw information passed to [`Widget::render`]
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
     frame:       u64,
@@ -67,6 +73,7 @@ pub struct RenderCtx {
 }
 
 impl RenderCtx {
+    /// frame zero, no size constraints, clipping and the default theme
     pub const fn new() -> Self {
         Self {
             frame:       0,
@@ -77,12 +84,15 @@ impl RenderCtx {
         }
     }
 
+    /// sets the frame counter
     #[must_use]
     pub const fn with_frame(mut self, frame: u64) -> Self {
         self.frame = frame;
         self
     }
 
+    /// sets the columns and rows available to the widget, `None` means
+    /// unconstrained
     #[must_use]
     pub const fn with_constraints(mut self, columns: Option<usize>, rows: Option<usize>) -> Self {
         self.columns = columns;
@@ -90,30 +100,36 @@ impl RenderCtx {
         self
     }
 
+    /// sets whether overlong rows are clipped or wrapped
     #[must_use]
     pub const fn with_layout_mode(mut self, layout_mode: LayoutMode) -> Self {
         self.layout_mode = layout_mode;
         self
     }
 
+    /// sets the theme that resolves [`Role`] styles
     #[must_use]
     pub const fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
+    /// counter that advances on every draw, for animation
     pub const fn frame(self) -> u64 {
         self.frame
     }
 
+    /// columns this widget may use, `None` when the width is unknown
     pub const fn available_columns(self) -> Option<usize> {
         self.columns
     }
 
+    /// rows this widget may use, `None` when the height is unconstrained
     pub const fn available_rows(self) -> Option<usize> {
         self.rows
     }
 
+    /// available columns and rows together, when both are known
     pub const fn viewport(self) -> Option<Viewport> {
         match (self.columns, self.rows) {
             (Some(columns), Some(rows)) => Some(Viewport::new(columns, rows)),
@@ -121,10 +137,12 @@ impl RenderCtx {
         }
     }
 
+    /// whether overlong rows are clipped or wrapped after rendering
     pub const fn layout_mode(self) -> LayoutMode {
         self.layout_mode
     }
 
+    /// theme that resolves [`Role`] styles
     pub const fn theme(self) -> Theme {
         self.theme
     }
@@ -141,9 +159,14 @@ impl Default for RenderCtx {
     }
 }
 
+/// something that can draw itself into a [`Surface`]
 pub trait Widget {
+    /// writes the widget into `out`, a newline starts a new row, rendering must
+    /// not block
     fn render(&self, ctx: &RenderCtx, out: &mut Surface);
 
+    /// whether the widget changes on its own, [`TickInterest::Never`] by
+    /// default
     fn tick_interest(&self) -> TickInterest {
         TickInterest::Never
     }
@@ -154,6 +177,7 @@ pub trait Widget {
     }
 }
 
+/// cloneable widget reference that can be shared with a background renderer
 pub type WidgetRef = Arc<dyn Widget + Send + Sync>;
 
 /// cloneable widget reference for composition and rendering on one thread
@@ -175,6 +199,7 @@ where
     Rc::new(widget)
 }
 
+/// run of text in one style or role
 #[derive(Clone, Debug)]
 pub struct Text {
     value: String,
@@ -188,6 +213,7 @@ enum TextStyle {
 }
 
 impl Text {
+    /// unstyled text
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -195,12 +221,14 @@ impl Text {
         }
     }
 
+    /// sets a concrete style, replacing any role
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = TextStyle::Concrete(style);
         self
     }
 
+    /// sets a role resolved through the active [`Theme`], replacing any style
     #[must_use]
     pub const fn role(mut self, role: Role) -> Self {
         self.style = TextStyle::Role(role);
@@ -311,6 +339,7 @@ impl Widget for Spans {
     }
 }
 
+/// cycles through a list of frames, one per draw, such as a spinner
 #[derive(Clone, Debug)]
 pub struct Looping {
     frames: Arc<[String]>,
@@ -329,6 +358,7 @@ impl Looping {
         }
     }
 
+    /// sets the style of the frame
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = style;
@@ -351,6 +381,8 @@ impl Widget for Looping {
     }
 }
 
+/// most recent lines pushed to it, clones share them, mark the runtime dirty
+/// after a push
 #[derive(Clone, Debug)]
 pub struct WindowedLines {
     capacity: usize,
@@ -359,6 +391,7 @@ pub struct WindowedLines {
 }
 
 impl WindowedLines {
+    /// empty window that keeps at most `capacity` lines
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -367,12 +400,14 @@ impl WindowedLines {
         }
     }
 
+    /// sets the style of every line
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
+    /// appends a line, discarding the oldest when the window is full
     pub fn push(&self, line: impl Into<String>) {
         if self.capacity == 0 {
             return;
@@ -385,6 +420,7 @@ impl WindowedLines {
         lines.push_back(text);
     }
 
+    /// copy of the lines currently held, oldest first
     pub fn lines(&self) -> Vec<String> {
         lock(&self.lines).iter().cloned().collect()
     }
@@ -401,6 +437,7 @@ impl Widget for WindowedLines {
     }
 }
 
+/// list of rows with one selected, scrolled to keep the selection visible
 #[derive(Clone, Debug)]
 pub struct List {
     rows:          Arc<[String]>,
@@ -411,6 +448,7 @@ pub struct List {
 }
 
 impl List {
+    /// list showing every row with the first one selected
     pub fn new(rows: impl Into<Vec<String>>) -> Self {
         let owned = rows.into();
         let height = owned.len().max(1);
@@ -423,18 +461,21 @@ impl List {
         }
     }
 
+    /// selects the row at `selected`, clamped to the last row
     #[must_use]
     pub const fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
         self
     }
 
+    /// limits the number of visible rows
     #[must_use]
     pub const fn height(mut self, height: usize) -> Self {
         self.height = height;
         self
     }
 
+    /// sets the roles of ordinary and selected rows
     #[must_use]
     pub const fn roles(mut self, normal: Role, selected: Role) -> Self {
         self.normal = normal;
@@ -442,6 +483,7 @@ impl List {
         self
     }
 
+    /// indices of the rows currently shown
     pub fn visible_range(&self) -> Range<usize> {
         if self.rows.is_empty() || self.height == 0 {
             return 0..0;
@@ -698,6 +740,8 @@ impl Widget for Table {
     }
 }
 
+/// bar of fixed width filled by a fraction, clones share it, mark the runtime
+/// dirty after a change
 #[derive(Clone, Debug)]
 pub struct ProgressBar {
     fraction: Arc<AtomicU32>,
@@ -707,6 +751,7 @@ pub struct ProgressBar {
 }
 
 impl ProgressBar {
+    /// empty bar with `width` cells between its brackets
     pub fn new(width: usize) -> Self {
         Self {
             fraction: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
@@ -716,6 +761,7 @@ impl ProgressBar {
         }
     }
 
+    /// sets the styles of the filled and the empty cells
     #[must_use]
     pub const fn styles(mut self, filled: Style, empty: Style) -> Self {
         self.filled = filled;
@@ -723,11 +769,13 @@ impl ProgressBar {
         self
     }
 
+    /// sets how much of the bar is filled, clamped to 0 to 1
     pub fn set_fraction(&self, fraction: f32) {
         self.fraction
             .store(fraction.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
+    /// how much of the bar is filled, from 0 to 1
     pub fn fraction(&self) -> f32 {
         f32::from_bits(self.fraction.load(Ordering::Relaxed))
     }
@@ -755,6 +803,8 @@ impl Widget for ProgressBar {
     }
 }
 
+/// prompt that places the terminal cursor after it, for input handled outside
+/// the renderer
 #[derive(Clone, Debug)]
 pub struct InputAnchor {
     prompt: String,
@@ -762,6 +812,7 @@ pub struct InputAnchor {
 }
 
 impl InputAnchor {
+    /// anchor that writes `prompt`
     pub fn prompt(prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
@@ -769,6 +820,7 @@ impl InputAnchor {
         }
     }
 
+    /// sets the style of the prompt
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = style;
@@ -783,6 +835,7 @@ impl Widget for InputAnchor {
     }
 }
 
+/// prompt followed by editable text with the terminal cursor placed inside it
 #[derive(Clone, Debug)]
 pub struct TextInput {
     prompt:      String,
@@ -793,6 +846,7 @@ pub struct TextInput {
 }
 
 impl TextInput {
+    /// input showing `prompt` and `value` with the cursor at the start
     pub fn new(prompt: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             prompt:      prompt.into(),
@@ -803,12 +857,15 @@ impl TextInput {
         }
     }
 
+    /// places the cursor at char index `cursor`, clamped to the end and moved
+    /// past a split cluster
     #[must_use]
     pub const fn cursor(mut self, cursor: usize) -> Self {
         self.cursor = cursor;
         self
     }
 
+    /// sets the roles of the prompt and of the value
     #[must_use]
     pub const fn roles(mut self, prompt: Role, value: Role) -> Self {
         self.prompt_role = prompt;
@@ -842,6 +899,7 @@ impl Widget for TextInput {
     }
 }
 
+/// children written one after another on a single row
 #[derive(Clone)]
 pub struct Line<H = WidgetRef> {
     children: Box<[H]>,
@@ -856,6 +914,7 @@ impl<H> fmt::Debug for Line<H> {
 }
 
 impl<H> Line<H> {
+    /// line of `children`
     pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
             children: children.into().into_boxed_slice(),
@@ -882,6 +941,8 @@ where
     }
 }
 
+/// children placed one below another, [`VerticalSize::Flexible`] ones sharing
+/// the leftover height
 #[derive(Clone)]
 pub struct Stack<H = WidgetRef> {
     children: Box<[H]>,
@@ -896,6 +957,7 @@ impl<H> fmt::Debug for Stack<H> {
 }
 
 impl<H> Stack<H> {
+    /// stack of `children`
     pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
             children: children.into().into_boxed_slice(),
@@ -984,6 +1046,7 @@ where
     }
 }
 
+/// shows one of several widgets by state, a state with no widget draws nothing
 pub struct Stateful<S, H = WidgetRef> {
     state: Mutex<S>,
     cases: HashMap<S, H>,
@@ -1002,6 +1065,7 @@ impl<S, H> Stateful<S, H>
 where
     S: Clone + Eq + Hash,
 {
+    /// switch in state `initial` with no cases
     pub fn new(initial: S) -> Self {
         Self {
             state: Mutex::new(initial),
@@ -1009,16 +1073,19 @@ where
         }
     }
 
+    /// shows `widget` while the state is `state`
     #[must_use]
     pub fn case(mut self, state: S, widget: H) -> Self {
         self.cases.insert(state, widget);
         self
     }
 
+    /// changes the state, taking effect on the next draw
     pub fn set_state(&self, state: S) {
         *lock(&self.state) = state;
     }
 
+    /// current state
     pub fn state(&self) -> S {
         lock(&self.state).clone()
     }
@@ -1141,6 +1208,8 @@ fn combine_vertical_size<'a, H: Widget + 'a>(
     }
 }
 
+/// combines child tick interests, [`TickInterest::EveryFrame`] wins, then the
+/// shortest interval
 pub fn combine_tick_interest(interests: impl IntoIterator<Item = TickInterest>) -> TickInterest {
     let mut every: Option<Duration> = None;
     for interest in interests {
