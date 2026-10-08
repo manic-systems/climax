@@ -379,11 +379,7 @@ where
         };
         let mut surface = Surface::new();
         root.render(
-            &RenderCtx {
-                frame: 0,
-                width: self.width,
-                theme: self.theme,
-            },
+            &RenderCtx::new().with_columns(self.width).with_theme(self.theme),
             &mut surface,
         );
         surface = layout_surface(surface, self.width, self.layout_mode);
