@@ -100,13 +100,19 @@ where
     }
 
     pub const fn resize(&mut self, width: usize) {
+        if matches!(self.width, Some(current) if current == width) {
+            return;
+        }
         self.width = Some(width);
-        // Terminal resize reflow is emulator- and mode-dependent. Retained
-        // state cannot safely infer the old physical frame at the new width.
+        // Terminal resize reflow is emulator- and mode-dependent, so the retained
+        // frame's rewrapped position at the new width is only ever an estimate.
         self.force_full = true;
     }
 
-    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+    pub fn resize_viewport(&mut self, width: usize, height: usize) {
+        if self.previous.as_ref().is_some_and(|previous| previous.physical.height() > height) {
+            self.force_full = true;
+        }
         self.height = Some(height);
         self.resize(width);
     }
@@ -154,9 +160,7 @@ where
 
         if self.force_full {
             if let Some(previous) = &previous_physical {
-                move_to_top(&mut self.writer, final_position(previous), &mut cursor)?;
-                clear_surface(previous, &mut self.writer, &mut cursor, &mut stats)?;
-                cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
+                clear_reflowed(previous, self.width, &mut self.writer, &mut cursor, &mut stats)?;
             }
             write_initial_surface(&next_physical, &mut self.writer, &mut cursor, &mut stats)?;
             self.force_full = false;
@@ -191,19 +195,34 @@ where
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
 
-        move_to_top(
-            &mut self.writer,
-            final_position(&previous_physical),
-            &mut cursor,
-        )?;
-        clear_surface(
-            &previous_physical,
-            &mut self.writer,
-            &mut cursor,
-            &mut stats,
-        )?;
-        cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
-        self.update_cursor_visibility(false)?;
+        if self.force_full {
+            clear_reflowed(
+                &previous_physical,
+                self.width,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+            )?;
+        } else {
+            move_to_top(
+                &mut self.writer,
+                final_position(&previous_physical),
+                &mut cursor,
+            )?;
+            clear_surface(
+                &previous_physical,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+            )?;
+            cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
+        }
+        // restore visibility only if this renderer hid the cursor
+        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            && self.cursor_visible == Some(false)
+        {
+            self.update_cursor_visibility(true)?;
+        }
         self.writer.flush()?;
         self.force_full = false;
         Ok(stats)
@@ -385,6 +404,59 @@ fn move_to_top(writer: &mut impl Write, from: Position, cursor: &mut Cursor) -> 
     }
     *cursor = Cursor::default();
     Ok(())
+}
+
+/// Reflowing terminals rewrap each hard-broken row from its original width, so
+/// after any sequence of resizes the frame top is the sum of those rewraps
+/// above the anchor. The erase below catches lines the estimate misses.
+fn clear_reflowed(
+    previous: &Surface,
+    width: Option<usize>,
+    writer: &mut impl Write,
+    cursor: &mut Cursor,
+    stats: &mut RenderStats,
+) -> io::Result<()> {
+    let anchor = final_position(previous);
+    let row = width.filter(|&width| width > 0).map_or(anchor.row, |width| {
+        previous
+            .rows()
+            .iter()
+            .take(anchor.row)
+            .map(|row| wrapped_lines(row.cells(), width))
+            .sum::<usize>()
+            + previous
+                .rows()
+                .get(anchor.row)
+                .map_or(0, |row| wraps_before_column(row.cells(), width, anchor.col))
+    });
+    move_to_top(writer, Position { row, col: 0 }, cursor)?;
+    writer.write_all(b"\x1b[J")?;
+    stats.changed_rows += previous.height();
+    Ok(())
+}
+
+fn wrapped_lines(cells: &[Cell], width: usize) -> usize {
+    1 + wraps_before_column(cells, width, usize::MAX)
+}
+
+/// Count the wraps of `cells` at `width` before `column`, so a wide cell that straddles a
+/// wrap boundary is not rounded away by dividing the column by `width`.
+fn wraps_before_column(cells: &[Cell], width: usize, column: usize) -> usize {
+    let mut wraps = 0;
+    let mut used = 0;
+    let mut consumed = 0;
+    for cell in cells {
+        if consumed >= column {
+            break;
+        }
+        if used + cell.width > width {
+            wraps += 1;
+            used = 0;
+        }
+        used += cell.width;
+        consumed += cell.width;
+    }
+    wraps
 }
 
 fn write_initial_surface(
@@ -888,6 +960,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repeated_viewport_resizes_rewrap_logical_content_to_each_new_width() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(6)
+            .height(6)
+            .layout_mode(crate::LayoutMode::Wrap);
+        let logical = || surface(&["abcdefghij"], None);
+
+        renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            "abcde\nfghij",
+        );
+
+        renderer.resize_viewport(4, 6);
+        renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            "abc\ndef\nghi\nj",
+        );
+
+        renderer.resize_viewport(7, 6);
+        let before = renderer.writer.len();
+        let stats = renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            "abcdef\nghij",
+        );
+        assert!(stats.changed_rows > 0);
+        assert!(renderer.writer.len() > before);
+    }
+
+    #[test]
+    fn rewrapping_consumes_soft_boundaries_but_preserves_hard_ones() {
+        let mut prewrapped = surface(&["abc"], None);
+        prewrapped.soft_wrap();
+        prewrapped.write("def", Style::PLAIN);
+        assert_eq!(
+            layout_surface(prewrapped, Some(10), LayoutMode::Wrap).plain_text(),
+            "abcdef",
+        );
+
+        let hard = surface(&["abc", "def"], None);
+        assert_eq!(
+            layout_surface(hard, Some(10), LayoutMode::Wrap).plain_text(),
+            "abc\ndef",
+        );
+    }
+
     struct CursorDocument;
 
     impl Widget for CursorDocument {
@@ -967,6 +1088,39 @@ mod tests {
         assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25"));
     }
 
+    #[test]
+    fn narrowing_climbs_to_the_rewrapped_frame_top() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        let frame = || surface(&["abcdefghij", "xy"], None);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize(4);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame()).unwrap();
+        let update = &renderer.writer[before..];
+        assert!(update.starts_with(b"\r\x1b[3A\x1b[J"), "{update:?}");
+        assert!(!update.windows(4).any(|part| part == b"\x1b[2K"));
+    }
+
+    #[test]
+    fn widening_keeps_the_hard_broken_row_count() {
+        let mut renderer = Renderer::new(Vec::new()).width(4);
+        let frame = || surface(&["abcd", "xy"], None);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize(10);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame()).unwrap();
+        assert!(renderer.writer[before..].starts_with(b"\r\x1b[1A\x1b[J"));
+    }
+
+    #[test]
+    fn unchanged_width_resize_keeps_diffing() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        renderer.resize_viewport(10, 5);
+        let stats = renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        assert_eq!(stats.changed_rows, 0);
+    }
+
     fn text_at(surface: &Surface, wanted: Position) -> Option<&str> {
         let row = surface.rows().get(wanted.row)?;
         let mut col = 0;
@@ -977,6 +1131,26 @@ mod tests {
             col += cell.width;
         }
         None
+    }
+
+    #[test]
+    fn narrowing_estimates_the_anchor_rows_wrap_around_a_wide_character() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        let mut frame = Surface::new();
+        frame.write("a", Style::PLAIN);
+        frame.write("界", Style::PLAIN);
+        frame.write("bc", Style::PLAIN);
+        frame.set_cursor(Position { row: 0, col: 3 });
+        renderer.draw_surface(frame.clone()).unwrap();
+
+        renderer.resize(3);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame).unwrap();
+        let update = &renderer.writer[before..];
+        assert!(
+            update.starts_with(b"\r\x1b[J"),
+            "the wide anchor cell fills the reflowed row exactly, so no climb is needed: {update:?}"
+        );
     }
 
     #[test]

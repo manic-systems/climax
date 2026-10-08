@@ -121,7 +121,7 @@ where
         self.dirty = true;
     }
 
-    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+    pub fn resize_viewport(&mut self, width: usize, height: usize) {
         self.renderer.resize_viewport(width, height);
         self.dirty = true;
     }
@@ -659,7 +659,7 @@ impl<W> Drop for LiveRuntime<W> {
     }
 }
 
-const fn apply_command<W, H, F>(runtime: &mut Runtime<W, H, F>, command: &RuntimeCommand)
+fn apply_command<W, H, F>(runtime: &mut Runtime<W, H, F>, command: &RuntimeCommand)
 where
     W: Write,
     H: crate::Widget,
