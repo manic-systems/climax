@@ -8,33 +8,48 @@ use crate::{
     measure::{Segment, segments},
 };
 
+/// How an overlaid widget treats the cells it covers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fill {
+    /// Cells the source leaves blank show the base underneath.
     Transparent,
+    /// The whole destination is blanked with this style before the source is drawn.
     Opaque(Style),
 }
 
+/// How an overlay combines its cursor with the base cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CursorMerge {
+    /// Keep the base cursor.
     PreserveBase,
+    /// Use the overlay cursor when it has one and it lands on the canvas.
     PreferOverlay,
+    /// Remove the cursor.
     Hide,
 }
 
+/// What separates a row from the next one.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowBreak {
+    /// The row is the last or no break was recorded.
     #[default]
     None,
+    /// An explicit newline.
     Hard,
+    /// A wrap point, so the next row continues the same logical line.
     Soft,
 }
 
+/// A cell coordinate.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Position {
+    /// Zero-based row.
     pub row: usize,
+    /// Zero-based column.
     pub col: usize,
 }
 
+/// One terminal cell, or the leading cell of a wide character.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cell {
     pub(crate) text:  String,
@@ -61,6 +76,8 @@ impl Cell {
         self.style
     }
 
+    /// Creates a cell for `text`, or `None` unless it is exactly one extended grapheme cluster
+    /// that takes columns. Lone combining marks, controls and multi-cluster strings are refused.
     pub fn new(text: &str, style: Style) -> Option<Self> {
         let mut clusters = segments(text);
         let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
@@ -75,6 +92,8 @@ impl Cell {
         })
     }
 
+    /// Appends `text` to this cell and measures the result again. Without `attach` the text is
+    /// only joined when the two form a single grapheme cluster. Returns whether it was joined.
     fn join(&mut self, text: &str, attach: bool) -> bool {
         let mut joined = String::with_capacity(self.text.len() + text.len());
         joined.push_str(&self.text);
@@ -92,6 +111,7 @@ impl Cell {
     }
 }
 
+/// A line of cells and the break that follows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Row {
     cells:       Vec<Cell>,
@@ -99,6 +119,7 @@ pub struct Row {
 }
 
 impl Row {
+    /// Creates an empty row.
     pub const fn new() -> Self {
         Self {
             cells:       Vec::new(),
@@ -106,18 +127,22 @@ impl Row {
         }
     }
 
+    /// The cells of the row in order.
     pub fn cells(&self) -> &[Cell] {
         &self.cells
     }
 
+    /// Whether the row has no cells.
     pub const fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
 
+    /// The break that follows this row.
     pub const fn break_after(&self) -> RowBreak {
         self.break_after
     }
 
+    /// Sets the break that follows this row.
     pub const fn set_break_after(&mut self, row_break: RowBreak) {
         self.break_after = row_break;
     }
@@ -129,6 +154,10 @@ impl Default for Row {
     }
 }
 
+/// A grid of styled rows that widgets render into.
+///
+/// A surface always has at least one row. Text is added with [`Surface::write`] and rows are
+/// started with [`Surface::newline`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Surface {
     rows:   Vec<Row>,
@@ -142,6 +171,7 @@ impl Default for Surface {
 }
 
 impl Surface {
+    /// Creates a surface holding one empty row.
     pub fn new() -> Self {
         Self {
             rows:   vec![Row::new()],
@@ -149,18 +179,22 @@ impl Surface {
         }
     }
 
+    /// The rows from top to bottom.
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
+    /// Number of rows.
     pub const fn height(&self) -> usize {
         self.rows.len()
     }
 
+    /// Where the terminal cursor should rest, if a widget asked for one.
     pub const fn cursor(&self) -> Option<Position> {
         self.cursor
     }
 
+    /// Places the cursor at `position`.
     pub const fn set_cursor(&mut self, position: Position) {
         self.cursor = Some(position);
     }
@@ -171,6 +205,7 @@ impl Surface {
         self.cursor = None;
     }
 
+    /// Places the cursor at the end of the current row.
     pub fn set_cursor_here(&mut self) {
         self.cursor = Some(Position {
             row: self.rows.len().saturating_sub(1),
@@ -224,26 +259,31 @@ impl Surface {
         }
     }
 
+    /// Ends the current row with a hard break and starts another.
     pub fn newline(&mut self) {
         self.newline_with_break(RowBreak::Hard);
     }
 
+    /// Ends the current row with a soft break, marking the next row as a continuation.
     pub fn soft_wrap(&mut self) {
         self.newline_with_break(RowBreak::Soft);
     }
 
+    /// Display width of the row being written.
     pub fn current_col(&self) -> usize {
         self.rows
             .last()
             .map_or(0, |row| row.cells().iter().map(|cell| cell.width).sum())
     }
 
+    /// Display width of row `row`, or zero if it does not exist.
     pub fn row_width(&self, row: usize) -> usize {
         self.rows
             .get(row)
             .map_or(0, |row| row.cells().iter().map(|cell| cell.width).sum())
     }
 
+    /// Display width of the widest row.
     pub fn display_width(&self) -> usize {
         self.rows
             .iter()
@@ -252,6 +292,11 @@ impl Surface {
             .unwrap_or(0)
     }
 
+    /// Draws `source` over this surface.
+    ///
+    /// `destination` is where the source lands and `canvas` bounds every write, so anything outside
+    /// it is clipped. `fill` decides whether the destination hides the cells below it and `cursor`
+    /// decides which cursor survives.
     pub fn overlay(
         &mut self,
         source: &Self,
@@ -295,6 +340,7 @@ impl Surface {
         }
     }
 
+    /// Clips every row to `max_columns` and clamps the cursor to that width.
     pub fn fit_width(&mut self, max_columns: usize) {
         for row in &mut self.rows {
             let mut width = 0_usize;
@@ -330,6 +376,7 @@ impl Surface {
         }
     }
 
+    /// The text of every row without styles, joined by newlines.
     pub fn plain_text(&self) -> String {
         self.rows
             .iter()

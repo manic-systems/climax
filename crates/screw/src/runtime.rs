@@ -30,6 +30,12 @@ use crate::{
 
 const DEFAULT_FPS: u16 = 15;
 
+/// Owns a [`Renderer`] and a root widget and decides when to redraw.
+///
+/// A runtime redraws when it was marked dirty or when the widget asks for ticks through
+/// [`TickInterest`], and never faster than its frame rate. Drive it yourself with
+/// [`Runtime::tick`], or call [`Runtime::start`] to move it onto its own thread and control it
+/// through a [`LiveRuntime`].
 pub struct Runtime<W, H = WidgetRef, F = WidgetRef> {
     root: H,
     final_widget: Option<F>,
@@ -57,6 +63,7 @@ where
     W: Write,
     H: crate::Widget,
 {
+    /// Creates a runtime at 15 frames per second that draws `root` to `writer`.
     pub fn new(writer: W, root: H) -> Self {
         Self {
             root,
@@ -74,47 +81,55 @@ where
     W: Write,
     H: crate::Widget,
 {
+    /// Sets the maximum frames per second, treating zero as one.
     #[must_use]
     pub fn fps(mut self, fps: u16) -> Self {
         self.frame_interval = fps_interval(fps);
         self
     }
 
+    /// Sets the terminal width in columns.
     #[must_use]
     pub fn width(mut self, width: usize) -> Self {
         self.renderer = self.renderer.width(width);
         self
     }
 
+    /// Sets the terminal height in rows.
     #[must_use]
     pub fn height(mut self, height: usize) -> Self {
         self.renderer = self.renderer.height(height);
         self
     }
 
+    /// Sets the width and the height.
     #[must_use]
     pub fn viewport(self, width: usize, height: usize) -> Self {
         self.width(width).height(height)
     }
 
+    /// Chooses between clipping and wrapping overlong rows.
     #[must_use]
     pub fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.renderer = self.renderer.layout_mode(mode);
         self
     }
 
+    /// Chooses whether the surface cursor controls terminal cursor visibility.
     #[must_use]
     pub fn cursor_visibility(mut self, visibility: CursorVisibility) -> Self {
         self.renderer = self.renderer.cursor_visibility(visibility);
         self
     }
 
+    /// Sets the theme that resolves [`Role`](crate::Role) styles.
     #[must_use]
     pub fn theme(mut self, theme: Theme) -> Self {
         self.renderer = self.renderer.theme(theme);
         self
     }
 
+    /// Sets the widget drawn as the last frame when the runtime finishes, replacing the root.
     #[must_use]
     pub fn final_widget<G>(self, final_widget: G) -> Runtime<W, H, G>
     where
@@ -134,20 +149,24 @@ where
         }
     }
 
+    /// Changes the width and schedules a redraw.
     pub const fn resize(&mut self, width: usize) {
         self.renderer.resize(width);
         self.dirty = true;
     }
 
+    /// Changes the width and the height and schedules a redraw.
     pub fn resize_viewport(&mut self, width: usize, height: usize) {
         self.renderer.resize_viewport(width, height);
         self.dirty = true;
     }
 
+    /// Schedules a redraw on the next tick that is due.
     pub const fn mark_dirty(&mut self) {
         self.dirty = true;
     }
 
+    /// Draws immediately, ignoring the frame rate, and records `now` as the time of the draw.
     pub fn draw_now(&mut self, now: Instant) -> io::Result<RenderStats> {
         let stats = self.renderer.draw(&self.root)?;
         self.dirty = false;
@@ -155,6 +174,7 @@ where
         Ok(stats)
     }
 
+    /// Draws if a frame is due at `now`, returning the stats or `None` when nothing was drawn.
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<RenderStats>> {
         if !self.should_draw(now) {
             return Ok(None);
@@ -162,6 +182,7 @@ where
         self.draw_now(now).map(Some)
     }
 
+    /// Returns the writer without drawing.
     pub fn into_inner(self) -> W {
         self.renderer.into_inner()
     }
@@ -202,12 +223,15 @@ where
 }
 
 impl Runtime<io::Stderr, WidgetRef> {
+    /// Creates a runtime on standard error sized to the terminal, or 80 columns when the size is
+    /// unknown.
     pub fn stderr(root: WidgetRef) -> Self {
         let mut runtime = Self::new(io::stderr(), root);
         runtime.renderer = Renderer::stderr();
         runtime
     }
 
+    /// Like [`Runtime::auto`] on standard error, choosing live output only when it is a terminal.
     pub fn stderr_auto(root: WidgetRef) -> AutoRuntimeBuilder<io::Stderr> {
         let (width, height) = stderr_size();
         let mut builder = Self::auto(io::stderr(), root, io::stderr().is_terminal()).width(width);
@@ -221,6 +245,8 @@ where
     W: Write + Send + 'static,
     H: crate::Widget + Send + 'static,
 {
+    /// Starts building a runtime that is live when `interactive` is true and prints plain text once
+    /// otherwise.
     pub fn auto(writer: W, root: H, interactive: bool) -> AutoRuntimeBuilder<W, H> {
         AutoRuntimeBuilder::new(writer, root, interactive)
     }
@@ -239,6 +265,10 @@ enum ThreadFinishMode {
     Clear,
 }
 
+/// A [`Runtime`] running on its own thread.
+///
+/// Dropping it finishes the runtime with a final frame, or clears the frame if the dropping thread
+/// is panicking. Call one of the `finish` methods to get the writer back and see errors.
 pub struct LiveRuntime<W> {
     handle: RuntimeHandle,
     thread: Option<JoinHandle<Result<W, (W, io::Error)>>>,
@@ -254,11 +284,15 @@ impl<W> fmt::Debug for LiveRuntime<W> {
     }
 }
 
+/// A cloneable handle that sends commands to the thread of a [`LiveRuntime`].
+///
+/// Commands fail with a broken pipe error once the thread has stopped.
 #[derive(Debug)]
 pub struct RuntimeHandle {
     tx: Sender<RuntimeCommand>,
 }
 
+/// Builds an [`AutoRuntime`] with the same options as a [`Runtime`].
 pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
     writer:       W,
     root: H,
@@ -314,24 +348,28 @@ where
     H: crate::Widget + Send + 'static,
     F: crate::Widget + Send + 'static,
 {
+    /// Sets the maximum frames per second for live output.
     #[must_use]
     pub const fn fps(mut self, fps: u16) -> Self {
         self.fps = fps;
         self
     }
 
+    /// Sets the terminal width in columns.
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
         self
     }
 
+    /// Sets the terminal height in rows.
     #[must_use]
     pub const fn height(mut self, height: usize) -> Self {
         self.height = Some(height);
         self
     }
 
+    /// Sets the width and the height.
     #[must_use]
     pub const fn viewport(mut self, width: usize, height: usize) -> Self {
         self.width = Some(width);
@@ -339,24 +377,28 @@ where
         self
     }
 
+    /// Chooses between clipping and wrapping overlong rows.
     #[must_use]
     pub const fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.layout_mode = mode;
         self
     }
 
+    /// Chooses whether the surface cursor controls terminal cursor visibility.
     #[must_use]
     pub const fn cursor_visibility(mut self, visibility: CursorVisibility) -> Self {
         self.cursor_visibility = visibility;
         self
     }
 
+    /// Sets the theme that resolves [`Role`](crate::Role) styles.
     #[must_use]
     pub const fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
+    /// Sets the widget shown when the runtime finishes, replacing the root.
     #[must_use]
     pub fn final_widget<G>(self, final_widget: G) -> AutoRuntimeBuilder<W, H, G>
     where
@@ -376,6 +418,7 @@ where
         }
     }
 
+    /// Starts a live runtime when interactive and a plain one otherwise.
     pub fn start(self) -> AutoRuntime<W, H, F> {
         if self.interactive {
             let mut runtime = Runtime::new(self.writer, self.root).fps(self.fps);
@@ -404,8 +447,11 @@ where
     }
 }
 
+/// A runtime that is either live or plain, chosen when it was started.
 pub enum AutoRuntime<W, H = WidgetRef, F = WidgetRef> {
+    /// Animated output on a thread.
     Live(LiveRuntime<W>),
+    /// Unstyled text written once at the end.
     Plain(PlainRuntime<W, H, F>),
 }
 
@@ -424,6 +470,7 @@ where
     H: crate::Widget + Send + 'static,
     F: crate::Widget + Send + 'static,
 {
+    /// Schedules a redraw when live and does nothing when plain.
     pub fn mark_dirty(&self) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.mark_dirty(),
@@ -431,6 +478,7 @@ where
         }
     }
 
+    /// Changes the width.
     pub fn resize(&mut self, width: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize(width),
@@ -438,6 +486,7 @@ where
         }
     }
 
+    /// Changes the width and the height.
     pub fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize_viewport(width, height),
@@ -445,6 +494,10 @@ where
         }
     }
 
+    /// Ends the runtime with its final frame and returns the writer.
+    ///
+    /// No newline follows the frame and the cursor rests at the end of its last row, so write one
+    /// before printing anything else.
     pub fn finish(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish(),
@@ -452,6 +505,7 @@ where
         }
     }
 
+    /// Ends the runtime with `final_widget` as the last frame and returns the writer.
     pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
     where
         G: crate::Widget + Send + 'static,
@@ -462,6 +516,7 @@ where
         }
     }
 
+    /// Ends the runtime erasing what it drew and returns the writer.
     pub fn finish_cleared(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish_cleared(),
@@ -470,6 +525,9 @@ where
     }
 }
 
+/// The non-interactive half of [`AutoRuntime`].
+///
+/// It draws nothing while running and writes the final widget as unstyled text when it finishes.
 pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
     writer:       W,
     root: H,
@@ -499,17 +557,28 @@ where
     H: crate::Widget,
     F: crate::Widget,
 {
+    /// Changes the width used for the final text.
+    ///
+    /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch to either runtime
+    /// with `?`.
     pub const fn resize(&mut self, width: usize) -> io::Result<()> {
         self.width = Some(width);
         Ok(())
     }
 
+    /// Changes the width and the height used for the final text.
+    ///
+    /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch to either runtime
+    /// with `?`.
     pub const fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         self.width = Some(width);
         self.height = Some(height);
         Ok(())
     }
 
+    /// Writes the final widget, or the root when none was set, and returns the writer.
+    ///
+    /// No trailing newline is written, so write one before printing anything else.
     pub fn finish(self) -> io::Result<W> {
         let Self {
             writer,
@@ -527,6 +596,7 @@ where
         }
     }
 
+    /// Writes `final_widget` as the final text and returns the writer.
     pub fn finish_with<G>(self, final_widget: &G) -> io::Result<W>
     where
         G: crate::Widget,
@@ -541,6 +611,7 @@ where
         )
     }
 
+    /// Returns the writer without writing anything.
     pub fn finish_cleared(mut self) -> io::Result<W> {
         self.writer.flush()?;
         Ok(self.writer)
@@ -611,30 +682,47 @@ where
         }
     }
 
+    /// A handle for sending commands to the thread from elsewhere.
     pub fn handle(&self) -> RuntimeHandle {
         self.handle.clone()
     }
 
+    /// Schedules a redraw.
     pub fn mark_dirty(&self) -> io::Result<()> {
         self.handle.mark_dirty()
     }
 
+    /// Changes the width.
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.handle.resize(width)
     }
 
+    /// Changes the width and the height.
     pub fn resize_viewport(&self, width: usize, height: usize) -> io::Result<()> {
         self.handle.resize_viewport(width, height)
     }
 
+    /// Stops the thread after drawing its final frame and returns the writer.
+    ///
+    /// No newline follows the frame and the cursor rests at the end of its last row, so write one
+    /// before printing anything else. When drawing fails or a widget panics on the thread, the
+    /// writer is dropped after a best effort to show a hidden cursor again, and the error carries
+    /// the panic message. Use [`LiveRuntime::finish_recovering`] to keep the writer in that case.
     pub fn finish(self) -> io::Result<W> {
         self.finish_via(ThreadFinishMode::Current)
     }
 
+    /// Like [`LiveRuntime::finish`], but hands the writer back alongside the error.
+    ///
+    /// The writer is `None` only when the thread died without returning it, which a failed draw or
+    /// a panicking widget does not cause.
     pub fn finish_recovering(self) -> Result<W, (Option<W>, io::Error)> {
         self.finish_via_recovering(ThreadFinishMode::Current)
     }
 
+    /// Stops the thread after drawing `final_widget` as the last frame and returns the writer.
+    ///
+    /// The cursor is left as [`LiveRuntime::finish`] leaves it.
     pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
     where
         G: crate::Widget + Send + 'static,
@@ -642,6 +730,7 @@ where
         self.finish_via(ThreadFinishMode::With(Box::new(final_widget)))
     }
 
+    /// Stops the thread after erasing what it drew and returns the writer.
     pub fn finish_cleared(self) -> io::Result<W> {
         self.finish_via(ThreadFinishMode::Clear)
     }
@@ -684,14 +773,17 @@ impl Clone for RuntimeHandle {
 }
 
 impl RuntimeHandle {
+    /// Schedules a redraw.
     pub fn mark_dirty(&self) -> io::Result<()> {
         self.send(RuntimeCommand::Dirty)
     }
 
+    /// Changes the width.
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.send(RuntimeCommand::Resize(width))
     }
 
+    /// Changes the width and the height.
     pub fn resize_viewport(&self, width: usize, height: usize) -> io::Result<()> {
         self.send(RuntimeCommand::ResizeViewport(width, height))
     }
