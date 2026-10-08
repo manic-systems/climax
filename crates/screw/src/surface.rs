@@ -166,9 +166,7 @@ impl Surface {
             .map_or(0, |row| row.cells().iter().map(|cell| cell.width).sum())
     }
 
-    pub fn fit_width(&mut self, terminal_width: usize) {
-        let max_columns = fitted_columns(terminal_width);
-
+    pub fn fit_width(&mut self, max_columns: usize) {
         for row in &mut self.rows {
             let mut width = 0_usize;
             let keep = row
@@ -191,6 +189,15 @@ impl Surface {
             let row = cursor.row.min(self.rows.len().saturating_sub(1));
             let col = cursor.col.min(self.row_width(row)).min(max_columns);
             self.cursor = Some(Position { row, col });
+        }
+    }
+
+    /// Clip physical rows to a terminal height and discard an outside cursor.
+    pub fn fit_height(&mut self, terminal_height: usize) {
+        let height = terminal_height.max(1);
+        self.rows.truncate(height);
+        if self.cursor.is_some_and(|cursor| cursor.row >= height) {
+            self.cursor = None;
         }
     }
 
@@ -219,6 +226,28 @@ impl Surface {
     }
 }
 
-fn fitted_columns(terminal_width: usize) -> usize {
-    terminal_width.saturating_sub(1).max(1)
+pub(crate) fn append_surface(out: &mut Surface, surface: &Surface, limit: usize) -> usize {
+    let rows = surface.rows().iter().take(limit);
+    let base_row = out.height().saturating_sub(1);
+    let mut written = 0_usize;
+    for (row_index, row) in rows.enumerate() {
+        if row_index > 0 {
+            let previous_break = surface.rows()[row_index - 1].break_after();
+            out.newline_with_break(previous_break);
+        }
+        for cell in row.cells() {
+            out.write(&cell.text, cell.style);
+        }
+        out.current_row_mut().set_break_after(row.break_after());
+        written += 1;
+    }
+    if let Some(cursor) = surface.cursor()
+        && cursor.row < written
+    {
+        out.set_cursor(Position {
+            row: base_row + cursor.row,
+            col: cursor.col,
+        });
+    }
+    written
 }

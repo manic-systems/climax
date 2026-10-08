@@ -19,12 +19,19 @@ use std::{
 use unicode_width::UnicodeWidthChar as _;
 
 use crate::{
-    Role,
-    Style,
-    Surface,
-    Theme,
+    LayoutMode, Role, Style, Surface, Theme, Viewport, renderer::layout_surface,
+    surface::append_surface, sync::lock,
 };
-use crate::sync::lock;
+
+/// A widget's vertical allocation behavior inside a [`Stack`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VerticalSize {
+    /// Measure the widget from its content before allocating flexible space.
+    #[default]
+    Content,
+    /// Share the height left after content-sized siblings are measured.
+    Flexible,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
@@ -37,6 +44,8 @@ pub enum TickInterest {
 pub struct RenderCtx {
     frame: u64,
     columns: Option<usize>,
+    rows: Option<usize>,
+    layout_mode: LayoutMode,
     theme: Theme,
 }
 
@@ -45,6 +54,8 @@ impl RenderCtx {
         Self {
             frame: 0,
             columns: None,
+            rows: None,
+            layout_mode: LayoutMode::Clip,
             theme: Theme::DEFAULT,
         }
     }
@@ -56,8 +67,15 @@ impl RenderCtx {
     }
 
     #[must_use]
-    pub(crate) const fn with_columns(mut self, columns: Option<usize>) -> Self {
+    pub const fn with_constraints(mut self, columns: Option<usize>, rows: Option<usize>) -> Self {
         self.columns = columns;
+        self.rows = rows;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_layout_mode(mut self, layout_mode: LayoutMode) -> Self {
+        self.layout_mode = layout_mode;
         self
     }
 
@@ -75,8 +93,28 @@ impl RenderCtx {
         self.columns
     }
 
+    pub const fn available_rows(self) -> Option<usize> {
+        self.rows
+    }
+
+    pub const fn viewport(self) -> Option<Viewport> {
+        match (self.columns, self.rows) {
+            (Some(columns), Some(rows)) => Some(Viewport::new(columns, rows)),
+            _ => None,
+        }
+    }
+
+    pub const fn layout_mode(self) -> LayoutMode {
+        self.layout_mode
+    }
+
     pub const fn theme(self) -> Theme {
         self.theme
+    }
+
+    pub(crate) const fn with_rows(mut self, rows: Option<usize>) -> Self {
+        self.rows = rows;
+        self
     }
 }
 
@@ -91,6 +129,11 @@ pub trait Widget {
 
     fn tick_interest(&self) -> TickInterest {
         TickInterest::Never
+    }
+
+    /// Describe how a vertical container should allocate height to this widget.
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Content
     }
 }
 
@@ -543,6 +586,10 @@ where
     fn tick_interest(&self) -> TickInterest {
         combine_tick_interest(self.children.iter().map(Widget::tick_interest))
     }
+
+    fn vertical_size(&self) -> VerticalSize {
+        combine_vertical_size(self.children.iter())
+    }
 }
 
 #[derive(Clone)]
@@ -563,16 +610,79 @@ where
     H: Widget,
 {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        let flexible = self
+            .children
+            .iter()
+            .filter(|child| child.vertical_size() == VerticalSize::Flexible)
+            .count();
+        if ctx.available_rows().is_none() || flexible == 0 {
+            self.render_sequentially(ctx, out);
+            return;
+        }
+
+        let mut rendered = vec![None; self.children.len()];
+        let mut fixed_height = 0_usize;
+        for (index, child) in self.children.iter().enumerate() {
+            if child.vertical_size() == VerticalSize::Content {
+                let mut surface = Surface::new();
+                child.render(&ctx.with_rows(None), &mut surface);
+                let surface = layout_surface(surface, ctx.available_columns(), ctx.layout_mode());
+                fixed_height = fixed_height.saturating_add(surface.height());
+                let height = surface.height();
+                rendered[index] = Some((surface, height));
+            }
+        }
+
+        let available = ctx
+            .available_rows()
+            .unwrap_or_default()
+            .saturating_sub(out.height().saturating_sub(1))
+            .saturating_sub(fixed_height);
+        let each = available / flexible;
+        let mut extra = available % flexible;
+        let mut first = true;
+        for (index, child) in self.children.iter().enumerate() {
+            let (surface, limit) = rendered[index].take().unwrap_or_else(|| {
+                let allocation = each + usize::from(extra > 0);
+                extra = extra.saturating_sub(1);
+                let mut surface = Surface::new();
+                child.render(&ctx.with_rows(Some(allocation)), &mut surface);
+                (
+                    layout_surface(surface, ctx.available_columns(), ctx.layout_mode()),
+                    allocation,
+                )
+            });
+            if limit == 0 {
+                continue;
+            }
+            if !first {
+                out.newline();
+            }
+            append_surface(out, &surface, limit);
+            first = false;
+        }
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        combine_vertical_size(self.children.iter())
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        combine_tick_interest(self.children.iter().map(Widget::tick_interest))
+    }
+}
+
+impl<H> Stack<H>
+where
+    H: Widget,
+{
+    fn render_sequentially(&self, ctx: &RenderCtx, out: &mut Surface) {
         for (index, child) in self.children.iter().enumerate() {
             if index > 0 {
                 out.newline();
             }
             child.render(ctx, out);
         }
-    }
-
-    fn tick_interest(&self) -> TickInterest {
-        combine_tick_interest(self.children.iter().map(Widget::tick_interest))
     }
 }
 
@@ -623,6 +733,12 @@ where
             .get(&self.state())
             .map_or(TickInterest::Never, Widget::tick_interest)
     }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.cases
+            .get(&self.state())
+            .map_or(VerticalSize::Content, Widget::vertical_size)
+    }
 }
 
 impl<T> Widget for Arc<T>
@@ -635,6 +751,10 @@ where
 
     fn tick_interest(&self) -> TickInterest {
         self.as_ref().tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
     }
 }
 
@@ -649,6 +769,10 @@ where
     fn tick_interest(&self) -> TickInterest {
         self.as_ref().tick_interest()
     }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
 }
 
 impl<T> Widget for Box<T>
@@ -662,6 +786,10 @@ where
     fn tick_interest(&self) -> TickInterest {
         self.as_ref().tick_interest()
     }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
 }
 
 impl Widget for String {
@@ -673,6 +801,19 @@ impl Widget for String {
 impl Widget for &'static str {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         out.write(*self, Style::default());
+    }
+}
+
+fn combine_vertical_size<'a, H: Widget + 'a>(
+    children: impl IntoIterator<Item = &'a H>,
+) -> VerticalSize {
+    if children
+        .into_iter()
+        .any(|child| child.vertical_size() == VerticalSize::Flexible)
+    {
+        VerticalSize::Flexible
+    } else {
+        VerticalSize::Content
     }
 }
 
