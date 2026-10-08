@@ -1,4 +1,8 @@
 //! render primitives
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
 
 extern crate alloc;
 
@@ -8,6 +12,7 @@ mod renderer;
 mod runtime;
 mod style;
 mod surface;
+mod sync;
 mod template;
 mod terminal;
 mod widget;
@@ -64,6 +69,7 @@ pub use widget::{
     InputAnchor,
     Line,
     List,
+    LocalWidgetRef,
     Looping,
     ProgressBar,
     RenderCtx,
@@ -75,6 +81,7 @@ pub use widget::{
     Widget,
     WidgetRef,
     WindowedLines,
+    local_widget,
     widget,
 };
 
