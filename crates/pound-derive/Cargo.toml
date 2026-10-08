@@ -18,9 +18,7 @@ help = [  ]
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
-quote       = "1"
-venial      = "0.6"
+pound-derive-impl = { version = "=0.2.0", path = "../pound-derive-impl" }
 
 [lints]
 workspace = true

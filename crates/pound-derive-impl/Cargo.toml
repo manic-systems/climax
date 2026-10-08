@@ -1,0 +1,19 @@
+[package]
+name                 = "pound-derive-impl"
+version              = "0.2.0"
+description          = "expansion behind pound's derive macros"
+keywords             = [ "cli", "args", "derive" ]
+categories           = [ "development-tools::procedural-macro-helpers" ]
+readme               = "../../README.md"
+authors.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[dependencies]
+proc-macro2 = "1"
+quote       = "1"
+venial      = "0.6"
+
+[lints]
+workspace = true

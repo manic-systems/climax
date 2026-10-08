@@ -8,6 +8,7 @@ members = [
 	"crates/climax",
 	"crates/pound",
 	"crates/pound-derive",
+	"crates/pound-derive-impl",
 	"crates/screw",
 	"crates/screw-pty",
 ]
