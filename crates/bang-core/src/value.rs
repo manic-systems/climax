@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use alloc::collections::BTreeMap;
-use core::{
+use std::{
+    collections::BTreeMap,
     fmt,
     str::FromStr,
 };
@@ -32,12 +32,7 @@ impl Value {
     pub const fn as_bool(&self) -> Option<bool> {
         match self {
             Self::Bool(value) => Some(*value),
-            Self::Null
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+            _ => None,
         }
     }
 
@@ -46,12 +41,7 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(value) => Some(value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+            _ => None,
         }
     }
 
@@ -60,12 +50,7 @@ impl Value {
     pub const fn as_number(&self) -> Option<Number> {
         match self {
             Self::Number(value) => Some(*value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Date(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+            _ => None,
         }
     }
 
@@ -74,12 +59,7 @@ impl Value {
     pub const fn as_date(&self) -> Option<Date> {
         match self {
             Self::Date(value) => Some(*value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+            _ => None,
         }
     }
 
@@ -88,12 +68,7 @@ impl Value {
     pub fn as_list(&self) -> Option<&[Self]> {
         match self {
             Self::List(value) => Some(value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::Object(_) => None,
+            _ => None,
         }
     }
 
@@ -102,12 +77,7 @@ impl Value {
     pub const fn as_object(&self) -> Option<&BTreeMap<String, Self>> {
         match self {
             Self::Object(value) => Some(value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::List(_) => None,
+            _ => None,
         }
     }
 }

@@ -3,12 +3,16 @@ name                 = "bang-core"
 version              = "0.0.1"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
-description          = "widgets and state for bang"
+description          = "Widgets and session state behind the bang prompts, rendered with screw"
 edition.workspace    = true
 keywords             = [ "cli", "input", "terminal", "widgets" ]
 license.workspace    = true
 readme               = "../../README.md"
 repository.workspace = true
+
+[dependencies]
+screw = { path = "../screw", version = "=0.0.1" }
+unicode-segmentation = "1.13"
 
 [lints]
 workspace = true
