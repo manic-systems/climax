@@ -5,6 +5,7 @@ use std::{
     fmt,
     io::{
         self,
+        IsTerminal as _,
         Write,
     },
     panic::{
@@ -44,8 +45,7 @@ use crate::{
         layout_surface,
         usable_columns,
     },
-    stderr_is_terminal,
-    terminal_width_or_default,
+    terminal::stderr_size,
 };
 
 const DEFAULT_FPS: u16 = 15;
@@ -234,11 +234,16 @@ where
 
 impl Runtime<io::Stderr, WidgetRef> {
     pub fn stderr(root: WidgetRef) -> Self {
-        Self::new(io::stderr(), root).width(terminal_width_or_default())
+        let mut runtime = Self::new(io::stderr(), root);
+        runtime.renderer = Renderer::stderr();
+        runtime
     }
 
     pub fn stderr_auto(root: WidgetRef) -> AutoRuntimeBuilder<io::Stderr> {
-        Self::auto(io::stderr(), root, stderr_is_terminal()).width(terminal_width_or_default())
+        let (width, height) = stderr_size();
+        let mut builder = Self::auto(io::stderr(), root, io::stderr().is_terminal()).width(width);
+        builder.height = height;
+        builder
     }
 }
 
@@ -1257,6 +1262,19 @@ mod tests {
             Some(4),
             Some(2)
         )],);
+    }
+
+    #[test]
+    fn stderr_constructor_takes_its_height_from_the_terminal() {
+        let (root, seen) = recording_widget();
+        let mut runtime = Runtime::stderr(root);
+        runtime.draw_now(Instant::now()).unwrap();
+        assert_eq!(
+            seen.lock().unwrap().last().unwrap().2,
+            crate::Viewport::of(&io::stderr())
+                .ok()
+                .map(|size| size.rows),
+        );
     }
 
     #[test]

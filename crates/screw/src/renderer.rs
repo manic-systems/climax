@@ -17,7 +17,7 @@ use crate::{
     Surface,
     Theme,
     Widget,
-    terminal_width_or_default,
+    terminal::stderr_size,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -393,7 +393,10 @@ impl<W: Write> Write for Sink<W> {
 
 impl Renderer<io::Stderr> {
     pub fn stderr() -> Self {
-        Self::new(io::stderr()).width(terminal_width_or_default())
+        let (width, height) = stderr_size();
+        let mut renderer = Self::new(io::stderr()).width(width);
+        renderer.height = height;
+        renderer
     }
 }
 
