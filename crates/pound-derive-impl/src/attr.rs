@@ -88,6 +88,7 @@ impl Pound {
         {
             return Err(format!("pound: `{key}` is not valid here (`{owner}`)"));
         }
+
         Ok(())
     }
 
@@ -130,6 +131,7 @@ impl Pound {
             "alias"           => self.aliases.extend(csv(&needed(key, value)?)),
             _                 => return Err(format!("pound: unknown attribute `{key}`")),
         }
+
         Ok(())
     }
 }
@@ -137,15 +139,19 @@ impl Pound {
 /// collect `#[pound(...)]` options from a set of attributes
 pub fn pound(attrs: &[Attribute]) -> Result<Pound, String> {
     let mut out = Pound::default();
+
     for attr in attrs {
         if !path_is(attr, "pound") {
             continue;
         }
+
         let AttributeValue::Group(_, tokens) = &attr.value else {
             return Err("pound: attributes must use #[pound(...)]".to_owned());
         };
+
         apply_metas(&mut out, tokens)?;
     }
+
     Ok(out)
 }
 
@@ -155,26 +161,31 @@ pub fn pound(attrs: &[Attribute]) -> Result<Pound, String> {
 pub fn doc(attrs: &[Attribute]) -> String {
     let mut out = String::new();
     let mut fresh = true;
+
     for attr in attrs {
         if path_is(attr, "doc")
             && let AttributeValue::Equals(_, tokens) = &attr.value
             && let Some(text) = tokens.first().map(unquote)
         {
             let line = text.trim();
+
             if line.is_empty() {
                 if !out.is_empty() {
                     out.push_str("\n\n");
                 }
+
                 fresh = true;
             } else {
                 if !fresh {
                     out.push(' ');
                 }
+
                 out.push_str(line);
                 fresh = false;
             }
         }
     }
+
     out.trim().to_owned()
 }
 
@@ -193,7 +204,9 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
         let Some(TokenTree::Ident(ident)) = seg.first() else {
             return Err("pound: expected `key` or `key = value`".to_owned());
         };
+
         let key = ident.to_string();
+
         let value = match seg.as_slice() {
             [_] => None,
             [_, TokenTree::Punct(p), value] if p.as_char() == '=' => Some(unquote(value)),
@@ -203,6 +216,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
         out.set(&key, value, &seg)?;
         out.keys.push(key);
     }
+
     Ok(())
 }
 
@@ -210,6 +224,7 @@ fn bare(key: &str, has_value: bool) -> Result<bool, String> {
     if has_value {
         return Err(format!("pound: `{key}` does not take a value"));
     }
+
     Ok(true)
 }
 
@@ -219,6 +234,7 @@ fn needed(key: &str, value: Option<String>) -> Result<String, String> {
 
 fn single_char(value: &str) -> Result<char, String> {
     let mut chars = value.chars();
+
     match (chars.next(), chars.next()) {
         (Some(short), None) => Ok(short),
         _ => Err("pound: `short` needs one character".to_owned()),
@@ -255,9 +271,11 @@ fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
             cur.push(tok.clone());
         }
     }
+
     if !cur.is_empty() {
         segs.push(cur);
     }
+
     segs
 }
 
@@ -274,7 +292,9 @@ fn unquote(tok: &TokenTree) -> String {
         },
         other => return other.to_string(),
     };
+
     let bytes = raw.as_bytes();
+
     if bytes.len() >= 2
         && (bytes[0] == b'"' || bytes[0] == b'\'')
         && bytes[bytes.len() - 1] == bytes[0]
