@@ -39,7 +39,6 @@ pub enum CursorVisibility {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct RenderedFrame {
-    logical:  Surface,
     physical: Surface,
 }
 
@@ -48,12 +47,12 @@ pub struct Renderer<W> {
     previous:       Option<RenderedFrame>,
     frame:          u64,
     width:          Option<usize>,
+    height: Option<usize>,
     layout_mode:    LayoutMode,
     theme:          Theme,
     cursor_visibility: CursorVisibility,
     cursor_visible: Option<bool>,
-    force_full:     bool,
-    resize_pending: bool,
+    force_full: bool,
 }
 
 impl<W> Renderer<W>
@@ -66,18 +65,24 @@ where
             previous: None,
             frame: 0,
             width: None,
+            height: None,
             layout_mode: LayoutMode::Clip,
             theme: Theme::DEFAULT,
             cursor_visibility: CursorVisibility::Preserve,
             cursor_visible: None,
             force_full: false,
-            resize_pending: false,
         }
     }
 
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    #[must_use]
+    pub const fn height(mut self, height: usize) -> Self {
+        self.height = Some(height);
         self
     }
 
@@ -96,10 +101,14 @@ where
 
     pub const fn resize(&mut self, width: usize) {
         self.width = Some(width);
-        self.resize_pending = true;
-        if matches!(self.layout_mode, LayoutMode::Clip) {
-            self.force_full = true;
-        }
+        // Terminal resize reflow is emulator- and mode-dependent. Retained
+        // state cannot safely infer the old physical frame at the new width.
+        self.force_full = true;
+    }
+
+    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+        self.height = Some(height);
+        self.resize(width);
     }
 
     #[must_use]
@@ -108,9 +117,6 @@ where
         self
     }
 
-    /// # Errors
-    ///
-    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn draw<T>(&mut self, widget: &T) -> io::Result<RenderStats>
     where
         T: Widget + ?Sized,
@@ -119,7 +125,8 @@ where
         widget.render(
             &RenderCtx::new()
                 .with_frame(self.frame)
-                .with_columns(self.width)
+                .with_constraints(self.width.map(usable_columns), self.height)
+                .with_layout_mode(self.layout_mode)
                 .with_theme(self.theme),
             &mut next,
         );
@@ -127,26 +134,18 @@ where
         self.draw_surface(next)
     }
 
-    /// # Errors
-    ///
-    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
-        let next_physical = self.layout_surface(next_logical.clone());
+        let next_physical = self.layout_surface(next_logical);
 
-        let previous_physical = self.previous.as_ref().map(|previous| {
-            if self.resize_pending && matches!(self.layout_mode, LayoutMode::Wrap) {
-                self.layout_surface(previous.logical.clone())
-            } else {
-                previous.physical.clone()
-            }
-        });
+        let previous_physical = self
+            .previous
+            .as_ref()
+            .map(|previous| previous.physical.clone());
 
         if !self.force_full && previous_physical.as_ref() == Some(&next_physical) {
             self.previous = Some(RenderedFrame {
-                logical:  next_logical,
                 physical: next_physical,
             });
-            self.resize_pending = false;
             return Ok(RenderStats::default());
         }
 
@@ -162,7 +161,8 @@ where
             write_initial_surface(&next_physical, &mut self.writer, &mut cursor, &mut stats)?;
             self.force_full = false;
         } else if let Some(previous) = &previous_physical {
-            move_to_top(&mut self.writer, final_position(previous), &mut cursor)?;
+            let from = extend_for_growth(previous, &next_physical, &mut self.writer, &mut cursor)?;
+            move_to_top(&mut self.writer, from, &mut cursor)?;
             diff_surfaces(
                 previous,
                 &next_physical,
@@ -178,26 +178,16 @@ where
         self.update_cursor_visibility(next_physical.cursor().is_some())?;
         self.writer.flush()?;
         self.previous = Some(RenderedFrame {
-            logical:  next_logical,
             physical: next_physical,
         });
-        self.resize_pending = false;
         Ok(stats)
     }
 
-    /// # Errors
-    ///
-    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let Some(previous) = self.previous.take() else {
             return Ok(RenderStats::default());
         };
-        let previous_physical =
-            if self.resize_pending && matches!(self.layout_mode, LayoutMode::Wrap) {
-                self.layout_surface(previous.logical)
-            } else {
-                previous.physical
-            };
+        let previous_physical = previous.physical;
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
 
@@ -216,7 +206,6 @@ where
         self.update_cursor_visibility(false)?;
         self.writer.flush()?;
         self.force_full = false;
-        self.resize_pending = false;
         Ok(stats)
     }
 
@@ -225,7 +214,11 @@ where
     }
 
     fn layout_surface(&self, surface: Surface) -> Surface {
-        layout_surface(surface, self.width, self.layout_mode)
+        let mut surface = layout_surface(surface, self.width.map(usable_columns), self.layout_mode);
+        if let Some(height) = self.height {
+            surface.fit_height(height);
+        }
+        surface
     }
 
     fn update_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
@@ -249,37 +242,38 @@ impl Renderer<io::Stderr> {
 
 pub fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMode) -> Surface {
     match (width, mode) {
-        (Some(columns), LayoutMode::Clip) => {
-            surface.fit_width(columns);
+        (Some(width), LayoutMode::Clip) => {
+            surface.fit_width(width);
             surface
         },
-        (Some(columns), LayoutMode::Wrap) => wrap_surface(&surface, columns),
+        (Some(width), LayoutMode::Wrap) => wrap_surface(&surface, width),
         (None, _) => surface,
     }
 }
 
-fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
-    let max_columns = fitted_columns(terminal_width);
-    let logical_cursor = surface.cursor();
+fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
+    let cursor = surface.cursor();
     let mut out = Surface::new();
     let mut first_physical_row = true;
     let mut physical_cursor = None;
 
+    let mut previous_break = crate::RowBreak::None;
     for (logical_row, row) in surface.rows().iter().enumerate() {
-        if !first_physical_row {
+        if !first_physical_row && previous_break != crate::RowBreak::Soft {
             out.newline();
         }
         first_physical_row = false;
         let mut logical_col = 0_usize;
-        let cursor_on_row = logical_cursor.filter(|position| position.row == logical_row);
+        let cursor_on_row = cursor.filter(|cursor| cursor.row == logical_row);
 
         if row.is_empty() {
-            if cursor_on_row.is_some_and(|position| position.col == 0) {
+            if cursor_on_row.is_some_and(|cursor| cursor.col == 0) {
                 physical_cursor = Some(Position {
                     row: out.height().saturating_sub(1),
                     col: 0,
                 });
             }
+            previous_break = row.break_after();
             continue;
         }
 
@@ -310,28 +304,78 @@ fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
             logical_col += cell.width;
         }
 
-        if cursor_on_row.is_some_and(|position| position.col >= logical_col) {
+        if cursor_on_row.is_some_and(|cursor| cursor.col >= logical_col) {
             physical_cursor = Some(Position {
                 row: out.height().saturating_sub(1),
                 col: out.current_col(),
             });
         }
+        previous_break = row.break_after();
     }
 
-    if let Some(position) = physical_cursor {
-        out.set_cursor(position);
+    if let Some(cursor) = physical_cursor {
+        out.set_cursor(cursor);
     }
     out
 }
 
 fn cursor_crosses_cell(cursor: Option<Position>, logical_col: usize, cell_width: usize) -> bool {
-    cursor.is_some_and(|position| {
-        position.col >= logical_col && position.col < logical_col.saturating_add(cell_width)
+    cursor.is_some_and(|cursor| {
+        cursor.col >= logical_col && cursor.col < logical_col.saturating_add(cell_width)
     })
 }
 
-fn fitted_columns(terminal_width: usize) -> usize {
-    terminal_width.saturating_sub(1).max(1)
+pub const fn usable_columns(terminal_columns: usize) -> usize {
+    if terminal_columns > 1 {
+        terminal_columns - 1
+    } else {
+        1
+    }
+}
+
+/// Ensure every physical row addressed by the next diff exists.
+///
+/// Cursor movement cannot create terminal rows: moving below the bottom edge
+/// simply clamps. A taller retained frame must therefore append real newlines
+/// before the renderer moves back to its origin and patches the new rows.
+fn extend_for_growth(
+    previous: &Surface,
+    next: &Surface,
+    writer: &mut impl Write,
+    cursor: &mut Cursor,
+) -> io::Result<Position> {
+    let previous_final = final_position(previous);
+    let previous_bottom = allocated_bottom(previous);
+    let next_bottom = allocated_bottom(next);
+    if next_bottom <= previous_bottom {
+        return Ok(previous_final);
+    }
+
+    *cursor = Cursor {
+        row: previous_final.row,
+        col: previous_final.col,
+        style: Style::default(),
+    };
+    cursor.move_to(
+        writer,
+        Position {
+            row: previous_bottom,
+            col: 0,
+        },
+    )?;
+    for _ in previous_bottom..next_bottom {
+        writer.write_all(b"\r\n")?;
+        cursor.row += 1;
+        cursor.col = 0;
+    }
+    Ok(Position {
+        row: next_bottom,
+        col: 0,
+    })
+}
+
+const fn allocated_bottom(surface: &Surface) -> usize {
+    surface.height().saturating_sub(1)
 }
 
 fn move_to_top(writer: &mut impl Write, from: Position, cursor: &mut Cursor) -> io::Result<()> {
@@ -377,7 +421,7 @@ fn diff_surfaces(
     let rows = previous.height().max(next.height());
     for row_index in 0..rows {
         match (previous.rows().get(row_index), next.rows().get(row_index)) {
-            (Some(old), Some(new)) if old == new => {},
+            (Some(old), Some(new)) if old.cells() == new.cells() => {},
             (Some(old), Some(new)) => {
                 patch_row(writer, cursor, row_index, old.cells(), new.cells())?;
                 stats.changed_rows += 1;
@@ -475,7 +519,7 @@ fn write_row_tail(
 fn common_prefix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .zip(new)
-        .take_while(|(before, after)| before == after)
+        .take_while(|(old, new)| old == new)
         .count()
 }
 
@@ -483,7 +527,7 @@ fn common_suffix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .rev()
         .zip(new.iter().rev())
-        .take_while(|(before, after)| before == after)
+        .take_while(|(old, new)| old == new)
         .count()
 }
 
@@ -492,11 +536,9 @@ fn cells_width(cells: &[Cell]) -> usize {
 }
 
 fn final_position(surface: &Surface) -> Position {
-    surface.cursor().unwrap_or_else(|| {
-        Position {
-            row: surface.height(),
-            col: 0,
-        }
+    surface.cursor().unwrap_or_else(|| Position {
+        row: surface.height().saturating_sub(1),
+        col: surface.row_width(surface.height().saturating_sub(1)),
     })
 }
 

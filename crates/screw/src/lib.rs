@@ -1,5 +1,6 @@
 //! render primitives
 
+mod geometry;
 mod layout;
 mod plain;
 mod renderer;
@@ -9,8 +10,10 @@ mod surface;
 mod sync;
 mod template;
 mod terminal;
+mod viewport;
 mod widget;
 
+pub use geometry::{Insets, Rect, Size, Viewport};
 pub use layout::{LayoutBuilder, layout, local_layout};
 pub use plain::{
     render_plain, render_plain_with_frame, render_plain_with_frame_and_theme, write_plain,
@@ -23,9 +26,11 @@ pub use style::{Color, Role, Style, Theme};
 pub use surface::{Cell, Position, Row, RowBreak, Surface};
 pub use template::{TemplateError, local_template, template};
 pub use terminal::{FALLBACK_WIDTH, stderr_is_terminal, terminal_width, terminal_width_or_default};
+pub use viewport::{VerticalViewport, ViewportReport, ViewportReportHandle};
 pub use widget::{
     Grid, GridCell, InputAnchor, Line, List, LocalWidgetRef, Looping, ProgressBar, RenderCtx, Stack,
-    Stateful, Text, TextInput, TickInterest, Widget, WidgetRef, WindowedLines, local_widget, widget,
+    Stateful, Text, TextInput, TickInterest, VerticalSize, Widget, WidgetRef, WindowedLines,
+    local_widget, widget,
 };
 
 #[macro_export]
