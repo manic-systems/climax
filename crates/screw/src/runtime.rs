@@ -28,7 +28,10 @@ use crate::{
     Theme,
     TickInterest,
     WidgetRef,
-    renderer::layout_surface,
+    renderer::{
+        layout_surface,
+        usable_columns,
+    },
     stderr_is_terminal,
     terminal_width_or_default,
 };
@@ -79,6 +82,17 @@ where
     }
 
     #[must_use]
+    pub fn height(mut self, height: usize) -> Self {
+        self.renderer = self.renderer.height(height);
+        self
+    }
+
+    #[must_use]
+    pub fn viewport(self, width: usize, height: usize) -> Self {
+        self.width(width).height(height)
+    }
+
+    #[must_use]
     pub fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.renderer = self.renderer.layout_mode(mode);
         self
@@ -117,6 +131,11 @@ where
 
     pub const fn resize(&mut self, width: usize) {
         self.renderer.resize(width);
+        self.dirty = true;
+    }
+
+    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+        self.renderer.resize_viewport(width, height);
         self.dirty = true;
     }
 
@@ -199,6 +218,7 @@ where
 enum RuntimeCommand {
     Dirty,
     Resize(usize),
+    ResizeViewport(usize, usize),
     Finish(ThreadFinishMode),
 }
 
@@ -223,6 +243,7 @@ pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
     interactive:       bool,
     fps:               u16,
     width:             Option<usize>,
+    height:            Option<usize>,
     layout_mode:       LayoutMode,
     cursor_visibility: CursorVisibility,
     theme:             Theme,
@@ -241,6 +262,7 @@ where
             interactive,
             fps: DEFAULT_FPS,
             width: None,
+            height: None,
             layout_mode: LayoutMode::Clip,
             cursor_visibility: CursorVisibility::Preserve,
             theme: Theme::default(),
@@ -264,6 +286,19 @@ where
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
+        self
+    }
+
+    #[must_use]
+    pub const fn height(mut self, height: usize) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    #[must_use]
+    pub const fn viewport(mut self, width: usize, height: usize) -> Self {
+        self.width = Some(width);
+        self.height = Some(height);
         self
     }
 
@@ -296,6 +331,7 @@ where
             interactive:       self.interactive,
             fps:               self.fps,
             width:             self.width,
+            height:            self.height,
             layout_mode:       self.layout_mode,
             cursor_visibility: self.cursor_visibility,
             theme:             self.theme,
@@ -309,6 +345,9 @@ where
             if let Some(width) = self.width {
                 runtime = runtime.width(width);
             }
+            if let Some(height) = self.height {
+                runtime = runtime.height(height);
+            }
             runtime = runtime.layout_mode(self.layout_mode);
             runtime = runtime.cursor_visibility(self.cursor_visibility);
             runtime = runtime.theme(self.theme);
@@ -319,6 +358,7 @@ where
                 writer:       self.writer,
                 root:         self.root,
                 width:        self.width,
+                height:       self.height,
                 layout_mode:  self.layout_mode,
                 theme:        self.theme,
                 final_widget: self.final_widget,
@@ -355,6 +395,16 @@ where
         }
     }
 
+    pub fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
+        match self {
+            Self::Live(runtime) => runtime.resize_viewport(width, height),
+            Self::Plain(runtime) => {
+                runtime.resize_viewport(width, height);
+                Ok(())
+            },
+        }
+    }
+
     pub fn finish(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish(),
@@ -384,6 +434,7 @@ pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
     writer:       W,
     root:         H,
     width:        Option<usize>,
+    height:       Option<usize>,
     layout_mode:  LayoutMode,
     theme:        Theme,
     final_widget: Option<F>,
@@ -399,19 +450,25 @@ where
         self.width = Some(width);
     }
 
+    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+        self.width = Some(width);
+        self.height = Some(height);
+    }
+
     pub fn finish(self) -> io::Result<W> {
         let Self {
             writer,
             root,
             width,
+            height,
             layout_mode,
             theme,
             final_widget,
         } = self;
         if let Some(final_widget) = final_widget {
-            write_plain_frame(writer, &final_widget, width, layout_mode, theme)
+            write_plain_frame(writer, &final_widget, width, height, layout_mode, theme)
         } else {
-            write_plain_frame(writer, &root, width, layout_mode, theme)
+            write_plain_frame(writer, &root, width, height, layout_mode, theme)
         }
     }
 
@@ -423,6 +480,7 @@ where
             self.writer,
             final_widget,
             self.width,
+            self.height,
             self.layout_mode,
             self.theme,
         )
@@ -438,6 +496,7 @@ fn write_plain_frame<W, G>(
     mut writer: W,
     root: &G,
     width: Option<usize>,
+    height: Option<usize>,
     layout_mode: LayoutMode,
     theme: Theme,
 ) -> io::Result<W>
@@ -446,11 +505,18 @@ where
     G: crate::Widget,
 {
     let mut surface = Surface::new();
+    let columns = width.map(usable_columns);
     root.render(
-        &RenderCtx::new().with_columns(width).with_theme(theme),
+        &RenderCtx::new()
+            .with_constraints(columns, height)
+            .with_layout_mode(layout_mode)
+            .with_theme(theme),
         &mut surface,
     );
-    surface = layout_surface(surface, width, layout_mode);
+    surface = layout_surface(surface, columns, layout_mode);
+    if let Some(height) = height {
+        surface.fit_height(height);
+    }
     writer.write_all(surface.plain_text().as_bytes())?;
     writer.flush()?;
     Ok(writer)
@@ -471,7 +537,11 @@ where
             runtime.draw_now(Instant::now())?;
             loop {
                 match rx.recv_timeout(frame_interval) {
-                    Ok(command @ (RuntimeCommand::Dirty | RuntimeCommand::Resize(_))) => {
+                    Ok(
+                        command @ (RuntimeCommand::Dirty
+                        | RuntimeCommand::Resize(_)
+                        | RuntimeCommand::ResizeViewport(..)),
+                    ) => {
                         apply_command(&mut runtime, &command);
                     },
                     Ok(RuntimeCommand::Finish(finish_mode)) => {
@@ -487,7 +557,9 @@ where
 
                 while let Ok(command) = rx.try_recv() {
                     match command {
-                        RuntimeCommand::Dirty | RuntimeCommand::Resize(_) => {
+                        RuntimeCommand::Dirty
+                        | RuntimeCommand::Resize(_)
+                        | RuntimeCommand::ResizeViewport(..) => {
                             apply_command(&mut runtime, &command);
                         },
                         RuntimeCommand::Finish(finish_mode) => {
@@ -515,6 +587,10 @@ where
 
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.handle.resize(width)
+    }
+
+    pub fn resize_viewport(&self, width: usize, height: usize) -> io::Result<()> {
+        self.handle.resize_viewport(width, height)
     }
 
     pub fn finish(mut self) -> io::Result<W> {
@@ -568,6 +644,10 @@ impl RuntimeHandle {
         self.send(RuntimeCommand::Resize(width))
     }
 
+    pub fn resize_viewport(&self, width: usize, height: usize) -> io::Result<()> {
+        self.send(RuntimeCommand::ResizeViewport(width, height))
+    }
+
     fn send(&self, command: RuntimeCommand) -> io::Result<()> {
         self.tx.send(command).map_err(|err| {
             io::Error::new(
@@ -599,6 +679,7 @@ where
     match command {
         RuntimeCommand::Dirty => runtime.mark_dirty(),
         RuntimeCommand::Resize(width) => runtime.resize(*width),
+        RuntimeCommand::ResizeViewport(width, height) => runtime.resize_viewport(*width, *height),
         RuntimeCommand::Finish(_) => {},
     }
 }

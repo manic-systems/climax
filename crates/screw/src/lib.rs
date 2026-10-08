@@ -6,6 +6,7 @@
 
 extern crate alloc;
 
+mod geometry;
 mod layout;
 mod plain;
 mod renderer;
@@ -15,8 +16,15 @@ mod surface;
 mod sync;
 mod template;
 mod terminal;
+mod viewport;
 mod widget;
 
+pub use geometry::{
+    Insets,
+    Rect,
+    Size,
+    Viewport,
+};
 pub use layout::{
     LayoutBuilder,
     layout,
@@ -66,6 +74,11 @@ pub use terminal::{
     terminal_width,
     terminal_width_or_default,
 };
+pub use viewport::{
+    VerticalViewport,
+    ViewportReport,
+    ViewportReportHandle,
+};
 pub use widget::{
     Grid,
     GridCell,
@@ -81,6 +94,7 @@ pub use widget::{
     Text,
     TextInput,
     TickInterest,
+    VerticalSize,
     Widget,
     WidgetRef,
     WindowedLines,
