@@ -1,6 +1,6 @@
 use bang_core::{
     ActionBinding,
-    Reaction,
+    SessionReaction,
     Session,
     SessionStatus,
     Value,
@@ -298,8 +298,7 @@ impl TextPrompt {
 }
 
 pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Result<Value> {
-    let widget = bang_core::ActionLayer::new(widget).with_actions(actions);
-    bang_screw::run_live_session(widget).map_err(Error::from)
+    ::bang::advanced::interact_widget(widget, actions).map_err(Error::from)
 }
 
 /// Drive a widget with already-decoded events. Useful for tests and examples.
@@ -310,9 +309,9 @@ pub fn replay_events(
     let mut session = Session::new(widget);
     for event in events {
         match session.handle(event) {
-            Reaction::Submit(value) => return Ok(value),
-            Reaction::Cancel => return Err(Error::Cancelled),
-            Reaction::Ignored | Reaction::Changed | Reaction::Focus(_) => {},
+            SessionReaction::Submit(value) => return Ok(value),
+            SessionReaction::Cancel => return Err(Error::Cancelled),
+            SessionReaction::Ignored | SessionReaction::Changed | SessionReaction::Focus(_) => {},
         }
         if !matches!(session.status(), SessionStatus::Running) {
             break;

@@ -18,7 +18,7 @@ pub enum Error {
     Draw(io::Error),
     /// interactive terminal session failed
     #[cfg(feature = "interactive")]
-    Interact(bang_screw::LiveSessionError),
+    Interact(::bang::Error),
     /// prompt was cancelled
     #[cfg(feature = "interactive")]
     Cancelled,
@@ -87,12 +87,12 @@ impl From<pound::Error> for Error {
 }
 
 #[cfg(feature = "interactive")]
-impl From<bang_screw::LiveSessionError> for Error {
-    fn from(value: bang_screw::LiveSessionError) -> Self {
-        match value {
-            bang_screw::LiveSessionError::Cancelled => Self::Cancelled,
-            bang_screw::LiveSessionError::InputEnded => Self::InputEnded,
-            other => Self::Interact(other),
+impl From<::bang::Error> for Error {
+    fn from(value: ::bang::Error) -> Self {
+        match value.kind() {
+            ::bang::ErrorKind::Cancelled => Self::Cancelled,
+            ::bang::ErrorKind::InputEnded => Self::InputEnded,
+            _ => Self::Interact(value),
         }
     }
 }
