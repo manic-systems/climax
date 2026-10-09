@@ -15,7 +15,6 @@ fn main() -> climax::Result<()> {
             PromptOutcome::Leave => return Ok(()),
         };
 
-        println!("{shell}");
-        Ok(())
+        context.output().result(&shell).text(|shell| *shell).emit()
     })
 }

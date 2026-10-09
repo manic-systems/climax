@@ -1,15 +1,12 @@
-#[cfg(feature = "interactive")]
-use std::io::Write;
-
-#[cfg(feature = "interactive")]
-use bang_core::Value;
+// SPDX-License-Identifier: EUPL-1.2
 
 use std::marker::PhantomData;
 
 use crate::Result;
 
+/// Run a parsed application without handling output or process exit status.
 #[cfg(feature = "parse")]
-pub fn run<C, F>(f: F) -> Result<()>
+pub fn try_run<C, F>(f: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
@@ -17,11 +14,44 @@ where
     run_with(C::try_parse()?, f)
 }
 
+/// Run an application from supplied arguments without handling process output.
+#[cfg(feature = "parse")]
+pub fn try_run_from<'a, C, F, I>(args: I, f: F) -> Result<()>
+where
+    C: pound::Parse,
+    F: FnOnce(Context, C) -> Result<()>,
+    I: IntoIterator<Item = &'a str>,
+{
+    run_with(C::try_parse_from(args)?, f)
+}
+
 pub fn run_with<C, F>(command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
-    f(Context::new(), command)
+    execute(Context::new(), command, f)
+}
+
+fn execute<C, F>(context: Context, command: C, f: F) -> Result<()>
+where
+    F: FnOnce(Context, C) -> Result<()>,
+{
+    let output = context.output();
+    let diagnostic = context.diagnostic();
+    match f(context, command) {
+        Ok(()) => {
+            // Both lifecycles must close: `diagnostic` owns its own result slot,
+            // so committing only `output` would silently drop diagnostic results.
+            let mut failure = output.commit().err();
+            collect_related(&mut failure, diagnostic.commit());
+            failure.map_or(Ok(()), Err)
+        },
+        Err(error) => {
+            output.discard();
+            diagnostic.discard();
+            Err(error)
+        },
+    }
 }
 
 /// Application policy and access to the composed command-line facilities.
@@ -36,13 +66,13 @@ where
 /// ```
 #[derive(Debug)]
 pub struct Context {
+    output: crate::output::Output,
+    diagnostic: crate::output::Output,
     terminal: crate::terminal::TerminalPolicy,
     #[cfg(feature = "interactive")]
     interaction: bang::Interaction,
     #[cfg(feature = "interactive")]
     custom_interaction: bool,
-    #[cfg(feature = "interactive")]
-    output_format: crate::output::Format,
     _not_send: PhantomData<std::rc::Rc<()>>,
 }
 
@@ -57,13 +87,14 @@ impl Context {
     pub fn new() -> Self {
         let terminal = crate::terminal::TerminalPolicy::process();
         Self {
+            output: crate::output::Output::new(crate::output::Format::Text),
+            diagnostic: crate::output::Output::new(crate::output::Format::Text)
+                .with_shared_writer(crate::output::SharedWriter::stderr()),
             terminal,
             #[cfg(feature = "interactive")]
             interaction: interaction_for(terminal),
             #[cfg(feature = "interactive")]
             custom_interaction: false,
-            #[cfg(feature = "interactive")]
-            output_format: crate::output::Format::Text,
             _not_send: PhantomData,
         }
     }
@@ -132,30 +163,37 @@ impl Context {
         crate::status::message(message)
     }
 
-    #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn output(&self) -> OutputContext {
-        OutputContext {
-            format: self.output_format,
-        }
+    pub fn output(&self) -> crate::output::Output {
+        self.output.clone()
     }
 
-    #[cfg(feature = "interactive")]
     #[must_use]
     pub const fn output_format(&self) -> crate::output::Format {
-        self.output_format
+        self.output.format()
     }
 
-    #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn with_output_format(mut self, format: crate::output::Format) -> Self {
-        self.output_format = format;
+    pub fn with_output_format(mut self, format: crate::output::Format) -> Self {
+        self.output = self.output.with_format(format);
         self
     }
 
-    #[cfg(feature = "interactive")]
-    pub const fn set_output_format(&mut self, format: crate::output::Format) {
-        self.output_format = format;
+    pub fn set_output_format(&mut self, format: crate::output::Format) {
+        self.output = self.output.clone().with_format(format);
+    }
+
+    /// Sideband output for human-facing context (stderr in text mode).
+    ///
+    /// Has its own result slot, separate from [`Self::output`], and writes to the
+    /// diagnostic stream. Both slots are committed together when the application
+    /// handler returns.
+    ///
+    /// Notice routing and suppression always match [`Self::output`], since a
+    /// separately tracked diagnostic notice policy could drift from it.
+    #[must_use]
+    pub fn diagnostic(&self) -> crate::output::Output {
+        self.diagnostic.clone().with_notices_from(&self.output)
     }
 
     #[must_use]
@@ -194,6 +232,22 @@ impl Context {
     }
 
     #[must_use]
+    pub fn with_output_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
+        self.output = self.output.with_writer(writer);
+        self
+    }
+
+    /// Notices follow this writer too, so a diagnostic handle and its paired
+    /// output handle never disagree about where human-facing context goes.
+    #[must_use]
+    pub fn with_diagnostic_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
+        let writer = crate::output::SharedWriter::new(writer);
+        self.output = self.output.with_notice_writer(writer.clone());
+        self.diagnostic = self.diagnostic.with_shared_writer(writer);
+        self
+    }
+
+    #[must_use]
     pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
         self.set_interaction_mode(mode);
         self
@@ -202,6 +256,16 @@ impl Context {
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
         self.interaction.clone()
+    }
+}
+
+
+fn collect_related(failure: &mut Option<crate::Error>, result: Result<()>) {
+    if let Err(error) = result {
+        *failure = Some(match failure.take() {
+            Some(primary) => primary.with_related(error),
+            None => error,
+        });
     }
 }
 
@@ -218,62 +282,146 @@ fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interacti
     }
 }
 
-#[cfg(feature = "interactive")]
-#[derive(Clone, Copy, Debug)]
-pub struct OutputContext {
-    format: crate::output::Format,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(feature = "interactive")]
-impl Default for OutputContext {
-    fn default() -> Self {
-        Self {
-            format: crate::output::Format::Text,
+    #[derive(Clone, Default)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
-}
 
-#[cfg(feature = "interactive")]
-impl OutputContext {
-    #[must_use]
-    pub const fn format(&self) -> crate::output::Format {
-        self.format
+    #[test]
+    fn diagnostic_writer_carries_notices() {
+        let sink = Sink::default();
+        let mut context = Context::new().with_diagnostic_writer(sink.clone());
+        context.output().notice("heads up").unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
+
+        sink.0.lock().unwrap().clear();
+        context.diagnostic().notice("heads up").unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
+
+        sink.0.lock().unwrap().clear();
+        context.set_output_format(crate::output::Format::Json);
+        context.diagnostic().notice("heads up").unwrap();
+        assert!(sink.0.lock().unwrap().is_empty());
     }
 
-    #[must_use]
-    pub const fn with_format(mut self, format: crate::output::Format) -> Self {
-        self.format = format;
-        self
+    #[cfg(feature = "structured")]
+    #[derive(Clone, Default)]
+    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    #[cfg(feature = "structured")]
+    impl Capture {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
     }
 
-    pub fn write_value(self, writer: impl Write, value: &Value) -> Result<()> {
-        crate::output::write_value(writer, value, self.format)
+    #[cfg(feature = "structured")]
+    impl std::io::Write for Capture {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
-    pub fn write_value_as(
-        self,
-        writer: impl Write,
-        value: &Value,
-        format: crate::output::Format,
-    ) -> Result<()> {
-        crate::output::write_value(writer, value, format)
+    #[test]
+    fn context_carries_output_policy() {
+        let context = Context::new().with_output_format(crate::output::Format::Json);
+        assert_eq!(context.output_format(), crate::output::Format::Json);
+        assert_eq!(context.output().format(), crate::output::Format::Json);
     }
 
-    pub fn print_value(self, value: &Value) -> Result<()> {
-        crate::output::print_value(value, self.format)
+    #[test]
+    fn run_with_supplies_the_command_and_context() {
+        let result = run_with(42, |context, command| {
+            assert_eq!(command, 42);
+            assert_eq!(context.output_format(), crate::output::Format::Text);
+            Ok(())
+        });
+        assert!(result.is_ok());
     }
 
-    pub fn print_value_as(self, value: &Value, format: crate::output::Format) -> Result<()> {
-        crate::output::print_value(value, format)
+    #[cfg(feature = "structured")]
+    #[test]
+    fn lifecycle_commits_a_finite_result_after_success() {
+        let capture = Capture::default();
+        let context = Context::new().with_output_writer(capture.clone());
+        execute(context, (), |context, ()| {
+            context
+                .output()
+                .result(&42)
+                .text(|value| format!("answer: {value}"))
+                .emit()
+        })
+        .unwrap();
+        assert_eq!(capture.text(), "answer: 42\n");
     }
 
-    #[must_use]
-    pub fn text(self, value: &Value) -> String {
-        crate::output::text(value)
+    #[cfg(feature = "structured")]
+    #[test]
+    fn lifecycle_discards_a_finite_result_after_failure() {
+        let capture = Capture::default();
+        let context = Context::new().with_output_writer(capture.clone());
+        let error = execute(context, (), |context, ()| {
+            context.output().result(&42).text(|value| value).emit()?;
+            Err(crate::Error::message("later failure"))
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "later failure");
+        assert_eq!(capture.text(), "");
     }
 
-    #[must_use]
-    pub fn json(self, value: &Value) -> String {
-        crate::output::json(value)
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn context_injects_scripted_interaction_into_typed_prompts() {
+        let interaction = bang::advanced::scripted_interaction([[
+            bang::advanced::Event::key(bang::advanced::Key::Down),
+            bang::advanced::Event::key(bang::advanced::Key::Enter),
+        ]]);
+        let context = Context::new().with_interaction(interaction);
+        assert!(context.interaction_available());
+        assert_eq!(
+            context
+                .select("shell")
+                .choice("bash", 1)
+                .choice("zsh", 2)
+                .interact()
+                .unwrap(),
+            crate::PromptOutcome::Submit(2)
+        );
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn context_builds_typed_bang_prompts() {
+        let context = Context::new();
+        let _select = context.select("shell").choice("bash", 1_u8);
+        let _multi = context.multi_select("shells").choice("bash", 1_u8);
+        let _search = context.search("shell").choice("bash", 1_u8);
+        let _review = context
+            .review("shells")
+            .item("bash", 1_u8, bang::ReviewState::Unconfirmed)
+            .action('a', "accept", true);
+        let _text = context.text("Name").placeholder("Ada");
+        let _password = context.password("Passphrase");
+        let _confirm = context.confirm("Continue");
+        let _date = context.date("Due");
+        let _number = context.number::<u16>("Port");
     }
 }

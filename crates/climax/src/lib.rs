@@ -2,10 +2,11 @@
 
 //! batteries-included CLI facade over `pound`, `screw`, and `bang`
 
-pub mod app;
+mod app;
 pub mod error;
 pub mod output;
 pub mod prelude;
+mod sync;
 pub mod terminal;
 
 #[cfg(feature = "render")] pub mod status;
@@ -14,10 +15,8 @@ pub use app::{
     Context,
     run_with,
 };
-#[cfg(feature = "interactive")]
-pub use app::OutputContext;
 #[cfg(feature = "parse")]
-pub use app::run;
+pub use app::{try_run, try_run_from};
 /// Types needed to build and match review prompts and to call `with_config`,
 /// at the crate root, next to the `Context` methods that build them.
 #[cfg(feature = "interactive")]
