@@ -7,11 +7,6 @@ pub use pound::{
     FromArg,
     Parse as ParseTrait,
 };
-#[cfg(feature = "derive")]
-pub use pound::{
-    Parse,
-    ValueEnum,
-};
 #[cfg(feature = "render")]
 pub use screw::{
     Color,
@@ -51,6 +46,11 @@ pub use crate::{
         TerminalCapabilities,
         TerminalPolicy,
     },
+};
+#[cfg(feature = "derive")]
+pub use crate::{
+    Parse,
+    ValueEnum,
 };
 #[cfg(feature = "parse")]
 pub use crate::{
