@@ -5,6 +5,8 @@ use std::{io, process::ExitCode};
 #[cfg(all(feature = "render", feature = "structured"))]
 use std::io::IsTerminal as _;
 use std::marker::PhantomData;
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::os::fd::OwnedFd;
 
 use crate::Result;
 
@@ -214,6 +216,8 @@ pub struct Context {
     custom_interaction: bool,
     #[cfg(feature = "render")]
     transient:          crate::status::StatusCoordinator,
+    #[cfg(any(feature = "render", feature = "interactive"))]
+    terminal_handle: Option<OwnedFd>,
     _not_send: PhantomData<std::rc::Rc<()>>,
 }
 
@@ -261,6 +265,8 @@ impl Context {
             custom_interaction: false,
             #[cfg(feature = "render")]
             transient,
+            #[cfg(any(feature = "render", feature = "interactive"))]
+            terminal_handle: None,
             _not_send: PhantomData,
         }
     }
@@ -372,6 +378,139 @@ impl Context {
         self.terminal.interaction_available()
     }
 
+    /// Run a custom terminal application while prompts and live statuses are
+    /// excluded from the configured transient stream.
+    ///
+    /// Requires both the `interactive` and `render` features.
+    ///
+    /// Reads from [`Self::with_terminal`]'s handle when one is configured,
+    /// otherwise from process stdin.
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    pub fn with_terminal_application<T>(
+        &self,
+        operation: impl FnOnce(&mut crate::terminal::TerminalApplication<'_>) -> Result<T>,
+    ) -> Result<T> {
+        self.acquire_terminal_application()?;
+        let _guard = self.transient.application_guard()?;
+        let stdin = std::io::stdin();
+        let input: Box<dyn crate::terminal::TerminalInput + '_> = match &self.terminal_handle {
+            Some(handle) => Box::new(std::fs::File::from(handle.try_clone()?)),
+            None => Box::new(stdin.lock()),
+        };
+        let mut terminal = crate::terminal::TerminalApplication::new(
+            input,
+            Box::new(self.transient.writer()),
+            self.terminal.capabilities(),
+        );
+        operation(&mut terminal)
+    }
+
+    /// Move prompts, statuses, and notices onto a caller-owned terminal
+    /// handle, such as `/dev/tty` opened for reading and writing, instead of
+    /// process stdin and stderr.
+    ///
+    /// Available with `interactive`, `render` or both. Without `render` only
+    /// prompts and notices move, since there is no status to place. The live
+    /// region follows the handle's width as the terminal is resized.
+    ///
+    /// Diagnostics stay on process stderr, routed around the live region when
+    /// stderr is a terminal. Output still routes around the transient region
+    /// only when both stdout and `terminal` are terminals, the same check
+    /// [`Self::new`] makes against stdout and stderr. A custom interaction set
+    /// through `with_interaction` is left in place. Fails while a status is
+    /// live, because the coordinator's writer cannot change out from under it.
+    /// A status started from another thread while the replacement runs may
+    /// stay on the previous coordinator.
+    #[cfg(any(feature = "render", feature = "interactive"))]
+    pub fn with_terminal(mut self, terminal: impl Into<OwnedFd>) -> Result<Self> {
+        #[cfg(feature = "render")]
+        if !self.transient.is_idle() {
+            return Err(crate::Error::with_source(
+                crate::error::ErrorKind::Output,
+                std::io::Error::other(
+                    "the terminal handle cannot change while status output is in use",
+                ),
+            ));
+        }
+        let handle = terminal.into();
+        let capabilities = crate::terminal::TerminalCapabilities::detect_on(&handle);
+        self.terminal.set_capabilities(capabilities);
+
+        #[cfg(feature = "render")]
+        {
+            let coordinator_writer = crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?));
+            let mode = self.terminal.effective_status_mode();
+            let width = crate::status::WidthSource::Terminal(handle.try_clone()?);
+            let previous = std::mem::replace(
+                &mut self.transient,
+                crate::status::StatusCoordinator::with_width(coordinator_writer, mode, width),
+            );
+            previous.supersede(&self.transient);
+            self.output = self.output.with_transient(crate::status::TransientNotice::coordinator(
+                self.transient.clone(),
+            ));
+            #[cfg(feature = "structured")]
+            {
+                let around = |stream_is_terminal: bool| {
+                    if stream_is_terminal && capabilities.transient_terminal() {
+                        crate::output::PresentationRoute::Around(self.transient.clone())
+                    } else {
+                        crate::output::PresentationRoute::Direct
+                    }
+                };
+                let output_route = around(std::io::stdout().is_terminal());
+                let diagnostic_route = around(std::io::stderr().is_terminal());
+                self.output = self.output.with_stream_route(output_route);
+                self.diagnostic = self.diagnostic.with_stream_route(diagnostic_route);
+            }
+        }
+        #[cfg(not(feature = "render"))]
+        {
+            self.output = self
+                .output
+                .with_notice_writer(crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?)));
+        }
+
+        #[cfg(feature = "interactive")]
+        if !self.custom_interaction {
+            self.interaction = interaction_on(self.terminal, handle.try_clone()?);
+        }
+
+        self.terminal_handle = Some(handle);
+        Ok(self)
+    }
+
+    /// Run a custom terminal application on caller-supplied handles while
+    /// prompts and live statuses are excluded from the transient region.
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    pub fn with_terminal_application_on<'a, T, I, O>(
+        &self,
+        input: I,
+        output: O,
+        operation: impl FnOnce(&mut crate::terminal::TerminalApplication<'a>) -> Result<T>,
+    ) -> Result<T>
+    where
+        I: crate::terminal::TerminalInput + 'a,
+        O: std::io::Write + 'a,
+    {
+        self.acquire_terminal_application()?;
+        let _guard = self.transient.application_guard()?;
+        let mut terminal = crate::terminal::TerminalApplication::new(
+            Box::new(input),
+            Box::new(output),
+            self.terminal.capabilities(),
+        );
+        operation(&mut terminal)
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    fn acquire_terminal_application(&self) -> Result<()> {
+        if !self.terminal.interaction_available() {
+            return Err(crate::Error::from(bang::Error::interaction_unavailable()));
+        }
+        Ok(())
+    }
+
     #[cfg_attr(
         not(any(feature = "interactive", feature = "render")),
         allow(clippy::missing_const_for_fn)
@@ -398,9 +537,20 @@ impl Context {
         self.terminal.set_interaction_mode(mode);
         #[cfg(feature = "interactive")]
         {
-            self.interaction = interaction_for(self.terminal);
+            self.interaction = self.policy_interaction();
             self.custom_interaction = false;
         }
+    }
+
+    #[cfg(feature = "interactive")]
+    fn policy_interaction(&self) -> bang::Interaction {
+        if let Some(handle) = &self.terminal_handle {
+            return handle.try_clone().map_or_else(
+                |_| bang::Interaction::disabled(),
+                |handle| interaction_on(self.terminal, handle),
+            );
+        }
+        interaction_for(self.terminal)
     }
 
     #[cfg_attr(not(feature = "render"), allow(clippy::missing_const_for_fn))]
@@ -460,6 +610,8 @@ impl Context {
     /// width, since a writer says nothing about its terminal. Fails while
     /// statuses are live, a prompt holds the terminal or failed transient
     /// lines are still queued, because those belong to the current writer.
+    /// A status started from another thread while the replacement runs may
+    /// stay on the previous coordinator.
     #[cfg(feature = "render")]
     pub fn with_transient_writer(
         mut self,
@@ -549,6 +701,19 @@ fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interacti
     }
 }
 
+#[cfg(feature = "interactive")]
+fn interaction_on(terminal: crate::terminal::TerminalPolicy, handle: OwnedFd) -> bang::Interaction {
+    match terminal.interaction_mode() {
+        crate::terminal::InteractionMode::Auto if terminal.interaction_available() => {
+            bang::Interaction::live_on(handle)
+        },
+        crate::terminal::InteractionMode::Auto | crate::terminal::InteractionMode::Disabled => {
+            bang::Interaction::disabled()
+        },
+        crate::terminal::InteractionMode::Force => bang::Interaction::forced_on(handle),
+    }
+}
+
 #[cfg(all(feature = "interactive", feature = "render"))]
 fn guarded_interaction(
     interaction: bang::Interaction,
@@ -618,6 +783,43 @@ mod tests {
         status.finish().unwrap();
     }
 
+    #[cfg(feature = "render")]
+    #[test]
+    fn terminal_handle_cannot_change_under_a_live_status() {
+        let context = Context::new();
+        let status = context.status("working").start();
+        let handle = OwnedFd::from(std::fs::File::open("/dev/null").unwrap());
+        let error = context.with_terminal(handle).unwrap_err();
+        assert_eq!(error.kind(), crate::error::ErrorKind::Output);
+        status.finish().unwrap();
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
+    #[test]
+    fn cleanup_reports_a_failed_notice_queued_on_a_replaced_coordinator() {
+        struct BrokenPipe;
+
+        impl std::io::Write for BrokenPipe {
+            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(false, false, false))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+        let result = execute(context, (), |context, ()| {
+            let context = context.with_transient_writer(BrokenPipe)?;
+            context.with_terminal_application(|_| context.diagnostic().notice("queued"))
+        });
+        assert!(result.is_err());
+    }
+
     #[cfg(feature = "structured")]
     #[derive(Clone, Default)]
     struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -646,6 +848,73 @@ mod tests {
         let context = Context::new().with_output_format(crate::output::Format::Json);
         assert_eq!(context.output_format(), crate::output::Format::Json);
         assert_eq!(context.output().format(), crate::output::Format::Json);
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
+    #[test]
+    fn terminal_application_uses_configured_output_and_excludes_nested_owners() {
+        use std::io::Write as _;
+
+        let capture = Capture::default();
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force)
+            .with_transient_writer(capture.clone())
+            .unwrap();
+
+        context
+            .with_terminal_application(|terminal| {
+                terminal.write_all(b"application").unwrap();
+                let nested = context.with_terminal_application(|_| Ok(()));
+                assert_eq!(
+                    nested.unwrap_err().kind(),
+                    crate::error::ErrorKind::InteractionBusy,
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(capture.text(), "application");
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    #[test]
+    fn terminal_application_releases_exclusivity_after_an_error() {
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+        let failed = context.with_terminal_application::<()>(|_| Err("failed".into()));
+        assert!(failed.is_err());
+        context.with_terminal_application(|_| Ok(())).unwrap();
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render"))]
+    #[test]
+    fn terminal_application_accepts_caller_supplied_handles() {
+        use std::{io::Write as _, os::unix::net::UnixStream};
+
+        let (input, _peer) = UnixStream::pair().unwrap();
+        let mut output = Vec::new();
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap()
+            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+
+        context
+            .with_terminal_application_on(input, &mut output, |terminal| {
+                terminal.write_all(b"custom").unwrap();
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(output, b"custom");
     }
 
     #[test]

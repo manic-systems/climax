@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
     io::Write as _,
+    os::fd::OwnedFd,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc, OnceLock,
@@ -136,9 +137,10 @@ impl Status {
             final_message: self.final_message,
             failure_message: self.failure_message,
         };
-        let id = self.coordinator.insert(entry, self.fps);
+        let coordinator = self.coordinator.current().clone();
+        let id = coordinator.insert(entry, self.fps);
         StatusRuntime {
-            coordinator: self.coordinator,
+            coordinator,
             id: Some(id),
         }
     }
@@ -258,10 +260,10 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const RESIZE_POLL: Duration = Duration::from_millis(250);
 
 /// Where the live region reads its width from.
-#[derive(Clone)]
 pub(crate) enum WidthSource {
     Fixed(usize),
     Stderr,
+    Terminal(OwnedFd),
 }
 
 impl WidthSource {
@@ -271,13 +273,14 @@ impl WidthSource {
         match self {
             Self::Fixed(_) => None,
             Self::Stderr => screw::Viewport::of(&std::io::stderr()).ok(),
+            Self::Terminal(handle) => screw::Viewport::of(handle).ok(),
         }
     }
 
     fn columns(&self) -> usize {
         match self {
             Self::Fixed(columns) => *columns,
-            Self::Stderr => self.measure().unwrap_or(screw::Viewport::FALLBACK).columns,
+            Self::Stderr | Self::Terminal(_) => self.measure().unwrap_or(screw::Viewport::FALLBACK).columns,
         }
     }
 
@@ -293,6 +296,16 @@ impl WidthSource {
 
     const fn follows_terminal(&self) -> bool {
         !matches!(self, Self::Fixed(_))
+    }
+
+    fn duplicate(&self) -> Self {
+        match self {
+            Self::Fixed(columns) => Self::Fixed(*columns),
+            Self::Stderr => Self::Stderr,
+            Self::Terminal(handle) => handle
+                .try_clone()
+                .map_or(Self::FALLBACK, Self::Terminal),
+        }
     }
 }
 
@@ -321,7 +334,7 @@ impl Inner {
             let config = ActorConfig {
                 writer: self.writer.clone(),
                 stamp,
-                width: self.width.clone(),
+                width: self.width.duplicate(),
             };
             let thread = thread::spawn(move || run_actor(config, &receiver));
             Channel { sender, thread }
@@ -513,11 +526,12 @@ impl StatusCoordinator {
     }
 
     pub(crate) fn set_mode(&self, mode: StatusMode) -> Result<()> {
-        let stamp = self.inner.publish_mode(mode);
-        if self.inner.channel.get().is_none() {
+        let this = self.current();
+        let stamp = this.inner.publish_mode(mode);
+        if this.inner.channel.get().is_none() {
             return Ok(());
         }
-        self.request(|reply| Command::SetMode { stamp, reply }, |failure| Err(failure.into()))
+        this.request(|reply| Command::SetMode { stamp, reply }, |failure| Err(failure.into()))
     }
 
     fn insert(&self, entry: StatusEntry, fps: u16) -> u64 {
@@ -544,7 +558,7 @@ impl StatusCoordinator {
     /// queue it and return at once while a prompt or terminal application holds
     /// the lease.
     pub(crate) fn notice(&self, buffer: &[u8]) -> Result<()> {
-        self.request(
+        self.current().request(
             |reply| Command::Notice { bytes: buffer.to_owned(), reply },
             |failure| Err(failure.into()),
         )
@@ -557,8 +571,9 @@ impl StatusCoordinator {
     /// request bound, and fails when the calling thread holds it.
     #[cfg(feature = "structured")]
     pub(crate) fn write_around(&self, writer: SharedWriter, bytes: Vec<u8>) -> Result<()> {
-        let deadline = Instant::now() + self.inner.request_timeout;
-        self.request(
+        let this = self.current();
+        let deadline = Instant::now() + this.inner.request_timeout;
+        this.request(
             |reply| Command::Around { writer, bytes, requester: thread::current().id(), deadline, reply },
             |failure| Err(failure.into()),
         )
@@ -567,16 +582,27 @@ impl StatusCoordinator {
     /// No live status, prompt lease or unwritten transient line depends on
     /// this coordinator's writer.
     pub(crate) fn is_idle(&self) -> bool {
-        if self.inner.channel.get().is_none() {
+        let this = self.current();
+        if this.inner.channel.get().is_none() {
             return true;
         }
-        self.request(|reply| Command::IsIdle { reply }, |failure| matches!(failure, Failure::Stopped))
+        this.request(|reply| Command::IsIdle { reply }, |failure| matches!(failure, Failure::Stopped))
     }
 
     /// Make `next` the coordinator that replaces this one, so a flush of this
     /// handle also reaches whatever the caller moved to.
     pub(crate) fn supersede(&self, next: &Self) {
         let _ = self.inner.successor.set(next.clone());
+    }
+
+    /// The end of the successor chain, where a handle kept from before a
+    /// replacement sends its operations.
+    fn current(&self) -> &Self {
+        let mut current = self;
+        while let Some(next) = current.inner.successor.get() {
+            current = next;
+        }
+        current
     }
 
     /// Retry lines an earlier failed write left queued, on this coordinator
@@ -629,10 +655,21 @@ impl std::io::Write for TransientNotice {
 impl StatusCoordinator {
     #[cfg(feature = "interactive")]
     pub(crate) fn prompt_guard(&self) -> bang::Result<PromptGuard> {
-        match self.acquire_lease() {
-            Ok(()) => Ok(PromptGuard { coordinator: self.clone() }),
+        let this = self.current();
+        match this.acquire_lease() {
+            Ok(()) => Ok(PromptGuard { coordinator: this.clone() }),
             Err(LeaseError::Busy) => Err(bang::Error::interaction_busy()),
             Err(LeaseError::Clear(error)) => Err(bang::Error::terminal(error)),
+        }
+    }
+
+    #[cfg(feature = "interactive")]
+    pub(crate) fn application_guard(&self) -> Result<PromptGuard> {
+        let this = self.current();
+        match this.acquire_lease() {
+            Ok(()) => Ok(PromptGuard { coordinator: this.clone() }),
+            Err(LeaseError::Busy) => Err(Error::from(bang::Error::interaction_busy())),
+            Err(LeaseError::Clear(error)) => Err(error),
         }
     }
 
@@ -644,6 +681,10 @@ impl StatusCoordinator {
         )
     }
 
+    #[cfg(feature = "interactive")]
+    pub(crate) fn writer(&self) -> SharedWriter {
+        self.current().inner.writer.clone()
+    }
 }
 
 impl fmt::Debug for StatusCoordinator {
@@ -1363,6 +1404,22 @@ mod tests {
     }
 
     #[test]
+    fn a_builder_saved_before_a_replacement_starts_on_the_successor() {
+        let old = Capture::default();
+        let new = Capture::default();
+        let previous = StatusCoordinator::new(SharedWriter::new(old.clone()), StatusMode::Plain);
+        let saved = Status::new("saved", previous.clone());
+        let next = StatusCoordinator::new(SharedWriter::new(new.clone()), StatusMode::Plain);
+        previous.supersede(&next);
+
+        saved.finish().unwrap();
+        previous.notice(b"late\n").unwrap();
+
+        assert_eq!(old.text(), "");
+        assert_eq!(new.text(), "saved\nlate\n");
+    }
+
+    #[test]
     fn the_status_stack_does_not_keep_its_coordinator_alive() {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
@@ -2028,6 +2085,11 @@ mod tests {
         let mut fixed = actor_with(WidthSource::Fixed(40));
         drawn_static_status(&mut fixed);
         assert_eq!(fixed.next_wake(), None);
+
+        let null = std::fs::File::open("/dev/null").unwrap();
+        let mut not_a_terminal = actor_with(WidthSource::Terminal(null.into()));
+        drawn_static_status(&mut not_a_terminal);
+        assert_eq!(not_a_terminal.next_wake(), None);
     }
 
     #[test]

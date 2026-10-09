@@ -115,6 +115,17 @@ impl Output {
         self
     }
 
+    /// Apply `route` only while this handle still writes to its process
+    /// stream, so a writer the caller supplied keeps writing directly
+    /// whichever order the builders ran in.
+    #[cfg(all(feature = "render", feature = "structured"))]
+    pub(crate) fn with_stream_route(mut self, route: PresentationRoute) -> Self {
+        if matches!(self.writer, SharedWriter::Stdout | SharedWriter::Stderr) {
+            self.route = route;
+        }
+        self
+    }
+
     #[cfg(not(feature = "render"))]
     pub(crate) fn with_notice_writer(mut self, writer: SharedWriter) -> Self {
         self.notices = writer;
@@ -816,6 +827,24 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "render", feature = "structured"))]
+    #[test]
+    fn a_stream_route_never_replaces_a_writer_the_caller_supplied() {
+        let coordinator = crate::status::StatusCoordinator::new(
+            SharedWriter::new(Capture::default()),
+            crate::terminal::StatusMode::Silent,
+        );
+        let around = || PresentationRoute::Around(coordinator.clone());
+
+        let supplied = Output::new(Format::Text)
+            .with_writer(Capture::default())
+            .with_stream_route(around());
+        assert!(matches!(supplied.route, PresentationRoute::Direct));
+
+        let process = Output::new(Format::Text).with_stream_route(around());
+        assert!(matches!(process.route, PresentationRoute::Around(_)));
+    }
+
     #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
     #[test]
     fn queued_route_defers_writes_while_the_coordinator_is_leased() {
@@ -826,7 +855,7 @@ mod tests {
         );
         let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator.clone()));
 
-        let guard = coordinator.prompt_guard().unwrap();
+        let guard = coordinator.application_guard().unwrap();
         output.write_bytes(b"heads up\n").unwrap();
         assert!(capture.text().is_empty());
 
