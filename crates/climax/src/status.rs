@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, Sender},
     },
-    thread::{self, JoinHandle},
+    thread::{self, JoinHandle, ThreadId},
     time::{Duration, Instant},
 };
 
@@ -212,8 +212,8 @@ struct StatusEntry {
 }
 
 /// One thread owns the transient terminal, with the live renderer, the status
-/// entries and the queued-line retry buffer, so nothing about the terminal is
-/// shared behind a lock.
+/// entries, the queued-line retry buffer and the prompt lease, so nothing
+/// about the terminal is shared behind a lock.
 ///
 /// Handles are cheap clones. The thread starts on the first command that
 /// needs it and is joined, within a bound, when the last handle drops.
@@ -224,13 +224,26 @@ struct StatusEntry {
 ///
 /// A notice waits until the line reaches the transient writer and returns the
 /// write result, so it stays ordered against the caller's own writes to the
-/// same stream and survives a process exit that follows. Failed lines stay
-/// queued and resume after the bytes the writer accepted. Broken pipe and EIO
-/// mean the terminal is gone, so the channel is marked dead, the queue is
-/// dropped and later lines are discarded. The queue holds at most 1024 lines
-/// and drops the oldest past that. The first failure, plus counts of repeats,
-/// drops and discards, is reported when a caller takes the report through a
-/// status finish, a flush or the lifecycle commit.
+/// same stream and survives a process exit that follows. Writes to a stream
+/// that shares the terminal, such as `diagnostic().stream` on stderr, take the
+/// same path. While a prompt or terminal application holds the lease those
+/// lines are queued instead and the call returns at once, so they are the only
+/// writes that can still be pending after a return. Failed lines stay queued
+/// and resume after the bytes the writer accepted. Broken pipe and EIO mean
+/// the terminal is gone, so the channel is marked dead, the queue is dropped
+/// and later lines are discarded. The queue holds at most 1024 lines and drops
+/// the oldest past that. The first failure, plus counts of repeats, drops and
+/// discards, is reported when a caller takes the report through a status
+/// finish, a flush or the lifecycle commit.
+///
+/// Stream writes to a stdout that shares the terminal wait for a reply,
+/// because stdout carries durable data. A blocked stdout therefore stalls
+/// status drawing until it drains. A stream write requested while a prompt
+/// holds the lease waits for the lease to end, unless the requesting thread
+/// holds it, in which case it fails because it would wait on itself. The wait
+/// is bounded like every request, so a lease holder that joins a worker
+/// which is streaming sees the worker's write fail after `REQUEST_TIMEOUT`
+/// and the join complete, and the write is dropped rather than made late.
 ///
 /// Every request gives up with an error after `REQUEST_TIMEOUT` when a widget
 /// blocks the thread, and the final join stops waiting after the same bound.
@@ -404,6 +417,21 @@ enum Command {
         bytes: Vec<u8>,
         reply: Sender<Result<()>>,
     },
+    #[cfg(feature = "structured")]
+    Around {
+        writer: SharedWriter,
+        bytes: Vec<u8>,
+        requester: ThreadId,
+        deadline: Instant,
+        reply: Sender<Result<()>>,
+    },
+    #[cfg(feature = "interactive")]
+    AcquireLease {
+        holder: ThreadId,
+        reply: Sender<std::result::Result<(), LeaseError>>,
+    },
+    #[cfg(feature = "interactive")]
+    ReleaseLease,
     SetMode {
         stamp: u64,
         reply: Sender<Result<()>>,
@@ -414,6 +442,12 @@ enum Command {
     IsIdle {
         reply: Sender<bool>,
     },
+}
+
+#[cfg(feature = "interactive")]
+enum LeaseError {
+    Busy,
+    Clear(Error),
 }
 
 enum Failure {
@@ -506,7 +540,9 @@ impl StatusCoordinator {
         Ok(())
     }
 
-    /// Write `buffer` to the transient stream and wait for the result.
+    /// Write `buffer` to the transient stream and wait for the result, or
+    /// queue it and return at once while a prompt or terminal application holds
+    /// the lease.
     pub(crate) fn notice(&self, buffer: &[u8]) -> Result<()> {
         self.request(
             |reply| Command::Notice { bytes: buffer.to_owned(), reply },
@@ -514,8 +550,22 @@ impl StatusCoordinator {
         )
     }
 
-    /// No live status or unwritten transient line depends on this coordinator's
-    /// writer.
+    /// Clear the live region, write `bytes` directly to `writer` and flush,
+    /// letting the next frame redraw below them.
+    ///
+    /// Waits for the lease when another thread holds it, giving up after the
+    /// request bound, and fails when the calling thread holds it.
+    #[cfg(feature = "structured")]
+    pub(crate) fn write_around(&self, writer: SharedWriter, bytes: Vec<u8>) -> Result<()> {
+        let deadline = Instant::now() + self.inner.request_timeout;
+        self.request(
+            |reply| Command::Around { writer, bytes, requester: thread::current().id(), deadline, reply },
+            |failure| Err(failure.into()),
+        )
+    }
+
+    /// No live status, prompt lease or unwritten transient line depends on
+    /// this coordinator's writer.
     pub(crate) fn is_idle(&self) -> bool {
         if self.inner.channel.get().is_none() {
             return true;
@@ -576,9 +626,41 @@ impl std::io::Write for TransientNotice {
     }
 }
 
+impl StatusCoordinator {
+    #[cfg(feature = "interactive")]
+    pub(crate) fn prompt_guard(&self) -> bang::Result<PromptGuard> {
+        match self.acquire_lease() {
+            Ok(()) => Ok(PromptGuard { coordinator: self.clone() }),
+            Err(LeaseError::Busy) => Err(bang::Error::interaction_busy()),
+            Err(LeaseError::Clear(error)) => Err(bang::Error::terminal(error)),
+        }
+    }
+
+    #[cfg(feature = "interactive")]
+    fn acquire_lease(&self) -> std::result::Result<(), LeaseError> {
+        self.request(
+            |reply| Command::AcquireLease { holder: thread::current().id(), reply },
+            |failure| Err(LeaseError::Clear(failure.into())),
+        )
+    }
+
+}
+
 impl fmt::Debug for StatusCoordinator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatusCoordinator").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "interactive")]
+pub(crate) struct PromptGuard {
+    coordinator: StatusCoordinator,
+}
+
+#[cfg(feature = "interactive")]
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        self.coordinator.send(Command::ReleaseLease);
     }
 }
 
@@ -638,6 +720,14 @@ struct ActorConfig {
     width: WidthSource,
 }
 
+#[cfg(feature = "structured")]
+struct DeferredAround {
+    writer: SharedWriter,
+    bytes: Vec<u8>,
+    deadline: Instant,
+    reply: Sender<Result<()>>,
+}
+
 /// State owned by the transient-terminal thread.
 struct Actor {
     renderer: Renderer<SharedWriter>,
@@ -654,6 +744,9 @@ struct Actor {
     pending: VecDeque<Vec<u8>>,
     accepted: usize,
     flush_owed: bool,
+    lease_holder: Option<ThreadId>,
+    #[cfg(feature = "structured")]
+    deferred: VecDeque<DeferredAround>,
     dead: bool,
     errors: ErrorLog,
     panicked: BTreeMap<u64, Error>,
@@ -678,9 +771,80 @@ impl Actor {
             pending: VecDeque::new(),
             accepted: 0,
             flush_owed: false,
+            lease_holder: None,
+            #[cfg(feature = "structured")]
+            deferred: VecDeque::new(),
             dead: false,
             errors: ErrorLog::default(),
             panicked: BTreeMap::new(),
+        }
+    }
+
+    const fn leased(&self) -> bool {
+        self.lease_holder.is_some()
+    }
+
+    #[cfg(feature = "structured")]
+    fn around(&mut self, write: DeferredAround, requester: ThreadId) {
+        if Instant::now() >= write.deadline {
+            return;
+        }
+        match self.lease_holder {
+            Some(holder) if holder == requester => {
+                let _ = write.reply.send(Err(output_error(std::io::Error::other(
+                    "the calling thread holds the terminal, so a stream write would wait on itself",
+                ))));
+            },
+            Some(_) => self.deferred.push_back(write),
+            None => {
+                let _ = write.reply.send(self.write_around(write.writer, &write.bytes));
+            },
+        }
+    }
+
+    #[cfg(feature = "interactive")]
+    fn acquire_lease(
+        &mut self,
+        holder: ThreadId,
+        reply: &Sender<std::result::Result<(), LeaseError>>,
+    ) {
+        if self.leased() {
+            let _ = reply.send(Err(LeaseError::Busy));
+            return;
+        }
+        match self.clear_immediate() {
+            Ok(()) => {
+                if reply.send(Ok(())).is_ok() {
+                    self.lease_holder = Some(holder);
+                }
+            },
+            Err(error) => {
+                let _ = reply.send(Err(LeaseError::Clear(error)));
+            },
+        }
+    }
+
+    fn remove(&mut self, id: u64, success: bool) {
+        if let Some(entry) = self.entries.remove(&id) {
+            if self.entries.is_empty() {
+                self.clear_if_live();
+            }
+            self.dirty = true;
+            let StatusEntry { widget, plain, final_message, failure_message } = entry;
+            self.discard_widget(id, widget);
+            let line = match (self.mode, success) {
+                (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
+                (StatusMode::Live, true) => final_message,
+                (StatusMode::Plain | StatusMode::Live, false) => failure_message,
+                // `Auto` is resolved to `Live`/`Silent` before
+                // coordinators are built, so a raw `Auto` here means
+                // silent.
+                (StatusMode::Silent | StatusMode::Auto, _) => None,
+            };
+            if let Some(line) = line {
+                self.enqueue(format!("{line}\n").into_bytes());
+            }
+            self.drain_pending();
         }
     }
 
@@ -692,27 +856,7 @@ impl Actor {
                 self.dirty = true;
             },
             Command::Remove { id, success, reply } => {
-                if let Some(entry) = self.entries.remove(&id) {
-                    if self.entries.is_empty() {
-                        self.clear_if_live();
-                    }
-                    self.dirty = true;
-                    let StatusEntry { widget, plain, final_message, failure_message } = entry;
-                    self.discard_widget(id, widget);
-                    let line = match (self.mode, success) {
-                        (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
-                        (StatusMode::Live, true) => final_message,
-                        (StatusMode::Plain | StatusMode::Live, false) => failure_message,
-                        // `Auto` is resolved to `Live`/`Silent` before
-                        // coordinators are built, so a raw `Auto` here means
-                        // silent.
-                        (StatusMode::Silent | StatusMode::Auto, _) => None,
-                    };
-                    if let Some(line) = line {
-                        self.enqueue(format!("{line}\n").into_bytes());
-                    }
-                    self.drain_pending();
-                }
+                self.remove(id, success);
                 let panic = self.panicked.remove(&id);
                 let _ = reply.send(self.report(panic));
             },
@@ -720,8 +864,31 @@ impl Actor {
             Command::Stop { .. } => {},
             Command::Notice { bytes, reply } => {
                 self.enqueue(bytes);
+                let result = if self.leased() {
+                    Ok(())
+                } else {
+                    self.drain_pending();
+                    self.notice_result()
+                };
+                let _ = reply.send(result);
+            },
+            #[cfg(feature = "structured")]
+            Command::Around { writer, bytes, requester, deadline, reply } => {
+                self.around(DeferredAround { writer, bytes, deadline, reply }, requester);
+            },
+            #[cfg(feature = "interactive")]
+            Command::AcquireLease { holder, reply } => self.acquire_lease(holder, &reply),
+            #[cfg(feature = "interactive")]
+            Command::ReleaseLease => {
+                self.lease_holder = None;
                 self.drain_pending();
-                let _ = reply.send(self.notice_result());
+                #[cfg(feature = "structured")]
+                while let Some(DeferredAround { writer, bytes, deadline, reply }) = self.deferred.pop_front() {
+                    if Instant::now() < deadline {
+                        let _ = reply.send(self.write_around(writer, &bytes));
+                    }
+                }
+                self.dirty = true;
             },
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
@@ -741,10 +908,17 @@ impl Actor {
                 let _ = reply.send(self.report_all());
             },
             Command::IsIdle { reply } => {
-                let idle = self.entries.is_empty() && self.pending.is_empty() && !self.flush_owed;
+                let idle = self.entries.is_empty() && self.pending.is_empty() && !self.flush_owed && !self.leased();
                 let _ = reply.send(idle);
             },
         }
+    }
+
+    #[cfg(feature = "structured")]
+    fn write_around(&mut self, mut writer: SharedWriter, bytes: &[u8]) -> Result<()> {
+        self.clear_if_live();
+        self.dirty = true;
+        writer.write_record(bytes).map_err(output_error)
     }
 
     fn notice_result(&mut self) -> Result<()> {
@@ -871,7 +1045,7 @@ impl Actor {
     }
 
     fn drain_pending(&mut self) {
-        if self.dead {
+        if self.leased() || self.dead {
             return;
         }
         if !self.pending.is_empty() {
@@ -946,7 +1120,7 @@ impl Actor {
     }
 
     fn wants_periodic_ticks(&self) -> bool {
-        self.mode == StatusMode::Live && !self.dead && !self.entries.is_empty()
+        self.mode == StatusMode::Live && !self.leased() && !self.dead && !self.entries.is_empty()
     }
 
     fn frame_interval(&self) -> Duration {
@@ -1426,6 +1600,86 @@ mod tests {
         assert!(error.to_string().contains("first frame failed"));
     }
 
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn prompt_exclusivity_suspends_and_restores_status_presentation() {
+        let capture = Capture::default();
+        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        wait_for(|| !capture.text().is_empty());
+
+        let guard = coordinator.prompt_guard().unwrap();
+        assert!(coordinator.prompt_guard().is_err());
+        let before = capture.text();
+        coordinator.mark_dirty().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(capture.text(), before, "no draw happens while leased");
+
+        drop(guard);
+        wait_for(|| capture.text() != before);
+        status.finish().unwrap();
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn finishing_statuses_defer_final_lines_while_a_prompt_holds_the_lease() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        let status = Status::new("working", coordinator.clone())
+            .final_message("finished")
+            .start();
+        let guard = coordinator.prompt_guard().unwrap();
+        status.finish().unwrap();
+        assert!(capture.text().is_empty());
+        drop(guard);
+        wait_for(|| capture.text() == "finished\n");
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn a_failed_write_keeps_lines_queued_until_the_next_emit() {
+        struct FailOnce {
+            fail:   bool,
+            output: Capture,
+        }
+
+        impl io::Write for FailOnce {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                if self.fail {
+                    self.fail = false;
+                    return Err(io::Error::other("first write failed"));
+                }
+                self.output.write(bytes)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let output = Capture::default();
+        let coordinator = StatusCoordinator::new(
+            SharedWriter::new(FailOnce {
+                fail:   true,
+                output: output.clone(),
+            }),
+            StatusMode::Plain,
+        );
+        let guard = coordinator.prompt_guard().unwrap();
+        coordinator.notice(b"first\n").unwrap();
+        coordinator.notice(b"second\n").unwrap();
+        drop(guard);
+
+        // The very first write attempt anywhere is scripted to fail before
+        // writing bytes, so nothing can have reached `output` yet.
+        assert!(output.text().is_empty());
+        coordinator.notice(b"third\n").unwrap();
+        assert_eq!(output.text(), "first\nsecond\nthird\n");
+    }
+
     #[test]
     fn unwritable_lines_stay_queued_and_fail_the_commit_flush() {
         struct Closed;
@@ -1625,6 +1879,32 @@ mod tests {
         assert!(reported_drop);
     }
 
+    #[cfg(feature = "structured")]
+    #[test]
+    fn a_stream_write_through_around_appears_after_the_live_region_clears_and_is_not_overwritten() {
+        let capture = Capture::default();
+        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        wait_for(|| !capture.text().is_empty());
+        let before = capture.text();
+
+        coordinator
+            .write_around(SharedWriter::new(capture.clone()), b"stream line\n".to_vec())
+            .unwrap();
+        let after_around = capture.text();
+        let appended = &after_around[before.len()..];
+        assert!(appended.ends_with("stream line\n"));
+        assert!(
+            appended.len() > b"stream line\n".len(),
+            "a clear sequence must precede the line: {appended:?}"
+        );
+
+        wait_for(|| capture.text().len() > after_around.len());
+        status.finish().unwrap();
+    }
+
     #[test]
     fn a_notice_under_a_live_status_clears_the_region_before_it_is_written() {
         let capture = Capture::default();
@@ -1691,6 +1971,43 @@ mod tests {
         let error = coordinator.notice(b"second\n").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Output);
         assert!(error.to_string().contains("stopped"));
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn a_notice_under_a_lease_returns_at_once_and_is_written_on_release() {
+        let capture = Capture::default();
+        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        let guard = coordinator.prompt_guard().unwrap();
+        coordinator.notice(b"queued\n").unwrap();
+        assert!(capture.text().is_empty());
+        drop(guard);
+        wait_for(|| capture.text() == "queued\n");
+    }
+
+    #[cfg(all(feature = "interactive", feature = "structured"))]
+    #[test]
+    fn a_stream_write_waits_for_another_threads_lease_and_fails_on_the_holders_own() {
+        let capture = Capture::default();
+        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
+        let guard = coordinator.prompt_guard().unwrap();
+
+        let own = coordinator
+            .write_around(SharedWriter::new(capture.clone()), b"own\n".to_vec())
+            .unwrap_err();
+        assert!(own.to_string().contains("would wait on itself"));
+
+        let other = std::thread::scope(|scope| {
+            let streaming = scope.spawn(|| {
+                coordinator.write_around(SharedWriter::new(capture.clone()), b"other\n".to_vec())
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(capture.text().is_empty(), "the write must wait for the lease");
+            drop(guard);
+            streaming.join().unwrap()
+        });
+        other.unwrap();
+        assert_eq!(capture.text(), "other\n");
     }
 
     fn actor_with(width: WidthSource) -> Actor {
@@ -1801,6 +2118,50 @@ mod tests {
         status.finish().unwrap();
     }
 
+    #[cfg(feature = "structured")]
+    #[test]
+    fn a_widget_streaming_beside_a_waiting_stream_fails_at_once() {
+        use crate::output::{Format, Output, PresentationRoute};
+
+        struct Streams(Output, Arc<Barrier>, AtomicBool, Arc<Mutex<Option<(Error, Duration)>>>);
+
+        impl Widget for Streams {
+            fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+                if !self.2.swap(true, Ordering::SeqCst) {
+                    self.1.wait();
+                    thread::sleep(Duration::from_millis(200));
+                    let started = Instant::now();
+                    if let Err(error) = self.0.stream(&1).text(|value| value).emit() {
+                        *lock(&self.3) = Some((error, started.elapsed()));
+                    }
+                }
+                out.write("x", screw::Style::PLAIN);
+            }
+        }
+
+        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let output = Output::new(Format::Text)
+            .with_writer(Capture::default())
+            .with_route(PresentationRoute::Around(coordinator.clone()));
+        let barrier = Arc::new(Barrier::new(2));
+        let seen = Arc::new(Mutex::new(None));
+        let status = Status::new("widget", coordinator)
+            .widget(widget(Streams(
+                output.clone(),
+                Arc::clone(&barrier),
+                AtomicBool::new(false),
+                Arc::clone(&seen),
+            )))
+            .start();
+        barrier.wait();
+        let _ = output.stream(&2).text(|value| value).emit();
+        wait_for(|| lock(&seen).is_some());
+        let (error, elapsed) = lock(&seen).take().unwrap();
+        assert!(error.to_string().contains("would wait on itself"), "{error}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
+        status.finish().unwrap();
+    }
+
     #[test]
     fn a_blocking_widget_makes_requests_time_out_with_an_error() {
         struct Blocks(Arc<Barrier>);
@@ -1858,6 +2219,32 @@ mod tests {
         assert!(!coordinator.is_idle());
         release.wait();
         drop(status);
+    }
+
+    #[cfg(all(feature = "interactive", feature = "structured"))]
+    #[test]
+    fn a_stream_write_waiting_for_a_lease_gives_up_and_is_not_made_late() {
+        let capture = Capture::default();
+        let coordinator = StatusCoordinator::build(
+            SharedWriter::new(Capture::default()),
+            StatusMode::Plain,
+            WidthSource::Fixed(40),
+            Duration::from_millis(100),
+        );
+        let guard = coordinator.prompt_guard().unwrap();
+
+        let error = std::thread::scope(|scope| {
+            scope
+                .spawn(|| coordinator.write_around(SharedWriter::new(capture.clone()), b"late\n".to_vec()))
+                .join()
+                .unwrap()
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("did not answer in time"), "{error}");
+
+        drop(guard);
+        coordinator.flush_transient().unwrap();
+        assert!(capture.text().is_empty());
     }
 
     #[test]

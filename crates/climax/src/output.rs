@@ -41,7 +41,29 @@ pub struct Output {
     notices: SharedWriter,
     notice_format: Format,
     #[cfg(feature = "structured")]
-    state: Arc<Mutex<EmissionState>>,
+    state: Arc<Emission>,
+    #[cfg(all(feature = "render", feature = "structured"))]
+    route: PresentationRoute,
+}
+
+/// Where an immediate write to `Output`'s own writer goes when a live status
+/// may be sharing the terminal.
+///
+/// Only `structured`'s `register` reaches an immediate write at all; a finite
+/// result writes straight to its captured writer on `commit`, and `notice`
+/// never touches this route.
+#[cfg(all(feature = "render", feature = "structured"))]
+#[derive(Clone)]
+pub(crate) enum PresentationRoute {
+    /// Write straight to the destination.
+    Direct,
+    /// Clear the live region, write through, and let the next frame redraw.
+    Around(crate::status::StatusCoordinator),
+    /// Write through the coordinator's notice path, because the destination
+    /// is literally the transient channel's stream. The call waits for the
+    /// write, or returns once the line is queued while a prompt holds the
+    /// terminal.
+    Queued(crate::status::StatusCoordinator),
 }
 
 impl Output {
@@ -54,7 +76,9 @@ impl Output {
             notices: SharedWriter::stderr(),
             notice_format: format,
             #[cfg(feature = "structured")]
-            state: Arc::new(Mutex::new(EmissionState::default())),
+            state: Arc::new(Emission::default()),
+            #[cfg(all(feature = "render", feature = "structured"))]
+            route: PresentationRoute::Direct,
         }
     }
 
@@ -73,11 +97,21 @@ impl Output {
     #[must_use]
     pub fn with_writer(mut self, writer: impl Write + Send + 'static) -> Self {
         self.writer = SharedWriter::new(writer);
+        #[cfg(all(feature = "render", feature = "structured"))]
+        {
+            self.route = PresentationRoute::Direct;
+        }
         self
     }
 
     pub(crate) fn with_shared_writer(mut self, writer: SharedWriter) -> Self {
         self.writer = writer;
+        self
+    }
+
+    #[cfg(all(feature = "render", feature = "structured"))]
+    pub(crate) fn with_route(mut self, route: PresentationRoute) -> Self {
+        self.route = route;
         self
     }
 
@@ -184,40 +218,54 @@ impl Output {
 
     #[cfg(feature = "structured")]
     fn register(&self, mode: EmissionMode, bytes: Vec<u8>) -> Result<()> {
-        let mut state = lock(&self.state);
-        match (mode, &mut *state) {
-            (EmissionMode::Finite, state @ EmissionState::Empty) => {
-                *state = EmissionState::Finite(PendingResult {
-                    bytes,
-                    writer: self.writer.clone(),
-                });
-                Ok(())
-            },
-            (EmissionMode::Finite, EmissionState::Finite(_)) => {
-                Err(output_policy("a finite result is already registered"))
-            },
-            (EmissionMode::Finite, EmissionState::Streaming) => Err(output_policy(
-                "cannot emit a finite result after streaming output",
-            )),
-            (EmissionMode::Stream, state @ EmissionState::Empty) => {
-                *state = EmissionState::Streaming;
-                self.write_bytes(&bytes)
-            },
-            (EmissionMode::Stream, EmissionState::Streaming) => self.write_bytes(&bytes),
-            (EmissionMode::Stream, EmissionState::Finite(_)) => Err(output_policy(
-                "cannot stream output after registering a finite result",
-            )),
-            (EmissionMode::Finite | EmissionMode::Stream, EmissionState::Closed) => {
-                Err(output_policy("the output lifecycle is already complete"))
-            },
+        {
+            let mut lifecycle = lock(&self.state.lifecycle);
+            match (mode, &mut lifecycle.state) {
+                (EmissionMode::Finite, state @ EmissionState::Empty) => {
+                    *state = EmissionState::Finite(PendingResult {
+                        bytes,
+                        writer: self.writer.clone(),
+                    });
+                    return Ok(());
+                },
+                (EmissionMode::Finite, EmissionState::Finite(_)) => {
+                    return Err(output_policy("a finite result is already registered"));
+                },
+                (EmissionMode::Finite, EmissionState::Streaming) => {
+                    return Err(output_policy(
+                        "cannot emit a finite result after streaming output",
+                    ));
+                },
+                (EmissionMode::Stream, state @ EmissionState::Empty) => {
+                    *state = EmissionState::Streaming;
+                },
+                (EmissionMode::Stream, EmissionState::Streaming) => {},
+                (EmissionMode::Stream, EmissionState::Finite(_)) => {
+                    return Err(output_policy(
+                        "cannot stream output after registering a finite result",
+                    ));
+                },
+                (EmissionMode::Finite | EmissionMode::Stream, EmissionState::Closed) => {
+                    return Err(output_policy("the output lifecycle is already complete"));
+                },
+            }
+            lifecycle.in_flight += 1;
         }
+        let _write = InFlight(&self.state);
+        self.write_bytes(&bytes)
     }
 
     #[cfg(feature = "structured")]
     pub(crate) fn commit(&self) -> Result<()> {
         let pending = {
-            let mut state = lock(&self.state);
-            match std::mem::replace(&mut *state, EmissionState::Closed) {
+            let state = std::mem::replace(&mut lock(&self.state.lifecycle).state, EmissionState::Closed);
+            drop(
+                self.state
+                    .drained
+                    .wait_while(lock(&self.state.lifecycle), |lifecycle| lifecycle.in_flight > 0)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            match state {
                 EmissionState::Finite(pending) => Some(pending),
                 EmissionState::Empty | EmissionState::Streaming | EmissionState::Closed => None,
             }
@@ -225,11 +273,7 @@ impl Output {
         if let Some(mut pending) = pending {
             pending
                 .writer
-                .write_all(&pending.bytes)
-                .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-            pending
-                .writer
-                .flush()
+                .write_record(&pending.bytes)
                 .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
         }
         Ok(())
@@ -243,22 +287,63 @@ impl Output {
 
     #[cfg(feature = "structured")]
     pub(crate) fn discard(&self) {
-        *lock(&self.state) = EmissionState::Closed;
+        lock(&self.state.lifecycle).state = EmissionState::Closed;
     }
 
     #[cfg(not(feature = "structured"))]
     #[expect(clippy::unused_self, reason = "without `structured` nothing is registered to discard")]
     pub(crate) const fn discard(&self) {}
 
+    /// Write bytes to `writer` using the presentation route in effect, so a
+    /// live status region is never torn by a stream or message write.
     #[cfg(feature = "structured")]
     fn write_bytes(&self, bytes: &[u8]) -> Result<()> {
-        let mut writer = self.writer.clone();
-        writer
-            .write_all(bytes)
-            .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-        writer
-            .flush()
+        #[cfg(feature = "render")]
+        match &self.route {
+            PresentationRoute::Direct => self.write_bytes_direct(bytes),
+            PresentationRoute::Around(coordinator) => {
+                coordinator.write_around(self.writer.clone(), bytes.to_vec())
+            },
+            PresentationRoute::Queued(coordinator) => coordinator.notice(bytes),
+        }
+        #[cfg(not(feature = "render"))]
+        self.write_bytes_direct(bytes)
+    }
+
+    #[cfg(feature = "structured")]
+    fn write_bytes_direct(&self, bytes: &[u8]) -> Result<()> {
+        self.writer
+            .clone()
+            .write_record(bytes)
             .map_err(|error| Error::with_source(ErrorKind::Output, error))
+    }
+}
+
+/// The emission state and the stream writes that passed its check but have not
+/// finished, so `commit` can wait for them without any writer holding the lock
+/// across a coordinator request.
+#[cfg(feature = "structured")]
+#[derive(Default)]
+struct Emission {
+    lifecycle: Mutex<Lifecycle>,
+    drained: std::sync::Condvar,
+}
+
+#[cfg(feature = "structured")]
+#[derive(Default)]
+struct Lifecycle {
+    state: EmissionState,
+    in_flight: usize,
+}
+
+#[cfg(feature = "structured")]
+struct InFlight<'a>(&'a Emission);
+
+#[cfg(feature = "structured")]
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.lifecycle).in_flight -= 1;
+        self.0.drained.notify_all();
     }
 }
 
@@ -374,6 +459,23 @@ impl SharedWriter {
     pub(crate) const fn stderr() -> Self {
         Self::Stderr
     }
+
+    /// Write and flush one complete record, holding the destination's lock
+    /// throughout so records from clones never interleave.
+    pub(crate) fn write_record(&mut self, bytes: &[u8]) -> io::Result<()> {
+        fn whole(mut writer: impl Write, bytes: &[u8]) -> io::Result<()> {
+            writer.write_all(bytes)?;
+            writer.flush()
+        }
+
+        match self {
+            Self::Stdout => whole(io::stdout().lock(), bytes),
+            Self::Stderr => whole(io::stderr().lock(), bytes),
+            #[cfg(feature = "render")]
+            Self::Transient(notices) => whole(notices, bytes),
+            Self::Custom(inner) => whole(&mut **lock(inner), bytes),
+        }
+    }
 }
 
 impl Write for SharedWriter {
@@ -417,14 +519,10 @@ fn format_text(message: impl fmt::Display) -> String {
     format!("{message}\n")
 }
 
-fn write_text(mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
+fn write_text(mut writer: SharedWriter, message: impl fmt::Display) -> Result<()> {
     writer
-        .write_all(format_text(message).as_bytes())
-        .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-    writer
-        .flush()
-        .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-    Ok(())
+        .write_record(format_text(message).as_bytes())
+        .map_err(|error| Error::with_source(ErrorKind::Output, error))
 }
 
 #[cfg(feature = "structured")]
@@ -489,6 +587,45 @@ mod tests {
             Output::new(Format::Json).format_message("a\n\"b"),
             "\"a\\n\\\"b\"\n"
         );
+    }
+
+    #[cfg(feature = "structured")]
+    #[test]
+    fn records_from_clones_never_interleave_on_a_short_writing_destination() {
+        struct OneByte(Capture);
+
+        impl Write for OneByte {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                std::thread::yield_now();
+                self.0.write(&buffer[..buffer.len().min(1)])
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let capture = Capture::default();
+        let output = Output::new(Format::Text).with_writer(OneByte(capture.clone()));
+        let threads: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|letter| {
+                let output = output.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..50 {
+                        output.stream(&letter.repeat(20)).text(|value| value).emit().unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let text = capture.text();
+        assert_eq!(text.lines().count(), 100);
+        for line in text.lines() {
+            assert!(line == "a".repeat(20) || line == "b".repeat(20), "{line}");
+        }
     }
 
     #[cfg(feature = "structured")]
@@ -614,5 +751,90 @@ mod tests {
         output.notices = SharedWriter::new(json.clone());
         output.notice("heads up").unwrap();
         assert_eq!(json.text(), "");
+    }
+
+    #[cfg(feature = "structured")]
+    #[test]
+    fn commit_waits_for_a_stream_write_already_in_flight() {
+        use std::sync::mpsc;
+
+        struct Gated {
+            bytes: Capture,
+            entered: mpsc::Sender<()>,
+            release: Arc<Mutex<mpsc::Receiver<()>>>,
+        }
+
+        impl Write for Gated {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                self.bytes.write(buffer)
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let capture = Capture::default();
+        let (entered, entered_rx) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+        let output = Output::new(Format::Text).with_writer(Gated {
+            bytes: capture.clone(),
+            entered,
+            release: Arc::new(Mutex::new(release)),
+        });
+
+        let streaming = output.clone();
+        let stream = std::thread::spawn(move || streaming.stream(&1).text(|value| value).emit());
+        entered_rx.recv().unwrap();
+
+        let commit = std::thread::spawn(move || {
+            output.commit().unwrap();
+            capture.text()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!commit.is_finished(), "commit must wait for the write in flight");
+
+        release_tx.send(()).unwrap();
+        stream.join().unwrap().unwrap();
+        assert_eq!(commit.join().unwrap(), "1\n");
+    }
+
+    #[cfg(all(feature = "render", feature = "structured"))]
+    #[test]
+    fn queued_route_has_written_when_the_call_returns() {
+        let capture = Capture::default();
+        let coordinator = crate::status::StatusCoordinator::new(
+            SharedWriter::new(capture.clone()),
+            crate::terminal::StatusMode::Silent,
+        );
+        let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator));
+        for index in 0..20 {
+            output.write_bytes(format!("line {index}\n").as_bytes()).unwrap();
+            assert!(capture.text().ends_with(&format!("line {index}\n")));
+        }
+    }
+
+    #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
+    #[test]
+    fn queued_route_defers_writes_while_the_coordinator_is_leased() {
+        let capture = Capture::default();
+        let coordinator = crate::status::StatusCoordinator::new(
+            SharedWriter::new(capture.clone()),
+            crate::terminal::StatusMode::Silent,
+        );
+        let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator.clone()));
+
+        let guard = coordinator.prompt_guard().unwrap();
+        output.write_bytes(b"heads up\n").unwrap();
+        assert!(capture.text().is_empty());
+
+        drop(guard);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while capture.text().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(capture.text(), "heads up\n");
     }
 }
