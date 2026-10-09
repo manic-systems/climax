@@ -35,7 +35,5 @@ pub use crate::{
     run_with,
     terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
 };
-#[cfg(feature = "interactive")]
-pub use crate::OutputContext;
 #[cfg(feature = "parse")]
-pub use crate::run;
+pub use crate::{try_run, try_run_from};
