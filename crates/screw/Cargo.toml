@@ -11,12 +11,12 @@ readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
-rustix = { version = "1.1", default-features = false, features = [ "std", "termios" ] }
-unicode-segmentation = "1.13"
-unicode-width = "0.2.2"
+rustix               = { workspace = true, features = [ "std", "termios" ] }
+unicode-segmentation.workspace = true
+unicode-width.workspace        = true
 
 [dev-dependencies]
-screw-pty = { path = "../screw-pty", version = "=0.0.1" }
+screw-pty = { path = "../screw-pty" }
 
 [lints]
 workspace = true
