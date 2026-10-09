@@ -16,6 +16,7 @@ extern crate alloc;
 mod error;
 mod interaction;
 mod live;
+mod prompt;
 mod session;
 
 pub mod advanced;
@@ -42,3 +43,13 @@ pub use error::{
     Result,
 };
 pub use interaction::Interaction;
+pub use prompt::{
+    Configurable,
+    MultiSelectConfig,
+    MultiSelectPrompt,
+    PromptOutcome,
+    SelectConfig,
+    SelectPrompt,
+    multi_select,
+    select,
+};
