@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "bang"
+version = "0.0.1"
+dependencies = [
+ "bang-core",
+ "bang-terminal",
+ "libc",
+ "screw",
+]
+
+[[package]]
 name = "bang-core"
 version = "0.0.1"
 dependencies = [
