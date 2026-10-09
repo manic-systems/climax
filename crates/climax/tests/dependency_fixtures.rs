@@ -2,7 +2,22 @@
 
 use std::{path::PathBuf, process::Command};
 
-const FIXTURES: &[&str] = &[];
+const FIXTURES: &[&str] = &[
+    "fixture-bang-only",
+    "fixture-climax-derive-only",
+    "fixture-climax-interactive-only",
+    "fixture-climax-no-default-features",
+    "fixture-climax-only",
+    "fixture-climax-parse-only",
+    "fixture-climax-render-only",
+    "fixture-climax-structured-only",
+    "fixture-climax-with-components",
+    "fixture-pound-no-derive",
+    "fixture-pound-no-help",
+    "fixture-pound-no-std",
+    "fixture-pound-only",
+    "fixture-screw-only",
+];
 
 /// Each fixture is built and tested in its own `cargo test -p`, not
 /// `--workspace`, so Cargo resolves its features from only that fixture's

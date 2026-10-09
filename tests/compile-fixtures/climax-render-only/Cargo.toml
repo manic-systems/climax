@@ -1,0 +1,8 @@
+[package]
+name = "fixture-climax-render-only"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+climax = { path = "../../../crates/climax", default-features = false, features = [ "render" ] }

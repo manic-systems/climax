@@ -1,0 +1,8 @@
+[package]
+name = "fixture-screw-only"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+screw.workspace = true
