@@ -23,10 +23,7 @@ pub use cleanup::{
     CleanupFailures,
     CleanupStage,
 };
-pub use decoder::{
-    Decoder,
-    decode_all,
-};
+pub use decoder::Decoder;
 pub use mode::{
     RawModeOptions,
     TerminalModeGuard,
