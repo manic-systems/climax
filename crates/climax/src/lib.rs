@@ -54,13 +54,14 @@ pub use error::{
 #[cfg(feature = "parse")]
 pub use pound;
 #[cfg(feature = "render")] pub use screw;
+#[cfg(feature = "structured")] pub use serde;
 #[cfg(feature = "parse")]
 pub use pound::{
     FromArg,
     Parse as ParseTrait,
 };
 #[cfg(feature = "derive")]
-pub use pound::{
+pub use climax_derive::{
     Parse,
     ValueEnum,
 };

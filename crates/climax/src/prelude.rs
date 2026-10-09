@@ -8,7 +8,7 @@ pub use pound::{
     Parse as ParseTrait,
 };
 #[cfg(feature = "derive")]
-pub use pound::{
+pub use crate::{
     Parse,
     ValueEnum,
 };
