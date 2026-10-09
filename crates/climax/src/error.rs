@@ -1,13 +1,13 @@
-use core::{
-    error,
-    fmt,
-    result::Result as CoreResult,
-};
 #[cfg(any(feature = "render", feature = "interactive"))]
 use std::io;
+use std::{
+    error,
+    fmt,
+};
 
-pub type Result<T> = CoreResult<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
+#[derive(Debug)]
 pub enum Error {
     /// argument parsing failed
     #[cfg(feature = "parse")]
@@ -17,7 +17,7 @@ pub enum Error {
     Draw(io::Error),
     /// interactive terminal session failed
     #[cfg(feature = "interactive")]
-    Interact(bang_screw::LiveSessionError),
+    Interact(::bang::Error),
     /// prompt was cancelled
     #[cfg(feature = "interactive")]
     Cancelled,
@@ -62,20 +62,6 @@ impl fmt::Display for Error {
     }
 }
 
-impl fmt::Debug for Error {
-    // std prints an error returned from main through Debug
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            #[cfg(feature = "parse")]
-            Self::ArgParse(error) => {
-                let report = error.render(pound::Term::plain());
-                f.write_str(report.strip_prefix("error: ").unwrap_or(&report))
-            },
-            _ => fmt::Display::fmt(self, f),
-        }
-    }
-}
-
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
@@ -100,16 +86,12 @@ impl From<pound::Error> for Error {
 }
 
 #[cfg(feature = "interactive")]
-impl From<bang_screw::LiveSessionError> for Error {
-    fn from(value: bang_screw::LiveSessionError) -> Self {
-        match value {
-            bang_screw::LiveSessionError::Cancelled => Self::Cancelled,
-            bang_screw::LiveSessionError::InputEnded => Self::InputEnded,
-            other @ (bang_screw::LiveSessionError::RawMode(_)
-            | bang_screw::LiveSessionError::Signals(_)
-            | bang_screw::LiveSessionError::TerminalIo(_)
-            | bang_screw::LiveSessionError::Signalled(_)
-            | bang_screw::LiveSessionError::ReraiseSignal { .. }) => Self::Interact(other),
+impl From<::bang::Error> for Error {
+    fn from(value: ::bang::Error) -> Self {
+        match value.kind() {
+            ::bang::ErrorKind::Cancelled => Self::Cancelled,
+            ::bang::ErrorKind::InputEnded => Self::InputEnded,
+            _ => Self::Interact(value),
         }
     }
 }
