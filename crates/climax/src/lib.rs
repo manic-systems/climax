@@ -1,6 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! batteries-included CLI facade over `pound`, `screw`, and `bang`
+//! Batteries-included application facade over `pound`, `screw`, and `bang`.
+//!
+//! The crate root and [`prelude`] contain the ordinary application workflow.
+//! Each component is also re-exported whole behind the feature that enables
+//! it, as `climax::pound` under `parse`, `climax::bang` under `interactive`,
+//! `climax::screw` under `render`, and `climax::serde` under `structured`. An
+//! application needs no direct dependency on any of them, and the versions it
+//! sees are the ones `climax` was tested against.
+//!
+//! The `derive` feature provides `#[derive(climax::Parse)]` and
+//! `#[derive(climax::ValueEnum)]`, whose expansion refers to
+//! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
+//! for the same reason.
+
+#[cfg(all(
+    doctest,
+    feature = "derive",
+    feature = "interactive",
+    feature = "render",
+    feature = "structured"
+))]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 mod app;
 pub mod error;
@@ -51,24 +73,12 @@ pub use error::{
     Error,
     Result,
 };
-#[cfg(feature = "parse")]
-pub use pound;
-#[cfg(feature = "render")] pub use screw;
-#[cfg(feature = "structured")] pub use serde;
-#[cfg(feature = "parse")]
-pub use pound::{
-    FromArg,
-    Parse as ParseTrait,
-};
+#[cfg(feature = "interactive")] pub use bang;
 #[cfg(feature = "derive")]
 pub use climax_derive::{
     Parse,
     ValueEnum,
 };
-#[cfg(feature = "render")]
-pub use screw::{
-    Color,
-    Role,
-    Style,
-    Theme,
-};
+#[cfg(feature = "parse")] pub use pound;
+#[cfg(feature = "render")] pub use screw;
+#[cfg(feature = "structured")] pub use serde;
