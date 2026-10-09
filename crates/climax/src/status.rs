@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
+    any::Any,
     collections::{
         BTreeMap,
         VecDeque,
     },
     fmt,
     io::Write as _,
+    panic::{
+        AssertUnwindSafe,
+        catch_unwind,
+    },
     sync::{
         Arc,
         OnceLock,
@@ -103,10 +108,10 @@ impl Status {
     /// render `widget` in the live region in place of the message, after the
     /// spinner if any
     ///
-    /// Every prompt, notice and status removal waits on that same thread, so
-    /// `render` must be quick and must not block, and it must not call back
-    /// into anything that waits on the coordinator, which fails at once
-    /// instead.
+    /// the widget is drawn on the coordinator's thread, so it must be quick and
+    /// must not block, and shared state it reads needs
+    /// [`StatusRuntime::mark_dirty`] after changing. a widget that panics
+    /// is removed and the failure is reported by that status's `finish`
     #[must_use]
     pub fn widget(mut self, widget: WidgetRef) -> Self {
         self.widget = Some(widget);
@@ -721,6 +726,7 @@ struct Actor {
     flush_owed:       bool,
     dead:             bool,
     errors:           ErrorLog,
+    panicked:         BTreeMap<u64, Error>,
 }
 
 impl Actor {
@@ -744,6 +750,7 @@ impl Actor {
             flush_owed: false,
             dead: false,
             errors: ErrorLog::default(),
+            panicked: BTreeMap::new(),
         }
     }
 
@@ -766,7 +773,7 @@ impl Actor {
                         final_message,
                         failure_message,
                     } = entry;
-                    drop(widget);
+                    self.discard_widget(id, widget);
                     let line = match (self.mode, success) {
                         (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
                         (StatusMode::Live, true) => final_message,
@@ -781,7 +788,8 @@ impl Actor {
                     }
                     self.drain_pending();
                 }
-                let _ = reply.send(self.take_reports());
+                let panic = self.panicked.remove(&id);
+                let _ = reply.send(self.report(panic));
             },
             Command::MarkDirty => self.dirty = true,
             Command::Stop { .. } => {},
@@ -809,7 +817,7 @@ impl Actor {
             },
             Command::Flush { reply } => {
                 self.drain_pending();
-                let _ = reply.send(self.take_reports());
+                let _ = reply.send(self.report_all());
             },
             Command::IsIdle { reply } => {
                 let idle = self.entries.is_empty() && self.pending.is_empty() && !self.flush_owed;
@@ -828,8 +836,67 @@ impl Actor {
         Ok(())
     }
 
-    fn take_reports(&mut self) -> Result<()> {
-        self.errors.take().map_or(Ok(()), Err)
+    fn report(&mut self, panic: Option<Error>) -> Result<()> {
+        collect_reports(self.errors.take().into_iter().chain(panic))
+    }
+
+    fn report_all(&mut self) -> Result<()> {
+        let panics = std::mem::take(&mut self.panicked);
+        collect_reports(self.errors.take().into_iter().chain(panics.into_values()))
+    }
+
+    fn record_widget_panic(&mut self, ids: &[u64], what: &str, payload: &(dyn Any + Send)) {
+        let message = format!(
+            "a status widget panicked while {what} and was removed, {}",
+            panic_message(payload)
+        );
+        for id in ids {
+            let error = Error::message(message.clone());
+            let error = match self.panicked.remove(id) {
+                Some(first) => first.with_related(error),
+                None => error,
+            };
+            self.panicked.insert(*id, error);
+        }
+        self.dirty = true;
+    }
+
+    fn discard_widget(&mut self, id: u64, widget: WidgetRef) {
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(widget))) {
+            self.record_widget_panic(&[id], "dropping", payload.as_ref());
+        }
+    }
+
+    /// remove every entry whose widget panics when probed, or all of them when
+    /// the panic cannot be pinned on one, so the next draw cannot panic
+    /// again
+    fn remove_panicking_entries(&mut self, what: &str, payload: &(dyn Any + Send)) {
+        let culprits: Vec<u64> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    let _ = screw::render_plain(&*entry.widget);
+                    let _ = entry.widget.tick_interest();
+                }))
+                .is_err()
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        let doomed = if culprits.is_empty() {
+            self.entries.keys().copied().collect()
+        } else {
+            culprits
+        };
+        self.record_widget_panic(&doomed, what, payload);
+        for id in doomed {
+            if let Some(entry) = self.entries.remove(&id) {
+                self.discard_widget(id, entry.widget);
+            }
+        }
+        if self.entries.is_empty() {
+            self.clear_if_live();
+        }
     }
 
     fn kill(&mut self) {
@@ -961,12 +1028,15 @@ impl Actor {
             .values()
             .map(|entry| entry.widget.clone())
             .collect();
-        match self.renderer.draw(&StatusStack(widgets)) {
-            Ok(_) => self.dirty = false,
-            Err(error) => {
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.renderer.draw(&StatusStack(widgets))
+        })) {
+            Ok(Ok(_)) => self.dirty = false,
+            Ok(Err(error)) => {
                 self.record_transient_failure(error);
                 self.dirty = false;
             },
+            Err(payload) => self.remove_panicking_entries("rendering", payload.as_ref()),
         }
         self.last_draw = Some(Instant::now());
     }
@@ -979,11 +1049,17 @@ impl Actor {
         Duration::from_nanos(1_000_000_000 / u64::from(self.fps.max(1)))
     }
 
-    fn tick_interest(&self) -> TickInterest {
-        combined_tick_interest(&self.entries)
+    fn tick_interest(&mut self) -> TickInterest {
+        match catch_unwind(AssertUnwindSafe(|| combined_tick_interest(&self.entries))) {
+            Ok(interest) => interest,
+            Err(payload) => {
+                self.remove_panicking_entries("reporting its tick interest", payload.as_ref());
+                TickInterest::Never
+            },
+        }
     }
 
-    fn should_draw(&self) -> bool {
+    fn should_draw(&mut self) -> bool {
         if !self.wants_periodic_ticks() {
             return false;
         }
@@ -999,7 +1075,7 @@ impl Actor {
 
     /// how long the thread may sleep before it next has to act, or `None` to
     /// sleep until a command arrives
-    fn next_wake(&self) -> Option<Duration> {
+    fn next_wake(&mut self) -> Option<Duration> {
         if !self.wants_periodic_ticks() {
             return None;
         }
@@ -1053,6 +1129,21 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
             actor.draw();
         }
     }
+}
+
+fn collect_reports(errors: impl IntoIterator<Item = Error>) -> Result<()> {
+    let mut errors = errors.into_iter();
+    errors
+        .next()
+        .map_or(Ok(()), |first| Err(errors.fold(first, Error::with_related)))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "with a non-string payload".to_owned())
 }
 
 struct StatusStack(Vec<WidgetRef>);
@@ -1765,6 +1856,70 @@ mod tests {
         drawn_static_status(&mut actor);
         let is_terminal = screw::Viewport::of(&std::io::stderr()).is_ok();
         assert_eq!(actor.next_wake().is_some(), is_terminal);
+    }
+
+    struct PanicsOnRender;
+
+    impl Widget for PanicsOnRender {
+        fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {
+            panic!("widget exploded");
+        }
+    }
+
+    fn start_broken(coordinator: &StatusCoordinator) -> StatusRuntime {
+        let broken = Status::new("broken", coordinator.clone())
+            .widget(widget(PanicsOnRender))
+            .start();
+        // the first insert draws at once, and a reply means the draw has run
+        coordinator.is_idle();
+        broken
+    }
+
+    #[test]
+    fn a_panicking_widget_is_reported_by_its_own_finish_and_the_actor_survives() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let broken = start_broken(&coordinator);
+        let healthy = Status::new("healthy", coordinator.clone()).start();
+
+        coordinator.mark_dirty().unwrap();
+        coordinator.notice(b"still alive\n").unwrap();
+        assert!(capture.text().contains("still alive"));
+        let error = broken.finish().unwrap_err();
+        assert!(error.to_string().contains("widget exploded"), "{error}");
+
+        healthy.finish().unwrap();
+        coordinator.flush_transient().unwrap();
+        Status::new("later", coordinator)
+            .final_message("later done")
+            .finish()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_stale_widget_panic_report_reaches_no_other_call() {
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let broken = start_broken(&coordinator);
+        drop(broken);
+
+        coordinator.notice(b"unrelated\n").unwrap();
+        Status::new("other", coordinator.clone()).finish().unwrap();
+        coordinator.flush_transient().unwrap();
+    }
+
+    #[test]
+    fn the_closing_flush_reports_a_panicked_status_that_is_still_live() {
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let broken = start_broken(&coordinator);
+
+        coordinator.notice(b"unrelated\n").unwrap();
+        let error = coordinator.flush_transient().unwrap_err();
+        assert!(error.to_string().contains("widget exploded"), "{error}");
+        coordinator.flush_transient().unwrap();
+        drop(broken);
     }
 
     #[test]
