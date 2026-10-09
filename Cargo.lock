@@ -17,6 +17,7 @@ dependencies = [
  "bang-core",
  "libc",
  "rustix",
+ "screw",
 ]
 
 [[package]]
