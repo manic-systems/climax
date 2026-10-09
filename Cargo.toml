@@ -1,5 +1,6 @@
 [workspace]
 members = [
+	"crates/bang",
 	"crates/bang-core",
 	"crates/bang-terminal",
 	"crates/pound",
