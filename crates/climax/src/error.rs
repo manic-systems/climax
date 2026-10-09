@@ -1,130 +1,213 @@
-#[cfg(any(feature = "render", feature = "interactive"))]
-use std::io;
+// SPDX-License-Identifier: EUPL-1.2
+
 use std::{
     error,
     fmt,
-    result,
+    io,
 };
 
 pub type Result<T> = result::Result<T, Error>;
 
-pub enum Error {
-    /// argument parsing failed
-    #[cfg(feature = "parse")]
-    ArgParse(pound::Error),
-    /// terminal drawing or stream output failed
-    #[cfg(any(feature = "render", feature = "interactive"))]
-    Draw(io::Error),
-    /// interactive terminal session failed
-    #[cfg(feature = "interactive")]
-    Interact(::bang::Error),
-    /// prompt was cancelled
-    #[cfg(feature = "interactive")]
+/// stable, high-level category of an application error
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// arguments failed to parse
+    Parse,
+    /// terminal output failed to render or write
+    Output,
+    /// filesystem or other i/o failure
+    Io,
+    /// an interactive operation failed
+    Interactive,
+    /// the user cancelled, or a signal interrupted a prompt
+    ///
+    /// [`Error::signal`] tells the two apart
     Cancelled,
-    /// input ended before value submission
-    #[cfg(feature = "interactive")]
+    /// input ended before an operation completed
     InputEnded,
-    /// invalid value
-    #[cfg(feature = "interactive")]
-    UnexpectedValue {
-        expected: &'static str,
-        actual:   &'static str,
-    },
-    Message(String),
+    /// interactive input is unavailable under the terminal policy
+    InteractionUnavailable,
+    /// another prompt owns the interactive terminal
+    InteractionBusy,
+    /// error with an application-owned source
+    Application,
+    /// application-defined message
+    Message,
+}
+
+/// error reported through the `climax` facade
+///
+/// dependency errors are kept as opaque sources, not variants
+#[derive(Debug)]
+pub struct Error {
+    kind:              ErrorKind,
+    message:           String,
+    pub(crate) signal: Option<i32>,
+    source:            Option<Box<dyn error::Error + Send + Sync + 'static>>,
+    related:           Vec<Self>,
 }
 
 impl Error {
     #[must_use]
     pub fn message(message: impl Into<String>) -> Self {
-        Self::Message(message.into())
+        Self {
+            kind:    ErrorKind::Message,
+            message: message.into(),
+            signal:  None,
+            source:  None,
+            related: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
+        Self::with_source(ErrorKind::Application, source)
+    }
+
+    #[must_use]
+    pub fn application_context(
+        message: impl Into<String>,
+        source: impl error::Error + Send + Sync + 'static,
+    ) -> Self {
+        let message = format!("{}: {source}", message.into());
+        Self {
+            kind: ErrorKind::Application,
+            message,
+            signal: None,
+            source: Some(Box::new(source)),
+            related: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn source_error(&self) -> Option<&(dyn error::Error + Send + Sync + 'static)> {
+        self.source.as_deref()
+    }
+
+    /// number of the signal that interrupted a prompt, for a
+    /// [`ErrorKind::Cancelled`] error raised by one
+    ///
+    /// `climax::main` exits with 128 plus this number, and a plain cancellation
+    /// exits with 130
+    #[must_use]
+    pub const fn signal(&self) -> Option<i32> {
+        self.signal
+    }
+
+    /// failures reported alongside the primary one, from cleanup or a second
+    /// output stream
+    #[must_use]
+    pub fn related_errors(&self) -> &[Self] {
+        &self.related
+    }
+
+    pub(crate) fn with_related(mut self, other: Self) -> Self {
+        self.message = format!("{}, and {other}", self.message);
+        self.related.push(other);
+        self
+    }
+
+    pub(crate) fn with_source(
+        kind: ErrorKind,
+        source: impl error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            kind,
+            message: source.to_string(),
+            signal: None,
+            source: Some(Box::new(source)),
+            related: Vec::new(),
+        }
     }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            #[cfg(feature = "parse")]
-            Self::ArgParse(error) => write!(f, "{error}"),
-            #[cfg(any(feature = "render", feature = "interactive"))]
-            Self::Draw(error) => write!(f, "{error}"),
-            #[cfg(feature = "interactive")]
-            Self::Interact(error) => write!(f, "{error}"),
-            #[cfg(feature = "interactive")]
-            Self::Cancelled => f.write_str("cancelled"),
-            #[cfg(feature = "interactive")]
-            Self::InputEnded => f.write_str("input ended before submit"),
-            #[cfg(feature = "interactive")]
-            Self::UnexpectedValue { expected, actual } => {
-                write!(f, "expected {expected}, got {actual}")
-            },
-            Self::Message(message) => f.write_str(message),
-        }
-    }
-}
-
-impl fmt::Debug for Error {
-    // std prints an error returned from main through Debug
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            #[cfg(feature = "parse")]
-            Self::ArgParse(error) => {
-                let report = error.render(pound::Term::plain());
-                f.write_str(report.strip_prefix("error: ").unwrap_or(&report))
-            },
-            _ => fmt::Display::fmt(self, f),
-        }
+        f.write_str(&self.message)
     }
 }
 
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            #[cfg(feature = "parse")]
-            Self::ArgParse(error) => Some(error),
-            #[cfg(any(feature = "render", feature = "interactive"))]
-            Self::Draw(error) => Some(error),
-            #[cfg(feature = "interactive")]
-            Self::Interact(error) => Some(error),
-            #[cfg(feature = "interactive")]
-            Self::Cancelled | Self::InputEnded | Self::UnexpectedValue { .. } => None,
-            Self::Message(_) => None,
-        }
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn error::Error + 'static))
     }
 }
 
 #[cfg(feature = "parse")]
 impl From<pound::Error> for Error {
     fn from(value: pound::Error) -> Self {
-        Self::ArgParse(value)
+        Self::with_source(ErrorKind::Parse, value)
     }
 }
 
 #[cfg(feature = "interactive")]
-impl From<::bang::Error> for Error {
-    fn from(value: ::bang::Error) -> Self {
-        match value.kind() {
-            ::bang::ErrorKind::Cancelled => Self::Cancelled,
-            ::bang::ErrorKind::InputEnded => Self::InputEnded,
-            _ => Self::Interact(value),
-        }
+impl From<bang::Error> for Error {
+    fn from(value: bang::Error) -> Self {
+        let kind = match value.kind() {
+            bang::ErrorKind::Cancelled | bang::ErrorKind::Interrupted => ErrorKind::Cancelled,
+            bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
+            bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
+            bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
+            _ => ErrorKind::Interactive,
+        };
+        let signal = value.signal().map(bang::terminal::Signal::as_raw);
+        let mut error = Self::with_source(kind, value);
+        error.signal = signal;
+        error
     }
 }
 
-#[cfg(any(feature = "render", feature = "interactive"))]
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
-        Self::Draw(value)
+        Self::with_source(ErrorKind::Io, value)
     }
 }
 
 impl From<String> for Error {
     fn from(value: String) -> Self {
-        Self::Message(value)
+        Self::message(value)
     }
 }
 
 impl From<&str> for Error {
     fn from(value: &str) -> Self {
-        Self::Message(value.to_owned())
+        Self::message(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_errors_have_no_dependency_source() {
+        let error = Error::message("boom");
+        assert_eq!(error.kind(), ErrorKind::Message);
+        assert_eq!(error.to_string(), "boom");
+        assert!(error.source_error().is_none());
+    }
+
+    #[test]
+    fn dependency_errors_are_opaque_sources() {
+        let error = Error::from(io::Error::other("closed"));
+        assert_eq!(error.kind(), ErrorKind::Io);
+        assert_eq!(error.to_string(), "closed");
+        assert!(error.source_error().is_some());
+    }
+
+    #[test]
+    fn application_context_preserves_its_source() {
+        let error = Error::application_context("cannot query history", io::Error::other("closed"));
+        assert_eq!(error.kind(), ErrorKind::Application);
+        assert_eq!(error.to_string(), "cannot query history: closed");
+        assert!(error.source_error().is_some());
     }
 }
