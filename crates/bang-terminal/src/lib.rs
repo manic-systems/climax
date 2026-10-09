@@ -21,7 +21,4 @@ pub use screen::{
     enter_inline_screen,
     leave_inline_screen,
 };
-pub use signal::{
-    SignalGuard,
-    restore_default_and_raise,
-};
+pub use signal::{Signal, SignalGuard, SignalPoller};
