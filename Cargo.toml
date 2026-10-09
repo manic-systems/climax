@@ -22,24 +22,28 @@ license    = "EUPL-1.2"
 repository = "https://github.com/manic-systems/climax"
 
 [workspace.dependencies]
-bang              = { path = "crates/bang", version = "0.0.1" }
-bang-core         = { path = "crates/bang-core", version = "0.0.1" }
-bang-terminal     = { path = "crates/bang-terminal", version = "0.0.1" }
+bang              = { path = "crates/bang", version = "=0.0.1" }
+bang-core         = { path = "crates/bang-core", version = "=0.0.1" }
+bang-terminal     = { path = "crates/bang-terminal", version = "=0.0.1" }
 caress            = { path = "crates/caress", version = "0.3.0" }
-climax            = { path = "crates/climax", version = "0.0.1" }
+climax            = { path = "crates/climax", version = "=0.0.1" }
+climax-derive     = { path = "crates/climax-derive", version = "=0.0.1" }
 pound             = { path = "crates/pound", version = "0.6.1", default-features = false }
 pound-derive      = { path = "crates/pound-derive", version = "=0.6.1" }
 pound-derive-impl = { path = "crates/pound-derive-impl", version = "=0.6.1" }
-screw             = { path = "crates/screw", version = "0.0.1" }
-screw-pty         = { path = "crates/screw-pty", version = "0.0.1" }
+screw             = { path = "crates/screw", version = "=0.0.1" }
+screw-pty         = { path = "crates/screw-pty", version = "=0.0.1" }
 
-libc          = "0.2.191"
-proc-macro2   = "1.0.107"
-quote         = "1.0.47"
-serde         = { version = "1.0.229", features = [ "derive" ] }
-toml          = "1.1.8"
-unicode-width = { version = "0.2.2", default-features = false }
-venial        = "0.6.1"
+libc                 = "0.2.191"
+proc-macro2          = "1.0.107"
+quote                = "1.0.47"
+rustix               = { version = "1.1", default-features = false }
+serde                = { version = "1.0.229", features = [ "derive" ] }
+serde_json           = "1"
+toml                 = "1.1.8"
+unicode-segmentation = "1.13"
+unicode-width        = { version = "0.2.2", default-features = false }
+venial               = "0.6.1"
 
 [workspace.lints.clippy]
 cargo       = { level = "warn", priority = -1 }
