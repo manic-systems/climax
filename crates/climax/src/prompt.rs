@@ -1,7 +1,7 @@
 use bang_core::{
     ActionBinding,
-    Reaction,
     Session,
+    SessionReaction,
     SessionStatus,
     Value,
     Widget,
@@ -62,9 +62,8 @@ impl SelectPrompt {
 
     #[must_use]
     pub fn option(mut self, label: impl Into<String>) -> Self {
-        let label_text = label.into();
-        self.items
-            .push(SelectItem::new(label_text.clone(), label_text));
+        let label = label.into();
+        self.items.push(SelectItem::new(label.clone(), label));
         self
     }
 
@@ -92,11 +91,6 @@ impl SelectPrompt {
         self
     }
 
-    /// # Errors
-    ///
-    /// fails with [`Error::Cancelled`] when the user cancels,
-    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
-    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let mut widget = Select::new(self.id, self.items).with_page_size(self.page_size);
         if let Some(selected) = self.selected {
@@ -105,10 +99,6 @@ impl SelectPrompt {
         run_widget(widget, self.actions)
     }
 
-    /// # Errors
-    ///
-    /// fails like [`Self::run`], and with [`Error::UnexpectedValue`] when the
-    /// result is not a string.
     pub fn run_string(self) -> Result<String> {
         into_string(self.run()?)
     }
@@ -137,9 +127,8 @@ impl MultiSelectPrompt {
 
     #[must_use]
     pub fn option(mut self, label: impl Into<String>) -> Self {
-        let label_text = label.into();
-        self.items
-            .push(SelectItem::new(label_text.clone(), label_text));
+        let label = label.into();
+        self.items.push(SelectItem::new(label.clone(), label));
         self
     }
 
@@ -167,11 +156,6 @@ impl MultiSelectPrompt {
         self
     }
 
-    /// # Errors
-    ///
-    /// fails with [`Error::Cancelled`] when the user cancels,
-    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
-    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let widget = MultiSelect::new(self.id, self.items)
             .with_page_size(self.page_size)
@@ -205,9 +189,8 @@ impl SearchPrompt {
 
     #[must_use]
     pub fn option(mut self, label: impl Into<String>) -> Self {
-        let label_text = label.into();
-        self.items
-            .push(SelectItem::new(label_text.clone(), label_text));
+        let label = label.into();
+        self.items.push(SelectItem::new(label.clone(), label));
         self
     }
 
@@ -241,11 +224,6 @@ impl SearchPrompt {
         self
     }
 
-    /// # Errors
-    ///
-    /// fails with [`Error::Cancelled`] when the user cancels,
-    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
-    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let mut widget = SearchSelect::new(self.id, self.items).with_page_size(self.page_size);
         if let Some(prompt) = self.prompt {
@@ -303,11 +281,6 @@ impl TextPrompt {
         self
     }
 
-    /// # Errors
-    ///
-    /// fails with [`Error::Cancelled`] when the user cancels,
-    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
-    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let mut widget = TextInput::new(self.id).with_prompt(self.prompt);
         if let Some(placeholder) = self.placeholder {
@@ -319,31 +292,16 @@ impl TextPrompt {
         run_widget(widget, self.actions)
     }
 
-    /// # Errors
-    ///
-    /// fails like [`Self::run`], and with [`Error::UnexpectedValue`] when the
-    /// result is not a string.
     pub fn run_string(self) -> Result<String> {
         into_string(self.run()?)
     }
 }
 
-/// # Errors
-///
-/// fails with [`Error::Cancelled`] when the user cancels, [`Error::InputEnded`]
-/// when input ends first, and [`Error::Interact`] when the terminal session
-/// fails.
 pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Result<Value> {
-    let wrapped_widget = bang_core::ActionLayer::new(widget).with_actions(actions);
-    bang_screw::run_live_session(wrapped_widget).map_err(Error::from)
+    ::bang::advanced::interact_widget(widget, actions).map_err(Error::from)
 }
 
 /// Drive a widget with already-decoded events. Useful for tests and examples.
-///
-/// # Errors
-///
-/// fails with [`Error::Cancelled`] when the widget cancels, and
-/// [`Error::InputEnded`] when the events run out before it submits.
 pub fn replay_events(
     widget: impl Widget + 'static,
     events: impl IntoIterator<Item = bang_core::Event>,
@@ -351,9 +309,9 @@ pub fn replay_events(
     let mut session = Session::new(widget);
     for event in events {
         match session.handle(event) {
-            Reaction::Submit(value) => return Ok(value),
-            Reaction::Cancel => return Err(Error::Cancelled),
-            Reaction::Ignored | Reaction::Changed | Reaction::Focus(_) => {},
+            SessionReaction::Submit(value) => return Ok(value),
+            SessionReaction::Cancel => return Err(Error::Cancelled),
+            SessionReaction::Ignored | SessionReaction::Changed | SessionReaction::Focus(_) => {},
         }
         if !matches!(session.status(), SessionStatus::Running) {
             break;
@@ -369,14 +327,8 @@ pub fn replay_events(
 
 fn into_string(value: Value) -> Result<String> {
     match value {
-        Value::String(string_value) => Ok(string_value),
-        other @ (Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::Date(_)
-        | Value::List(_)
-        | Value::Object(_)
-        | _) => {
+        Value::String(value) => Ok(value),
+        other => {
             Err(Error::UnexpectedValue {
                 expected: "string",
                 actual:   value_name(&other),
