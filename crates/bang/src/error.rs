@@ -68,6 +68,24 @@ impl Error {
         self.signal
     }
 
+    pub(crate) fn unexpected(expected: &'static str) -> Self {
+        Self {
+            kind: ErrorKind::UnexpectedValue,
+            message: format!("prompt returned an unexpected value; expected {expected}"),
+            signal: None,
+            source: None,
+        }
+    }
+
+    pub(crate) fn invalid_configuration(message: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::InvalidConfiguration,
+            message: message.into(),
+            signal: None,
+            source: None,
+        }
+    }
+
     pub(crate) fn from_live(error: LiveSessionError) -> Self {
         let primary = error.primary().unwrap_or(&error);
         let signal = match primary {

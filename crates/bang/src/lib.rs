@@ -7,6 +7,7 @@
 mod error;
 mod interaction;
 mod live;
+mod prompt;
 mod session;
 
 pub mod advanced;
@@ -27,3 +28,7 @@ pub mod terminal {
 pub use bang_core::{Date, widgets::ReviewState};
 pub use error::{Error, ErrorKind, Result};
 pub use interaction::Interaction;
+pub use prompt::{
+    Configurable, MultiSelectConfig, MultiSelectPrompt, PromptOutcome, SelectConfig, SelectPrompt,
+    multi_select, select,
+};
