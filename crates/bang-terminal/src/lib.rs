@@ -16,9 +16,5 @@ pub use decoder::{
     decode_all,
 };
 pub use mode::{RawModeOptions, TerminalModeGuard};
-pub use screen::{
-    InlineScreenGuard,
-    enter_inline_screen,
-    leave_inline_screen,
-};
+pub use screen::{CursorPolicy, ScreenGuard, ScreenKind, ScreenOptions};
 pub use signal::{Signal, SignalGuard, SignalPoller};
