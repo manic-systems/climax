@@ -20,10 +20,7 @@ pub use screw::{
     Theme,
 };
 
-#[cfg(feature = "interactive")]
-pub use crate::OutputContext;
 #[cfg(feature = "interactive")] pub use crate::output;
-#[cfg(feature = "parse")] pub use crate::run;
 #[cfg(feature = "render")] pub use crate::status;
 #[cfg(feature = "interactive")]
 pub use crate::{
@@ -54,4 +51,9 @@ pub use crate::{
         TerminalCapabilities,
         TerminalPolicy,
     },
+};
+#[cfg(feature = "parse")]
+pub use crate::{
+    try_run,
+    try_run_from,
 };
