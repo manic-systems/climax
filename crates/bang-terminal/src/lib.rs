@@ -1,6 +1,48 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! translate terminal byte streams into bang input events
+//! bang-terminal: terminal session toolkit behind the bang prompts
+//!
+//! install a [`SignalGuard`] first, then take the terminal out of line mode
+//! with a [`TerminalModeGuard`], claim the screen with a [`ScreenGuard`] and
+//! pull input from [`TerminalEvents`], each guard restores on drop or through
+//! `restore` or `leave`, drop them in reverse order so the signal handlers come
+//! back last
+//!
+//! ```no_run
+//! use std::io::{
+//!     self,
+//!     Write as _,
+//! };
+//!
+//! use bang_terminal::{
+//!     RawModeOptions,
+//!     ScreenGuard,
+//!     ScreenOptions,
+//!     TerminalEvents,
+//!     TerminalModeGuard,
+//!     TerminalPoll,
+//! };
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let stdin = io::stdin();
+//!     let raw = TerminalModeGuard::activate(&stdin, RawModeOptions::blocking())?;
+//!     let mut stdout = io::stdout();
+//!     let mut screen = ScreenGuard::enter(&mut stdout, ScreenOptions::full_screen())?;
+//!     let mut events = TerminalEvents::pollable(stdin)?;
+//!
+//!     if let TerminalPoll::Event(event) = events.next_event()? {
+//!         writeln!(screen.writer(), "{event:?}\r")?;
+//!     }
+//!
+//!     screen.leave()?;
+//!     raw.restore()?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! [`Decoder`] decodes bytes without any terminal at all
+
+#![warn(missing_docs)]
 #![cfg_attr(
     test,
     expect(
@@ -13,6 +55,7 @@ extern crate alloc;
 
 mod cleanup;
 mod decoder;
+mod events;
 mod mode;
 mod screen;
 mod signal;
@@ -24,6 +67,11 @@ pub use cleanup::{
     CleanupStage,
 };
 pub use decoder::Decoder;
+pub use events::{
+    TerminalEvents,
+    TerminalPoll,
+    resize_event,
+};
 pub use mode::{
     RawModeOptions,
     TerminalModeGuard,
