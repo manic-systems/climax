@@ -1,8 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#[cfg(all(feature = "interactive", feature = "render"))]
 use std::io::{
-    self,
-    IsTerminal as _,
+    Read,
+    Write,
+};
+#[cfg(all(feature = "interactive", feature = "render"))]
+use std::os::fd::AsFd;
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::os::fd::OwnedFd;
+use std::{
+    env,
+    io::{
+        self,
+        IsTerminal as _,
+    },
 };
 
 /// whether prompts use detected terminal capabilities
@@ -32,7 +44,7 @@ pub enum StatusMode {
 }
 
 fn ansi_available() -> bool {
-    std::env::var_os("TERM").is_none_or(|term| term != "dumb")
+    env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
 /// terminal facts observed by the facade
@@ -41,6 +53,64 @@ pub struct TerminalCapabilities {
     input_terminal:     bool,
     transient_terminal: bool,
     ansi:               bool,
+}
+
+/// readable terminal input accepted by a [`TerminalApplication`]
+#[cfg(all(feature = "interactive", feature = "render"))]
+pub trait TerminalInput: Read + AsFd {}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+impl<T> TerminalInput for T where T: Read + AsFd + ?Sized {}
+
+/// input and transient output held under the context's exclusive terminal lease
+#[cfg(all(feature = "interactive", feature = "render"))]
+pub struct TerminalApplication<'a> {
+    input:        Box<dyn TerminalInput + 'a>,
+    output:       Box<dyn Write + 'a>,
+    capabilities: TerminalCapabilities,
+}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+impl<'a> TerminalApplication<'a> {
+    pub(crate) const fn new(
+        input: Box<dyn TerminalInput + 'a>,
+        output: Box<dyn Write + 'a>,
+        capabilities: TerminalCapabilities,
+    ) -> Self {
+        Self {
+            input,
+            output,
+            capabilities,
+        }
+    }
+
+    #[must_use]
+    pub const fn capabilities(&self) -> TerminalCapabilities {
+        self.capabilities
+    }
+
+    pub fn input(&mut self) -> &mut (dyn TerminalInput + 'a) {
+        &mut *self.input
+    }
+
+    pub fn output(&mut self) -> &mut dyn Write {
+        &mut *self.output
+    }
+
+    pub fn split(&mut self) -> (&mut (dyn TerminalInput + 'a), &mut (dyn Write + 'a)) {
+        (&mut *self.input, &mut *self.output)
+    }
+}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+impl Write for TerminalApplication<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.output.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()
+    }
 }
 
 impl TerminalCapabilities {
@@ -60,6 +130,12 @@ impl TerminalCapabilities {
             io::stderr().is_terminal(),
             ansi_available(),
         )
+    }
+
+    #[cfg(any(feature = "render", feature = "interactive"))]
+    pub(crate) fn detect_on(handle: &OwnedFd) -> Self {
+        let is_terminal = handle.is_terminal();
+        Self::new(is_terminal, is_terminal, ansi_available())
     }
 
     #[must_use]
@@ -135,7 +211,7 @@ impl TerminalPolicy {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
             StatusMode::Auto => StatusMode::Silent,
-            status => status,
+            status @ (StatusMode::Live | StatusMode::Plain | StatusMode::Silent) => status,
         }
     }
 
