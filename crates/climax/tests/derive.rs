@@ -2,7 +2,10 @@
 
 #![cfg(all(feature = "derive", feature = "structured"))]
 
+use core::result;
+
 use climax::{
+    pound::Term,
     prelude::*,
     serde::Serialize,
 };
@@ -31,8 +34,28 @@ fn derives_resolve_through_climax_alone() {
     .unwrap();
 
     let help = Args::try_parse_from(["--help"]).err().unwrap();
-    assert!(
-        help.render(climax::pound::Term::plain())
-            .contains("shell to configure")
-    );
+    assert!(help.render(Term::plain()).contains("shell to configure"));
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Port(u16);
+
+impl FromArg for Port {
+    fn from_arg(raw: &str) -> result::Result<Self, ValueError> {
+        raw.parse()
+            .map(Self)
+            .map_err(|_parse_error| ValueError::new(raw, "expected a port number"))
+    }
+}
+
+#[derive(Parse)]
+struct Listen {
+    #[pound(long)]
+    port: Port,
+}
+
+#[test]
+fn the_prelude_carries_what_a_manual_from_arg_impl_needs() {
+    let listen = Listen::try_parse_from(["--port", "8080"]).unwrap();
+    assert_eq!(listen.port, Port(8080));
 }
