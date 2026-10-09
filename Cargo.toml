@@ -84,5 +84,5 @@ tests_outside_test_module          = "allow"
 codegen-units = 1
 lto           = "fat"
 opt-level     = "s"
-panic         = "abort"
+panic         = "unwind"
 strip         = true
