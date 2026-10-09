@@ -11,10 +11,7 @@ mod signal;
 pub mod testing;
 
 pub use cleanup::{CleanupFailure, CleanupFailures, CleanupStage};
-pub use decoder::{
-    Decoder,
-    decode_all,
-};
+pub use decoder::Decoder;
 pub use mode::{RawModeOptions, TerminalModeGuard};
 pub use screen::{CursorPolicy, ScreenGuard, ScreenKind, ScreenOptions};
 pub use signal::{Signal, SignalGuard, SignalPoller};
