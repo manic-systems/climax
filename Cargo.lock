@@ -86,6 +86,107 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixture-bang-only"
+version = "0.0.0"
+dependencies = [
+ "bang",
+]
+
+[[package]]
+name = "fixture-climax-derive-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-interactive-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-no-default-features"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-parse-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-render-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-structured-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-with-components"
+version = "0.0.0"
+dependencies = [
+ "bang",
+ "climax",
+ "pound",
+ "screw",
+]
+
+[[package]]
+name = "fixture-pound-no-derive"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-no-help"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-no-std"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-only"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-screw-only"
+version = "0.0.0"
+dependencies = [
+ "screw",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -11,6 +11,33 @@ members = [
 	"crates/pound-derive-impl",
 	"crates/screw",
 	"crates/screw-pty",
+	"tests/compile-fixtures/bang-only",
+	"tests/compile-fixtures/climax-derive-only",
+	"tests/compile-fixtures/climax-interactive-only",
+	"tests/compile-fixtures/climax-no-default-features",
+	"tests/compile-fixtures/climax-only",
+	"tests/compile-fixtures/climax-parse-only",
+	"tests/compile-fixtures/climax-render-only",
+	"tests/compile-fixtures/climax-structured-only",
+	"tests/compile-fixtures/climax-with-components",
+	"tests/compile-fixtures/pound-no-derive",
+	"tests/compile-fixtures/pound-no-help",
+	"tests/compile-fixtures/pound-no-std",
+	"tests/compile-fixtures/pound-only",
+	"tests/compile-fixtures/screw-only",
+]
+default-members = [
+	"crates/bang",
+	"crates/bang-core",
+	"crates/bang-run",
+	"crates/bang-terminal",
+	"crates/climax",
+	"crates/climax-derive",
+	"crates/pound",
+	"crates/pound-derive",
+	"crates/pound-derive-impl",
+	"crates/screw",
+	"crates/screw-pty",
 ]
 resolver = "3"
 

@@ -1,0 +1,8 @@
+[package]
+name = "fixture-pound-only"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+pound = { workspace = true, features = [ "derive", "help", "std" ] }
