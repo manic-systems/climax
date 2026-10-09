@@ -32,9 +32,10 @@ pub use mode::{
     TerminalModeGuard,
 };
 pub use screen::{
-    InlineScreenGuard,
-    enter_inline_screen,
-    leave_inline_screen,
+    CursorPolicy,
+    ScreenGuard,
+    ScreenKind,
+    ScreenOptions,
 };
 pub use signal::{
     Signal,
