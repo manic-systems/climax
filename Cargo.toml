@@ -2,6 +2,7 @@
 members = [
 	"crates/bang",
 	"crates/bang-core",
+	"crates/bang-run",
 	"crates/bang-terminal",
 	"crates/pound",
 	"crates/pound-derive",

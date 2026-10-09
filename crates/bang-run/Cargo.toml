@@ -1,9 +1,9 @@
 [package]
-name                 = "bang"
+name                 = "bang-run"
 version              = "0.0.1"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
-description          = "cli for bang widgets"
+description          = "Command-line tool that runs bang prompts and prints their answers"
 edition.workspace    = true
 keywords             = [ "cli", "input", "terminal", "widgets" ]
 license.workspace    = true
@@ -11,12 +11,11 @@ readme               = "../../README.md"
 repository.workspace = true
 
 [dependencies]
-bang-core     = { path = "../bang-core", version = "0.0.1" }
-bang-screw    = { path = "../bang-screw", version = "0.0.1" }
-bang-terminal = { path = "../bang-terminal", version = "0.0.1" }
-pound         = { path = "../pound", version = "0.2.0" }
-serde         = { version = "1", features = [ "derive" ] }
-toml          = "0.8"
+bang = { path = "../bang", version = "=0.0.1" }
+bang-core = { path = "../bang-core", version = "=0.0.1" }
+pound = { path = "../pound", version = "=0.2.1", default-features = false, features = [ "std", "help", "derive" ] }
+serde = { version = "1", features = [ "derive" ] }
+toml = "0.8"
 
 [dev-dependencies]
 libc = "0.2"
@@ -24,6 +23,7 @@ libc = "0.2"
 [[bin]]
 name = "bang"
 path = "src/main.rs"
+doc  = false
 
 [lints]
 workspace = true

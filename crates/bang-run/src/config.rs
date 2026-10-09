@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::Path,
-};
+use std::collections::BTreeMap;
 
 use bang_core::{
     ActionBinding,
@@ -67,13 +63,6 @@ pub struct FieldConfig {
 }
 
 impl WidgetConfig {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
-        let path = path.as_ref();
-        let source = fs::read_to_string(path)
-            .map_err(|error| format!("failed to read config {}: {error}", path.display()))?;
-        Self::parse(&source)
-    }
-
     pub fn parse(source: &str) -> Result<Self, String> {
         toml::from_str::<RawConfig>(source)
             .map_err(|error| format!("failed to parse config: {error}"))?
@@ -330,7 +319,7 @@ struct RawAction {
 
 impl RawAction {
     fn finish_review(self) -> Result<ReviewActionBinding, String> {
-        let key = parse_action_key(&self.key)?;
+        let key = parse_action_key(&self.key, "review action")?;
         if self.name.is_empty() {
             return Err("review action name cannot be empty".to_owned());
         }
@@ -424,18 +413,7 @@ fn finish_review_actions(actions: Vec<RawAction>) -> Result<Vec<ReviewActionBind
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        let action = action.finish_review()?;
-        if is_reserved_action_key(action.key()) {
-            return Err(format!(
-                "review action key '{}' is reserved by built-in review controls",
-                action.key()
-            ));
-        }
-        if seen.contains(&action.key()) {
-            return Err(format!("duplicate review action key '{}'", action.key()));
-        }
-        seen.push(action.key());
-        finished.push(action);
+        finished.push(push_unique_review_action(&mut seen, action.finish_review()?)?);
     }
     Ok(finished)
 }
@@ -444,17 +422,46 @@ fn finish_widget_actions(actions: Vec<RawAction>) -> Result<Vec<ActionBinding>, 
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        let action = action.finish_action()?;
-        if seen.contains(action.key_event()) {
-            return Err(format!(
-                "duplicate action key '{}'",
-                format_action_key_event(action.key_event())
-            ));
-        }
-        seen.push(action.key_event().clone());
-        finished.push(action);
+        finished.push(push_unique_action(&mut seen, action.finish_action()?)?);
     }
     Ok(finished)
+}
+
+/// The one place bang-run enforces that an [`ActionBinding`] key is unused so
+/// far in the list being built, shared by the `--action` and config paths.
+pub(crate) fn push_unique_action(
+    seen: &mut Vec<KeyEvent>,
+    action: ActionBinding,
+) -> Result<ActionBinding, String> {
+    if seen.contains(action.key_event()) {
+        return Err(format!(
+            "duplicate action key '{}'",
+            format_action_key_event(action.key_event())
+        ));
+    }
+    seen.push(action.key_event().clone());
+    Ok(action)
+}
+
+/// The one place bang-run enforces that a [`ReviewActionBinding`] key is
+/// neither reserved nor already used, shared by the `--action` and config
+/// paths.
+pub(crate) fn push_unique_review_action(
+    seen: &mut Vec<char>,
+    action: ReviewActionBinding,
+) -> Result<ReviewActionBinding, String> {
+    if is_reserved_action_key(action.key()) {
+        return Err(format!(
+            "review action key '{}' is reserved by built-in review controls",
+            action.key()
+        ));
+    }
+    let key = action.key().to_ascii_lowercase();
+    if seen.iter().any(|seen: &char| seen.eq_ignore_ascii_case(&key)) {
+        return Err(format!("duplicate review action key '{key}'"));
+    }
+    seen.push(key);
+    Ok(action)
 }
 
 pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
@@ -472,12 +479,7 @@ pub fn parse_review_action_binding(value: &str) -> Result<ReviewActionBinding, S
     let Some((key, name)) = value.split_once(':') else {
         return Err("review action must use key:name syntax".to_owned());
     };
-    let key = parse_action_key(key)?;
-    if is_reserved_action_key(key) {
-        return Err(format!(
-            "review action key '{key}' is reserved by built-in review controls"
-        ));
-    }
+    let key = parse_action_key(key, "review action")?;
     if name.is_empty() {
         return Err("review action name cannot be empty".to_owned());
     }
@@ -509,7 +511,7 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
         "end" => Key::End,
         "page-up" | "pageup" => Key::PageUp,
         "page-down" | "pagedown" => Key::PageDown,
-        _ => Key::Char(parse_action_key(value)?),
+        _ => Key::Char(parse_action_key(value, "action")?),
     };
     Ok(KeyEvent::new(key))
 }
@@ -527,14 +529,14 @@ fn parse_control_action_key(key: &str, original: &str) -> Result<char, String> {
     Ok(key.to_ascii_lowercase())
 }
 
-fn parse_action_key(value: &str) -> Result<char, String> {
+fn parse_action_key(value: &str, label: &str) -> Result<char, String> {
     let mut chars = value.chars();
     let Some(key) = chars.next() else {
-        return Err("review action key cannot be empty".to_owned());
+        return Err(format!("{label} key cannot be empty"));
     };
     if chars.next().is_some() || key.is_control() {
         return Err(format!(
-            "review action key '{value}' must be one printable character"
+            "{label} key '{value}' must be one printable character"
         ));
     }
     Ok(key)
@@ -555,12 +557,8 @@ const fn is_reserved_action_key(key: char) -> bool {
     matches!(
         key,
         ' ' | '\t'
-            | 'a'
-            | 'A'
             | 'c'
             | 'C'
-            | 'g'
-            | 'G'
             | 'j'
             | 'J'
             | 'k'
@@ -569,8 +567,6 @@ const fn is_reserved_action_key(key: char) -> bool {
             | 'N'
             | 'r'
             | 'R'
-            | 's'
-            | 'S'
             | 'u'
             | 'U'
             | 'x'
