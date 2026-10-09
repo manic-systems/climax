@@ -5,7 +5,11 @@
 use std::{
     io,
     os::fd::{FromRawFd as _, OwnedFd},
+    sync::Mutex,
 };
+
+/// Held by every test that installs the process-wide signal handlers.
+pub static SIGNAL_LOCK: Mutex<()> = Mutex::new(());
 
 /// A pseudo-terminal with the given size, returned as `(master, slave)`.
 pub fn pty(cols: u16, rows: u16) -> io::Result<(OwnedFd, OwnedFd)> {
