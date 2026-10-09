@@ -70,6 +70,11 @@ pub use bang::{
     SelectConfig,
     TextConfig,
 };
+#[cfg(feature = "derive")]
+pub use climax_derive::{
+    Parse,
+    ValueEnum,
+};
 pub use error::{
     Error,
     Result,
@@ -80,11 +85,6 @@ pub use pound::{
     FromArg,
     Parse as ParseTrait,
 };
-#[cfg(feature = "derive")]
-pub use pound::{
-    Parse,
-    ValueEnum,
-};
 #[cfg(feature = "render")] pub use screw;
 #[cfg(feature = "render")]
 pub use screw::{
@@ -93,3 +93,4 @@ pub use screw::{
     Style,
     Theme,
 };
+#[cfg(feature = "structured")] pub use serde;
