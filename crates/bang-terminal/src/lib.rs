@@ -37,6 +37,7 @@ pub use screen::{
     leave_inline_screen,
 };
 pub use signal::{
+    Signal,
     SignalGuard,
-    restore_default_and_raise,
+    SignalPoller,
 };
