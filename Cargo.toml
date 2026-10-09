@@ -46,5 +46,5 @@ single_char_lifetime_names     = "allow"
 codegen-units = 1
 lto           = "fat"
 opt-level     = "s"
-panic         = "abort"
+panic         = "unwind"
 strip         = true
