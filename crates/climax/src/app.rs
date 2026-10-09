@@ -2,6 +2,8 @@
 
 #[cfg(feature = "parse")]
 use std::{io, process::ExitCode};
+#[cfg(all(feature = "render", feature = "structured"))]
+use std::io::IsTerminal as _;
 use std::marker::PhantomData;
 
 use crate::Result;
@@ -232,11 +234,21 @@ impl Context {
         );
         #[cfg(feature = "interactive")]
         let interaction = interaction_for(terminal);
+        #[cfg(all(feature = "render", feature = "structured"))]
+        let output_route = if std::io::stdout().is_terminal() && terminal.capabilities().transient_terminal() {
+            crate::output::PresentationRoute::Around(transient.clone())
+        } else {
+            crate::output::PresentationRoute::Direct
+        };
         let diagnostic = crate::output::Output::new(crate::output::Format::Text)
             .with_shared_writer(crate::output::SharedWriter::stderr());
+        #[cfg(all(feature = "render", feature = "structured"))]
+        let diagnostic = diagnostic.with_route(crate::output::PresentationRoute::Queued(transient.clone()));
         #[cfg(feature = "render")]
         let output = crate::output::Output::new(crate::output::Format::Text)
             .with_transient(crate::status::TransientNotice::coordinator(transient.clone()));
+        #[cfg(all(feature = "render", feature = "structured"))]
+        let output = output.with_route(output_route);
         #[cfg(not(feature = "render"))]
         let output = crate::output::Output::new(crate::output::Format::Text);
         Self {
@@ -431,6 +443,12 @@ impl Context {
             self.output = self.output.with_notice_writer(writer.clone());
         }
         self.diagnostic = self.diagnostic.with_shared_writer(writer);
+        #[cfg(all(feature = "render", feature = "structured"))]
+        {
+            self.diagnostic = self
+                .diagnostic
+                .with_route(crate::output::PresentationRoute::Direct);
+        }
         self
     }
 
@@ -468,6 +486,13 @@ impl Context {
         self.output = self.output.with_transient(crate::status::TransientNotice::coordinator(
             self.transient.clone(),
         ));
+        #[cfg(feature = "structured")]
+        {
+            self.output = self.output.with_route(crate::output::PresentationRoute::Direct);
+            self.diagnostic = self
+                .diagnostic
+                .with_route(crate::output::PresentationRoute::Direct);
+        }
         Ok(self)
     }
 
@@ -492,6 +517,11 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
+        #[cfg(feature = "render")]
+        {
+            guarded_interaction(self.interaction.clone(), &self.transient)
+        }
+        #[cfg(not(feature = "render"))]
         self.interaction.clone()
     }
 
@@ -517,6 +547,15 @@ fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interacti
         },
         crate::terminal::InteractionMode::Force => bang::Interaction::forced(),
     }
+}
+
+#[cfg(all(feature = "interactive", feature = "render"))]
+fn guarded_interaction(
+    interaction: bang::Interaction,
+    transient: &crate::status::StatusCoordinator,
+) -> bang::Interaction {
+    let transient = transient.clone();
+    interaction.with_guard(move || transient.prompt_guard())
 }
 
 #[cfg(test)]
