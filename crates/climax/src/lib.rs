@@ -4,20 +4,24 @@
 
 extern crate alloc;
 
-pub mod app;
+mod app;
 pub mod error;
 #[cfg(feature = "complete")] pub mod install;
 pub mod output;
 pub mod prelude;
+mod sync;
 pub mod terminal;
 
 #[cfg(feature = "render")] pub mod status;
 
-#[cfg(feature = "interactive")] pub use app::OutputContext;
-#[cfg(feature = "parse")] pub use app::run;
 pub use app::{
     Context,
     run_with,
+};
+#[cfg(feature = "parse")]
+pub use app::{
+    try_run,
+    try_run_from,
 };
 /// ```no_run
 /// use climax::{
