@@ -14,6 +14,7 @@ repository.workspace = true
 bang-core = { path = "../bang-core", version = "=0.0.1" }
 libc = "0.2"
 rustix = { version = "1.1", default-features = false, features = [ "event", "fs", "pipe", "process", "std", "termios" ] }
+screw = { path = "../screw", version = "=0.0.1" }
 
 [lints]
 workspace = true
