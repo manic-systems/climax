@@ -54,11 +54,19 @@ version = "0.0.1"
 dependencies = [
  "bang",
  "bang-core",
+ "climax-derive",
  "libc",
  "pound",
  "screw",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "climax-derive"
+version = "0.0.1"
+dependencies = [
+ "pound-derive-impl",
 ]
 
 [[package]]

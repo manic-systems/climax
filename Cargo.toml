@@ -5,6 +5,7 @@ members = [
 	"crates/bang-run",
 	"crates/bang-terminal",
 	"crates/climax",
+	"crates/climax-derive",
 	"crates/pound",
 	"crates/pound-derive",
 	"crates/pound-derive-impl",
