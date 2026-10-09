@@ -14,7 +14,7 @@ repository.workspace = true
 proc-macro = true
 
 [dependencies]
-pound-derive-impl = { version = "=0.2.1", path = "../pound-derive-impl" }
+pound-derive-impl.workspace = true
 
 [lints]
 workspace = true

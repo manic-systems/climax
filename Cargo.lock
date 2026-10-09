@@ -59,6 +59,7 @@ dependencies = [
  "screw",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
