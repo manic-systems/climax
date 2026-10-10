@@ -162,7 +162,7 @@ pub use measure::{Align, pad, truncate, width};
 pub use plain::{
     render_plain, render_plain_with_frame, render_plain_with_frame_and_theme, write_plain,
 };
-pub use renderer::{CursorVisibility, LayoutMode, RenderStats, Renderer};
+pub use renderer::{CursorVisibility, LayoutMode, RenderStats, Renderer, colors_enabled};
 pub use runtime::{
     AutoRuntime, AutoRuntimeBuilder, LiveRuntime, PlainRuntime, Runtime, RuntimeHandle,
 };

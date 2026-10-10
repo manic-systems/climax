@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{
-    self,
-    Write,
+use std::{
+    io::{
+        self,
+        Write,
+    },
+    sync::OnceLock,
 };
 
 use crate::{
@@ -64,6 +67,31 @@ pub struct Renderer<W> {
     pending_cursor: Option<bool>,
     force_full: bool,
     rendition_uncertain: bool,
+    colors: bool,
+}
+
+/// Whether the environment permits colour output.
+///
+/// `NO_COLOR` set to a non-empty value disables colour and outranks everything else, following
+/// <https://no-color.org>. Otherwise `CLICOLOR_FORCE` set to anything but `0` enables it, and
+/// failing that it needs `CLICOLOR` not `0` and `TERM` not `dumb`. Empty values count as unset, as
+/// they do for pound. The environment is read once, on first use, and every [`Renderer`] starts
+/// from the result.
+pub fn colors_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        colors_from(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
+    })
+}
+
+fn colors_from(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    if var("NO_COLOR").is_some() {
+        return false;
+    }
+    if var("CLICOLOR_FORCE").is_some_and(|value| value != "0") {
+        return true;
+    }
+    var("TERM").is_none_or(|value| value != "dumb") && var("CLICOLOR").is_none_or(|value| value != "0")
 }
 
 impl<W> Renderer<W>
@@ -71,8 +99,8 @@ where
     W: Write,
 {
     /// Creates a renderer over `writer` with no width or height limit, clipping, the default theme
-    /// and untouched cursor visibility.
-    pub const fn new(writer: W) -> Self {
+    /// and untouched cursor visibility. Colours follow [`colors_enabled`].
+    pub fn new(writer: W) -> Self {
         Self {
             writer,
             previous: None,
@@ -86,7 +114,16 @@ where
             pending_cursor: None,
             force_full: false,
             rendition_uncertain: false,
+            colors: colors_enabled(),
         }
+    }
+
+    /// Chooses whether foreground and background colours are written. Other attributes such as
+    /// bold and reverse are kept either way. Overrides the [`colors_enabled`] default of [`Renderer::new`].
+    #[must_use]
+    pub const fn colors(mut self, enabled: bool) -> Self {
+        self.colors = enabled;
+        self
     }
 
     /// Sets the terminal width in columns, which rows are clipped or wrapped to.
@@ -305,6 +342,9 @@ where
 
     fn layout_surface(&self, surface: Surface) -> Surface {
         let mut surface = layout_surface(surface, self.width.map(usable_columns), self.layout_mode);
+        if !self.colors {
+            surface.drop_colors();
+        }
         if let Some(height) = self.height {
             surface.fit_height(height);
         }
@@ -752,7 +792,7 @@ mod tests {
     use std::io;
 
     use crate::{
-        CursorMerge, CursorVisibility, Edge, Fill, Floating, Insets, Layers, LayoutMode, Position,
+        Color, CursorMerge, CursorVisibility, Edge, Fill, Floating, Insets, Layers, LayoutMode, Position,
         Renderer, Size, Style, Surface, Widget, renderer::layout_surface,
     };
 
@@ -1289,6 +1329,44 @@ mod tests {
             update, b"\x1b[0mabc\x1b[K",
             "a redraw after a failed write must start below the cursor, not climb: {update:?}"
         );
+    }
+
+    #[test]
+    fn the_colour_policy_matches_pounds_term() {
+        let policy = |set: &[(&str, &str)]| {
+            super::colors_from(|name| {
+                set.iter()
+                    .find(|(key, value)| *key == name && !value.is_empty())
+                    .map(|(_, value)| (*value).into())
+            })
+        };
+
+        assert!(policy(&[]));
+        assert!(policy(&[("NO_COLOR", "")]));
+        assert!(!policy(&[("NO_COLOR", "1")]));
+        assert!(!policy(&[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]));
+        assert!(!policy(&[("CLICOLOR", "0")]));
+        assert!(!policy(&[("TERM", "dumb")]));
+        assert!(policy(&[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "1")]));
+        assert!(!policy(&[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "0")]));
+    }
+
+    #[test]
+    fn disabling_colours_keeps_the_other_attributes() {
+        let mut surface = Surface::new();
+        surface.write(
+            "x",
+            Style::new().fg(Color::Red).bg(Color::Rgb(1, 2, 3)).bold().reverse(),
+        );
+        surface.write("y", Style::new().fg(Color::Indexed(9)));
+
+        let mut plain = Renderer::new(Vec::new()).colors(false);
+        plain.draw_surface(surface.clone()).unwrap();
+        let mut coloured = Renderer::new(Vec::new()).colors(true);
+        coloured.draw_surface(surface).unwrap();
+
+        assert_eq!(plain.into_inner(), b"\x1b[0;1;7mx\x1b[0my\x1b[K");
+        assert!(String::from_utf8_lossy(&coloured.into_inner()).contains("31"));
     }
 
     fn styled_surface(text: &str) -> Surface {

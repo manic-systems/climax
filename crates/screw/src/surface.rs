@@ -263,6 +263,13 @@ impl Surface {
         }
     }
 
+    pub(crate) fn drop_colors(&mut self) {
+        for cell in self.rows.iter_mut().flat_map(|row| row.cells.iter_mut()) {
+            cell.style.fg = None;
+            cell.style.bg = None;
+        }
+    }
+
     /// Stops the next write from joining the cells already on the row, so a boundary between
     /// independently measured pieces cannot merge clusters.
     pub(crate) const fn seal(&mut self) {
