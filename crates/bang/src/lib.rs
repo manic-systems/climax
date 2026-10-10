@@ -30,16 +30,11 @@
 //! [`ErrorKind::Cancelled`] error. ended input, a non-interactive terminal and
 //! terminal failures are errors, see [`ErrorKind`]
 //!
-//! - Prompts are `!Send`. They hold `Rc` state, so build and run a prompt on
-//!   one thread.
-//! - `interact` consumes the prompt. Clone it first to ask again.
-//! - A cancel, whether Esc or Ctrl-C, maps to [`PromptOutcome::Leave`] rather
-//!   than an error. Ended input, a non-interactive terminal and terminal
-//!   failures are errors, see [`ErrorKind`].
-//! - The entry point takes the text the user sees. The widget id is optional
-//!   and set with `.id(...)`.
-//! - List prompts need at least one choice and fail with
-//!   [`ErrorKind::InvalidConfiguration`] otherwise.
+//! a submitted prompt leaves a dimmed summary line such as `Shell › bash` in
+//! the scrollback, off with `summary(false)` or
+//! [`Interaction::with_summaries`]. a review prompt reserves `j`, `k`,
+//! space, tab, `y`, `c`, `x`, `n`, `u`, `r`, enter and esc, so its `action`
+//! keys must avoid them
 //!
 //! [`terminal`] is the session toolkit for a full-screen application,
 //! [`advanced`] has the widget traits, and both render through the re-exported
