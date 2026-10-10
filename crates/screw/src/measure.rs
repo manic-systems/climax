@@ -117,14 +117,6 @@ pub(crate) fn first_segment_end(text: &str) -> usize {
         .map_or(text.len(), |(index, _)| index)
 }
 
-/// `text` without the zero-width clusters it starts with, which would otherwise attach to whatever
-/// was written before it.
-pub(crate) fn drop_leading_zero_width(text: &str) -> &str {
-    segments(text)
-        .find(|(_, segment)| !matches!(segment, Segment::Cluster { width: 0, .. }))
-        .map_or("", |(index, _)| &text[index..])
-}
-
 /// Display width of `text` in terminal columns.
 ///
 /// Measures exactly what [`Surface::write`](crate::Surface::write) would lay out. Each extended

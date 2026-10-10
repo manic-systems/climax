@@ -21,7 +21,7 @@ use std::{
 
 use crate::{
     Align, LayoutMode, Role, Style, Surface, Theme, Viewport,
-    measure::{drop_leading_zero_width, expand_tabs, first_segment_end, split_padding},
+    measure::{expand_tabs, first_segment_end, split_padding},
     renderer::layout_surface,
     surface::append_surface,
     sync::lock,
@@ -533,8 +533,8 @@ impl Widget for List {
 /// shrinks below one column, so a table with more columns than the width allows is clipped by the
 /// renderer, and a cluster wider than its column becomes an ellipsis. The final cell of a row is
 /// never padded on its trailing side. A table that follows other content on a row fits itself to
-/// the columns left and indents its continuation rows to where it started. Zero-width content at
-/// the start of a cell is dropped so it cannot widen the previous cell.
+/// the columns left and indents its continuation rows to where it started. No cluster joins across
+/// a cell boundary, so zero-width content at the start of a cell is dropped.
 #[derive(Clone, Debug)]
 pub struct Table {
     header: Option<Vec<String>>,
@@ -647,7 +647,7 @@ impl Table {
         let mut lines = Vec::new();
         for line in value.split('\n') {
             let line = expand_tabs(line);
-            let line = drop_leading_zero_width(&line);
+            let line = line.as_ref();
             if width(line) <= columns {
                 lines.push(line.to_owned());
                 continue;
@@ -742,6 +742,7 @@ impl Widget for Table {
                     let align = self.aligns.get(column).copied().unwrap_or_default();
                     let (before, after) = split_padding(missing, align);
                     out.write(" ".repeat(before), Style::new());
+                    out.seal();
                     Text {
                         value: text.to_owned(),
                         style: cell.text.style,
@@ -1373,6 +1374,16 @@ mod tests {
         table.render(&RenderCtx::new().with_constraints(Some(2), None), &mut surface);
         assert_eq!(surface.plain_text(), "❤B");
         assert_eq!(surface.display_width(), 2);
+    }
+
+    #[test]
+    fn table_cell_ending_in_a_joiner_does_not_join_the_next_cell() {
+        let table = Table::new([["👩\u{200d}", "💻", "B"], ["AA", "bb", "C"]]).gap(0);
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new().with_constraints(Some(5), None), &mut surface);
+        assert_eq!(surface.plain_text(), "👩\u{200d}💻B\nAAbbC");
+        assert_eq!(surface.rows()[0].cells().len(), 3);
+        assert_eq!(surface.display_width(), 5);
     }
 
     #[test]
