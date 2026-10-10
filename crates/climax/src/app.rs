@@ -227,7 +227,21 @@ impl Completion {
             CompletionStream::Stdout => write_message(io::stdout().lock(), &message),
             CompletionStream::Stderr => write_message(io::stderr().lock(), &message),
         };
-        ExitCode::from(if result.is_ok() { self.code } else { 1 })
+        ExitCode::from(Self::code_after_write(self.code, stream, &result))
+    }
+
+    fn code_after_write(code: u8, stream: CompletionStream, result: &io::Result<()>) -> u8 {
+        match result {
+            Ok(()) => code,
+            // 128 + SIGPIPE, what pound's Error::exit reports for the same failure
+            Err(error)
+                if stream != CompletionStream::Stderr
+                    && error.kind() == io::ErrorKind::BrokenPipe =>
+            {
+                141
+            },
+            Err(_) => 1,
+        }
     }
 }
 
@@ -1148,6 +1162,17 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "later failure");
         assert_eq!(capture.text(), "");
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn a_closed_stdout_pipe_exits_141_and_other_write_failures_exit_1() {
+        let broken = Err(io::Error::from(io::ErrorKind::BrokenPipe));
+        assert_eq!(Completion::code_after_write(0, CompletionStream::Stdout, &Ok(())), 0);
+        assert_eq!(Completion::code_after_write(0, CompletionStream::Stdout, &broken), 141);
+        let full = Err(io::Error::from(io::ErrorKind::StorageFull));
+        assert_eq!(Completion::code_after_write(0, CompletionStream::Stdout, &full), 1);
+        assert_eq!(Completion::code_after_write(0, CompletionStream::Stderr, &broken), 1);
     }
 
     #[test]

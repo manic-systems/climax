@@ -263,6 +263,7 @@ fn main() -> std::process::ExitCode {
 | 0 | success, and help or version output |
 | 1 | an application error, printed to stderr as `error: ...` |
 | 2 | a parse failure (`main` only) |
+| 141 | help or version output hit a closed stdout pipe (`main` only) |
 | 130 | a cancellation, silent unless related errors are attached |
 | 128 plus N | a prompt interrupted by signal N, silent like 130 |
 | any non-zero `u8` | the code set with `Error::with_exit_code`, for an error of any kind, where 0 becomes 1 |
