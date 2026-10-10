@@ -294,6 +294,8 @@ pub struct Context {
     interaction:        bang::Interaction,
     #[cfg(feature = "interactive")]
     custom_interaction: bool,
+    #[cfg(feature = "interactive")]
+    prompt_summaries:   Option<bool>,
     #[cfg(feature = "render")]
     transient:          StatusCoordinator,
     #[cfg(any(feature = "render", feature = "interactive"))]
@@ -347,6 +349,8 @@ impl Context {
             interaction,
             #[cfg(feature = "interactive")]
             custom_interaction: false,
+            #[cfg(feature = "interactive")]
+            prompt_summaries: None,
             #[cfg(feature = "render")]
             transient,
             #[cfg(any(feature = "render", feature = "interactive"))]
@@ -714,6 +718,24 @@ impl Context {
         self.custom_interaction = true;
     }
 
+    /// whether submitted prompts leave a one-line summary in the scrollback,
+    /// such as `Deploy to prod? › no`
+    ///
+    /// applies to every prompt built afterwards. a prompt's own `summary`
+    /// setting still wins
+    #[cfg(feature = "interactive")]
+    pub const fn set_prompt_summaries(&mut self, summaries: bool) {
+        self.prompt_summaries = Some(summaries);
+    }
+
+    /// builder form of [`Self::set_prompt_summaries`]
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub const fn with_prompt_summaries(mut self, summaries: bool) -> Self {
+        self.set_prompt_summaries(summaries);
+        self
+    }
+
     #[cfg(feature = "interactive")]
     #[must_use]
     /// builder form of [`Self::set_interaction`]
@@ -813,12 +835,16 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
+        let interaction = match self.prompt_summaries {
+            Some(summaries) => self.interaction.clone().with_summaries(summaries),
+            None => self.interaction.clone(),
+        };
         #[cfg(feature = "render")]
         {
-            guarded_interaction(self.interaction.clone(), &self.transient)
+            guarded_interaction(interaction, &self.transient)
         }
         #[cfg(not(feature = "render"))]
-        self.interaction.clone()
+        interaction
     }
 }
 
