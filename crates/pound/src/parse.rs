@@ -194,7 +194,7 @@ impl<'a> Matches<'a> {
         if slot.count > 0 {
             return true;
         }
-        matches!(fallback(spec, i).as_deref(), Some("1" | "true" | "yes"))
+        fallback(spec, i).is_some_and(|f| matches!(&*f.value, "1" | "true" | "yes"))
     }
 
     /// how many times a count flag was supplied
@@ -245,12 +245,10 @@ impl<'a> Matches<'a> {
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<T, Error> {
         if let Some(s) = self.raw(i) {
-            return parse_with(spec, i, s, &convert);
+            return parse_with(spec, i, s, None, &convert);
         }
-        match fallback(spec, i) {
-            Some(c) => parse_with(spec, i, &c, &convert),
-            None => Err(ErrorKind::MissingRequired(spec.args[i].display_name()).into()),
-        }
+        parse_fallback(spec, i, &convert)
+            .unwrap_or_else(|| Err(ErrorKind::MissingRequired(spec.args[i].display_name()).into()))
     }
 
     /// read an optional value
@@ -262,12 +260,9 @@ impl<'a> Matches<'a> {
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Option<T>, Error> {
         if let Some(s) = self.raw(i) {
-            return Ok(Some(parse_with(spec, i, s, &convert)?));
+            return Ok(Some(parse_with(spec, i, s, None, &convert)?));
         }
-        match fallback(spec, i) {
-            Some(c) => Ok(Some(parse_with(spec, i, &c, &convert)?)),
-            None => Ok(None),
-        }
+        parse_fallback(spec, i, &convert).transpose()
     }
 
     /// read every value
@@ -282,31 +277,54 @@ impl<'a> Matches<'a> {
         if !raws.is_empty() {
             return raws
                 .iter()
-                .map(|&s| parse_with(spec, i, s, &convert))
+                .map(|&s| parse_with(spec, i, s, None, &convert))
                 .collect();
         }
-        match fallback(spec, i) {
-            Some(c) => Ok(vec![parse_with(spec, i, &c, &convert)?]),
-            None => Ok(Vec::new()),
-        }
+        Ok(parse_fallback(spec, i, &convert)
+            .transpose()?
+            .into_iter()
+            .collect())
     }
 }
 
-/// the value to use when an arg was not given
-fn fallback(spec: &CommandSpec, i: usize) -> Option<Cow<'static, str>> {
+/// the value an arg takes when it was not given, and the env var it was read
+/// from, if any
+struct Fallback {
+    value: Cow<'static, str>,
+    env:   Option<&'static str>,
+}
+
+fn fallback(spec: &CommandSpec, i: usize) -> Option<Fallback> {
     #[cfg(feature = "std")]
     if let Some(var) = spec.args[i].env
-        && let Ok(val) = std::env::var(var)
+        && let Ok(value) = std::env::var(var)
     {
-        return Some(Cow::Owned(val));
+        return Some(Fallback {
+            value: Cow::Owned(value),
+            env:   Some(var),
+        });
     }
-    spec.args[i].default.map(Cow::Borrowed)
+    spec.args[i].default.map(|value| {
+        Fallback {
+            value: Cow::Borrowed(value),
+            env:   None,
+        }
+    })
+}
+
+fn parse_fallback<T>(
+    spec: &CommandSpec,
+    i: usize,
+    convert: &impl Fn(&str) -> Result<T, ValueError>,
+) -> Option<Result<T, Error>> {
+    fallback(spec, i).map(|f| parse_with(spec, i, &f.value, f.env, convert))
 }
 
 fn parse_with<T>(
     spec: &CommandSpec,
     i: usize,
     s: &str,
+    env: Option<&str>,
     convert: &impl Fn(&str) -> Result<T, ValueError>,
 ) -> Result<T, Error> {
     convert(s).map_err(|e| {
@@ -316,8 +334,12 @@ fn parse_with<T>(
         {
             msg = format!("{msg} (possible values: {})", values.join(", "));
         }
+        let arg = match env {
+            Some(var) => format!("{} (from ${var})", spec.args[i].display_name()),
+            None => spec.args[i].display_name(),
+        };
         ErrorKind::Value {
-            arg: spec.args[i].display_name(),
+            arg,
             value: e.value,
             msg,
         }
@@ -1185,6 +1207,25 @@ mod tests {
             parse(&SPEC, &[]).unwrap_err(),
             ErrorKind::MissingRequired("--token".to_owned())
         );
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn a_bad_env_value_names_its_variable() {
+        const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("path").env("PATH")];
+        const SPEC: CommandSpec = CommandSpec::new("e").args(ARGS);
+        let reject = |s: &str| Err::<u8, _>(ValueError::new(s, "bad"));
+        let arg_of = |args: &[&str]| {
+            match parse(&SPEC, args).unwrap().required_map(&SPEC, 0, reject) {
+                Err(Error {
+                    kind: ErrorKind::Value { arg, .. },
+                    ..
+                }) => arg,
+                _ => panic!("expected a value error"),
+            }
+        };
+        assert_eq!(arg_of(&[]), "--path (from $PATH)");
+        assert_eq!(arg_of(&["--path", "x"]), "--path");
     }
 
     #[test]
