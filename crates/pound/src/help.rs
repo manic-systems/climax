@@ -150,7 +150,23 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
         }
         let _ = write!(s, "[possible values: {}]", values.join(", "));
     }
+    let takes_value = matches!(a.kind, Kind::Opt | Kind::Positional | Kind::Trailing);
+    if takes_value && let Some(default) = a.default {
+        push_tag(&mut s, format_args!("default: {default}"));
+    }
+    #[cfg(feature = "std")]
+    if let Some(env) = a.env {
+        push_tag(&mut s, format_args!("env: {env}"));
+    }
     s
+}
+
+#[cfg(feature = "help")]
+fn push_tag(s: &mut String, tag: core::fmt::Arguments<'_>) {
+    if !s.is_empty() {
+        s.push(' ');
+    }
+    let _ = write!(s, "[{tag}]");
 }
 
 /// the listing for `-h`/`--help` or `-V`/`--version`. the parser answers each
@@ -372,4 +388,25 @@ pub(crate) fn render(
     _long: bool,
 ) -> String {
     usage_line(spec, path, globals)
+}
+
+#[cfg(all(test, feature = "help", feature = "std"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_and_env_follow_the_possible_values() {
+        let mode = ArgSpec::new(Kind::Opt)
+            .long("mode")
+            .help("how to run")
+            .possible(&["fast", "slow"])
+            .default("fast")
+            .env("RUN_MODE");
+        let loud = ArgSpec::new(Kind::Flag).long("loud").env("LOUD");
+        assert_eq!(
+            help_text(&mode, false),
+            "how to run [possible values: fast, slow] [default: fast] [env: RUN_MODE]"
+        );
+        assert_eq!(help_text(&loud, false), "[env: LOUD]");
+    }
 }
