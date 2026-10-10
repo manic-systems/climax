@@ -189,10 +189,28 @@ impl Output {
     /// The selected projection is buffered until the application handler
     /// succeeds. Use [`ResultBuilder::text`] to supply its human view.
     ///
-    /// Serde derives reached through climax need `#[serde(crate = "climax::serde")]`,
-    /// because the derive otherwise expands to a path in the `serde` crate, which an
-    /// application depending on climax alone does not have. Forgetting it gives an
-    /// error that points at the compiler and not at the missing attribute.
+    /// Derive serde's traits with `#[climax::serde(Serialize)]`, which roots the
+    /// derive at `climax::serde` so an application depending on climax alone needs
+    /// no `serde` dependency. List `Serialize`, `Deserialize` or both. The
+    /// attribute must come before any other derive that shares serde's helper
+    /// attributes, and the item keeps its other attributes, so `#[serde(rename_all
+    /// = "kebab-case")]` works as usual. It needs the `derive` and `structured`
+    /// features.
+    ///
+    /// ```
+    /// use climax::prelude::*;
+    ///
+    /// # #[cfg(feature = "derive")]
+    /// #[climax::serde(Serialize)]
+    /// #[serde(rename_all = "kebab-case")]
+    /// struct Report {
+    ///     file_count: usize,
+    /// }
+    /// ```
+    ///
+    /// Without the `derive` feature, write `#[derive(climax::serde::Serialize)]`
+    /// with `#[serde(crate = "climax::serde")]`. Forgetting that attribute gives
+    /// an error that points at the compiler and not at the missing attribute.
     ///
     /// ```text
     /// error[E0658]: use of unstable library feature `rustc_private`: this crate is being loaded from the sysroot, an unstable location; did you mean to load this crate from crates.io via `Cargo.toml` instead?
@@ -232,10 +250,10 @@ impl Output {
     /// JSON mode writes one JSON value per line. Streams cannot be combined
     /// with a finite result in the same invocation.
     ///
-    /// Serde derives reached through climax need `#[serde(crate = "climax::serde")]`,
-    /// because the derive otherwise expands to a path in the `serde` crate. Without
-    /// it rustc reports `E0658` about the unstable `rustc_private` feature on the
-    /// derive, and [`Self::result`] shows the full error.
+    /// Derive serde's traits with `#[climax::serde(Serialize)]`, placed before any
+    /// other derive, as [`Self::result`] shows. Without the `derive` feature use
+    /// `#[serde(crate = "climax::serde")]`, since otherwise rustc reports `E0658`
+    /// about the unstable `rustc_private` feature on the derive.
     ///
     /// The call returns once the value is written, routed around a live
     /// status when one shares the terminal. A write on a [`crate::Context::diagnostic`]

@@ -22,7 +22,7 @@ pub enum InteractionMode {
 /// How transient status presentation should behave.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum StatusMode {
-    /// Animate on a suitable terminal and otherwise remain silent.
+    /// Animate on a suitable terminal and otherwise print plain lines.
     #[default]
     Auto,
     /// Animate regardless of terminal capability detection.
@@ -220,11 +220,11 @@ impl TerminalPolicy {
 
     #[must_use]
     /// The status mode after resolving `Auto`, which is `Live` on a terminal that
-    /// supports it and `Silent` otherwise.
+    /// supports it and `Plain` otherwise. `Silent` is only ever chosen explicitly.
     pub const fn effective_status_mode(self) -> StatusMode {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
-            StatusMode::Auto => StatusMode::Silent,
+            StatusMode::Auto => StatusMode::Plain,
             status => status,
         }
     }
@@ -260,6 +260,15 @@ mod tests {
         let mut policy = TerminalPolicy::process();
         policy.set_capabilities(TerminalCapabilities::new(true, true, true));
         assert!(policy.interaction_available());
+    }
+
+    #[test]
+    fn auto_status_is_plain_off_a_terminal_and_live_on_one() {
+        let mut policy = TerminalPolicy::process();
+        policy.set_capabilities(TerminalCapabilities::new(false, false, false));
+        assert_eq!(policy.effective_status_mode(), StatusMode::Plain);
+        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        assert_eq!(policy.effective_status_mode(), StatusMode::Live);
     }
 
     #[test]

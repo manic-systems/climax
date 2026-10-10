@@ -40,7 +40,7 @@ pub fn message(message: impl Into<String>) -> Status {
             if capabilities.live_status_available() {
                 StatusMode::Live
             } else {
-                StatusMode::Silent
+                StatusMode::Plain
             },
         )
     });
@@ -930,7 +930,7 @@ impl Actor {
                 (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
                 (StatusMode::Live, true) => final_message,
                 (StatusMode::Plain | StatusMode::Live, false) => failure_message,
-                // `Auto` is resolved to `Live`/`Silent` before
+                // `Auto` is resolved to `Live`/`Plain` before
                 // coordinators are built, so a raw `Auto` here means
                 // silent.
                 (StatusMode::Silent | StatusMode::Auto, _) => None,

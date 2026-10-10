@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-#[cfg(feature = "parse")]
 use std::{io, process::ExitCode};
 #[cfg(all(feature = "render", feature = "structured"))]
 use std::io::IsTerminal as _;
@@ -18,6 +17,10 @@ use crate::Result;
 /// function exits with 130, or with 128 plus the signal number when a signal
 /// interrupted a live prompt (see [`crate::Error::signal`]). Both are silent
 /// unless related errors are attached, in which case those are printed.
+/// [`crate::Error::with_exit_code`] replaces the code for any error kind.
+///
+/// The crate docs list the full exit-code mapping. [`main_with`] reports the
+/// same way for an application that takes no arguments.
 ///
 /// A typed prompt the user cancels resolves to `PromptOutcome::Leave` so the
 /// handler decides what leaving means. A signal delivered during a live prompt
@@ -31,6 +34,29 @@ where
     F: FnOnce(Context, C) -> Result<()>,
 {
     complete(C::try_parse(), f).report()
+}
+
+/// Run an application that takes no arguments and report its process outcome.
+///
+/// Nothing is parsed. Errors are reported and mapped to an exit code exactly
+/// as `main` does, so a failure prints `error: ...` on stderr and exits 1, a
+/// cancellation exits 130, and [`crate::Error::with_exit_code`] picks any other
+/// code.
+///
+/// ```no_run
+/// use climax::prelude::*;
+///
+/// fn main() -> std::process::ExitCode {
+///     climax::main_with(|cx: Context| -> climax::Result<()> {
+///         cx.output().result(&"hello").text(|text| *text).emit()
+///     })
+/// }
+/// ```
+pub fn main_with<F>(f: F) -> ExitCode
+where
+    F: FnOnce(Context) -> Result<()>,
+{
+    finish(run_with((), |context, ()| f(context))).report()
 }
 
 /// Run a parsed application without handling output or process exit status.
@@ -105,18 +131,7 @@ where
     F: FnOnce(Context, C) -> Result<()>,
 {
     match parsed {
-        Ok(command) => match run_with(command, f) {
-            Ok(()) => Completion::success(),
-            Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
-                let code = cancelled_code(&error);
-                if error.related_errors().is_empty() {
-                    Completion::cancelled(code)
-                } else {
-                    Completion::error(code, error)
-                }
-            },
-            Err(error) => Completion::error(1, error),
-        },
+        Ok(command) => finish(run_with(command, f)),
         Err(error) if error.is_exit() => Completion::output(error.render()),
         Err(error) => Completion {
             code: 2,
@@ -126,7 +141,21 @@ where
     }
 }
 
-#[cfg(feature = "parse")]
+fn finish(result: Result<()>) -> Completion {
+    match result {
+        Ok(()) => Completion::success(),
+        Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
+            let code = error.exit_code().unwrap_or_else(|| cancelled_code(&error));
+            if error.related_errors().is_empty() {
+                Completion::cancelled(code)
+            } else {
+                Completion::error(code, error)
+            }
+        },
+        Err(error) => Completion::error(error.exit_code().unwrap_or(1), error),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Completion {
     code: u8,
@@ -134,14 +163,12 @@ struct Completion {
     message: Option<String>,
 }
 
-#[cfg(feature = "parse")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CompletionStream {
     Stdout,
     Stderr,
 }
 
-#[cfg(feature = "parse")]
 impl Completion {
     const fn success() -> Self {
         Self {
@@ -188,7 +215,6 @@ impl Completion {
     }
 }
 
-#[cfg(feature = "parse")]
 fn cancelled_code(error: &crate::Error) -> u8 {
     error
         .signal()
@@ -196,7 +222,6 @@ fn cancelled_code(error: &crate::Error) -> u8 {
         .unwrap_or(130)
 }
 
-#[cfg(feature = "parse")]
 fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
     writer.write_all(message.as_bytes())?;
     writer.write_all(b"\n")
@@ -363,7 +388,9 @@ impl Context {
     ///
     /// Statuses share one renderer on the transient channel, and prompts suspend them
     /// while they hold the terminal. Call `start`, `finish` or `during` on the result
-    /// to show it.
+    /// to show it. Off a terminal `StatusMode::Auto` prints the final message on
+    /// success and the failure message on failure, one plain line each, and
+    /// `StatusMode::Silent` prints nothing.
     ///
     /// Ctrl-C during a live status with no prompt open uses the default signal
     /// disposition, so the process dies and the spinner line is left on the screen.
@@ -959,6 +986,34 @@ mod tests {
         assert_eq!(capture.text(), "application");
     }
 
+    #[cfg(feature = "render")]
+    #[test]
+    fn auto_status_off_a_terminal_prints_plain_lines_and_silent_stays_explicit() {
+        let run = |mode: Option<crate::terminal::StatusMode>, fail: bool| {
+            let capture = Capture::default();
+            let mut context = Context::new()
+                .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                    false, false, false,
+                ))
+                .unwrap()
+                .with_transient_writer(capture.clone())
+                .unwrap();
+            if let Some(mode) = mode {
+                context.set_status_mode(mode).unwrap();
+            }
+            let _ = context
+                .status("working")
+                .final_message("done")
+                .failure_message("failed")
+                .during(|| if fail { Err(crate::Error::message("x")) } else { Ok(()) });
+            capture.text()
+        };
+        assert_eq!(run(None, false), "done\n");
+        assert_eq!(run(None, true), "failed\n");
+        assert_eq!(run(Some(crate::terminal::StatusMode::Silent), false), "");
+        assert_eq!(run(Some(crate::terminal::StatusMode::Silent), true), "");
+    }
+
     #[cfg(all(feature = "interactive", feature = "render"))]
     #[test]
     fn terminal_application_releases_exclusivity_after_an_error() {
@@ -1035,6 +1090,23 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "later failure");
         assert_eq!(capture.text(), "");
+    }
+
+    #[test]
+    fn finish_maps_cancellation_and_explicit_exit_codes() {
+        let cancelled = finish(Err(crate::Error::cancelled()));
+        assert_eq!((cancelled.code, cancelled.stream), (130, None));
+
+        let silent = finish(Err(crate::Error::cancelled().with_exit_code(7)));
+        assert_eq!((silent.code, silent.stream), (7, None));
+
+        let reported = finish(Err(crate::Error::message("nothing to do").with_exit_code(3)));
+        assert_eq!(reported.code, 3);
+        assert_eq!(reported.stream, Some(CompletionStream::Stderr));
+        assert_eq!(reported.message.as_deref(), Some("error: nothing to do"));
+
+        assert_eq!(finish(Err(crate::Error::message("boom"))).code, 1);
+        assert_eq!(finish(Ok(())).code, 0);
     }
 
     #[cfg(feature = "parse")]

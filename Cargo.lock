@@ -67,6 +67,8 @@ name = "climax-derive"
 version = "0.1.0"
 dependencies = [
  "pound-derive-impl",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
