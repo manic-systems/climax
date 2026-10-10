@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use alloc::sync::Arc;
+use core::{
+    fmt,
     ops::Range,
-    sync::{
-        Arc,
-        Mutex,
-    },
 };
+use std::sync::Mutex;
 
 use crate::{
     RenderCtx,
@@ -17,6 +16,7 @@ use crate::{
     WidgetRef,
     renderer::layout_surface,
     surface::append_surface,
+    sync::lock,
     widget::combine_tick_interest,
 };
 
@@ -35,7 +35,7 @@ pub struct ViewportReport {
 
 /// observer for the latest [`VerticalViewport`] allocation, `Default` never
 /// updates
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ViewportReportHandle {
     inner: Arc<Mutex<ViewportReport>>,
 }
@@ -44,11 +44,11 @@ impl ViewportReportHandle {
     /// the most recent allocation report
     #[must_use]
     pub fn report(&self) -> ViewportReport {
-        crate::sync::lock(&self.inner).clone()
+        lock(&self.inner).clone()
     }
 
     fn set(&self, report: ViewportReport) {
-        *crate::sync::lock(&self.inner) = report;
+        *lock(&self.inner) = report;
     }
 }
 
@@ -62,6 +62,19 @@ pub struct VerticalViewport<H = WidgetRef> {
     max_children:    Option<usize>,
     trailing:        Option<H>,
     report:          ViewportReportHandle,
+}
+
+impl<H> fmt::Debug for VerticalViewport<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerticalViewport")
+            .field("children", &self.children.len())
+            .field("requested_start", &self.requested_start)
+            .field("anchor", &self.anchor)
+            .field("max_children", &self.max_children)
+            .field("trailing", &self.trailing.is_some())
+            .field("report", &self.report)
+            .finish()
+    }
 }
 
 impl<H> VerticalViewport<H> {
@@ -96,7 +109,7 @@ impl<H> VerticalViewport<H> {
     pub const fn max_children(mut self, max_children: Option<usize>) -> Self {
         self.max_children = match max_children {
             Some(0) => Some(1),
-            Some(max_children) => Some(max_children),
+            Some(limit) => Some(limit),
             None => None,
         };
         self
@@ -167,12 +180,12 @@ where
             remaining = remaining.saturating_sub(written);
             wrote_child |= written > 0;
         }
-        if let Some(trailing) = &trailing {
+        if let Some(tail) = &trailing {
             let limit = trailing_limit.unwrap_or(usize::MAX);
             if wrote_child && limit > 0 {
                 out.newline();
             }
-            append_surface(out, trailing, limit);
+            append_surface(out, tail, limit);
         }
     }
 
@@ -209,17 +222,17 @@ fn allocate(
     }
 
     let budget = available.unwrap_or(usize::MAX);
-    let anchor = anchor.map(|anchor| anchor.min(heights.len() - 1));
+    let pinned = anchor.map(|row| row.min(heights.len() - 1));
     let mut start = requested_start.min(heights.len() - 1);
-    if let Some(anchor) = anchor
-        && anchor < start
+    if let Some(pin) = pinned
+        && pin < start
     {
-        start = anchor;
+        start = pin;
     }
 
     let mut end = packed_end(heights, start, budget, max_children);
-    if let Some(anchor) = anchor {
-        while anchor >= end && start < anchor {
+    if let Some(pin) = pinned {
+        while pin >= end && start < pin {
             start += 1;
             end = packed_end(heights, start, budget, max_children);
         }
