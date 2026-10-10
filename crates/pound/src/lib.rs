@@ -4,6 +4,8 @@
 
 //! pound: a low footprint, derive-first cli parser.
 //!
+//! a struct deriving [`Parse`] is one command, an enum is a subcommand tree,
+//! and a field's type says what it is.
 //!
 //! | type        | meaning              |
 //! |-------------|----------------------|
@@ -14,10 +16,10 @@
 //!
 //! `#[pound(short)]` / `#[pound(long)]` promote these to a named option, and
 //! `#[pound(flatten)]` embeds another `Parse` struct's args at the same level.
-//! on an enum, `#[pound(flatten)] Variant(Other)` offers every command of the
-//! `Other` enum as if it were declared here.
 //!
-//! ```ignore
+//! ```
+//! # #[cfg(feature = "derive")]
+//! # {
 //! use pound::Parse;
 //!
 //! #[derive(Parse)]
@@ -35,24 +37,44 @@
 //!     #[pound(short, long)] force: bool,     // -f / --force
 //! }
 //!
-//! let add = Add::parse(); // exits on -h/--help or a parse error
+//! // `Add::parse()` reads argv and exits on -h/--help or a parse error
+//! let add = Add::try_parse_from(["--verbose", "-f", "tool", "https://example.org"]).unwrap();
+//! assert!(add.common.verbose && add.force);
+//! assert_eq!(add.name, "tool");
+//! # }
 //! ```
 //!
 //! `parse` and `validate` take a path or any callable expression, and `default`
 //! takes a string literal, a bare word such as `auto`, or a braced constant of
-//! type `&str`. the string form of
-//! `parse` and `validate` still names a path.
+//! type `&str`.
 //!
-//! ```ignore
+//! ```
+//! # #[cfg(feature = "derive")]
+//! # {
+//! use std::num::NonZeroUsize;
+//! use pound::Parse;
+//!
 //! const SYSTEM_PROFILE: &str = "system";
+//!
+//! fn level(s: &str) -> Result<u8, std::num::ParseIntError> {
+//!     s.parse()
+//! }
 //!
 //! #[derive(Parse)]
 //! struct Run {
 //!     #[pound(long, parse = str::parse::<NonZeroUsize>)] jobs: NonZeroUsize,
-//!     #[pound(long, parse = my_fn, validate = |n: &u8| if *n > 0 { Ok(()) } else { Err("zero") })] level: u8,
+//!     #[pound(long, parse = level, validate = |n: &u8| if *n > 0 { Ok(()) } else { Err("zero") })] level: u8,
 //!     #[pound(long, default = { SYSTEM_PROFILE })] profile: String,
 //! }
+//!
+//! let run = Run::try_parse_from(["--jobs", "4", "--level", "2"]).unwrap();
+//! assert_eq!(run.profile, "system");
+//! # }
 //! ```
+//!
+//! every attribute, the field type mapping and the `default`, `env`, group and
+//! conflict forms are documented on the derive macros, see [`derive@Parse`] and
+//! [`derive@ValueEnum`].
 //!
 //! you may also hand-build a [`spec::CommandSpec`] and impl [`Parse`] yourself.
 
