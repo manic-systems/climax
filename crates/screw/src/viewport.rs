@@ -346,6 +346,17 @@ mod tests {
     }
 
     #[test]
+    fn viewport_keeps_sealed_table_cells_apart() {
+        let table = crate::Table::new([["👩\u{200d}", "💻", "B"]]).gap(0);
+        let viewport = VerticalViewport::new(vec![widget(table)]);
+        let ctx = crate::RenderCtx::new().with_constraints(Some(5), Some(3));
+        let mut surface = Surface::new();
+        viewport.render(&ctx, &mut surface);
+        assert_eq!(surface.rows()[0].cells().len(), 3);
+        assert_eq!(surface.rows()[0].cells()[2].text, "B");
+    }
+
+    #[test]
     fn viewport_reports_physical_page_targets() {
         let children = vec![
             widget(Text::new("one")),

@@ -362,6 +362,16 @@ mod tests {
         assert_eq!(surface.cursor(), Some(Position { row: 0, col: 2 }));
     }
 
+    #[test]
+    fn composition_keeps_sealed_table_cells_apart() {
+        let table = crate::Table::new([["👩\u{200d}", "💻", "B"]]).gap(0);
+        let mut surface = Surface::new();
+        Layers::new(table).render(&context(5, 3), &mut surface);
+        assert_eq!(surface.rows()[0].cells().len(), 3);
+        assert_eq!(surface.rows()[0].cells()[2].text, "B");
+        assert_eq!(surface.display_width(), 5);
+    }
+
     struct LocalOverlay(Rc<RefCell<String>>);
 
     impl Widget for LocalOverlay {
