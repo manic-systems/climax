@@ -2,10 +2,7 @@
 
 #![cfg(feature = "derive")]
 
-use pound::{
-    ErrorKind,
-    Parse,
-};
+use pound::Parse;
 
 #[derive(Debug, Parse, PartialEq, Eq)]
 enum Deeper {
@@ -79,6 +76,8 @@ fn a_flattened_struct_can_own_the_optional_selector() {
 
     #[cfg(feature = "help")]
     {
+        use pound::ErrorKind;
+
         let ErrorKind::Help(text) = Root::try_parse_from(["--help"]).unwrap_err().kind else {
             panic!("expected help");
         };
