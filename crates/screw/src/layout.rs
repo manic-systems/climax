@@ -1,8 +1,19 @@
+use std::fmt;
+
 use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
 
 #[derive(Clone)]
 pub struct LayoutBuilder<H = WidgetRef> {
     rows: Vec<H>,
+}
+
+impl<H> fmt::Debug for LayoutBuilder<H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LayoutBuilder")
+            .field("rows", &self.rows.len())
+            .finish()
+    }
 }
 
 impl LayoutBuilder<WidgetRef> {

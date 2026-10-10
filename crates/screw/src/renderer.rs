@@ -37,6 +37,7 @@ pub enum CursorVisibility {
     FromSurface,
 }
 
+#[derive(Debug)]
 pub struct Renderer<W> {
     writer:         W,
     previous:       Option<Surface>,

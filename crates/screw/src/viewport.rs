@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
+    fmt,
     ops::Range,
     sync::{Arc, Mutex},
 };
@@ -27,7 +28,7 @@ pub struct ViewportReport {
 ///
 /// Only handles from [`VerticalViewport::report_handle`] observe rendering;
 /// `Default` is an inert handle that never updates.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct ViewportReportHandle {
     inner: Arc<Mutex<ViewportReport>>,
 }
@@ -58,6 +59,20 @@ pub struct VerticalViewport<H = WidgetRef> {
     max_children: Option<usize>,
     trailing: Option<H>,
     report: ViewportReportHandle,
+}
+
+impl<H> fmt::Debug for VerticalViewport<H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerticalViewport")
+            .field("children", &self.children.len())
+            .field("requested_start", &self.requested_start)
+            .field("anchor", &self.anchor)
+            .field("max_children", &self.max_children)
+            .field("trailing", &self.trailing.is_some())
+            .field("report", &self.report)
+            .finish()
+    }
 }
 
 impl<H> VerticalViewport<H> {

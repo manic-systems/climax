@@ -3,6 +3,7 @@ use std::{
         HashMap,
         VecDeque,
     },
+    fmt,
     hash::Hash,
     rc::Rc,
     sync::{
@@ -840,6 +841,15 @@ pub struct Line<H = WidgetRef> {
     children: Box<[H]>,
 }
 
+impl<H> fmt::Debug for Line<H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Line")
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
 impl<H> Line<H> {
     pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
@@ -870,6 +880,15 @@ where
 #[derive(Clone)]
 pub struct Stack<H = WidgetRef> {
     children: Box<[H]>,
+}
+
+impl<H> fmt::Debug for Stack<H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Stack")
+            .field("children", &self.children.len())
+            .finish()
+    }
 }
 
 impl<H> Stack<H> {
@@ -964,6 +983,16 @@ where
 pub struct Stateful<S, H = WidgetRef> {
     state: Mutex<S>,
     cases: HashMap<S, H>,
+}
+
+impl<S: fmt::Debug, H> fmt::Debug for Stateful<S, H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Stateful")
+            .field("state", &*lock(&self.state))
+            .field("cases", &self.cases.len())
+            .finish()
+    }
 }
 
 impl<S, H> Stateful<S, H>
@@ -1347,6 +1376,19 @@ mod tests {
         let looping = Looping::new(["a", "b"]);
         assert_eq!(looping.tick_interest(), TickInterest::EveryFrame);
         assert_eq!((&&"x").vertical_size(), VerticalSize::Content);
+    }
+
+    #[test]
+    fn public_composite_types_implement_debug() {
+        fn debuggable<T: fmt::Debug>(_: &T) {}
+        debuggable(&Line::<WidgetRef>::new(Vec::new()));
+        debuggable(&Stack::<WidgetRef>::new(Vec::new()));
+        debuggable(&Stateful::<u8>::new(0));
+        debuggable(&crate::layout());
+        debuggable(&crate::VerticalViewport::<WidgetRef>::new(Vec::new()));
+        debuggable(&crate::Layers::new("base"));
+        debuggable(&crate::Renderer::new(Vec::new()));
+        debuggable(&crate::Runtime::new(Vec::new(), "root"));
     }
 
     #[test]
