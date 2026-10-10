@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use core::{
     error,
     fmt,
-    io,
+    result,
 };
+use std::io;
 
 use bang_terminal::Signal;
 
@@ -92,7 +93,13 @@ impl Error {
         let primary = error.primary().unwrap_or(&error);
         let signal = match primary {
             LiveSessionError::Signalled(signal) => Some(*signal),
-            _ => None,
+            LiveSessionError::Unavailable
+            | LiveSessionError::RawMode(_)
+            | LiveSessionError::Signals(_)
+            | LiveSessionError::TerminalIo(_)
+            | LiveSessionError::Cancelled
+            | LiveSessionError::InputEnded
+            | LiveSessionError::Cleanup { .. } => None,
         };
         let kind = if signal.is_some() {
             ErrorKind::Interrupted
@@ -108,7 +115,11 @@ impl Error {
                 {
                     ErrorKind::InteractionBusy
                 },
-                _ => ErrorKind::Terminal,
+                LiveSessionError::RawMode(_)
+                | LiveSessionError::Signals(_)
+                | LiveSessionError::TerminalIo(_)
+                | LiveSessionError::Signalled(_)
+                | LiveSessionError::Cleanup { .. } => ErrorKind::Terminal,
             }
         };
         let message = match kind {
@@ -119,7 +130,9 @@ impl Error {
             ErrorKind::Cancelled => "prompt was cancelled".to_owned(),
             ErrorKind::InputEnded => "input ended before the prompt was submitted".to_owned(),
             ErrorKind::Interrupted => error.to_string(),
-            _ => "terminal failure".to_owned(),
+            ErrorKind::InvalidConfiguration | ErrorKind::Terminal | ErrorKind::UnexpectedValue => {
+                "terminal failure".to_owned()
+            },
         };
         Self {
             kind,
@@ -127,6 +140,34 @@ impl Error {
             signal,
             source: Some(Box::new(error)),
         }
+    }
+
+    pub(crate) fn naming_prompt(mut self, prompt: &str) -> Self {
+        let trimmed = prompt.trim().trim_end_matches(':').trim_end();
+        if trimmed.is_empty() {
+            return self;
+        }
+        match self.kind {
+            ErrorKind::InteractionUnavailable => {
+                self.message = format!(
+                    "cannot ask \"{trimmed}\" because there is no interactive terminal, so pass \
+                     the answer another way or run in a terminal"
+                );
+            },
+            ErrorKind::InputEnded => {
+                self.message = format!(
+                    "input ended before \"{trimmed}\" was answered, so supply the answer or run \
+                     in a terminal"
+                );
+            },
+            ErrorKind::Cancelled
+            | ErrorKind::InteractionBusy
+            | ErrorKind::InvalidConfiguration
+            | ErrorKind::Interrupted
+            | ErrorKind::Terminal
+            | ErrorKind::UnexpectedValue => {},
+        }
+        self
     }
 
     /// for a driver built on [`crate::advanced::interaction_from_runner`],
@@ -203,12 +244,12 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.source
             .as_deref()
-            .map(|source| source as &(dyn error::Error + 'static))
+            .map(|source| -> &(dyn error::Error + 'static) { source })
     }
 }
 
 /// a result whose error is a bang [`Error`]
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 #[cfg(test)]
 mod tests {
