@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "bang"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang-core",
  "bang-terminal",
@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "bang-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "screw",
  "unicode-segmentation",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "bang-run"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang",
  "bang-core",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "bang-terminal"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang-core",
  "libc",
@@ -50,7 +50,7 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "climax"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang",
  "climax-derive",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "climax-derive"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "pound-derive-impl",
 ]
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "screw"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "rustix",
  "screw-pty",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "screw-pty"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "screw",
  "unicode-segmentation",

@@ -1,6 +1,6 @@
 [package]
 name                 = "bang-terminal"
-version              = "0.0.1"
+version              = "0.1.0"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
 description          = "Terminal input decoding, raw mode and event loop behind the bang prompts"
