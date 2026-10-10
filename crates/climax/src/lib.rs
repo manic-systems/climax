@@ -80,6 +80,7 @@ pub use bang::ReviewConfig;
 pub use bang::{
     Configurable,
     ConfirmConfig,
+    Date,
     DateConfig,
     MultiSelectConfig,
     NumberConfig,
@@ -100,6 +101,7 @@ pub use climax_derive::{
 };
 pub use error::{
     Error,
+    ErrorKind,
     Result,
 };
 #[cfg(feature = "parse")] pub use pound;
