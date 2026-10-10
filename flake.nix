@@ -34,7 +34,7 @@
               nixfmt
               rustc
               rust-analyzer
-              rustfmt
+              nightlyRustfmt
               taplo
             ];
             env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
