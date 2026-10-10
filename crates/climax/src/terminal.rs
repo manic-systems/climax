@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{
-    self,
-    IsTerminal as _,
-};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::io::{
     Read,
@@ -11,6 +7,15 @@ use std::io::{
 };
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::os::fd::AsFd;
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::os::fd::OwnedFd;
+use std::{
+    env,
+    io::{
+        self,
+        IsTerminal as _,
+    },
+};
 
 /// whether prompts use detected terminal capabilities
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -27,7 +32,7 @@ pub enum InteractionMode {
 /// how transient status is presented
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum StatusMode {
-    /// Animate on a suitable terminal and otherwise remain silent.
+    /// animate on a suitable terminal, print plain lines otherwise
     #[default]
     Auto,
     /// animate regardless of detection
@@ -39,7 +44,7 @@ pub enum StatusMode {
 }
 
 fn ansi_available() -> bool {
-    std::env::var_os("TERM").is_none_or(|term| term != "dumb")
+    env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
 /// terminal facts observed by the facade
@@ -104,8 +109,8 @@ impl<'a> TerminalApplication<'a> {
 
 #[cfg(all(feature = "interactive", feature = "render"))]
 impl Write for TerminalApplication<'_> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.output.write(buffer)
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.output.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -136,7 +141,7 @@ impl TerminalCapabilities {
     }
 
     #[cfg(any(feature = "render", feature = "interactive"))]
-    pub(crate) fn detect_on(handle: &std::os::fd::OwnedFd) -> Self {
+    pub(crate) fn detect_on(handle: &OwnedFd) -> Self {
         let is_terminal = handle.is_terminal();
         Self::new(is_terminal, is_terminal, ansi_available())
     }
@@ -221,13 +226,13 @@ impl TerminalPolicy {
     }
 
     #[must_use]
-    /// The status mode after resolving `Auto`, which is `Live` on a terminal
-    /// that supports it and `Silent` otherwise.
+    /// status mode after resolving `Auto` to `Live` on a capable terminal and
+    /// `Plain` otherwise
     pub const fn effective_status_mode(self) -> StatusMode {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
-            StatusMode::Auto => StatusMode::Silent,
-            status => status,
+            StatusMode::Auto => StatusMode::Plain,
+            status @ (StatusMode::Live | StatusMode::Plain | StatusMode::Silent) => status,
         }
     }
 
@@ -262,6 +267,15 @@ mod tests {
         let mut policy = TerminalPolicy::process();
         policy.set_capabilities(TerminalCapabilities::new(true, true, true));
         assert!(policy.interaction_available());
+    }
+
+    #[test]
+    fn auto_status_is_plain_off_a_terminal_and_live_on_one() {
+        let mut policy = TerminalPolicy::process();
+        policy.set_capabilities(TerminalCapabilities::new(false, false, false));
+        assert_eq!(policy.effective_status_mode(), StatusMode::Plain);
+        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        assert_eq!(policy.effective_status_mode(), StatusMode::Live);
     }
 
     #[test]
