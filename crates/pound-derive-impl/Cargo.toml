@@ -1,6 +1,6 @@
 [package]
 name                 = "pound-derive-impl"
-version              = "0.2.0"
+version              = "0.2.1"
 description          = "Expansion behind pound's derive macros"
 keywords             = [ "cli", "args", "derive" ]
 categories           = [ "development-tools::procedural-macro-helpers" ]
