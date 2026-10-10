@@ -323,7 +323,7 @@ impl Renderer<io::Stderr> {
     }
 }
 
-pub fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMode) -> Surface {
+pub(crate) fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMode) -> Surface {
     match (width, mode) {
         (Some(width), LayoutMode::Clip) => {
             surface.fit_width(width);
@@ -408,7 +408,7 @@ fn cursor_crosses_cell(cursor: Option<Position>, logical_col: usize, cell_width:
     })
 }
 
-pub const fn usable_columns(terminal_columns: usize) -> usize {
+pub(crate) const fn usable_columns(terminal_columns: usize) -> usize {
     if terminal_columns > 1 {
         terminal_columns - 1
     } else {

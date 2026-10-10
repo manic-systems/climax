@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 /// that can panic, so recovering a poisoned mutex never hands back a
 /// half-updated value. Recovering keeps an unrelated thread's failure from
 /// cascading into a second panic while a widget is rendering.
-pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
