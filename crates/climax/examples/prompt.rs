@@ -2,8 +2,8 @@
 
 use climax::PromptOutcome;
 
-fn main() -> climax::Result<()> {
-    climax::run_with((), |context, ()| {
+fn main() -> std::process::ExitCode {
+    climax::main_with(|context| {
         let shell = match context
             .select("shell")
             .choice("bash", "bash")

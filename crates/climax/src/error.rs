@@ -45,6 +45,7 @@ pub struct Error {
     kind: ErrorKind,
     message: String,
     pub(crate) signal: Option<i32>,
+    exit_code: Option<u8>,
     source: Option<Box<dyn error::Error + Send + Sync + 'static>>,
     related: Vec<Self>,
 }
@@ -57,6 +58,31 @@ impl Error {
             kind: ErrorKind::Message,
             message: message.into(),
             signal: None,
+            exit_code: None,
+            source: None,
+            related: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    /// A cancellation, of kind [`ErrorKind::Cancelled`].
+    ///
+    /// `climax::main` treats it like a cancelled prompt, so it exits 130 and
+    /// prints nothing. Return it when the user declines to continue.
+    ///
+    /// ```
+    /// use climax::{Error, ErrorKind};
+    ///
+    /// let error = Error::cancelled();
+    /// assert_eq!(error.kind(), ErrorKind::Cancelled);
+    /// assert_eq!(error.exit_code(), None);
+    /// ```
+    pub fn cancelled() -> Self {
+        Self {
+            kind: ErrorKind::Cancelled,
+            message: "cancelled".to_owned(),
+            signal: None,
+            exit_code: None,
             source: None,
             related: Vec::new(),
         }
@@ -81,9 +107,32 @@ impl Error {
             kind: ErrorKind::Application,
             message,
             signal: None,
+            exit_code: None,
             source: Some(Box::new(source)),
             related: Vec::new(),
         }
+    }
+
+    #[must_use]
+    /// Choose the process exit code `climax::main` and `climax::main_with` use
+    /// for this error, whatever its kind.
+    ///
+    /// A cancellation with an explicit code stays silent, and any other kind
+    /// is still reported on stderr.
+    ///
+    /// ```
+    /// let error = climax::Error::message("nothing to do").with_exit_code(3);
+    /// assert_eq!(error.exit_code(), Some(3));
+    /// ```
+    pub const fn with_exit_code(mut self, code: u8) -> Self {
+        self.exit_code = Some(code);
+        self
+    }
+
+    #[must_use]
+    /// The exit code chosen with [`Error::with_exit_code`], if any.
+    pub const fn exit_code(&self) -> Option<u8> {
+        self.exit_code
     }
 
     #[must_use]
@@ -132,6 +181,7 @@ impl Error {
             kind,
             message: source.to_string(),
             signal: None,
+            exit_code: None,
             source: Some(Box::new(source)),
             related: Vec::new(),
         }
@@ -236,6 +286,93 @@ impl From<io::Error> for Error {
     }
 }
 
+impl From<Box<dyn error::Error + Send + Sync + 'static>> for Error {
+    fn from(value: Box<dyn error::Error + Send + Sync + 'static>) -> Self {
+        Self::with_source(ErrorKind::Application, BoxedSource(value))
+    }
+}
+
+struct BoxedSource(Box<dyn error::Error + Send + Sync + 'static>);
+
+impl fmt::Debug for BoxedSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl fmt::Display for BoxedSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl error::Error for BoxedSource {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+/// Conversions from a foreign `Result` into a [`Result`] with an application
+/// [`Error`].
+///
+/// Implemented for every `Result<T, E>` whose error is a `Send + Sync`
+/// `std::error::Error`, and in the prelude. The error becomes the source of an
+/// [`ErrorKind::Application`] error.
+///
+/// ```
+/// use climax::prelude::*;
+///
+/// fn count(text: &str) -> climax::Result<u32> {
+///     let count = text.parse::<u32>().context("reading the count")?;
+///     Ok(count)
+/// }
+///
+/// assert_eq!(count("7").unwrap(), 7);
+/// let error = count("seven").unwrap_err();
+/// assert_eq!(error.kind(), ErrorKind::Application);
+/// assert_eq!(
+///     error.to_string(),
+///     "reading the count: invalid digit found in string",
+/// );
+/// ```
+pub trait ResultExt<T> {
+    /// Turn the error into an application error that reads `message: source`
+    /// and keeps the original error as its source.
+    ///
+    /// # Errors
+    ///
+    /// Returns the converted error when `self` is an `Err`.
+    fn context(self, message: impl Into<String>) -> Result<T>;
+
+    /// Turn the error into an application error carrying the original error's
+    /// text and keeping it as the source.
+    ///
+    /// ```
+    /// use climax::prelude::*;
+    ///
+    /// let error = "x".parse::<u8>().app_err().unwrap_err();
+    /// assert_eq!(error.kind(), ErrorKind::Application);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the converted error when `self` is an `Err`.
+    fn app_err(self) -> Result<T>;
+}
+
+impl<T, E> ResultExt<T> for std::result::Result<T, E>
+where
+    E: error::Error + Send + Sync + 'static,
+{
+    fn context(self, message: impl Into<String>) -> Result<T> {
+        self.map_err(|source| Error::application_context(message, source))
+    }
+
+    fn app_err(self) -> Result<T> {
+        self.map_err(Error::application)
+    }
+}
+
 impl From<String> for Error {
     fn from(value: String) -> Self {
         Self::message(value)
@@ -258,6 +395,22 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Message);
         assert_eq!(error.to_string(), "boom");
         assert!(error.source_error().is_none());
+    }
+
+    #[test]
+    fn context_and_boxed_errors_become_application_errors() {
+        let failed = "x".parse::<u8>().context("reading the count").unwrap_err();
+        assert_eq!(failed.kind(), ErrorKind::Application);
+        assert_eq!(failed.to_string(), "reading the count: invalid digit found in string");
+        assert!(failed.source_error().is_some());
+
+        let bare = "x".parse::<u8>().app_err().unwrap_err();
+        assert_eq!(bare.to_string(), "invalid digit found in string");
+
+        let boxed: Box<dyn error::Error + Send + Sync> = Box::new(Layered(io::Error::other("disk full")));
+        let converted = Error::from(boxed);
+        assert_eq!(converted.kind(), ErrorKind::Application);
+        assert_eq!(format!("{converted:?}"), "could not save\n\nCaused by:\n    disk full");
     }
 
     #[test]

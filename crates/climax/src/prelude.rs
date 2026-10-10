@@ -13,6 +13,8 @@ pub use crate::{
     Error,
     ErrorKind,
     Result,
+    ResultExt,
+    main_with,
     run_with,
     output::Format,
     terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
