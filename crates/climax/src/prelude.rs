@@ -14,6 +14,7 @@ pub use crate::{
     ErrorKind,
     Result,
     run_with,
+    output::Format,
     terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
 };
 #[cfg(feature = "parse")]

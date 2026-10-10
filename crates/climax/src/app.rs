@@ -358,17 +358,28 @@ impl Context {
         self.output.clone()
     }
 
+    /// The format `output` handles from this context currently use.
     #[must_use]
     pub const fn output_format(&self) -> crate::output::Format {
         self.output.format()
     }
 
+    /// Build this context with `format`, so results and streams are written
+    /// as JSON under [`Format::Json`](crate::output::Format::Json).
+    ///
+    /// A handle taken from [`Self::output`] before the change keeps the old
+    /// format, so change it before asking for one. The crate docs have a
+    /// recipe for a `--json` flag.
     #[must_use]
     pub fn with_output_format(mut self, format: crate::output::Format) -> Self {
         self.output = self.output.with_format(format);
         self
     }
 
+    /// Set the format for `output` handles taken after this call.
+    ///
+    /// Notices are suppressed in JSON mode, registered results serialize as
+    /// their natural JSON shape and streams write JSON Lines.
     pub fn set_output_format(&mut self, format: crate::output::Format) {
         self.output = self.output.clone().with_format(format);
     }

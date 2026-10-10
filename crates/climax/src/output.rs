@@ -13,6 +13,8 @@ use serde::Serialize;
 
 use crate::{Error, Result, error::ErrorKind, sync::lock};
 
+/// How an application writes its output, chosen with
+/// [`Context::set_output_format`](crate::Context::set_output_format).
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Format {
     /// Write the message as plain text.
