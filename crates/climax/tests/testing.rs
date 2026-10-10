@@ -324,3 +324,25 @@ fn select_nth_is_absolute_over_a_preselected_search() {
         assert_eq!(outcome.stderr, format!("{expected}\n"), "select_nth({n})");
     }
 }
+
+#[test]
+fn text_attempts_keep_a_prefilled_value_when_erasing_a_combining_mark() {
+    let script = Script::new().text_attempts(["e\u{301}", "ok"]);
+    let outcome = testing::run_with(script, |cx| {
+        let value = cx
+            .text("Name")
+            .value("x")
+            .validator(|text| {
+                if text == "xok" {
+                    Ok(())
+                } else {
+                    Err(format!("{text} is taken"))
+                }
+            })
+            .interact()?
+            .or_cancel()?;
+        cx.diagnostic().notice(value)
+    });
+    assert_eq!(outcome.exit_code, 0);
+    assert!(outcome.stderr.ends_with("xok\n"), "got {:?}", outcome.stderr);
+}
