@@ -19,6 +19,11 @@ const FIXTURES: &[&str] = &[
     "fixture-screw-only",
 ];
 
+/// Fixtures whose library carries doctests. `--all-targets` leaves doctests
+/// out, so these also run `cargo test --doc` to prove the README examples with
+/// `climax` as the only dependency.
+const DOCTEST_FIXTURES: &[&str] = &["fixture-climax-only"];
+
 /// Each fixture is built and tested in its own `cargo test -p`, not
 /// `--workspace`, so Cargo resolves its features from only that fixture's
 /// dependency graph. A combined `--workspace` run would unify features across
@@ -33,31 +38,32 @@ fn documented_dependency_stories_compile_in_isolation() {
         .join("Cargo.toml");
     let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
 
+    let run = |fixture: &str, target_flag: &str| {
+        let output = Command::new(env!("CARGO"))
+            .args(["test", "--offline", "--locked", "-p", fixture, target_flag])
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .env("CARGO_TARGET_DIR", &target)
+            .output()
+            .expect("run cargo for a dependency fixture");
+
+        (!output.status.success()).then(|| {
+            format!(
+                "{fixture} {target_flag}:\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )
+        })
+    };
+
     let failures: Vec<String> = FIXTURES
         .iter()
-        .filter_map(|&fixture| {
-            let output = Command::new(env!("CARGO"))
-                .args([
-                    "test",
-                    "--offline",
-                    "--locked",
-                    "-p",
-                    fixture,
-                    "--all-targets",
-                    "--manifest-path",
-                ])
-                .arg(&manifest)
-                .env("CARGO_TARGET_DIR", &target)
-                .output()
-                .expect("run cargo for a dependency fixture");
-
-            (!output.status.success()).then(|| {
-                format!(
-                    "{fixture}:\nstdout:\n{}\nstderr:\n{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr),
-                )
-            })
+        .flat_map(|&fixture| {
+            let doctests = DOCTEST_FIXTURES.contains(&fixture).then_some("--doc");
+            [Some("--all-targets"), doctests]
+                .into_iter()
+                .flatten()
+                .filter_map(move |flag| run(fixture, flag))
         })
         .collect();
 
