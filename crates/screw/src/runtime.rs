@@ -383,20 +383,14 @@ where
     pub fn resize(&mut self, width: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize(width),
-            Self::Plain(runtime) => {
-                runtime.resize(width);
-                Ok(())
-            },
+            Self::Plain(runtime) => runtime.resize(width),
         }
     }
 
     pub fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize_viewport(width, height),
-            Self::Plain(runtime) => {
-                runtime.resize_viewport(width, height);
-                Ok(())
-            },
+            Self::Plain(runtime) => runtime.resize_viewport(width, height),
         }
     }
 
@@ -441,13 +435,15 @@ where
     H: crate::Widget,
     F: crate::Widget,
 {
-    pub const fn resize(&mut self, width: usize) {
+    pub const fn resize(&mut self, width: usize) -> io::Result<()> {
         self.width = Some(width);
+        Ok(())
     }
 
-    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+    pub const fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         self.width = Some(width);
         self.height = Some(height);
+        Ok(())
     }
 
     pub fn finish(self) -> io::Result<W> {
