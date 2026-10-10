@@ -53,6 +53,9 @@ pub fn interact_widget(
 }
 
 /// build a deterministic interaction driver from one event sequence per prompt
+///
+/// panics when the last clone of the driver is dropped with a script never
+/// started or events left unread
 #[must_use]
 pub fn scripted_interaction(
     scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
