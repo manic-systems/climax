@@ -2,7 +2,7 @@
 
 use bang_core::{
     Value,
-    widgets::{MultiSelect, Select, SelectItem},
+    widgets::{MultiSelect, SearchSelect, Select, SelectItem},
 };
 
 use crate::{Error, Interaction, Result};
@@ -36,6 +36,12 @@ pub fn select<T>(header: impl Into<String>) -> SelectPrompt<T> {
 #[must_use]
 pub fn multi_select<T>(header: impl Into<String>) -> MultiSelectPrompt<T> {
     MultiSelectPrompt::new(header)
+}
+
+/// Ask the user to filter and pick one of several choices under `header`.
+#[must_use]
+pub fn search<T>(header: impl Into<String>) -> SearchPrompt<T> {
+    SearchPrompt::new(header)
 }
 
 #[derive(Clone, Debug)]
@@ -139,6 +145,35 @@ impl MultiSelectConfig {
     #[must_use]
     pub fn checked_indices(mut self, indices: impl IntoIterator<Item = usize>) -> Self {
         self.checked = indices.into_iter().collect();
+        self
+    }
+}
+
+/// Presentation settings for [`SearchPrompt`].
+#[derive(Clone, Debug, Default)]
+pub struct SearchConfig {
+    list: ListConfig,
+    prompt: Option<String>,
+    placeholder: Option<String>,
+}
+
+impl SearchConfig {
+    list_options!(
+        "Start with the choice at `selected` highlighted, counting from zero. The query starts empty, so every choice is listed.",
+        list
+    );
+
+    /// Set the text shown before the query.
+    #[must_use]
+    pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = Some(prompt.into());
+        self
+    }
+
+    /// Set the hint shown while the query is empty.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.placeholder = Some(placeholder.into());
         self
     }
 }
@@ -360,6 +395,101 @@ impl<T> Configurable for MultiSelectPrompt<T> {
     }
 }
 
+/// A prompt that filters and picks one of several choices.
+///
+/// The prompt needs at least one choice. Create it with [`search`].
+#[derive(Clone, Debug)]
+pub struct SearchPrompt<T> {
+    id: String,
+    choices: Vec<Choice<T>>,
+    config: SearchConfig,
+    interaction: Interaction,
+}
+
+impl<T> SearchPrompt<T> {
+    /// Create a search prompt with `header` above the choices.
+    #[must_use]
+    pub fn new(header: impl Into<String>) -> Self {
+        Self {
+            id: "search".to_owned(),
+            choices: Vec::new(),
+            config: SearchConfig {
+                list: ListConfig::with_header(header),
+                prompt: None,
+                placeholder: None,
+            },
+            interaction: Interaction::default(),
+        }
+    }
+
+    choice_option!();
+    prompt_options!();
+    list_options!(
+        "Start with the choice at `selected` highlighted, counting from zero. The query starts empty, so every choice is listed.",
+        config.list
+    );
+
+    /// Set the text shown before the query.
+    #[must_use]
+    pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.config.prompt = Some(prompt.into());
+        self
+    }
+
+    /// Set the hint shown while the query is empty.
+    #[must_use]
+    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+        self.config.placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// Run the prompt to completion.
+    ///
+    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
+    /// submitting. Fails with `ErrorKind::InvalidConfiguration` if no choice
+    /// was added, with `ErrorKind::InputEnded` if input ends first, and with
+    /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
+    /// interactive.
+    pub fn interact(self) -> Result<PromptOutcome<T>> {
+        let interaction = self.interaction.clone();
+        let (widget, choices) = self.into_widget()?;
+        resolve_prompt(interaction.interact(widget, []), |value| {
+            resolve_one(&value, choices)
+        })
+    }
+
+    fn into_widget(self) -> Result<(SearchSelect, Vec<Choice<T>>)> {
+        require_choices("search", self.choices.len())?;
+        let mut widget = SearchSelect::new(self.id, choice_items(&self.choices))
+            .with_page_size(self.config.list.page_size)
+            .with_wrap(self.config.list.wrap);
+        if let Some(header) = self.config.list.header {
+            widget = widget.with_header(header);
+        }
+        if let Some(prompt) = self.config.prompt {
+            widget = widget.with_prompt(prompt);
+        }
+        if let Some(placeholder) = self.config.placeholder {
+            widget = widget.with_placeholder(placeholder);
+        }
+        if let Some(selected) = self.config.list.selected {
+            widget = widget.with_selected_match_index(selected);
+        }
+        Ok((widget, self.choices))
+    }
+}
+
+impl<T> Configurable for SearchPrompt<T> {
+    type Config = SearchConfig;
+
+    fn with_config(mut self, config: Self::Config) -> Self {
+        let header = self.config.list.header.take();
+        self.config = config;
+        self.config.list.inherit_header(header);
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Choice<T> {
     label: String,
@@ -452,6 +582,20 @@ mod tests {
         );
         assert_eq!(multi.config.list.selected, Some(1));
         assert_eq!(multi.config.checked, [0, 2]);
+
+        let search = search::<()>("search").with_config(
+            SearchConfig::default()
+                .header("find one")
+                .wrap(false)
+                .page_size(6)
+                .prompt("query: ")
+                .placeholder("type here")
+                .selected(3),
+        );
+        assert_eq!(search.config.list.header.as_deref(), Some("find one"));
+        assert_eq!(search.config.prompt.as_deref(), Some("query: "));
+        assert_eq!(search.config.placeholder.as_deref(), Some("type here"));
+        assert_eq!(search.config.list.selected, Some(3));
     }
 
     #[test]
@@ -526,6 +670,7 @@ mod tests {
         let interaction = crate::advanced::scripted_interaction([
             vec![bang_core::Event::key(bang_core::Key::Esc)],
             vec![bang_core::Event::key(bang_core::Key::Esc)],
+            vec![bang_core::Event::key(bang_core::Key::Esc)],
         ]);
 
         assert_eq!(
@@ -538,6 +683,14 @@ mod tests {
         );
         assert_eq!(
             multi_select("shells")
+                .choice("Bash", 10)
+                .interaction(interaction.clone())
+                .interact()
+                .unwrap(),
+            PromptOutcome::Leave
+        );
+        assert_eq!(
+            search("shell")
                 .choice("Bash", 10)
                 .interaction(interaction)
                 .interact()
@@ -574,6 +727,14 @@ mod tests {
         assert_eq!(multi.config.list.selected, Some(1));
         assert_eq!(multi.config.checked, [0, 2]);
         assert_eq!(multi.checked_indices([3]).config.checked, [3]);
+
+        let search = search::<()>("pick")
+            .prompt("query: ")
+            .placeholder("type")
+            .page_size(5);
+        assert_eq!(search.config.prompt.as_deref(), Some("query: "));
+        assert_eq!(search.config.placeholder.as_deref(), Some("type"));
+        assert_eq!(search.config.list.page_size, 5);
     }
 
     #[test]
@@ -582,6 +743,7 @@ mod tests {
         assert_eq!(select.config.list.header.as_deref(), Some("pick a shell"));
         assert_eq!(select.id, "select");
         assert_eq!(multi_select::<()>("x").id, "multi_select");
+        assert_eq!(search::<()>("x").id, "search");
     }
 
     #[test]
@@ -596,6 +758,7 @@ mod tests {
         let kinds = [
             select::<i32>("x").interact().unwrap_err().kind(),
             multi_select::<i32>("x").interact().unwrap_err().kind(),
+            search::<i32>("x").interact().unwrap_err().kind(),
         ];
         assert!(
             kinds
