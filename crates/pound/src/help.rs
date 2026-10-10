@@ -51,18 +51,8 @@ pub(crate) fn version_line(spec: &CommandSpec) -> String {
 }
 
 #[cfg(feature = "help")]
-fn metavar(a: &ArgSpec) -> String {
-    let name = if a.value_name.is_empty() {
-        a.long.unwrap_or("arg")
-    } else {
-        a.value_name
-    };
-    name.to_uppercase()
-}
-
-#[cfg(feature = "help")]
 fn usage_positional(a: &ArgSpec) -> String {
-    let meta = metavar(a);
+    let meta = a.metavar();
     let dots = if a.multi || a.kind == Kind::Trailing {
         "..."
     } else {
@@ -78,7 +68,7 @@ fn usage_positional(a: &ArgSpec) -> String {
 /// the `=VALUE` tail of a long option, bracketed when the value may be omitted
 #[cfg(feature = "help")]
 fn value_suffix(a: &ArgSpec) -> String {
-    let meta = metavar(a);
+    let meta = a.metavar();
     if a.default_missing.is_some() {
         format!("[={meta}]")
     } else {
@@ -117,9 +107,9 @@ fn invocation(a: &ArgSpec) -> String {
             if takes_value {
                 s.push(' ');
                 if a.default_missing.is_some() {
-                    let _ = write!(s, "[{}]", metavar(a));
+                    let _ = write!(s, "[{}]", a.metavar());
                 } else {
-                    s.push_str(&metavar(a));
+                    s.push_str(&a.metavar());
                 }
             }
         },
@@ -130,7 +120,7 @@ fn invocation(a: &ArgSpec) -> String {
                 s.push_str(&value_suffix(a));
             }
         },
-        (None, None) => s.push_str(&metavar(a)),
+        (None, None) => s.push_str(&a.metavar()),
     }
     s
 }

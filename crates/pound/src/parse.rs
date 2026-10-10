@@ -1096,6 +1096,16 @@ mod tests {
     }
 
     #[test]
+    fn positionals_are_named_as_usage_names_them() {
+        let Err(ErrorKind::MissingRequired(name)) = parse(&FLAT, &[]) else {
+            panic!("expected a missing positional");
+        };
+        assert_eq!(name, "NAME");
+        assert_eq!(FLAT_ARGS[1].display_name(), "--dir");
+        assert_eq!(FLAT_ARGS[0].display_name(), "--force");
+    }
+
+    #[test]
     fn errors() {
         assert!(matches!(parse(&FLAT, &["--nope"]), Err(ErrorKind::Unknown { .. })));
         assert!(matches!(parse(&FLAT, &["-q"]), Err(ErrorKind::Unknown { .. })));

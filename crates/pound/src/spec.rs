@@ -271,16 +271,26 @@ impl ArgSpec {
         matches!(self.short, Some(own) if own == short)
     }
 
+    /// the placeholder usage and errors show for this arg's value, the
+    /// `value_name` or else the long name, uppercased
+    #[must_use]
+    pub fn metavar(&self) -> String {
+        let name = if self.value_name.is_empty() {
+            self.long.unwrap_or("arg")
+        } else {
+            self.value_name
+        };
+        name.to_uppercase()
+    }
+
     #[must_use]
     pub fn display_name(&self) -> String {
         if let Some(long) = self.long {
             format!("--{long}")
         } else if let Some(short) = self.short {
             format!("-{short}")
-        } else if !self.value_name.is_empty() {
-            format!("<{}>", self.value_name)
         } else {
-            "<value>".to_owned()
+            self.metavar()
         }
     }
 }
