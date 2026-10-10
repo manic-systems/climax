@@ -7,6 +7,7 @@ use core::ops::{
 
 /// an input or lifecycle event delivered to a widget
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     /// key press
     Key(KeyEvent),
@@ -68,6 +69,7 @@ impl KeyEvent {
 
 /// usable keys
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Key {
     /// a printable character
     Char(char),
