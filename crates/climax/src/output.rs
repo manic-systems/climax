@@ -81,8 +81,15 @@ impl Output {
         self
     }
 
+    #[cfg(not(feature = "render"))]
     pub(crate) fn with_notice_writer(mut self, writer: SharedWriter) -> Self {
         self.notices = writer;
+        self
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn with_transient(mut self, notices: crate::status::TransientNotice) -> Self {
+        self.notices = SharedWriter::Transient(notices);
         self
     }
 
@@ -107,8 +114,15 @@ impl Output {
 
     /// Write human-facing context without adding it to the application result.
     ///
-    /// Suppressed in structured output modes. Notices write straight to the
-    /// configured notice writer and return its write result.
+    /// Suppressed in structured output modes. With the `render` feature
+    /// enabled, a handle from [`crate::Context`] serializes notices with
+    /// status lines and prompts on the transient channel. The call waits until
+    /// the line has been written and returns the write result, so it stays
+    /// ordered against the caller's own writes to the same stream and is not
+    /// lost when the process exits right after. While a prompt or terminal
+    /// application holds the terminal the line is queued instead, written when
+    /// it is released, and the call returns at once. Without `render`, notices
+    /// write straight to the configured notice writer.
     pub fn notice(&self, message: impl fmt::Display) -> Result<()> {
         if self.notice_format == Format::Text {
             write_text(self.notices.clone(), message)?;
@@ -336,12 +350,15 @@ impl fmt::Debug for Output {
     }
 }
 
-/// A cloneable destination. The process streams carry their own lock, so
-/// only a caller-supplied writer needs a mutex of its own.
+/// A cloneable destination. The process streams carry their own lock and the
+/// transient channel is its own handle, so only a caller-supplied writer
+/// needs a mutex.
 #[derive(Clone)]
 pub(crate) enum SharedWriter {
     Stdout,
     Stderr,
+    #[cfg(feature = "render")]
+    Transient(crate::status::TransientNotice),
     Custom(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
@@ -364,6 +381,8 @@ impl Write for SharedWriter {
         match self {
             Self::Stdout => io::stdout().write(buffer),
             Self::Stderr => io::stderr().write(buffer),
+            #[cfg(feature = "render")]
+            Self::Transient(notices) => notices.write(buffer),
             Self::Custom(inner) => lock(inner).write(buffer),
         }
     }
@@ -372,6 +391,8 @@ impl Write for SharedWriter {
         match self {
             Self::Stdout => io::stdout().flush(),
             Self::Stderr => io::stderr().flush(),
+            #[cfg(feature = "render")]
+            Self::Transient(notices) => notices.flush(),
             Self::Custom(inner) => lock(inner).flush(),
         }
     }
