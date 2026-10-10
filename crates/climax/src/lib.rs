@@ -9,6 +9,11 @@
 //! application needs no direct dependency on any of them, and the versions it
 //! sees are the ones `climax` was tested against.
 //!
+//! The prompt builders on [`Context`] return the prompt types, which are
+//! re-exported at the root next to their config types, `PromptOutcome` and
+//! the review types, so a signature such as `fn ask(cx: &Context) ->
+//! SelectPrompt<String>` needs no path through `climax::bang`.
+//!
 //! The `derive` feature provides `#[derive(climax::Parse)]` and
 //! `#[derive(climax::ValueEnum)]`, whose expansion refers to
 //! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
@@ -47,52 +52,36 @@ pub use app::{
     try_run_from,
 };
 #[cfg(feature = "interactive")] pub use bang;
-/// ```no_run
-/// use climax::{
-///     Configurable as _,
-///     ReviewConfig,
-///     ReviewExit,
-///     ReviewState,
-/// };
-///
-/// # fn handle(context: climax::Context) -> climax::Result<()> {
-/// let outcome = context
-///     .review::<&str>("changes")
-///     .item("a.rs", "a.rs", ReviewState::Unconfirmed)
-///     .action('a', "accept", ())
-///     .with_config(ReviewConfig::default())
-///     .interact()?;
-/// if let Some(items) = outcome.accepted_items() {
-///     let _: &[climax::Reviewed<&str>] = items;
-/// }
-/// match outcome.exit() {
-///     ReviewExit::Submit | ReviewExit::Leave => {},
-///     ReviewExit::Action(()) => {},
-/// }
-/// # Ok(())
-/// # }
-/// ```
+/// presentation settings for a review prompt, passed to `with_config`
 #[cfg(feature = "interactive")]
 pub use bang::ReviewConfig;
-/// Types needed to build and match review prompts and to call `with_config`,
-/// at the crate root, next to the `Context` methods that build them.
 #[cfg(feature = "interactive")]
 pub use bang::{
     Configurable,
     ConfirmConfig,
+    ConfirmPrompt,
     Date,
     DateConfig,
+    DatePrompt,
     MultiSelectConfig,
+    MultiSelectPrompt,
     NumberConfig,
+    NumberPrompt,
     PasswordConfig,
+    PasswordPrompt,
     PromptOutcome,
     ReviewExit,
     ReviewOutcome,
+    ReviewPrompt,
+    ReviewPromptWithActions,
     ReviewState,
     Reviewed,
     SearchConfig,
+    SearchPrompt,
     SelectConfig,
+    SelectPrompt,
     TextConfig,
+    TextPrompt,
 };
 #[cfg(feature = "derive")]
 pub use climax_derive::{
