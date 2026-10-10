@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{any::Any, cell::RefCell, fmt, os::fd::OwnedFd, rc::Rc};
+use std::{any::Any, cell::RefCell, collections::VecDeque, fmt, os::fd::OwnedFd, rc::Rc};
 
 use bang_core::{
     ActionBinding, ActionLayer, Context, Event, Reaction, Value, Widget, WidgetId,
@@ -205,20 +205,44 @@ impl Widget for InteractionWidget {
 pub(crate) fn scripted(
     scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
 ) -> Interaction {
-    use std::collections::VecDeque;
-
     let scripts = scripts
         .into_iter()
         .map(|events| events.into_iter().collect::<Vec<_>>())
-        .collect::<VecDeque<_>>();
-    let scripts = Rc::new(RefCell::new(scripts));
+        .collect();
+    let state = Rc::new(RefCell::new(Script {
+        scripts,
+        unused_events: 0,
+    }));
     Interaction::from_runner(move |widget| {
-        let events = scripts
+        let events = state
             .borrow_mut()
+            .scripts
             .pop_front()
             .ok_or_else(Error::input_ended)?;
-        crate::advanced::replay_events(InteractionWidget::new(widget), events)
+        let mut events = events.into_iter();
+        let result = crate::advanced::replay_events(InteractionWidget::new(widget), &mut events);
+        state.borrow_mut().unused_events += events.count();
+        result
     })
+}
+
+struct Script {
+    scripts: VecDeque<Vec<Event>>,
+    unused_events: usize,
+}
+
+impl Drop for Script {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            return;
+        }
+        assert!(
+            self.scripts.is_empty() && self.unused_events == 0,
+            "scripted interaction dropped with {} unused scripts and {} unused events",
+            self.scripts.len(),
+            self.unused_events,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +258,30 @@ mod tests {
         fn drop(&mut self) {
             self.events.borrow_mut().push(self.label);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "1 unused scripts and 0 unused events")]
+    fn dropping_a_scripted_interaction_with_an_unstarted_script_panics() {
+        let _ = scripted([Vec::new(), Vec::new()]).interact(bang_core::widgets::TextInput::new("w"), []);
+    }
+
+    #[test]
+    #[should_panic(expected = "0 unused scripts and 1 unused events")]
+    fn dropping_a_scripted_interaction_with_unread_events_panics() {
+        let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
+        let interaction = scripted([[submit.clone(), submit]]);
+        interaction
+            .interact(bang_core::widgets::TextInput::new("w"), [])
+            .unwrap();
+    }
+
+    #[test]
+    fn a_fully_consumed_scripted_interaction_drops_quietly() {
+        let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
+        scripted([[submit]])
+            .interact(bang_core::widgets::TextInput::new("w"), [])
+            .unwrap();
     }
 
     #[test]
