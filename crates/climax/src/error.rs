@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use core::{
     error,
     fmt,
-    io,
+    result,
+};
+use std::io;
+
+#[cfg(feature = "interactive")]
+use bang::{
+    advanced::LiveSessionError,
+    terminal::Signal,
 };
 
 /// result type used across `climax`, with [`Error`] as the error
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T> = result::Result<T, Error>;
 
 /// stable, high-level category of an application error
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -17,8 +24,7 @@ pub enum ErrorKind {
     Parse,
     /// terminal output failed to render or write
     Output,
-    /// filesystem or other i/o failure, also an application error whose source
-    /// chain holds one
+    /// filesystem or other i/o failure
     Io,
     /// an interactive operation failed
     Interactive,
@@ -45,6 +51,10 @@ pub enum ErrorKind {
 /// `Debug` prints the report `fn main() -> climax::Result<()>` should show, the
 /// message followed by any source or related error text it does not already
 /// carry
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the output module sets the signal when it relays an interrupted error"
+)]
 pub struct Error {
     kind:              ErrorKind,
     message:           String,
@@ -70,7 +80,7 @@ impl Error {
     /// wraps `source` as an [`ErrorKind::Application`] error with its text as
     /// the message
     pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
-        Self::with_source(application_kind(&source), source)
+        Self::with_source(ErrorKind::Application, source)
     }
 
     #[must_use]
@@ -79,12 +89,12 @@ impl Error {
         message: impl Into<String>,
         source: impl error::Error + Send + Sync + 'static,
     ) -> Self {
-        let message = format!("{}: {source}", message.into());
+        let combined = format!("{}: {source}", message.into());
         Self {
-            kind: application_kind(&source),
-            message,
-            signal: None,
-            source: Some(Box::new(source)),
+            kind:    ErrorKind::Application,
+            message: combined,
+            signal:  None,
+            source:  Some(Box::new(source)),
             related: Vec::new(),
         }
     }
@@ -119,24 +129,6 @@ impl Error {
         &self.related
     }
 
-    #[cfg(feature = "parse")]
-    pub(crate) fn is_closed_pipe(&self) -> bool {
-        matches!(self.kind, ErrorKind::Output | ErrorKind::Io)
-            && causes(self)
-                .filter_map(|cause| cause.downcast_ref::<io::Error>())
-                .any(|cause| cause.kind() == io::ErrorKind::BrokenPipe)
-    }
-
-    #[cfg(feature = "parse")]
-    pub(crate) fn report(&self) -> String {
-        let mut report = format!("error: {self}");
-        for text in self.chain_texts() {
-            report.push_str("\n  caused by: ");
-            report.push_str(&text);
-        }
-        report
-    }
-
     pub(crate) fn with_related(mut self, other: Self) -> Self {
         self.message = format!("{}, and {other}", self.message);
         self.related.push(other);
@@ -155,9 +147,7 @@ impl Error {
             related: Vec::new(),
         }
     }
-}
 
-impl Error {
     fn chain_texts(&self) -> Vec<String> {
         let mut texts = Vec::new();
         let mut collect = |error: &Self| {
@@ -199,7 +189,7 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.source
             .as_deref()
-            .map(|source| source as &(dyn error::Error + 'static))
+            .map(|source| -> &(dyn error::Error + 'static) { source })
     }
 }
 
@@ -218,9 +208,12 @@ impl From<bang::Error> for Error {
             bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
             bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
             bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
-            _ => ErrorKind::Interactive,
+            bang::ErrorKind::InvalidConfiguration
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => ErrorKind::Interactive,
         };
-        let signal = value.signal().map(bang::terminal::Signal::as_raw);
+        let signal = value.signal().map(Signal::as_raw);
         let cleanup = if kind == ErrorKind::Cancelled {
             cleanup_errors(error::Error::source(&value))
         } else {
@@ -237,8 +230,8 @@ impl From<bang::Error> for Error {
 #[cfg(feature = "interactive")]
 fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
     source
-        .and_then(|source| source.downcast_ref::<bang::advanced::LiveSessionError>())
-        .map_or(&[][..], bang::advanced::LiveSessionError::cleanup_failures)
+        .and_then(|inner| inner.downcast_ref::<LiveSessionError>())
+        .map_or(&[][..], LiveSessionError::cleanup_failures)
         .iter()
         .map(|failure| {
             Error::with_source(
@@ -247,20 +240,6 @@ fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
             )
         })
         .collect()
-}
-
-fn application_kind(source: &(dyn error::Error + 'static)) -> ErrorKind {
-    if causes(source).any(<dyn error::Error>::is::<io::Error>) {
-        ErrorKind::Io
-    } else {
-        ErrorKind::Application
-    }
-}
-
-fn causes<'a>(
-    error: &'a (dyn error::Error + 'static),
-) -> impl Iterator<Item = &'a (dyn error::Error + 'static)> {
-    std::iter::successors(Some(error), |cause| cause.source())
 }
 
 impl From<io::Error> for Error {
@@ -369,37 +348,9 @@ mod tests {
 
     #[test]
     fn application_context_preserves_its_source() {
-        let error =
-            Error::application_context("cannot query history", "x".parse::<u8>().unwrap_err());
+        let error = Error::application_context("cannot query history", io::Error::other("closed"));
         assert_eq!(error.kind(), ErrorKind::Application);
-        assert_eq!(
-            error.to_string(),
-            "cannot query history: invalid digit found in string"
-        );
+        assert_eq!(error.to_string(), "cannot query history: closed");
         assert!(error.source_error().is_some());
-
-        let piped = Error::application(Layered(io::Error::from(io::ErrorKind::BrokenPipe)));
-        assert_eq!(piped.kind(), ErrorKind::Io);
-    }
-}
-
-#[cfg(test)]
-mod prelude_result {
-    use std::num::ParseIntError;
-
-    use crate::prelude::*;
-
-    fn two_parameters(text: &str) -> Result<u32, ParseIntError> {
-        text.parse()
-    }
-
-    fn one_parameter(text: &str) -> Result<u32> {
-        two_parameters(text).map_err(Error::application)
-    }
-
-    #[test]
-    fn the_prelude_result_takes_one_or_two_parameters() {
-        assert_eq!(one_parameter("4").unwrap(), 4);
-        two_parameters("x").unwrap_err();
     }
 }
