@@ -438,7 +438,7 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
                 });
             }
 
-            out.write(&cell.text, cell.style);
+            out.push_cell(cell);
             logical_col += cell.width;
         }
 

@@ -270,6 +270,11 @@ impl Surface {
         }
     }
 
+    /// Appends `cell` as it is, without joining it to the previous cell or measuring it again.
+    pub(crate) fn push_cell(&mut self, cell: &Cell) {
+        self.current_row_mut().cells.push(cell.clone());
+    }
+
     /// Stops the next write from joining the cells already on the row, so a boundary between
     /// independently measured pieces cannot merge clusters.
     pub(crate) const fn seal(&mut self) {
@@ -616,7 +621,7 @@ pub(crate) fn append_surface(out: &mut Surface, surface: &Surface, limit: usize)
             out.newline_with_break(previous_break);
         }
         for cell in row.cells() {
-            out.write(&cell.text, cell.style);
+            out.push_cell(cell);
         }
         out.current_row_mut().set_break_after(row.break_after());
         written += 1;
