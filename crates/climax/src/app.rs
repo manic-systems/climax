@@ -1164,6 +1164,8 @@ mod tests {
         assert_eq!(reported.message.as_deref(), Some("error: nothing to do"));
 
         assert_eq!(finish(&Err(crate::Error::message("boom"))).code, 1);
+        assert_eq!(finish(&Err(crate::Error::message("x").with_exit_code(0))).code, 1);
+        assert_eq!(finish(&Err(crate::Error::cancelled().with_exit_code(0))).code, 1);
         assert_eq!(finish(&Ok(())).code, 0);
     }
 

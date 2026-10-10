@@ -265,7 +265,7 @@ fn main() -> std::process::ExitCode {
 | 2 | a parse failure (`main` only) |
 | 130 | a cancellation, silent unless related errors are attached |
 | 128 plus N | a prompt interrupted by signal N, silent like 130 |
-| any `u8` | the code set with `Error::with_exit_code`, for an error of any kind |
+| any non-zero `u8` | the code set with `Error::with_exit_code`, for an error of any kind, where 0 becomes 1 |
 
 `Error::cancelled()` reports a cancellation of your own, and `with_exit_code`
 picks the code for any error. A cancellation with an explicit code stays silent

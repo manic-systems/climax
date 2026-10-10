@@ -120,12 +120,15 @@ impl Error {
     /// A cancellation with an explicit code stays silent, and any other kind
     /// is still reported on stderr.
     ///
+    /// An error never exits successfully, so a code of 0 is stored as 1.
+    ///
     /// ```
     /// let error = climax::Error::message("nothing to do").with_exit_code(3);
     /// assert_eq!(error.exit_code(), Some(3));
+    /// assert_eq!(error.with_exit_code(0).exit_code(), Some(1));
     /// ```
     pub const fn with_exit_code(mut self, code: u8) -> Self {
-        self.exit_code = Some(code);
+        self.exit_code = Some(if code == 0 { 1 } else { code });
         self
     }
 
@@ -478,6 +481,13 @@ mod tests {
         );
         let source = error.source_error().expect("the anyhow error is kept");
         assert_eq!(source.to_string(), "reading the count");
+    }
+
+    #[test]
+    fn a_zero_exit_code_is_stored_as_one() {
+        assert_eq!(Error::message("x").with_exit_code(0).exit_code(), Some(1));
+        assert_eq!(Error::cancelled().with_exit_code(0).exit_code(), Some(1));
+        assert_eq!(Error::message("x").with_exit_code(255).exit_code(), Some(255));
     }
 
     #[test]

@@ -224,7 +224,7 @@ fn main() -> std::process::ExitCode {
 - 130 for a cancellation, including `Error::cancelled()`, or 128 plus the signal
   number when a signal interrupted a live prompt. Either exit is silent unless
   related errors are attached, in which case those print instead.
-- The code given to `Error::with_exit_code`, for an error of any kind. A
+- The code given to `Error::with_exit_code` (0 becomes 1), for an error of any kind. A
   cancellation with an explicit code stays silent and any other error is still
   printed.
 
