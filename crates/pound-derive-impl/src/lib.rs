@@ -622,6 +622,7 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
     let mut arms = Vec::new();
     let mut spellings = Vec::new();
     let mut variants = Vec::new();
+    let mut variant_names = Vec::new();
     for (variant, _) in &e.variants.inner {
         if !matches!(variant.fields, Fields::Unit) {
             return err("pound: ValueEnum needs unit variants only");
@@ -637,6 +638,14 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
         let label = vattr
             .name
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
+        if let Some(first) = names.iter().position(|n| *n == label) {
+            return err(&format!(
+                "pound: ValueEnum variants `{}` and `{vname}` both spell `{label}`, so `{vname}` \
+                 could never be parsed",
+                variant_names[first]
+            ));
+        }
+        variant_names.push(vname.to_string());
         arms.push(quote! { #label => ::core::result::Result::Ok(Self::#vname), });
         spellings.push(quote! { Self::#vname => #label, });
         variants.push(quote! { Self::#vname });
@@ -1517,4 +1526,23 @@ fn camel_to_kebab(name: &str) -> String {
 
 fn err(msg: &str) -> TokenStream2 {
     quote! { ::core::compile_error!(#msg); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_variants_with_one_spelling_are_rejected() {
+        let input = r#"enum Mode { Fast, #[pound(name = "fast")] Quick }"#
+            .parse()
+            .unwrap();
+
+        let out = derive_value_enum(input, &Options::new("::pound", true)).to_string();
+
+        assert!(
+            out.contains("`Fast` and `Quick` both spell `fast`"),
+            "{out}"
+        );
+    }
 }
