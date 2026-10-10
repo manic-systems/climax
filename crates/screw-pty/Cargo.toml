@@ -1,6 +1,6 @@
 [package]
 name                 = "screw-pty"
-version              = "0.0.1"
+version              = "0.1.0"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
 description          = "A strict model of the terminal output screw emits, for testing screw"
