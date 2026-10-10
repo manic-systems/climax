@@ -148,7 +148,10 @@ impl Script {
         Self::default()
     }
 
-    /// Answer a select or search prompt by moving down `n` rows and submitting.
+    /// Answer a select or search prompt by picking row `n` and submitting.
+    ///
+    /// The script presses Home first, so the row is absolute whatever the
+    /// prompt preselected. A search prompt starts on its first row already.
     ///
     /// ```
     /// # use climax::testing::Script;
@@ -157,13 +160,17 @@ impl Script {
     /// ```
     #[must_use]
     pub fn select_nth(self, n: usize) -> Self {
-        let mut keys = vec![bang::advanced::Key::Down; n];
+        let mut keys = vec![bang::advanced::Key::Home];
+        keys.extend(vec![bang::advanced::Key::Down; n]);
         keys.push(bang::advanced::Key::Enter);
         self.keys(keys)
     }
 
-    /// Answer a multi-select prompt by toggling the rows at `indices` and
-    /// submitting. The indices may come in any order.
+    /// Answer a multi-select prompt by checking exactly the rows at `indices`
+    /// and submitting. The indices may come in any order.
+    ///
+    /// The script unchecks every row and moves to the first row before it
+    /// starts, so preselected rows do not leak into the answer.
     ///
     /// ```
     /// # use climax::testing::Script;
@@ -175,7 +182,7 @@ impl Script {
         let mut indices: Vec<usize> = indices.into_iter().collect();
         indices.sort_unstable();
         indices.dedup();
-        let mut keys = Vec::new();
+        let mut keys = vec![bang::advanced::Key::Home, bang::advanced::Key::Char('n')];
         let mut row = 0;
         for index in indices {
             keys.extend(vec![bang::advanced::Key::Down; index - row]);
