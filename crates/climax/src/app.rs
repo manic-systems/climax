@@ -56,7 +56,7 @@ pub fn main_with<F>(f: F) -> ExitCode
 where
     F: FnOnce(Context) -> Result<()>,
 {
-    finish(run_with((), |context, ()| f(context))).report()
+    finish(&run_with((), |context, ()| f(context))).report()
 }
 
 /// Run a parsed application without handling output or process exit status.
@@ -94,7 +94,7 @@ where
     execute(Context::new(), command, f)
 }
 
-fn execute<C, F>(context: Context, command: C, f: F) -> Result<()>
+pub(crate) fn execute<C, F>(context: Context, command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
@@ -131,21 +131,29 @@ where
     F: FnOnce(Context, C) -> Result<()>,
 {
     match parsed {
-        Ok(command) => finish(run_with(command, f)),
-        Err(error) if error.is_exit() => Completion::output(error.render()),
-        Err(error) => Completion {
-            code: 2,
-            stream: Some(CompletionStream::Stderr),
-            message: Some(error.render()),
-        },
+        Ok(command) => finish(&run_with(command, f)),
+        Err(error) => parse_completion(&error),
     }
 }
 
-fn finish(result: Result<()>) -> Completion {
+#[cfg(feature = "parse")]
+pub(crate) fn parse_completion(error: &pound::Error) -> Completion {
+    if error.is_exit() {
+        Completion::output(error.render())
+    } else {
+        Completion {
+            code: 2,
+            stream: Some(CompletionStream::Stderr),
+            message: Some(error.render()),
+        }
+    }
+}
+
+pub(crate) fn finish(result: &Result<()>) -> Completion {
     match result {
         Ok(()) => Completion::success(),
         Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
-            let code = error.exit_code().unwrap_or_else(|| cancelled_code(&error));
+            let code = error.exit_code().unwrap_or_else(|| cancelled_code(error));
             if error.related_errors().is_empty() {
                 Completion::cancelled(code)
             } else {
@@ -157,14 +165,15 @@ fn finish(result: Result<()>) -> Completion {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Completion {
+pub(crate) struct Completion {
     code: u8,
     stream: Option<CompletionStream>,
     message: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CompletionStream {
+pub(crate) enum CompletionStream {
+    #[cfg(feature = "parse")]
     Stdout,
     Stderr,
 }
@@ -186,6 +195,7 @@ impl Completion {
         }
     }
 
+    #[cfg(feature = "parse")]
     const fn output(message: String) -> Self {
         Self {
             code: 0,
@@ -202,12 +212,18 @@ impl Completion {
         }
     }
 
+    #[cfg(feature = "interactive")]
+    pub(crate) fn into_parts(self) -> (u8, Option<(CompletionStream, String)>) {
+        (self.code, self.stream.zip(self.message))
+    }
+
     fn report(self) -> ExitCode {
         let Some(stream) = self.stream else {
             return ExitCode::from(self.code);
         };
         let message = self.message.expect("a completion stream has a message");
         let result = match stream {
+            #[cfg(feature = "parse")]
             CompletionStream::Stdout => write_message(io::stdout().lock(), &message),
             CompletionStream::Stderr => write_message(io::stderr().lock(), &message),
         };
@@ -969,18 +985,18 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(feature = "structured")]
+    #[cfg(any(feature = "structured", feature = "render"))]
     #[derive(Clone, Default)]
     struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
-    #[cfg(feature = "structured")]
+    #[cfg(any(feature = "structured", feature = "render"))]
     impl Capture {
         fn text(&self) -> String {
             String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
         }
     }
 
-    #[cfg(feature = "structured")]
+    #[cfg(any(feature = "structured", feature = "render"))]
     impl std::io::Write for Capture {
         fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
             self.0.lock().unwrap().extend_from_slice(buffer);
@@ -1136,19 +1152,19 @@ mod tests {
 
     #[test]
     fn finish_maps_cancellation_and_explicit_exit_codes() {
-        let cancelled = finish(Err(crate::Error::cancelled()));
+        let cancelled = finish(&Err(crate::Error::cancelled()));
         assert_eq!((cancelled.code, cancelled.stream), (130, None));
 
-        let silent = finish(Err(crate::Error::cancelled().with_exit_code(7)));
+        let silent = finish(&Err(crate::Error::cancelled().with_exit_code(7)));
         assert_eq!((silent.code, silent.stream), (7, None));
 
-        let reported = finish(Err(crate::Error::message("nothing to do").with_exit_code(3)));
+        let reported = finish(&Err(crate::Error::message("nothing to do").with_exit_code(3)));
         assert_eq!(reported.code, 3);
         assert_eq!(reported.stream, Some(CompletionStream::Stderr));
         assert_eq!(reported.message.as_deref(), Some("error: nothing to do"));
 
-        assert_eq!(finish(Err(crate::Error::message("boom"))).code, 1);
-        assert_eq!(finish(Ok(())).code, 0);
+        assert_eq!(finish(&Err(crate::Error::message("boom"))).code, 1);
+        assert_eq!(finish(&Ok(())).code, 0);
     }
 
     #[cfg(feature = "parse")]
@@ -1180,11 +1196,31 @@ mod tests {
             Some("error: unrecognized argument '--wat'\n\n  tip: did you mean '--watch'\n\nUsage: demo [OPTION]...")
         );
 
+        let missing = complete::<(), _>(
+            Err(pound::Error {
+                kind: pound::ErrorKind::MissingSubcommand,
+                usage: Some("Usage: demo <COMMAND>".to_owned()),
+                help_flag: None,
+            }),
+            |_, ()| unreachable!(),
+        );
+        assert_eq!(missing.code, 2);
+        assert_eq!(missing.stream, Some(CompletionStream::Stderr));
+        assert!(
+            missing.message.as_deref().is_some_and(|text| text.starts_with("error: a subcommand is required")),
+            "got {:?}",
+            missing.message
+        );
+
         let application = complete(Ok(()), |_, ()| Err(crate::Error::message("boom")));
         assert_eq!(application.code, 1);
         assert_eq!(application.stream, Some(CompletionStream::Stderr));
         assert_eq!(application.message.as_deref(), Some("error: boom"));
+    }
 
+    #[cfg(feature = "parse")]
+    #[test]
+    fn lifecycle_reports_cancellation_with_signal_and_cleanup_codes() {
         let cancelled = complete(Ok(()), |_, ()| {
             Err(crate::Error::with_source(
                 crate::error::ErrorKind::Cancelled,

@@ -41,6 +41,7 @@ pub mod error;
 pub mod output;
 pub mod prelude;
 mod sync;
+pub mod testing;
 /// Terminal capability facts, policy overrides and terminal applications.
 pub mod terminal;
 
