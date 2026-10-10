@@ -125,3 +125,27 @@ const fn current_row_mut<H>(rows: &mut [Vec<H>]) -> &mut Vec<H> {
     rows.last_mut()
         .expect("template parser always keeps a current row")
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{RenderCtx, Style, Surface, Widget, local_widget, render_plain};
+
+    use super::local_template;
+
+    struct BorrowedText<'a>(&'a str);
+
+    impl Widget for BorrowedText<'_> {
+        fn render(&self, _context: &RenderCtx, output: &mut Surface) {
+            output.write(self.0, Style::PLAIN);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fn local_template_retains_borrowed_slots() {
+        let value = String::from("borrowed");
+        let slot = local_widget(BorrowedText(&value));
+        let rendered = local_template("{value}/{value}", &[("value", slot)]).unwrap();
+        assert_eq!(render_plain(&rendered), "borrowed/borrowed");
+    }
+}
