@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
 #![cfg(all(feature = "derive", feature = "interactive", feature = "structured"))]
 
+use core::cell::Cell;
+
 use climax::{
-    bang::Date,
+    bang::{
+        Date,
+        advanced::Key,
+    },
     prelude::*,
     testing::{
         self,
@@ -68,7 +74,7 @@ fn ship(mut cx: Context, args: Args) -> climax::Result<()> {
     };
     cx.output()
         .result(&shipped)
-        .text(|shipped| format!("shipped {} to {}", shipped.target, shipped.region))
+        .text(|result| format!("shipped {} to {}", result.target, result.region))
         .emit()
 }
 
@@ -139,12 +145,12 @@ fn a_parse_failure_exits_2_and_help_exits_0() {
         outcome.stderr
     );
 
-    let outcome = testing::run(["--help"], Script::new(), ship);
-    assert_eq!(outcome.exit_code, 0);
+    let help = testing::run(["--help"], Script::new(), ship);
+    assert_eq!(help.exit_code, 0);
     assert!(
-        outcome.stdout.contains("ship a build"),
+        help.stdout.contains("ship a build"),
         "got {:?}",
-        outcome.stdout
+        help.stdout
     );
 }
 
@@ -157,19 +163,20 @@ fn run_with_needs_no_arguments() {
 #[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn leftover_script_input_fails_the_run() {
-    let _ = testing::run(Vec::<&str>::new(), full_script().text("never asked"), ship);
+    drop(testing::run(
+        Vec::<&str>::new(),
+        full_script().text("never asked"),
+        ship,
+    ));
 }
 
 #[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn an_unread_tail_of_a_prompt_answer_fails_the_run() {
-    let _ = testing::run_with(
-        Script::new().keys([
-            climax::bang::advanced::Key::Char('y'),
-            climax::bang::advanced::Key::Enter,
-        ]),
+    drop(testing::run_with(
+        Script::new().keys([Key::Char('y'), Key::Enter]),
         |cx| ask(&cx),
-    );
+    ));
 }
 
 #[test]
@@ -224,7 +231,7 @@ fn select_nth_is_absolute_over_a_preselection() {
             .selected(2)
             .interact()?
             .or_cancel()?;
-        cx.diagnostic().notice(picked.to_string())
+        cx.diagnostic().notice(picked.to_owned())
     });
     assert_eq!(outcome.exit_code, 0);
     assert_eq!(outcome.stderr, "eu\n");
@@ -248,7 +255,7 @@ fn multi_select_nth_replaces_the_preselection() {
 }
 
 fn date_flow(from: Date, to: Date) -> Date {
-    let picked = std::cell::Cell::new(None);
+    let picked = Cell::new(None);
     let outcome = testing::run_with(Script::new().date(from, to), |cx| {
         picked.set(Some(cx.date("When").default(from).interact()?.or_cancel()?));
         Ok(())
@@ -269,8 +276,8 @@ fn date_moves_backward_and_within_a_month() {
     let from = Date::new(2026, 3, 31).unwrap();
     let to = Date::new(2024, 12, 5).unwrap();
     assert_eq!(date_flow(from, to), to);
-    let to = Date::new(2026, 3, 2).unwrap();
-    assert_eq!(date_flow(from, to), to);
+    let nearby = Date::new(2026, 3, 2).unwrap();
+    assert_eq!(date_flow(from, nearby), nearby);
 }
 
 #[test]
@@ -301,11 +308,32 @@ fn text_attempts_erase_a_rejected_input_before_retyping() {
 #[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn a_script_left_unused_by_help_fails_the_run() {
-    let _ = testing::run(["--help"], Script::new().confirm(true), ship);
+    drop(testing::run(["--help"], Script::new().confirm(true), ship));
 }
 
 #[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn a_script_left_unused_by_a_parse_failure_fails_the_run() {
-    let _ = testing::run(["--wat"], Script::new().confirm(true), ship);
+    drop(testing::run(["--wat"], Script::new().confirm(true), ship));
+}
+
+#[test]
+fn select_nth_is_absolute_over_a_preselected_search() {
+    for (n, expected) in [(0, "a"), (1, "b"), (4, "e")] {
+        let outcome = testing::run_with(Script::new().select_nth(n), |cx| {
+            let picked = cx
+                .search("Tool")
+                .choice("a", "a")
+                .choice("b", "b")
+                .choice("c", "c")
+                .choice("d", "d")
+                .choice("e", "e")
+                .selected(3)
+                .interact()?
+                .or_cancel()?;
+            cx.diagnostic().notice(picked.to_owned())
+        });
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.stderr, format!("{expected}\n"), "select_nth({n})");
+    }
 }
