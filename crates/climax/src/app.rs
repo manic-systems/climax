@@ -1,8 +1,6 @@
-#[cfg(feature = "interactive")]
-use std::io::Write;
+#[cfg(feature = "interactive")] use std::io::Write;
 
-#[cfg(feature = "interactive")]
-use bang_core::Value;
+#[cfg(feature = "interactive")] use bang_core::Value;
 
 use crate::Result;
 
@@ -39,7 +37,7 @@ impl Context {
     pub const fn new() -> Self {
         Self {
             #[cfg(feature = "interactive")]
-            output_format: crate::output::Format::Text,
+            output_format:                                 crate::output::Format::Text,
         }
     }
 

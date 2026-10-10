@@ -2,12 +2,17 @@
 
 //! walks `argv` against a [`CommandSpec`] and produces [`Matches`]
 
-use alloc::{borrow::Cow, vec::IntoIter};
+use alloc::{
+    borrow::Cow,
+    vec::IntoIter,
+};
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
-    error::{Error, ErrorKind},
+    error::{
+        Error,
+        ErrorKind,
+    },
     help,
     spec::{
         ArgSpec,
@@ -27,10 +32,10 @@ use crate::{
 #[derive(Default, Clone, Debug)]
 struct Slot<'a> {
     /// count of user supplied invocations
-    count: u32,
+    count:   u32,
     /// the last spelling seen was the arg's negation
     negated: bool,
-    values: Vec<&'a str>,
+    values:  Vec<&'a str>,
 }
 
 /// a successful parse
@@ -384,7 +389,7 @@ fn walk_cmd<'a>(
                 }
             } else {
                 return Err(ErrorKind::Unknown {
-                    arg: format!("--{name}"),
+                    arg:     format!("--{name}"),
                     closest: closest_long(spec, globals, name),
                 }
                 .into());
@@ -419,8 +424,9 @@ fn walk_cmd<'a>(
     Ok(m)
 }
 
-/// a bare token names a subcommand only once every required positional is filled,
-/// and never past a variadic one, which stays greedy so its tail can fill
+/// a bare token names a subcommand only once every required positional is
+/// filled, and never past a variadic one, which stays greedy so its tail can
+/// fill
 fn sub_dispatch(
     spec: &CommandSpec,
     positionals: &[&ArgTarget],
@@ -776,7 +782,7 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
     for &(a, b) in spec.requires {
         if m.slots[a].count > 0 && !supplied(spec, m, b) {
             return Err(ErrorKind::Requires {
-                arg: spec.args[a].display_name(),
+                arg:   spec.args[a].display_name(),
                 needs: spec.args[b].display_name(),
             });
         }
@@ -785,8 +791,8 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
     for &(a, b) in spec.conflicts {
         if m.slots[a].count > 0 && m.slots[b].count > 0 {
             return Err(ErrorKind::Conflict {
-                group: String::new(),
-                first: spec.args[a].display_name(),
+                group:  String::new(),
+                first:  spec.args[a].display_name(),
                 second: spec.args[b].display_name(),
             });
         }
@@ -811,8 +817,8 @@ fn finalise_groups(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
             .collect();
         if set.len() > 1 {
             return Err(ErrorKind::Conflict {
-                group: name.to_owned(),
-                first: set[0].clone(),
+                group:  name.to_owned(),
+                first:  set[0].clone(),
                 second: set[1].clone(),
             });
         }
@@ -974,7 +980,10 @@ fn edit_distance(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{GroupSpec, SubSpec};
+    use crate::spec::{
+        GroupSpec,
+        SubSpec,
+    };
 
     fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
         a.to_vec()
@@ -1014,10 +1023,9 @@ mod tests {
 
     #[test]
     fn longs_shorts_counts_positionals() {
-        let m = parse(
-            &FLAT,
-            &["--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma"],
-        )
+        let m = parse(&FLAT, &[
+            "--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma",
+        ])
         .unwrap();
         assert!(m.flag(0));
         assert_eq!(m.raw(1), Some("/x"));
@@ -1054,14 +1062,23 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert!(matches!(parse(&FLAT, &["--nope"]), Err(ErrorKind::Unknown { .. })));
-        assert!(matches!(parse(&FLAT, &["-q"]), Err(ErrorKind::Unknown { .. })));
+        assert!(matches!(
+            parse(&FLAT, &["--nope"]),
+            Err(ErrorKind::Unknown { .. })
+        ));
+        assert!(matches!(
+            parse(&FLAT, &["-q"]),
+            Err(ErrorKind::Unknown { .. })
+        ));
         assert_eq!(parse(&FLAT, &["-5"]).unwrap().raw(3), Some("-5"));
         assert!(matches!(
             parse(&FLAT, &["name", "--dir"]),
             Err(ErrorKind::MissingValue(_))
         ));
-        assert!(matches!(parse(&FLAT, &[]), Err(ErrorKind::MissingRequired(_))));
+        assert!(matches!(
+            parse(&FLAT, &[]),
+            Err(ErrorKind::MissingRequired(_))
+        ));
     }
 
     #[test]
@@ -1173,7 +1190,9 @@ mod tests {
     #[test]
     fn optional_value_leaves_the_next_token_alone() {
         const ARGS: &[ArgSpec] = &[
-            ArgSpec::new(Kind::Opt).long("color").default_missing("always"),
+            ArgSpec::new(Kind::Opt)
+                .long("color")
+                .default_missing("always"),
             ArgSpec::new(Kind::Positional).value_name("file"),
         ];
         const SPEC: CommandSpec = CommandSpec::new("o").args(ARGS);
@@ -1182,7 +1201,10 @@ mod tests {
         assert_eq!(m.raw(0), Some("always"));
         assert_eq!(m.raw(1), Some("x.txt"));
 
-        assert_eq!(parse(&SPEC, &["--color=never"]).unwrap().raw(0), Some("never"));
+        assert_eq!(
+            parse(&SPEC, &["--color=never"]).unwrap().raw(0),
+            Some("never")
+        );
     }
 
     #[test]
@@ -1216,7 +1238,10 @@ mod tests {
         ));
         assert!(parse(&OPT, &["--flake"]).is_ok());
         assert!(parse(&OPT, &[]).is_ok()); // not required, zero is fine
-        assert!(matches!(parse(&REQ, &[]), Err(ErrorKind::MissingGroup { .. })));
+        assert!(matches!(
+            parse(&REQ, &[]),
+            Err(ErrorKind::MissingGroup { .. })
+        ));
     }
 
     #[test]

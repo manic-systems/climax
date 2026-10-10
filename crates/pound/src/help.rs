@@ -2,8 +2,7 @@
 
 //! help and version rendering.
 
-#[cfg(feature = "help")]
-use core::fmt::Write as _;
+#[cfg(feature = "help")] use core::fmt::Write as _;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::spec::{

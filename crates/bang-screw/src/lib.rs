@@ -5,16 +5,37 @@
 use std::{
     error,
     fmt,
-    io::{self, Write},
+    io::{
+        self,
+        Write,
+    },
 };
 
 use bang_core::{
-    CalendarView, ListView, Role as BangRole, Span, TextInputView, Value, View,
+    CalendarView,
+    ListView,
+    Role as BangRole,
+    Span,
+    TextInputView,
+    Value,
+    View,
     Widget as BangWidget,
 };
-use bang_terminal::{RunOutcome, SessionRenderer, TerminalSize};
+use bang_terminal::{
+    RunOutcome,
+    SessionRenderer,
+    TerminalSize,
+};
 use screw::{
-    Position, RenderCtx, RenderStats, Renderer, Role as ScrewRole, Style, Surface, Theme, Widget,
+    Position,
+    RenderCtx,
+    RenderStats,
+    Renderer,
+    Role as ScrewRole,
+    Style,
+    Surface,
+    Theme,
+    Widget,
 };
 use unicode_width::UnicodeWidthChar as _;
 
@@ -133,10 +154,7 @@ pub enum LiveSessionError {
     Cancelled,
     InputEnded,
     Signalled(i32),
-    ReraiseSignal {
-        signal: i32,
-        source: io::Error,
-    },
+    ReraiseSignal { signal: i32, source: io::Error },
 }
 
 impl fmt::Display for LiveSessionError {
@@ -256,8 +274,8 @@ pub const fn map_role(role: BangRole) -> ScrewRole {
 }
 
 struct ViewRenderer<'a> {
-    theme: Theme,
-    out: &'a mut Surface,
+    theme:      Theme,
+    out:        &'a mut Surface,
     wrote_line: bool,
 }
 

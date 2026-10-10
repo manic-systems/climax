@@ -10,21 +10,70 @@ mod template;
 mod terminal;
 mod widget;
 
-pub use layout::{LayoutBuilder, layout};
+pub use layout::{
+    LayoutBuilder,
+    layout,
+};
 pub use plain::{
-    render_plain, render_plain_with_frame, render_plain_with_frame_and_theme, write_plain,
+    render_plain,
+    render_plain_with_frame,
+    render_plain_with_frame_and_theme,
+    write_plain,
 };
-pub use renderer::{LayoutMode, RenderStats, Renderer};
+pub use renderer::{
+    LayoutMode,
+    RenderStats,
+    Renderer,
+};
 pub use runtime::{
-    AutoRuntime, AutoRuntimeBuilder, LiveRuntime, PlainRuntime, Runtime, RuntimeHandle,
+    AutoRuntime,
+    AutoRuntimeBuilder,
+    LiveRuntime,
+    PlainRuntime,
+    Runtime,
+    RuntimeHandle,
 };
-pub use style::{Color, Role, Style, Theme};
-pub use surface::{Cell, Position, Row, RowBreak, Surface};
-pub use template::{TemplateError, template};
-pub use terminal::{FALLBACK_WIDTH, stderr_is_terminal, terminal_width, terminal_width_or_default};
+pub use style::{
+    Color,
+    Role,
+    Style,
+    Theme,
+};
+pub use surface::{
+    Cell,
+    Position,
+    Row,
+    RowBreak,
+    Surface,
+};
+pub use template::{
+    TemplateError,
+    template,
+};
+pub use terminal::{
+    FALLBACK_WIDTH,
+    stderr_is_terminal,
+    terminal_width,
+    terminal_width_or_default,
+};
 pub use widget::{
-    Grid, GridCell, InputAnchor, Line, List, Looping, ProgressBar, RenderCtx, Stack, Stateful,
-    Text, TextInput, TickInterest, Widget, WidgetRef, WindowedLines, widget,
+    Grid,
+    GridCell,
+    InputAnchor,
+    Line,
+    List,
+    Looping,
+    ProgressBar,
+    RenderCtx,
+    Stack,
+    Stateful,
+    Text,
+    TextInput,
+    TickInterest,
+    Widget,
+    WidgetRef,
+    WindowedLines,
+    widget,
 };
 
 #[macro_export]

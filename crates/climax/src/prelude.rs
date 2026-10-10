@@ -44,6 +44,7 @@ pub use screw::{
 
 #[cfg(feature = "interactive")] pub use crate::output;
 #[cfg(feature = "interactive")] pub use crate::prompt;
+#[cfg(feature = "parse")] pub use crate::run;
 #[cfg(feature = "render")] pub use crate::status;
 pub use crate::{
     Context,
@@ -56,5 +57,3 @@ pub use crate::{
     OutputContext,
     PromptContext,
 };
-#[cfg(feature = "parse")]
-pub use crate::run;

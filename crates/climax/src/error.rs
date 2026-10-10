@@ -1,10 +1,9 @@
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::io;
 use std::{
     error,
     fmt,
 };
-
-#[cfg(any(feature = "render", feature = "interactive"))]
-use std::io;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

@@ -1,24 +1,33 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{Context, Event, FocusTarget, Reaction, Value, View, ViewContext, Widget};
+use crate::{
+    Context,
+    Event,
+    FocusTarget,
+    Reaction,
+    Value,
+    View,
+    ViewContext,
+    Widget,
+};
 
 pub struct Session {
-    root: Box<dyn Widget>,
-    focus: Option<FocusTarget>,
-    status: SessionStatus,
+    root:         Box<dyn Widget>,
+    focus:        Option<FocusTarget>,
+    status:       SessionStatus,
     view_context: ViewContext,
-    dirty: bool,
+    dirty:        bool,
 }
 
 impl Session {
     #[must_use]
     pub fn new(root: impl Widget + 'static) -> Self {
         Self {
-            root: Box::new(root),
-            focus: None,
-            status: SessionStatus::Running,
+            root:         Box::new(root),
+            focus:        None,
+            status:       SessionStatus::Running,
             view_context: ViewContext::default(),
-            dirty: true,
+            dirty:        true,
         }
     }
 
