@@ -40,6 +40,7 @@ pub enum FocusTarget {
 
 /// event handled result
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Reaction {
     /// The widget did not use the event.
     Ignored,
