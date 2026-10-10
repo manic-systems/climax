@@ -441,10 +441,15 @@ enum Command {
     #[cfg(feature = "interactive")]
     AcquireLease {
         holder: ThreadId,
+        token: u64,
         reply: Sender<std::result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
+    #[cfg(feature = "interactive")]
+    CancelLease {
+        token: u64,
+    },
     SetMode {
         stamp: u64,
         reply: Sender<Result<()>>,
@@ -455,6 +460,12 @@ enum Command {
     IsIdle {
         reply: Sender<bool>,
     },
+}
+
+#[cfg_attr(not(feature = "interactive"), expect(dead_code, reason = "only a prompt lease sets or reads it"))]
+struct Lease {
+    holder: ThreadId,
+    token: u64,
 }
 
 #[cfg(feature = "interactive")]
@@ -675,9 +686,15 @@ impl StatusCoordinator {
 
     #[cfg(feature = "interactive")]
     fn acquire_lease(&self) -> std::result::Result<(), LeaseError> {
+        let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         self.request(
-            |reply| Command::AcquireLease { holder: thread::current().id(), reply },
-            |failure| Err(LeaseError::Clear(failure.into())),
+            |reply| Command::AcquireLease { holder: thread::current().id(), token, reply },
+            |failure| {
+                // The actor may grant after the bound expires but before the reply
+                // receiver is dropped, and would then hold a lease nobody releases.
+                self.send(Command::CancelLease { token });
+                Err(LeaseError::Clear(failure.into()))
+            },
         )
     }
 
@@ -785,7 +802,7 @@ struct Actor {
     pending: VecDeque<Vec<u8>>,
     accepted: usize,
     flush_owed: bool,
-    lease_holder: Option<ThreadId>,
+    lease: Option<Lease>,
     #[cfg(feature = "structured")]
     deferred: VecDeque<DeferredAround>,
     dead: bool,
@@ -812,7 +829,7 @@ impl Actor {
             pending: VecDeque::new(),
             accepted: 0,
             flush_owed: false,
-            lease_holder: None,
+            lease: None,
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
             dead: false,
@@ -822,7 +839,7 @@ impl Actor {
     }
 
     const fn leased(&self) -> bool {
-        self.lease_holder.is_some()
+        self.lease.is_some()
     }
 
     #[cfg(feature = "structured")]
@@ -830,7 +847,7 @@ impl Actor {
         if Instant::now() >= write.deadline {
             return;
         }
-        match self.lease_holder {
+        match self.lease.as_ref().map(|lease| lease.holder) {
             Some(holder) if holder == requester => {
                 let _ = write.reply.send(Err(output_error(std::io::Error::other(
                     "the calling thread holds the terminal, so a stream write would wait on itself",
@@ -847,6 +864,7 @@ impl Actor {
     fn acquire_lease(
         &mut self,
         holder: ThreadId,
+        token: u64,
         reply: &Sender<std::result::Result<(), LeaseError>>,
     ) {
         if self.leased() {
@@ -856,13 +874,26 @@ impl Actor {
         match self.clear_immediate() {
             Ok(()) => {
                 if reply.send(Ok(())).is_ok() {
-                    self.lease_holder = Some(holder);
+                    self.lease = Some(Lease { holder, token });
                 }
             },
             Err(error) => {
                 let _ = reply.send(Err(LeaseError::Clear(error)));
             },
         }
+    }
+
+    #[cfg(feature = "interactive")]
+    fn release_lease(&mut self) {
+        self.lease = None;
+        self.drain_pending();
+        #[cfg(feature = "structured")]
+        while let Some(DeferredAround { writer, bytes, deadline, reply }) = self.deferred.pop_front() {
+            if Instant::now() < deadline {
+                let _ = reply.send(self.write_around(writer, &bytes));
+            }
+        }
+        self.dirty = true;
     }
 
     fn remove(&mut self, id: u64, success: bool) {
@@ -918,18 +949,14 @@ impl Actor {
                 self.around(DeferredAround { writer, bytes, deadline, reply }, requester);
             },
             #[cfg(feature = "interactive")]
-            Command::AcquireLease { holder, reply } => self.acquire_lease(holder, &reply),
+            Command::AcquireLease { holder, token, reply } => self.acquire_lease(holder, token, &reply),
             #[cfg(feature = "interactive")]
-            Command::ReleaseLease => {
-                self.lease_holder = None;
-                self.drain_pending();
-                #[cfg(feature = "structured")]
-                while let Some(DeferredAround { writer, bytes, deadline, reply }) = self.deferred.pop_front() {
-                    if Instant::now() < deadline {
-                        let _ = reply.send(self.write_around(writer, &bytes));
-                    }
+            Command::ReleaseLease => self.release_lease(),
+            #[cfg(feature = "interactive")]
+            Command::CancelLease { token } => {
+                if self.lease.as_ref().is_some_and(|lease| lease.token == token) {
+                    self.release_lease();
                 }
-                self.dirty = true;
             },
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
@@ -2073,6 +2100,20 @@ mod tests {
             stamp: mode_to_u8(StatusMode::Live).into(),
             width,
         })
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn a_lease_granted_to_a_caller_that_gave_up_is_released_by_its_cancellation() {
+        let mut actor = actor_with(WidthSource::Fixed(40));
+        let (reply, _abandoned) = mpsc::channel();
+        actor.apply(Command::AcquireLease { holder: thread::current().id(), token: 7, reply });
+        assert!(actor.leased());
+
+        actor.apply(Command::CancelLease { token: 8 });
+        assert!(actor.leased(), "another request's cancellation must not release the lease");
+        actor.apply(Command::CancelLease { token: 7 });
+        assert!(!actor.leased());
     }
 
     fn drawn_static_status(actor: &mut Actor) {
