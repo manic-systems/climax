@@ -96,8 +96,10 @@ pub trait Widget {
 
 pub type WidgetRef = Arc<dyn Widget + Send + Sync>;
 
+/// A cloneable widget reference for composition and rendering on one thread.
 pub type LocalWidgetRef<'a> = Rc<dyn Widget + 'a>;
 
+/// Erase a thread-safe widget into a shared reference.
 pub fn widget<W>(widget: W) -> WidgetRef
 where
     W: Widget + Send + Sync + 'static,
@@ -105,6 +107,7 @@ where
     Arc::new(widget)
 }
 
+/// Erase a widget into a local reference, retaining any borrowed lifetime.
 pub fn local_widget<'a, W>(widget: W) -> LocalWidgetRef<'a>
 where
     W: Widget + 'a,
@@ -515,21 +518,24 @@ impl Widget for TextInput {
 }
 
 #[derive(Clone)]
-pub struct Line {
-    children: Arc<[WidgetRef]>,
+pub struct Line<H = WidgetRef> {
+    children: Box<[H]>,
 }
 
-impl Line {
-    pub fn new(children: impl Into<Vec<WidgetRef>>) -> Self {
+impl<H> Line<H> {
+    pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
-            children: children.into().into(),
+            children: children.into().into_boxed_slice(),
         }
     }
 }
 
-impl Widget for Line {
+impl<H> Widget for Line<H>
+where
+    H: Widget,
+{
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        for child in self.children.iter() {
+        for child in &self.children {
             child.render(ctx, out);
         }
     }
@@ -540,19 +546,22 @@ impl Widget for Line {
 }
 
 #[derive(Clone)]
-pub struct Stack {
-    children: Arc<[WidgetRef]>,
+pub struct Stack<H = WidgetRef> {
+    children: Box<[H]>,
 }
 
-impl Stack {
-    pub fn new(children: impl Into<Vec<WidgetRef>>) -> Self {
+impl<H> Stack<H> {
+    pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
-            children: children.into().into(),
+            children: children.into().into_boxed_slice(),
         }
     }
 }
 
-impl Widget for Stack {
+impl<H> Widget for Stack<H>
+where
+    H: Widget,
+{
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         for (index, child) in self.children.iter().enumerate() {
             if index > 0 {
@@ -567,12 +576,12 @@ impl Widget for Stack {
     }
 }
 
-pub struct Stateful<S> {
+pub struct Stateful<S, H = WidgetRef> {
     state: Mutex<S>,
-    cases: HashMap<S, WidgetRef>,
+    cases: HashMap<S, H>,
 }
 
-impl<S> Stateful<S>
+impl<S, H> Stateful<S, H>
 where
     S: Clone + Eq + Hash,
 {
@@ -584,7 +593,7 @@ where
     }
 
     #[must_use]
-    pub fn case(mut self, state: S, widget: WidgetRef) -> Self {
+    pub fn case(mut self, state: S, widget: H) -> Self {
         self.cases.insert(state, widget);
         self
     }
@@ -598,9 +607,10 @@ where
     }
 }
 
-impl<S> Widget for Stateful<S>
+impl<S, H> Widget for Stateful<S, H>
 where
-    S: Clone + Eq + Hash + Send + Sync,
+    S: Clone + Eq + Hash,
+    H: Widget,
 {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         if let Some(widget) = self.cases.get(&self.state()) {
@@ -616,6 +626,32 @@ where
 }
 
 impl<T> Widget for Arc<T>
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.as_ref().render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.as_ref().tick_interest()
+    }
+}
+
+impl<T> Widget for Rc<T>
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.as_ref().render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.as_ref().tick_interest()
+    }
+}
+
+impl<T> Widget for Box<T>
 where
     T: Widget + ?Sized,
 {

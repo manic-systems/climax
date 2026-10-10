@@ -1,8 +1,5 @@
 use std::{
-    io::{
-        self,
-        Write,
-    },
+    io::{self, Write},
     sync::mpsc::{
         self,
         RecvTimeoutError,
@@ -19,14 +16,7 @@ use std::{
 };
 
 use crate::{
-    CursorVisibility,
-    LayoutMode,
-    RenderCtx,
-    RenderStats,
-    Renderer,
-    Surface,
-    Theme,
-    TickInterest,
+    CursorVisibility, LayoutMode, RenderCtx, RenderStats, Renderer, Surface, Theme, TickInterest,
     WidgetRef,
     renderer::layout_surface,
     stderr_is_terminal,
@@ -35,20 +25,21 @@ use crate::{
 
 const DEFAULT_FPS: u16 = 15;
 
-pub struct Runtime<W> {
-    root:           WidgetRef,
-    final_widget:   Option<WidgetRef>,
+pub struct Runtime<W, H = WidgetRef, F = WidgetRef> {
+    root: H,
+    final_widget: Option<F>,
     renderer:       Renderer<W>,
     frame_interval: Duration,
     last_draw:      Option<Instant>,
     dirty:          bool,
 }
 
-impl<W> Runtime<W>
+impl<W, H> Runtime<W, H, WidgetRef>
 where
     W: Write,
+    H: crate::Widget,
 {
-    pub fn new(writer: W, root: WidgetRef) -> Self {
+    pub fn new(writer: W, root: H) -> Self {
         Self {
             root,
             final_widget: None,
@@ -58,7 +49,13 @@ where
             dirty: true,
         }
     }
+}
 
+impl<W, H, F> Runtime<W, H, F>
+where
+    W: Write,
+    H: crate::Widget,
+{
     #[must_use]
     pub fn fps(mut self, fps: u16) -> Self {
         self.frame_interval = fps_interval(fps);
@@ -90,9 +87,22 @@ where
     }
 
     #[must_use]
-    pub fn final_widget(mut self, final_widget: WidgetRef) -> Self {
-        self.final_widget = Some(final_widget);
-        self
+    pub fn final_widget<G>(self, final_widget: G) -> Runtime<W, H, G>
+    where
+        G: crate::Widget,
+    {
+        self.with_final_widget_type(Some(final_widget))
+    }
+
+    fn with_final_widget_type<G>(self, final_widget: Option<G>) -> Runtime<W, H, G> {
+        Runtime {
+            root: self.root,
+            final_widget,
+            renderer: self.renderer,
+            frame_interval: self.frame_interval,
+            last_draw: self.last_draw,
+            dirty: self.dirty,
+        }
     }
 
     pub const fn resize(&mut self, width: usize) {
@@ -105,9 +115,10 @@ where
     }
 
     pub fn draw_now(&mut self, now: Instant) -> io::Result<RenderStats> {
+        let stats = self.renderer.draw(&self.root)?;
         self.dirty = false;
         self.last_draw = Some(now);
-        self.renderer.draw(&self.root)
+        Ok(stats)
     }
 
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<RenderStats>> {
@@ -121,9 +132,19 @@ where
         self.renderer.into_inner()
     }
 
+    /// Move this runtime onto its rendering thread.
+    ///
+    /// Local references deliberately cannot cross this boundary:
+    ///
+    /// ```compile_fail
+    /// let root = screw::local_widget("local");
+    /// let _runtime = screw::Runtime::new(Vec::new(), root).start();
+    /// ```
     pub fn start(self) -> LiveRuntime<W>
     where
         W: Send + 'static,
+        H: Send + 'static,
+        F: crate::Widget + Send + 'static,
     {
         LiveRuntime::start(self)
     }
@@ -146,7 +167,7 @@ where
     }
 }
 
-impl Runtime<io::Stderr> {
+impl Runtime<io::Stderr, WidgetRef> {
     pub fn stderr(root: WidgetRef) -> Self {
         Self::new(io::stderr(), root).width(terminal_width_or_default())
     }
@@ -156,11 +177,12 @@ impl Runtime<io::Stderr> {
     }
 }
 
-impl<W> Runtime<W>
+impl<W, H> Runtime<W, H, WidgetRef>
 where
     W: Write + Send + 'static,
+    H: crate::Widget + Send + 'static,
 {
-    pub fn auto(writer: W, root: WidgetRef, interactive: bool) -> AutoRuntimeBuilder<W> {
+    pub fn auto(writer: W, root: H, interactive: bool) -> AutoRuntimeBuilder<W, H> {
         AutoRuntimeBuilder::new(writer, root, interactive)
     }
 }
@@ -168,12 +190,12 @@ where
 enum RuntimeCommand {
     Dirty,
     Resize(usize),
-    Finish(FinishMode),
+    Finish(ThreadFinishMode),
 }
 
-enum FinishMode {
+enum ThreadFinishMode {
     Current,
-    With(WidgetRef),
+    With(Box<dyn crate::Widget + Send>),
     Clear,
 }
 
@@ -182,28 +204,28 @@ pub struct LiveRuntime<W> {
     thread: Option<JoinHandle<io::Result<W>>>,
 }
 
-#[derive(Clone)]
 pub struct RuntimeHandle {
     tx: Sender<RuntimeCommand>,
 }
 
-pub struct AutoRuntimeBuilder<W> {
+pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
     writer:       W,
-    root:         WidgetRef,
+    root: H,
     interactive:  bool,
     fps:          u16,
     width:        Option<usize>,
-    layout_mode:  LayoutMode,
+    layout_mode: LayoutMode,
     cursor_visibility: CursorVisibility,
     theme:        Theme,
-    final_widget: Option<WidgetRef>,
+    final_widget: Option<F>,
 }
 
-impl<W> AutoRuntimeBuilder<W>
+impl<W, H> AutoRuntimeBuilder<W, H, WidgetRef>
 where
     W: Write + Send + 'static,
+    H: crate::Widget + Send + 'static,
 {
-    fn new(writer: W, root: WidgetRef, interactive: bool) -> Self {
+    fn new(writer: W, root: H, interactive: bool) -> Self {
         Self {
             writer,
             root,
@@ -216,7 +238,14 @@ where
             final_widget: None,
         }
     }
+}
 
+impl<W, H, F> AutoRuntimeBuilder<W, H, F>
+where
+    W: Write + Send + 'static,
+    H: crate::Widget + Send + 'static,
+    F: crate::Widget + Send + 'static,
+{
     #[must_use]
     pub const fn fps(mut self, fps: u16) -> Self {
         self.fps = fps;
@@ -248,12 +277,24 @@ where
     }
 
     #[must_use]
-    pub fn final_widget(mut self, final_widget: WidgetRef) -> Self {
-        self.final_widget = Some(final_widget);
-        self
+    pub fn final_widget<G>(self, final_widget: G) -> AutoRuntimeBuilder<W, H, G>
+    where
+        G: crate::Widget + Send + 'static,
+    {
+        AutoRuntimeBuilder {
+            writer: self.writer,
+            root: self.root,
+            interactive: self.interactive,
+            fps: self.fps,
+            width: self.width,
+            layout_mode: self.layout_mode,
+            cursor_visibility: self.cursor_visibility,
+            theme: self.theme,
+            final_widget: Some(final_widget),
+        }
     }
 
-    pub fn start(self) -> AutoRuntime<W> {
+    pub fn start(self) -> AutoRuntime<W, H, F> {
         if self.interactive {
             let mut runtime = Runtime::new(self.writer, self.root).fps(self.fps);
             if let Some(width) = self.width {
@@ -262,9 +303,7 @@ where
             runtime = runtime.layout_mode(self.layout_mode);
             runtime = runtime.cursor_visibility(self.cursor_visibility);
             runtime = runtime.theme(self.theme);
-            if let Some(final_widget) = self.final_widget {
-                runtime = runtime.final_widget(final_widget);
-            }
+            let runtime = runtime.with_final_widget_type(self.final_widget);
             AutoRuntime::Live(runtime.start())
         } else {
             AutoRuntime::Plain(PlainRuntime {
@@ -279,14 +318,16 @@ where
     }
 }
 
-pub enum AutoRuntime<W> {
+pub enum AutoRuntime<W, H = WidgetRef, F = WidgetRef> {
     Live(LiveRuntime<W>),
-    Plain(PlainRuntime<W>),
+    Plain(PlainRuntime<W, H, F>),
 }
 
-impl<W> AutoRuntime<W>
+impl<W, H, F> AutoRuntime<W, H, F>
 where
     W: Write + Send + 'static,
+    H: crate::Widget + Send + 'static,
+    F: crate::Widget + Send + 'static,
 {
     pub fn mark_dirty(&self) -> io::Result<()> {
         match self {
@@ -312,10 +353,13 @@ where
         }
     }
 
-    pub fn finish_with(self, final_widget: WidgetRef) -> io::Result<W> {
+    pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
+    where
+        G: crate::Widget + Send + 'static,
+    {
         match self {
             Self::Live(runtime) => runtime.finish_with(final_widget),
-            Self::Plain(runtime) => runtime.finish_with(final_widget),
+            Self::Plain(runtime) => runtime.finish_with(&final_widget),
         }
     }
 
@@ -327,63 +371,91 @@ where
     }
 }
 
-pub struct PlainRuntime<W> {
+pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
     writer:       W,
-    root:         WidgetRef,
-    width:        Option<usize>,
+    root: H,
+    width: Option<usize>,
     layout_mode:  LayoutMode,
     theme:        Theme,
-    final_widget: Option<WidgetRef>,
+    final_widget: Option<F>,
 }
 
-impl<W> PlainRuntime<W>
+impl<W, H, F> PlainRuntime<W, H, F>
 where
     W: Write,
+    H: crate::Widget,
+    F: crate::Widget,
 {
     pub const fn resize(&mut self, width: usize) {
         self.width = Some(width);
     }
 
     pub fn finish(self) -> io::Result<W> {
-        self.finish_mode(FinishMode::Current)
-    }
-
-    pub fn finish_with(self, final_widget: WidgetRef) -> io::Result<W> {
-        self.finish_mode(FinishMode::With(final_widget))
-    }
-
-    pub fn finish_cleared(self) -> io::Result<W> {
-        self.finish_mode(FinishMode::Clear)
-    }
-
-    fn finish_mode(mut self, finish_mode: FinishMode) -> io::Result<W> {
-        if matches!(finish_mode, FinishMode::Clear) {
-            self.writer.flush()?;
-            return Ok(self.writer);
+        let Self {
+            writer,
+            root,
+            width,
+            layout_mode,
+            theme,
+            final_widget,
+        } = self;
+        if let Some(final_widget) = final_widget {
+            write_plain_frame(writer, &final_widget, width, layout_mode, theme)
+        } else {
+            write_plain_frame(writer, &root, width, layout_mode, theme)
         }
+    }
 
-        let mut surface = Surface::new();
-        let root = match finish_mode {
-            FinishMode::Current => self.final_widget.unwrap_or(self.root),
-            FinishMode::With(final_widget) => final_widget,
-            FinishMode::Clear => unreachable!("clear finish returned before rendering"),
-        };
-        root.render(
-            &RenderCtx::new().with_columns(self.width).with_theme(self.theme),
-            &mut surface,
-        );
-        surface = layout_surface(surface, self.width, self.layout_mode);
-        self.writer.write_all(surface.plain_text().as_bytes())?;
+    pub fn finish_with<G>(self, final_widget: &G) -> io::Result<W>
+    where
+        G: crate::Widget,
+    {
+        write_plain_frame(
+            self.writer,
+            final_widget,
+            self.width,
+            self.layout_mode,
+            self.theme,
+        )
+    }
+
+    pub fn finish_cleared(mut self) -> io::Result<W> {
         self.writer.flush()?;
         Ok(self.writer)
     }
+}
+
+fn write_plain_frame<W, G>(
+    mut writer: W,
+    root: &G,
+    width: Option<usize>,
+    layout_mode: LayoutMode,
+    theme: Theme,
+) -> io::Result<W>
+where
+    W: Write,
+    G: crate::Widget,
+{
+    let mut surface = Surface::new();
+    root.render(
+        &RenderCtx::new().with_columns(width).with_theme(theme),
+        &mut surface,
+    );
+    surface = layout_surface(surface, width, layout_mode);
+    writer.write_all(surface.plain_text().as_bytes())?;
+    writer.flush()?;
+    Ok(writer)
 }
 
 impl<W> LiveRuntime<W>
 where
     W: Write + Send + 'static,
 {
-    fn start(mut runtime: Runtime<W>) -> Self {
+    fn start<H, F>(mut runtime: Runtime<W, H, F>) -> Self
+    where
+        H: crate::Widget + Send + 'static,
+        F: crate::Widget + Send + 'static,
+    {
         let (tx, rx) = mpsc::channel();
         let frame_interval = runtime.frame_interval;
         let thread = thread::spawn(move || {
@@ -397,7 +469,7 @@ where
                         return finish_runtime(runtime, finish_mode);
                     },
                     Err(RecvTimeoutError::Disconnected) => {
-                        return finish_runtime(runtime, FinishMode::Current);
+                        return finish_runtime(runtime, ThreadFinishMode::Current);
                     },
                     Err(RecvTimeoutError::Timeout) => {
                         let _ = runtime.tick(Instant::now())?;
@@ -438,19 +510,24 @@ where
 
     pub fn finish(mut self) -> io::Result<W> {
         self.handle
-            .send(RuntimeCommand::Finish(FinishMode::Current))?;
+            .send(RuntimeCommand::Finish(ThreadFinishMode::Current))?;
         self.join()
     }
 
-    pub fn finish_with(mut self, final_widget: WidgetRef) -> io::Result<W> {
+    pub fn finish_with<G>(mut self, final_widget: G) -> io::Result<W>
+    where
+        G: crate::Widget + Send + 'static,
+    {
         self.handle
-            .send(RuntimeCommand::Finish(FinishMode::With(final_widget)))?;
+            .send(RuntimeCommand::Finish(ThreadFinishMode::With(Box::new(
+                final_widget,
+            ))))?;
         self.join()
     }
 
     pub fn finish_cleared(mut self) -> io::Result<W> {
         self.handle
-            .send(RuntimeCommand::Finish(FinishMode::Clear))?;
+            .send(RuntimeCommand::Finish(ThreadFinishMode::Clear))?;
         self.join()
     }
 
@@ -462,6 +539,14 @@ where
         thread
             .join()
             .map_err(|_| io::Error::other("runtime thread panicked"))?
+    }
+}
+
+impl Clone for RuntimeHandle {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
     }
 }
 
@@ -489,7 +574,7 @@ impl<W> Drop for LiveRuntime<W> {
         if self.thread.is_some() {
             let _ = self
                 .handle
-                .send(RuntimeCommand::Finish(FinishMode::Current));
+                .send(RuntimeCommand::Finish(ThreadFinishMode::Current));
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
             }
@@ -497,9 +582,10 @@ impl<W> Drop for LiveRuntime<W> {
     }
 }
 
-const fn apply_command<W>(runtime: &mut Runtime<W>, command: &RuntimeCommand)
+const fn apply_command<W, H, F>(runtime: &mut Runtime<W, H, F>, command: &RuntimeCommand)
 where
     W: Write,
+    H: crate::Widget,
 {
     match command {
         RuntimeCommand::Dirty => runtime.mark_dirty(),
@@ -508,26 +594,27 @@ where
     }
 }
 
-fn finish_runtime<W>(mut runtime: Runtime<W>, finish_mode: FinishMode) -> io::Result<W>
+fn finish_runtime<W, H, F>(
+    mut runtime: Runtime<W, H, F>,
+    finish_mode: ThreadFinishMode,
+) -> io::Result<W>
 where
     W: Write,
+    H: crate::Widget,
+    F: crate::Widget,
 {
     match finish_mode {
-        FinishMode::Current => {
-            if let Some(final_widget) = runtime.final_widget.clone() {
-                runtime.dirty = false;
-                runtime.last_draw = Some(Instant::now());
+        ThreadFinishMode::Current => {
+            if let Some(final_widget) = runtime.final_widget.take() {
                 runtime.renderer.draw(&final_widget)?;
             } else {
                 runtime.draw_now(Instant::now())?;
             }
         },
-        FinishMode::With(final_widget) => {
-            runtime.dirty = false;
-            runtime.last_draw = Some(Instant::now());
+        ThreadFinishMode::With(final_widget) => {
             runtime.renderer.draw(&final_widget)?;
         },
-        FinishMode::Clear => {
+        ThreadFinishMode::Clear => {
             runtime.renderer.clear()?;
         },
     }

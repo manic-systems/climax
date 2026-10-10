@@ -1,19 +1,13 @@
-use crate::{
-    InputAnchor,
-    Line,
-    Stack,
-    WidgetRef,
-    widget,
-};
+use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
 
-#[derive(Clone, Default)]
-pub struct LayoutBuilder {
-    rows: Vec<WidgetRef>,
+#[derive(Clone)]
+pub struct LayoutBuilder<H = WidgetRef> {
+    rows: Vec<H>,
 }
 
-impl LayoutBuilder {
+impl LayoutBuilder<WidgetRef> {
     pub fn new() -> Self {
-        Self::default()
+        Self { rows: Vec::new() }
     }
 
     #[must_use]
@@ -23,19 +17,9 @@ impl LayoutBuilder {
     }
 
     #[must_use]
-    pub fn widget(mut self, child: WidgetRef) -> Self {
-        self.rows.push(child);
-        self
-    }
-
-    #[must_use]
     pub fn input(mut self, input: InputAnchor) -> Self {
         self.rows.push(widget(input));
         self
-    }
-
-    pub fn build(self) -> Stack {
-        Stack::new(self.rows)
     }
 
     pub fn into_widget(self) -> WidgetRef {
@@ -43,8 +27,53 @@ impl LayoutBuilder {
     }
 }
 
+impl Default for LayoutBuilder<WidgetRef> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> LayoutBuilder<LocalWidgetRef<'a>> {
+    pub fn new_local() -> Self {
+        Self { rows: Vec::new() }
+    }
+
+    #[must_use]
+    pub fn line(mut self, children: impl Into<Vec<LocalWidgetRef<'a>>>) -> Self {
+        self.rows.push(local_widget(Line::new(children)));
+        self
+    }
+
+    #[must_use]
+    pub fn input(mut self, input: InputAnchor) -> Self {
+        self.rows.push(local_widget(input));
+        self
+    }
+
+    pub fn into_widget(self) -> LocalWidgetRef<'a> {
+        local_widget(self.build())
+    }
+}
+
+impl<H> LayoutBuilder<H> {
+    #[must_use]
+    pub fn widget(mut self, child: H) -> Self {
+        self.rows.push(child);
+        self
+    }
+
+    pub fn build(self) -> Stack<H> {
+        Stack::new(self.rows)
+    }
+}
+
 pub fn layout() -> LayoutBuilder {
     LayoutBuilder::new()
+}
+
+/// Build a layout whose erased widgets stay on the current thread.
+pub fn local_layout<'a>() -> LayoutBuilder<LocalWidgetRef<'a>> {
+    LayoutBuilder::new_local()
 }
 
 #[cfg(test)]
