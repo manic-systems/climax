@@ -231,12 +231,17 @@ fn main() -> std::process::ExitCode {
 `try_run` and `try_run_from` are the non-reporting paths for embedding and
 tests. `run_with` starts from an already constructed command.
 
-`ResultExt`, in the prelude, adds `.context(message)` and `.app_err()` to any
+`climax::ResultExt`, imported by name and absent from the prelude so that
+`anyhow::Context` can sit beside `climax::prelude::*`, adds `.context(message)` and `.app_err()` to any
 `Result` whose error is a `Send + Sync` `std::error::Error`, so
 `text.parse::<u32>().context("reading the count")?` becomes an application
 error that reads `reading the count: invalid digit found in string` and keeps
 the original as its source. A `Box<dyn std::error::Error + Send + Sync>`
 converts into `Error` with `?`.
+
+With the optional `anyhow` feature, off by default, `anyhow::Error` converts
+into `Error` with `?` as well. The anyhow error is kept whole as the source, so
+its context chain prints under `Caused by:`.
 
 ## Testing
 
@@ -394,8 +399,10 @@ to an already running renderer thread are type-erased.
 - `interactive` provides typed Bang prompts.
 - `structured` provides Serde-backed application results and JSON and JSON
   Lines output.
+- `anyhow` converts `anyhow::Error` into `Error` with `?`, keeping its chain as
+  the source. It is not a default feature.
 
-All five are on by default. The dependency fixtures under
+The five features above are on by default. The dependency fixtures under
 `tests/compile-fixtures` build and test `climax` with no default features and
 with each of `derive`, `interactive`, `parse`, `render` and `structured` alone.
 Another fixture checks that a direct dependency on a component unifies with the

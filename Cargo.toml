@@ -49,6 +49,7 @@ repository   = "https://github.com/manic-systems/climax"
 rust-version = "1.88"
 
 [workspace.dependencies]
+anyhow            = "1"
 bang              = { path = "crates/bang", version = "=0.1.0" }
 bang-core         = { path = "crates/bang-core", version = "=0.1.0" }
 bang-terminal     = { path = "crates/bang-terminal", version = "=0.1.0" }
