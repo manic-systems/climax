@@ -1,7 +1,10 @@
 use std::{
+    any::Any,
     io::{self, Write},
+    panic::{self, AssertUnwindSafe},
     sync::mpsc::{
         self,
+        Receiver,
         RecvTimeoutError,
         Sender,
     },
@@ -218,7 +221,7 @@ enum ThreadFinishMode {
 
 pub struct LiveRuntime<W> {
     handle: RuntimeHandle,
-    thread: Option<JoinHandle<io::Result<W>>>,
+    thread: Option<JoinHandle<Result<W, (W, io::Error)>>>,
 }
 
 pub struct RuntimeHandle {
@@ -520,42 +523,21 @@ where
         F: crate::Widget + Send + 'static,
     {
         let (tx, rx) = mpsc::channel();
-        let frame_interval = runtime.frame_interval;
         let thread = thread::spawn(move || {
-            runtime.draw_now(Instant::now())?;
-            loop {
-                match rx.recv_timeout(frame_interval) {
-                    Ok(
-                        command @ (RuntimeCommand::Dirty
-                        | RuntimeCommand::Resize(_)
-                        | RuntimeCommand::ResizeViewport(_, _)),
-                    ) => {
-                        apply_command(&mut runtime, &command);
-                    },
-                    Ok(RuntimeCommand::Finish(finish_mode)) => {
-                        return finish_runtime(runtime, finish_mode);
-                    },
-                    Err(RecvTimeoutError::Disconnected) => {
-                        return finish_runtime(runtime, ThreadFinishMode::Current);
-                    },
-                    Err(RecvTimeoutError::Timeout) => {
-                        let _ = runtime.tick(Instant::now())?;
-                    },
-                }
-
-                while let Ok(command) = rx.try_recv() {
-                    match command {
-                        RuntimeCommand::Dirty
-                        | RuntimeCommand::Resize(_)
-                        | RuntimeCommand::ResizeViewport(_, _) => {
-                            apply_command(&mut runtime, &command);
-                        },
-                        RuntimeCommand::Finish(finish_mode) => {
-                            return finish_runtime(runtime, finish_mode);
-                        },
-                    }
-                }
-                let _ = runtime.tick(Instant::now())?;
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                let finish_mode = drive(&mut runtime, &rx)?;
+                finish_frame(&mut runtime, finish_mode)
+            }));
+            let restored = runtime.renderer.restore_cursor();
+            let failure = match result {
+                Ok(Ok(())) => restored.err(),
+                Ok(Err(error)) => Some(error),
+                Err(payload) => Some(panic_error(&*payload)),
+            };
+            let writer = runtime.into_inner();
+            match failure {
+                None => Ok(writer),
+                Some(error) => Err((writer, error)),
             }
         });
 
@@ -581,37 +563,51 @@ where
         self.handle.resize_viewport(width, height)
     }
 
-    pub fn finish(mut self) -> io::Result<W> {
-        self.handle
-            .send(RuntimeCommand::Finish(ThreadFinishMode::Current))?;
-        self.join()
+    pub fn finish(self) -> io::Result<W> {
+        self.finish_via(ThreadFinishMode::Current)
     }
 
-    pub fn finish_with<G>(mut self, final_widget: G) -> io::Result<W>
+    pub fn finish_recovering(self) -> Result<W, (Option<W>, io::Error)> {
+        self.finish_via_recovering(ThreadFinishMode::Current)
+    }
+
+    pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
     where
         G: crate::Widget + Send + 'static,
     {
-        self.handle
-            .send(RuntimeCommand::Finish(ThreadFinishMode::With(Box::new(
-                final_widget,
-            ))))?;
-        self.join()
+        self.finish_via(ThreadFinishMode::With(Box::new(final_widget)))
     }
 
-    pub fn finish_cleared(mut self) -> io::Result<W> {
-        self.handle
-            .send(RuntimeCommand::Finish(ThreadFinishMode::Clear))?;
-        self.join()
+    pub fn finish_cleared(self) -> io::Result<W> {
+        self.finish_via(ThreadFinishMode::Clear)
     }
 
-    fn join(&mut self) -> io::Result<W> {
+    fn finish_via(self, mode: ThreadFinishMode) -> io::Result<W> {
+        self.finish_via_recovering(mode).map_err(|(_, error)| error)
+    }
+
+    fn finish_via_recovering(
+        mut self,
+        mode: ThreadFinishMode,
+    ) -> Result<W, (Option<W>, io::Error)> {
+        let sent = self.handle.send(RuntimeCommand::Finish(mode));
+        match (sent, self.join()) {
+            (Ok(()), joined) => joined,
+            (Err(_), Err(joined)) => Err(joined),
+            (Err(sent), Ok(writer)) => Err((Some(writer), sent)),
+        }
+    }
+
+    fn join(&mut self) -> Result<W, (Option<W>, io::Error)> {
         let thread = self
             .thread
             .take()
             .expect("live runtime thread is joined at most once");
-        thread
-            .join()
-            .map_err(|_| io::Error::other("runtime thread panicked"))?
+        match thread.join() {
+            Ok(Ok(writer)) => Ok(writer),
+            Ok(Err((writer, error))) => Err((Some(writer), error)),
+            Err(payload) => Err((None, panic_error(&*payload))),
+        }
     }
 }
 
@@ -649,9 +645,12 @@ impl RuntimeHandle {
 impl<W> Drop for LiveRuntime<W> {
     fn drop(&mut self) {
         if self.thread.is_some() {
-            let _ = self
-                .handle
-                .send(RuntimeCommand::Finish(ThreadFinishMode::Current));
+            let finish_mode = if thread::panicking() {
+                ThreadFinishMode::Clear
+            } else {
+                ThreadFinishMode::Current
+            };
+            let _ = self.handle.send(RuntimeCommand::Finish(finish_mode));
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
             }
@@ -659,23 +658,58 @@ impl<W> Drop for LiveRuntime<W> {
     }
 }
 
-fn apply_command<W, H, F>(runtime: &mut Runtime<W, H, F>, command: &RuntimeCommand)
+fn drive<W, H, F>(
+    runtime: &mut Runtime<W, H, F>,
+    commands: &Receiver<RuntimeCommand>,
+) -> io::Result<ThreadFinishMode>
+where
+    W: Write,
+    H: crate::Widget,
+{
+    runtime.draw_now(Instant::now())?;
+    loop {
+        match commands.recv_timeout(runtime.frame_interval) {
+            Ok(command) => {
+                if let Some(finish_mode) = apply_command(runtime, command) {
+                    return Ok(finish_mode);
+                }
+            },
+            Err(RecvTimeoutError::Disconnected) => return Ok(ThreadFinishMode::Current),
+            Err(RecvTimeoutError::Timeout) => {
+                runtime.tick(Instant::now())?;
+            },
+        }
+
+        while let Ok(command) = commands.try_recv() {
+            if let Some(finish_mode) = apply_command(runtime, command) {
+                return Ok(finish_mode);
+            }
+        }
+        runtime.tick(Instant::now())?;
+    }
+}
+
+fn apply_command<W, H, F>(
+    runtime: &mut Runtime<W, H, F>,
+    command: RuntimeCommand,
+) -> Option<ThreadFinishMode>
 where
     W: Write,
     H: crate::Widget,
 {
     match command {
         RuntimeCommand::Dirty => runtime.mark_dirty(),
-        RuntimeCommand::Resize(width) => runtime.resize(*width),
-        RuntimeCommand::ResizeViewport(width, height) => runtime.resize_viewport(*width, *height),
-        RuntimeCommand::Finish(_) => {},
+        RuntimeCommand::Resize(width) => runtime.resize(width),
+        RuntimeCommand::ResizeViewport(width, height) => runtime.resize_viewport(width, height),
+        RuntimeCommand::Finish(finish_mode) => return Some(finish_mode),
     }
+    None
 }
 
-fn finish_runtime<W, H, F>(
-    mut runtime: Runtime<W, H, F>,
+fn finish_frame<W, H, F>(
+    runtime: &mut Runtime<W, H, F>,
     finish_mode: ThreadFinishMode,
-) -> io::Result<W>
+) -> io::Result<()>
 where
     W: Write,
     H: crate::Widget,
@@ -696,7 +730,19 @@ where
             runtime.renderer.clear()?;
         },
     }
-    Ok(runtime.into_inner())
+    Ok(())
+}
+
+fn panic_error(payload: &(dyn Any + Send)) -> io::Error {
+    io::Error::other(format!("runtime thread panicked: {}", panic_message(payload)))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("non-string payload")
 }
 
 fn wants_frame_tick(interest: TickInterest, elapsed: Duration, frame_interval: Duration) -> bool {
@@ -749,6 +795,136 @@ mod tests {
         assert!(output.windows(6).any(|part| part == b"\x1b[?25h"));
     }
 
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct PanicsOnSecondRender(std::sync::atomic::AtomicUsize);
+
+    impl Widget for PanicsOnSecondRender {
+        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+            assert!(
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0,
+                "widget exploded"
+            );
+            out.write("x", Style::PLAIN);
+        }
+
+        fn tick_interest(&self) -> TickInterest {
+            TickInterest::Never
+        }
+    }
+
+    #[test]
+    fn a_widget_panic_on_the_thread_restores_the_cursor_and_is_reported() {
+        let buffer = SharedBuffer::default();
+        let widget = PanicsOnSecondRender(std::sync::atomic::AtomicUsize::default());
+        let live = Runtime::new(buffer.clone(), widget)
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        let Err(error) = live.finish() else {
+            panic!("the widget panic was not reported");
+        };
+        assert!(error.to_string().contains("widget exploded"), "{error}");
+        assert!(buffer.0.lock().unwrap().ends_with(b"\x1b[?25h"));
+    }
+
+    #[derive(Default)]
+    struct LineBuffered {
+        pending: Vec<u8>,
+        flushed: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for LineBuffered {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.pending.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed.lock().unwrap().append(&mut self.pending);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_cursor_restore_is_flushed_when_the_thread_ends() {
+        let flushed = Arc::new(Mutex::new(Vec::new()));
+        let writer = LineBuffered {
+            pending: Vec::new(),
+            flushed: Arc::clone(&flushed),
+        };
+        let live = Runtime::new(writer, "content")
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        drop(live.finish().unwrap());
+        assert!(flushed.lock().unwrap().ends_with(b"\x1b[?25h"));
+    }
+
+    #[test]
+    fn finish_recovering_returns_the_writer_after_a_widget_panic() {
+        let buffer = SharedBuffer::default();
+        let widget = PanicsOnSecondRender(std::sync::atomic::AtomicUsize::default());
+        let live = Runtime::new(buffer, widget).start();
+        let Err((writer, error)) = live.finish_recovering() else {
+            panic!("the widget panic was not reported");
+        };
+        assert!(error.to_string().contains("widget exploded"), "{error}");
+        assert!(writer.is_some());
+    }
+
+    #[test]
+    fn finish_restores_a_hidden_cursor_left_by_a_final_frame_without_an_anchor() {
+        let live = Runtime::new(Vec::new(), "content")
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        let output = live.finish().unwrap();
+        assert!(output.ends_with(b"\x1b[?25h"));
+    }
+
+    #[test]
+    fn finish_with_restores_a_hidden_cursor_left_by_a_final_widget_without_an_anchor() {
+        let root: WidgetRef = Arc::new(CursorWidget);
+        let live = Runtime::new(Vec::new(), root)
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        let output = live.finish_with("final").unwrap();
+        assert!(output.ends_with(b"\x1b[?25h"));
+    }
+
+    #[test]
+    fn dropping_a_live_runtime_restores_a_hidden_cursor() {
+        let buffer = SharedBuffer::default();
+        let live = Runtime::new(buffer.clone(), "content")
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        drop(live);
+        assert!(buffer.0.lock().unwrap().ends_with(b"\x1b[?25h"));
+    }
+
+    #[test]
+    fn finish_does_not_emit_an_extra_show_when_the_final_frame_keeps_a_visible_cursor() {
+        let root: WidgetRef = Arc::new(CursorWidget);
+        let live = Runtime::new(Vec::new(), root)
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        let output = live.finish().unwrap();
+        let shows = output
+            .windows(b"\x1b[?25h".len())
+            .filter(|part| *part == b"\x1b[?25h")
+            .count();
+        assert_eq!(shows, 1);
+    }
+
     struct LocalValue(Rc<RefCell<String>>);
 
     impl Widget for LocalValue {
@@ -786,6 +962,44 @@ mod tests {
             .finish()
             .unwrap();
         assert!(!output.is_empty());
+    }
+
+    #[derive(Debug)]
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("distinctive failing writer message"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("distinctive failing writer message"))
+        }
+    }
+
+    fn dead_render_thread() -> LiveRuntime<FailingWriter> {
+        let live = Runtime::new(FailingWriter, "content").start();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live.mark_dirty().is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "render thread never reported the write failure"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        live
+    }
+
+    #[test]
+    fn finish_cleared_reports_the_render_threads_error_after_it_has_already_exited() {
+        let err = dead_render_thread().finish_cleared().unwrap_err();
+        assert!(err.to_string().contains("distinctive failing writer message"));
+    }
+
+    #[test]
+    fn finish_reports_the_render_threads_error_after_it_has_already_exited() {
+        let err = dead_render_thread().finish().unwrap_err();
+        assert!(err.to_string().contains("distinctive failing writer message"));
     }
 
     #[test]
@@ -886,5 +1100,46 @@ mod tests {
             plain_seen.lock().unwrap().as_slice(),
             [(0, Some(4), Some(2))],
         );
+    }
+
+    #[test]
+    fn dropping_a_live_runtime_while_panicking_clears_instead_of_drawing_the_final_frame() {
+        let buffer = SharedBuffer::default();
+        let live = Runtime::new(buffer.clone(), "content")
+            .final_widget("success frame")
+            .start();
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _live = live;
+            panic!("simulated panic while a live runtime is in scope");
+        }));
+        assert!(unwound.is_err());
+
+        let output = buffer.0.lock().unwrap().clone();
+        let drew_final_frame = output
+            .windows(b"success frame".len())
+            .any(|part| part == b"success frame");
+        assert!(
+            !drew_final_frame,
+            "a panicking drop must not draw the configured final frame: {:?}",
+            String::from_utf8_lossy(&output),
+        );
+    }
+
+    #[test]
+    fn dropping_a_live_runtime_without_a_panic_still_draws_the_final_frame() {
+        let buffer = SharedBuffer::default();
+        let live = Runtime::new(buffer.clone(), "content")
+            .final_widget("success frame")
+            .start();
+        drop(live);
+
+        let drew_final_frame = {
+            let output = buffer.0.lock().unwrap();
+            output
+                .windows(b"success frame".len())
+                .any(|part| part == b"success frame")
+        };
+        assert!(drew_final_frame);
     }
 }
