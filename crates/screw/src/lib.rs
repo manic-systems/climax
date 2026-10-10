@@ -113,6 +113,7 @@ pub use layout::{
 pub use measure::{
     Align,
     pad,
+    single_line,
     truncate,
     width,
 };
