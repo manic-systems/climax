@@ -292,6 +292,13 @@ impl Surface {
         Some(consumed)
     }
 
+    pub(crate) fn drop_colors(&mut self) {
+        for cell in self.rows.iter_mut().flat_map(|row| row.cells.iter_mut()) {
+            cell.style.fg = None;
+            cell.style.bg = None;
+        }
+    }
+
     pub(crate) fn push_cell(&mut self, cell: &Cell) {
         self.current_row_mut().cells.push(cell.clone());
     }

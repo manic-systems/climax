@@ -127,6 +127,7 @@ pub use renderer::{
     LayoutMode,
     RenderStats,
     Renderer,
+    colors_enabled,
 };
 pub use runtime::{
     AutoRuntime,
