@@ -12,6 +12,6 @@ use std::sync::{
 ///
 /// every critical section in this crate finishes its mutation without a step
 /// that can panic, so a poisoned mutex never holds a half-updated value
-pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
