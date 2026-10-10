@@ -305,19 +305,26 @@ pub(crate) fn parse_spec<'a>(
 ) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     let mut hits = Vec::new();
-    parse_cmd(spec, &mut it, &[], &mut hits)
+    parse_cmd(spec, &[], &mut it, &[], &mut hits)
 }
 
 /// parse one command, tagging whatever went wrong with this command's usage
 /// line unless a nested command already claimed it
 fn parse_cmd<'a>(
     spec: &CommandSpec,
+    path: &[&'static str],
     it: &mut IntoIter<&'a str>,
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
-    walk_cmd(spec, it, globals, hits)
-        .map_err(|e| e.or_usage(|| (help::usage_line(spec, globals), help_flag(spec, globals))))
+    walk_cmd(spec, path, it, globals, hits).map_err(|e| {
+        e.or_usage(|| {
+            (
+                help::usage_line(spec, path, globals),
+                help_flag(spec, globals),
+            )
+        })
+    })
 }
 
 /// the spelling that still reaches `spec`'s generated help, if any does
@@ -334,6 +341,7 @@ pub(crate) fn help_flag(spec: &CommandSpec, globals: &[&ArgSpec]) -> Option<&'st
 
 fn walk_cmd<'a>(
     spec: &CommandSpec,
+    path: &[&'static str],
     it: &mut IntoIter<&'a str>,
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
@@ -352,6 +360,8 @@ fn walk_cmd<'a>(
     let mut pos_cursor = 0_usize;
     let mut only_positional = false;
 
+    let builtin = |ch| builtin_short(spec, path, &targets, ch, globals);
+
     while let Some(tok) = it.next() {
         if only_positional {
             positional(&mut m, &positionals, &mut pos_cursor, tok)?;
@@ -365,7 +375,7 @@ fn walk_cmd<'a>(
                 Some((n, v)) => (n, Some(v)),
                 None => (long, None),
             };
-            if let Some(sig) = builtin_long(spec, &targets, name, globals) {
+            if let Some(sig) = builtin_long(spec, path, &targets, name, globals) {
                 return Err(sig.into());
             }
             if let Some(target) = targets
@@ -397,10 +407,10 @@ fn walk_cmd<'a>(
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             let first = rest.chars().next().unwrap_or('-');
             let known = targets.iter().any(|t| t.arg.answers_short(first))
-                || builtin_short(spec, &targets, first, globals).is_some()
+                || builtin(first).is_some()
                 || find_global_short(globals, first).is_some();
             if known {
-                shorts(spec, &targets, &mut m, rest, it, globals, hits)?;
+                shorts(&targets, &mut m, rest, it, globals, hits, builtin)?;
             } else if first.is_ascii_digit() || first == '.' {
                 // a negative number is a value, not a flag
                 positional(&mut m, &positionals, &mut pos_cursor, tok)?;
@@ -410,7 +420,8 @@ fn walk_cmd<'a>(
         } else if let Some(target) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
             child_globals.extend(targets.iter().map(|t| t.arg).filter(|a| a.global));
-            let sub_m = parse_cmd(target.command.spec, it, &child_globals, hits)?;
+            let child_path: Vec<&'static str> = path.iter().copied().chain([spec.name]).collect();
+            let sub_m = parse_cmd(target.command.spec, &child_path, it, &child_globals, hits)?;
             target.store(&mut m, sub_m);
             break; // subcommand owns the rest
         } else {
@@ -420,7 +431,7 @@ fn walk_cmd<'a>(
 
     // must run before finalise so owned globals count toward required/group checks
     apply_global_hits(&targets, globals.len(), &mut m, hits);
-    finalise(spec, &m, globals)?;
+    finalise(spec, path, &m, globals)?;
     Ok(m)
 }
 
@@ -496,16 +507,16 @@ fn apply_named<'a>(
 
 /// apply a cluster of short args
 fn shorts<'a>(
-    spec: &CommandSpec,
     targets: &[ArgTarget],
     m: &mut Matches<'a>,
     cluster: &'a str,
     it: &mut IntoIter<&'a str>,
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
+    builtin: impl Fn(char) -> Option<ErrorKind>,
 ) -> Result<(), ErrorKind> {
     for (off, ch) in cluster.char_indices() {
-        if let Some(sig) = builtin_short(spec, targets, ch, globals) {
+        if let Some(sig) = builtin(ch) {
             return Err(sig);
         }
         if let Some(target) = targets.iter().find(|t| t.arg.answers_short(ch)) {
@@ -754,6 +765,7 @@ fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
 /// read, so a defaulted arg never counts as missing here.
 fn finalise(
     spec: &CommandSpec,
+    path: &[&'static str],
     m: &Matches,
     globals: &[&'static ArgSpec],
 ) -> Result<(), ErrorKind> {
@@ -761,7 +773,7 @@ fn finalise(
     finalise_groups(spec, m)?;
     if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
         // empty/sub-less invocation shows help rather than a bare error
-        return Err(ErrorKind::Help(help::render(spec, globals, false)));
+        return Err(ErrorKind::Help(help::render(spec, path, globals, false)));
     }
     Ok(())
 }
@@ -882,6 +894,7 @@ fn target_slot_mut<'m, 'a>(m: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mu
 
 fn builtin_long(
     spec: &CommandSpec,
+    path: &[&'static str],
     targets: &[ArgTarget],
     name: &str,
     globals: &[&'static ArgSpec],
@@ -891,7 +904,7 @@ fn builtin_long(
         return None;
     }
     match name {
-        "help" => Some(ErrorKind::Help(help::render(spec, globals, true))),
+        "help" => Some(ErrorKind::Help(help::render(spec, path, globals, true))),
         "version" if spec.has_version_info() => Some(ErrorKind::Version(help::version_line(spec))),
         _ => None,
     }
@@ -899,6 +912,7 @@ fn builtin_long(
 
 fn builtin_short(
     spec: &CommandSpec,
+    path: &[&'static str],
     targets: &[ArgTarget],
     ch: char,
     globals: &[&'static ArgSpec],
@@ -908,7 +922,7 @@ fn builtin_short(
         return None;
     }
     match ch {
-        'h' => Some(ErrorKind::Help(help::render(spec, globals, false))),
+        'h' => Some(ErrorKind::Help(help::render(spec, path, globals, false))),
         'V' if spec.has_version_info() => Some(ErrorKind::Version(help::version_line(spec))),
         _ => None,
     }
@@ -1404,5 +1418,27 @@ mod tests {
             parse(&MIXED, &["p1", "a1", "nope"]),
             Err(ErrorKind::UnknownSubcommand { .. })
         ));
+    }
+
+    fn expected_add_usage() -> &'static str {
+        if cfg!(feature = "help") {
+            "Usage: prog add [OPTION]... NAME URL"
+        } else {
+            "Usage: prog add"
+        }
+    }
+
+    #[test]
+    fn subcommand_usage_carries_the_program_path() {
+        let err = parse_spec(&ROOT, argv(&["add", "only"])).unwrap_err();
+        assert_eq!(err.usage.as_deref(), Some(expected_add_usage()));
+
+        let ErrorKind::Help(text) = parse(&ROOT, &["add", "--help"]).unwrap_err() else {
+            panic!("expected help");
+        };
+        assert!(text.contains(expected_add_usage()), "{text}");
+
+        let err = parse_spec(&ROOT, argv(&["--nope"])).unwrap_err();
+        assert!(err.usage.unwrap().starts_with("Usage: prog"));
     }
 }
