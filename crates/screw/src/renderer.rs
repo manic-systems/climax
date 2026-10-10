@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::ops::{
+    Deref,
+    DerefMut,
+};
 use std::{
+    env,
+    ffi::OsString,
     io::{
         self,
         Write,
     },
-    ops::{
-        Deref,
-        DerefMut,
-    },
+    sync::OnceLock,
 };
 
 use crate::{
@@ -52,6 +55,10 @@ pub enum CursorVisibility {
 
 /// draws widgets to a terminal stream, writing only the rows that changed since
 /// the last draw
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag tracks an independent part of the terminal state"
+)]
 #[derive(Debug)]
 pub struct Renderer<W> {
     writer:              Sink<W>,
@@ -68,15 +75,33 @@ pub struct Renderer<W> {
     force_full:          bool,
     rendition_uncertain: bool,
     resync:              bool,
+    colors:              bool,
+}
+
+/// whether the environment permits colour, read once, a non-empty `NO_COLOR`
+/// always wins
+pub fn colors_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| colors_from(|name| env::var_os(name).filter(|value| !value.is_empty())))
+}
+
+fn colors_from(var: impl Fn(&str) -> Option<OsString>) -> bool {
+    if var("NO_COLOR").is_some() {
+        return false;
+    }
+    if var("CLICOLOR_FORCE").is_some_and(|value| value != "0") {
+        return true;
+    }
+    var("TERM").is_none_or(|value| value != "dumb")
+        && var("CLICOLOR").is_none_or(|value| value != "0")
 }
 
 impl<W> Renderer<W>
 where
     W: Write,
 {
-    /// Creates a renderer over `writer` with no width or height limit,
-    /// clipping, the default theme and untouched cursor visibility.
-    pub const fn new(writer: W) -> Self {
+    /// renderer over `writer`, colours follow [`colors_enabled`]
+    pub fn new(writer: W) -> Self {
         Self {
             writer:              Sink(Some(writer)),
             on_drop:             Self::restore_on_drop,
@@ -92,7 +117,15 @@ where
             force_full:          false,
             rendition_uncertain: false,
             resync:              false,
+            colors:              colors_enabled(),
         }
+    }
+
+    /// whether colours are written, overrides [`colors_enabled`]
+    #[must_use]
+    pub const fn colors(mut self, enabled: bool) -> Self {
+        self.colors = enabled;
+        self
     }
 
     /// terminal width in columns, rows are clipped or wrapped to it
@@ -154,6 +187,10 @@ where
     }
 
     /// renders `widget` and writes the difference from the previous frame
+    ///
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written or flushed
     pub fn draw<T>(&mut self, widget: &T) -> io::Result<RenderStats>
     where
         T: Widget + ?Sized,
@@ -173,6 +210,10 @@ where
 
     /// writes an already rendered surface after fitting it to the width and
     /// height
+    ///
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written or flushed
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
         let next_physical = self.layout_surface(next_logical);
 
@@ -274,6 +315,10 @@ where
     }
 
     /// erases the last frame from the terminal and forgets it
+    ///
+    /// # Errors
+    ///
+    /// fails when the erase sequence cannot be written or flushed
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let reset_pending = self.rendition_uncertain;
         let result = self
@@ -327,21 +372,26 @@ where
 
     /// the writer, the terminal is left untouched
     pub fn into_inner(mut self) -> W {
-        self.writer
-            .0
-            .take()
-            .expect("the writer is present until it is taken")
+        self.writer.take()
     }
 
-    fn layout_surface(&self, surface: Surface) -> Surface {
-        let mut surface = layout_surface(surface, self.width.map(usable_columns), self.layout_mode);
-        if let Some(height) = self.height {
-            surface.fit_height(height);
+    fn layout_surface(&self, logical: Surface) -> Surface {
+        let mut physical =
+            layout_surface(logical, self.width.map(usable_columns), self.layout_mode);
+        if !self.colors {
+            physical.drop_colors();
         }
-        surface
+        if let Some(height) = self.height {
+            physical.fit_height(height);
+        }
+        physical
     }
 
     /// shows the cursor again if this renderer hid it under `FromSurface`
+    ///
+    /// # Errors
+    ///
+    /// fails when the cursor sequence cannot be written or flushed
     pub fn restore_cursor(&mut self) -> io::Result<()> {
         let settled = self.rendition_uncertain;
         self.settle_rendition()?;
@@ -355,7 +405,7 @@ where
     }
 
     fn restore_on_drop(&mut self) {
-        let _ = self.restore_cursor();
+        drop(self.restore_cursor());
     }
 
     fn cursor_may_be_hidden(&self) -> bool {
@@ -387,21 +437,39 @@ impl<W> Drop for Renderer<W> {
 #[derive(Debug)]
 struct Sink<W>(Option<W>);
 
+#[expect(
+    clippy::expect_used,
+    reason = "the writer is present until into_inner takes it"
+)]
+impl<W> Sink<W> {
+    const fn take(&mut self) -> W {
+        self.0.take().expect("the writer is taken once")
+    }
+
+    const fn get(&self) -> &W {
+        self.0
+            .as_ref()
+            .expect("the writer is present until it is taken")
+    }
+
+    const fn get_mut(&mut self) -> &mut W {
+        self.0
+            .as_mut()
+            .expect("the writer is present until it is taken")
+    }
+}
+
 impl<W> Deref for Sink<W> {
     type Target = W;
 
     fn deref(&self) -> &W {
-        self.0
-            .as_ref()
-            .expect("the writer is present until it is taken")
+        self.get()
     }
 }
 
 impl<W> DerefMut for Sink<W> {
     fn deref_mut(&mut self) -> &mut W {
-        self.0
-            .as_mut()
-            .expect("the writer is present until it is taken")
+        self.get_mut()
     }
 }
 
@@ -432,11 +500,11 @@ pub(crate) fn layout_surface(
     mode: LayoutMode,
 ) -> Surface {
     match (width, mode) {
-        (Some(width), LayoutMode::Clip) => {
-            surface.fit_width(width);
+        (Some(columns), LayoutMode::Clip) => {
+            surface.fit_width(columns);
             surface
         },
-        (Some(width), LayoutMode::Wrap) => wrap_surface(&surface, width),
+        (Some(columns), LayoutMode::Wrap) => wrap_surface(&surface, columns),
         (None, _) => surface,
     }
 }
@@ -454,13 +522,13 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
         }
         first_physical_row = false;
         let mut logical_col = 0_usize;
-        let cursor_on_row = cursor.filter(|cursor| cursor.row == logical_row);
+        let cursor_on_row = cursor.filter(|at| at.row == logical_row);
 
         if row.is_empty() {
-            if let Some(cursor) = cursor_on_row {
+            if let Some(on_row) = cursor_on_row {
                 physical_cursor = Some(Position {
                     row: out.height().saturating_sub(1),
-                    col: cursor.col.min(max_columns),
+                    col: on_row.col.min(max_columns),
                 });
             }
             previous_break = row.break_after();
@@ -494,7 +562,7 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
             logical_col += cell.width;
         }
 
-        if cursor_on_row.is_some_and(|cursor| cursor.col >= logical_col) {
+        if cursor_on_row.is_some_and(|at| at.col >= logical_col) {
             physical_cursor = Some(Position {
                 row: out.height().saturating_sub(1),
                 col: out.current_col(),
@@ -503,16 +571,15 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
         previous_break = row.break_after();
     }
 
-    if let Some(cursor) = physical_cursor {
-        out.set_cursor(cursor);
+    if let Some(placed) = physical_cursor {
+        out.set_cursor(placed);
     }
     out
 }
 
 fn cursor_crosses_cell(cursor: Option<Position>, logical_col: usize, cell_width: usize) -> bool {
-    cursor.is_some_and(|cursor| {
-        cursor.col >= logical_col && cursor.col < logical_col.saturating_add(cell_width)
-    })
+    cursor
+        .is_some_and(|at| at.col >= logical_col && at.col < logical_col.saturating_add(cell_width))
 }
 
 pub(crate) const fn usable_columns(terminal_columns: usize) -> usize {
@@ -586,18 +653,17 @@ fn clear_reflowed(
 ) -> io::Result<()> {
     let anchor = final_position(previous);
     let row = width
-        .filter(|&width| width > 0)
-        .map_or(anchor.row, |width| {
+        .filter(|&columns| columns > 0)
+        .map_or(anchor.row, |columns| {
             previous
                 .rows()
                 .iter()
                 .take(anchor.row)
-                .map(|row| wrapped_lines(row.cells(), width))
+                .map(|row| wrapped_lines(row.cells(), columns))
                 .sum::<usize>()
-                + previous
-                    .rows()
-                    .get(anchor.row)
-                    .map_or(0, |row| wraps_before_column(row.cells(), width, anchor.col))
+                + previous.rows().get(anchor.row).map_or(0, |row| {
+                    wraps_before_column(row.cells(), columns, anchor.col)
+                })
         });
     move_to_top(writer, Position { row, col: 0 }, cursor)?;
     writer.write_all(b"\x1b[J")?;
@@ -772,7 +838,7 @@ fn write_row_tail(
 fn common_prefix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .zip(new)
-        .take_while(|(old, new)| old == new)
+        .take_while(|(left, right)| left == right)
         .count()
 }
 
@@ -780,7 +846,7 @@ fn common_suffix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .rev()
         .zip(new.iter().rev())
-        .take_while(|(old, new)| old == new)
+        .take_while(|(left, right)| left == right)
         .count()
 }
 
@@ -838,9 +904,12 @@ impl Cursor {
 
 #[cfg(test)]
 mod tests {
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
     use std::io;
 
     use crate::{
+        Color,
         CursorMerge,
         CursorVisibility,
         Edge,
@@ -866,8 +935,8 @@ mod tests {
             }
             surface.write(line, Style::default());
         }
-        if let Some(cursor) = cursor {
-            surface.set_cursor(cursor);
+        if let Some(position) = cursor {
+            surface.set_cursor(position);
         }
         surface
     }
@@ -968,11 +1037,11 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    struct Shared(Rc<RefCell<Vec<u8>>>);
 
     impl io::Write for Shared {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
+            self.0.borrow_mut().extend_from_slice(buf);
             Ok(buf.len())
         }
 
@@ -987,9 +1056,9 @@ mod tests {
         let mut renderer =
             Renderer::new(shared.clone()).cursor_visibility(CursorVisibility::FromSurface);
         renderer.draw_surface(surface(&["done"], None)).unwrap();
-        assert!(shared.0.lock().unwrap().ends_with(b"\x1b[?25l"));
+        assert!(shared.0.borrow().ends_with(b"\x1b[?25l"));
         drop(renderer);
-        assert!(shared.0.lock().unwrap().ends_with(b"\x1b[?25l\x1b[?25h"));
+        assert!(shared.0.borrow().ends_with(b"\x1b[?25l\x1b[?25h"));
     }
 
     #[test]
@@ -1411,11 +1480,9 @@ mod tests {
         renderer.resize(4);
 
         renderer.writer.writes_until_failure = Some(1);
-        assert!(
-            renderer
-                .draw_surface(surface(&["abcdefghij", "xy"], None))
-                .is_err()
-        );
+        renderer
+            .draw_surface(surface(&["abcdefghij", "xy"], None))
+            .unwrap_err();
         assert!(renderer.previous.is_none());
 
         let before = renderer.writer.buffer.len();
@@ -1428,6 +1495,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_colour_policy_matches_pounds_term() {
+        let policy = |set: &[(&str, &str)]| {
+            super::colors_from(|name| {
+                set.iter()
+                    .find(|(key, value)| *key == name && !value.is_empty())
+                    .map(|(_, value)| (*value).into())
+            })
+        };
+
+        assert!(policy(&[]));
+        assert!(policy(&[("NO_COLOR", "")]));
+        assert!(!policy(&[("NO_COLOR", "1")]));
+        assert!(!policy(&[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]));
+        assert!(!policy(&[("CLICOLOR", "0")]));
+        assert!(!policy(&[("TERM", "dumb")]));
+        assert!(policy(&[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "1")]));
+        assert!(!policy(&[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "0")]));
+    }
+
+    #[test]
+    fn disabling_colours_keeps_the_other_attributes() {
+        let mut surface = Surface::new();
+        surface.write(
+            "x",
+            Style::new()
+                .fg(Color::Red)
+                .bg(Color::Rgb(1, 2, 3))
+                .bold()
+                .reverse(),
+        );
+        surface.write("y", Style::new().fg(Color::Indexed(9)));
+
+        let mut plain = Renderer::new(Vec::new()).colors(false);
+        plain.draw_surface(surface.clone()).unwrap();
+        let mut coloured = Renderer::new(Vec::new()).colors(true);
+        coloured.draw_surface(surface).unwrap();
+
+        assert_eq!(plain.into_inner(), b"\x1b[0;1;7mx\x1b[0my\x1b[K");
+        assert!(String::from_utf8_lossy(&coloured.into_inner()).contains("31"));
+    }
+
     fn styled_surface(text: &str) -> Surface {
         let mut surface = Surface::new();
         surface.write(text, Style::new().bold());
@@ -1438,7 +1547,7 @@ mod tests {
     fn a_failed_write_after_an_sgr_is_reset_before_the_next_draw() {
         let mut renderer = Renderer::new(FlakyWriter::default());
         renderer.writer.writes_until_failure = Some(1);
-        assert!(renderer.draw_surface(styled_surface("red")).is_err());
+        renderer.draw_surface(styled_surface("red")).unwrap_err();
         assert!(renderer.writer.buffer.ends_with(b"1m"));
 
         let before = renderer.writer.buffer.len();
@@ -1450,17 +1559,17 @@ mod tests {
     fn clear_and_restore_cursor_reset_a_style_left_by_a_failed_write() {
         let mut renderer = Renderer::new(FlakyWriter::default());
         renderer.writer.writes_until_failure = Some(1);
-        assert!(renderer.draw_surface(styled_surface("red")).is_err());
+        renderer.draw_surface(styled_surface("red")).unwrap_err();
 
         let before = renderer.writer.buffer.len();
         renderer.restore_cursor().unwrap();
         assert_eq!(&renderer.writer.buffer[before..], b"\x1b[0m");
 
         renderer.writer.writes_until_failure = Some(1);
-        assert!(renderer.draw_surface(styled_surface("red")).is_err());
-        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(styled_surface("red")).unwrap_err();
+        let before_clear = renderer.writer.buffer.len();
         renderer.clear().unwrap();
-        assert!(renderer.writer.buffer[before..].starts_with(b"\x1b[0m"));
+        assert!(renderer.writer.buffer[before_clear..].starts_with(b"\x1b[0m"));
     }
 
     #[test]
@@ -1516,9 +1625,9 @@ mod tests {
         let before = renderer.writer.buffer.len();
         renderer.restore_cursor().unwrap();
         assert_eq!(&renderer.writer.buffer[before..], b"\x1b[?25h");
-        let before = renderer.writer.buffer.len();
+        let before_again = renderer.writer.buffer.len();
         renderer.restore_cursor().unwrap();
-        assert_eq!(renderer.writer.buffer.len(), before);
+        assert_eq!(renderer.writer.buffer.len(), before_again);
     }
 
     #[test]
@@ -1537,7 +1646,9 @@ mod tests {
     fn a_redraw_after_a_failed_write_does_not_continue_mid_row() {
         let mut renderer = Renderer::new(FlakyWriter::default()).width(10);
         renderer.writer.writes_until_failure = Some(3);
-        assert!(renderer.draw_surface(surface(&["HELLO"], None)).is_err());
+        renderer
+            .draw_surface(surface(&["HELLO"], None))
+            .unwrap_err();
         assert_eq!(renderer.writer.buffer, b"HEL");
 
         let before = renderer.writer.buffer.len();
