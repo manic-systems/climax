@@ -16,7 +16,7 @@ pub use app::{
     run_with,
 };
 #[cfg(feature = "parse")]
-pub use app::{try_run, try_run_from};
+pub use app::{main, try_run, try_run_from};
 /// Types needed to build and match review prompts and to call `with_config`,
 /// at the crate root, next to the `Context` methods that build them.
 #[cfg(feature = "interactive")]

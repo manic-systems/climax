@@ -158,10 +158,32 @@ impl From<bang::Error> for Error {
             _ => ErrorKind::Interactive,
         };
         let signal = value.signal().map(bang::terminal::Signal::as_raw);
+        let cleanup = if kind == ErrorKind::Cancelled {
+            cleanup_errors(error::Error::source(&value))
+        } else {
+            Vec::new()
+        };
         let mut error = Self::with_source(kind, value);
         error.signal = signal;
-        error
+        cleanup.into_iter().fold(error, Self::with_related)
     }
+}
+
+/// The teardown failures a signalled or cancelled session also hit, which
+/// bang keeps only inside the opaque source of its error.
+#[cfg(feature = "interactive")]
+fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
+    source
+        .and_then(|source| source.downcast_ref::<bang::advanced::LiveSessionError>())
+        .map_or(&[][..], bang::advanced::LiveSessionError::cleanup_failures)
+        .iter()
+        .map(|failure| {
+            Error::with_source(
+                ErrorKind::Interactive,
+                io::Error::other(format!("terminal cleanup failed, {failure}")),
+            )
+        })
+        .collect()
 }
 
 impl From<io::Error> for Error {
@@ -200,6 +222,24 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Io);
         assert_eq!(error.to_string(), "closed");
         assert!(error.source_error().is_some());
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn cleanup_failures_behind_an_interruption_become_related_errors() {
+        use bang::{advanced::LiveSessionError, terminal::{CleanupFailure, CleanupFailures, CleanupStage, Signal}};
+
+        let source = LiveSessionError::Cleanup {
+            primary: Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
+            failures: CleanupFailures::new(vec![
+                CleanupFailure::new(CleanupStage::Screen, io::Error::other("no tty")),
+                CleanupFailure::new(CleanupStage::RawMode, io::Error::other("EIO")),
+            ]),
+        };
+        let related = cleanup_errors(Some(&source));
+        assert_eq!(related.len(), 2);
+        assert_eq!(related[0].to_string(), "terminal cleanup failed, Screen: no tty");
+        assert!(cleanup_errors(Some(&LiveSessionError::Cancelled)).is_empty());
     }
 
     #[test]

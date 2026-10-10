@@ -36,4 +36,4 @@ pub use crate::{
     terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
 };
 #[cfg(feature = "parse")]
-pub use crate::{try_run, try_run_from};
+pub use crate::{main, try_run, try_run_from};
