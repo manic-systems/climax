@@ -816,12 +816,17 @@ fn finalise(
     path: &[&'static str],
     m: &Matches,
     globals: &[&'static ArgSpec],
-) -> Result<(), ErrorKind> {
+) -> Result<(), Error> {
     finalise_args(spec, m)?;
     finalise_groups(spec, m)?;
     if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
-        // empty/sub-less invocation shows help rather than a bare error
-        return Err(ErrorKind::Help(help::render(spec, path, globals, false)));
+        // the usage slot carries the whole help text, so the report lists the
+        // subcommands instead of a bare usage line
+        return Err(Error {
+            kind:      ErrorKind::MissingSubcommand,
+            usage:     Some(help::render(spec, path, globals, false)),
+            help_flag: None,
+        });
     }
     Ok(())
 }
@@ -1447,8 +1452,25 @@ mod tests {
             parse(&ROOT, &["nope"]),
             Err(ErrorKind::UnknownSubcommand { .. })
         ));
-        // bare invocation shows help
-        assert!(matches!(parse(&ROOT, &[]), Err(ErrorKind::Help(_))));
+        assert_eq!(parse(&ROOT, &[]).unwrap_err(), ErrorKind::MissingSubcommand);
+    }
+
+    #[test]
+    fn missing_subcommand_reports_the_help_text() {
+        let err = parse_spec(&ROOT, argv(&[])).unwrap_err();
+        assert!(!err.is_exit());
+        let help = help::render(&ROOT, &[], &[], false);
+        assert_eq!(err.usage.as_deref(), Some(help.as_str()));
+        let report = err.render();
+        assert!(report.starts_with("error: a subcommand is required\n\n"), "{report}");
+        assert!(report.ends_with(&help), "{report}");
+
+        let err = parse_spec(&MIXED, argv(&["p1", "a1"])).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::MissingSubcommand);
+        assert_eq!(
+            err.usage.as_deref(),
+            Some(help::render(&MIXED, &[], &[], false).as_str())
+        );
     }
 
     // positionals and subs on one command (`prog <process> <access> COMMAND`)

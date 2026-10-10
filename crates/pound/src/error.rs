@@ -32,7 +32,9 @@ pub enum ErrorKind {
         /// the known subcommand it was probably meant to be, when one is close
         closest: Option<String>,
     },
-    /// a subcommand was required but none given
+    /// a subcommand was required but none given. the parser attaches the
+    /// command's help text, so it reaches stderr with status 2 like any other
+    /// failure
     MissingSubcommand,
     /// a value failed to parse into its target type
     Value {
@@ -148,7 +150,9 @@ impl fmt::Display for ErrorKind {
 pub struct Error {
     /// what happened
     pub kind:      ErrorKind,
-    /// the usage line of the command that raised it, when it came from a parse
+    /// the usage line of the command that raised it, when it came from a parse.
+    /// for [`ErrorKind::MissingSubcommand`] raised by the parser it is the whole
+    /// help text, so the report lists the subcommands to pick from
     pub usage:     Option<String>,
     /// the spelling that still reaches the generated help, if any does
     pub help_flag: Option<&'static str>,
