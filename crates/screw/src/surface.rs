@@ -162,6 +162,7 @@ impl Default for Row {
 pub struct Surface {
     rows:   Vec<Row>,
     cursor: Option<Position>,
+    sealed: bool,
 }
 
 impl Default for Surface {
@@ -176,6 +177,7 @@ impl Surface {
         Self {
             rows:   vec![Row::new()],
             cursor: None,
+            sealed: false,
         }
     }
 
@@ -225,6 +227,7 @@ impl Surface {
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
         let mut col = self.current_col();
         let mut first = true;
+        let sealed = std::mem::take(&mut self.sealed);
         for (_, segment) in segments(text.as_ref()) {
             match segment {
                 Segment::Newline => self.newline(),
@@ -235,6 +238,7 @@ impl Surface {
                 },
                 Segment::Cluster { text, width, .. } => {
                     let joined = (first || width == 0)
+                        && !(sealed && first)
                         && self
                             .current_row_mut()
                             .cells
@@ -257,6 +261,12 @@ impl Surface {
             first = false;
             col = segment.advance(col);
         }
+    }
+
+    /// Stops the next write from joining the cells already on the row, so a boundary between
+    /// independently measured pieces cannot merge clusters.
+    pub(crate) const fn seal(&mut self) {
+        self.sealed = true;
     }
 
     /// Ends the current row with a hard break and starts another.
