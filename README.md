@@ -272,7 +272,7 @@ picks the code for any error. A cancellation with an explicit code stays silent
 and any other error is still printed.
 
 ```rust,no_run
-use climax::prelude::*;
+use climax::{ResultExt as _, prelude::*};
 
 fn main() -> std::process::ExitCode {
     climax::main_with(|cx| {
@@ -288,10 +288,12 @@ fn main() -> std::process::ExitCode {
 }
 ```
 
-`ResultExt::context` turns any `Send + Sync` error into an application error
-that reads `message: source` and keeps the source, and `app_err` keeps the
-source's own text. A `Box<dyn std::error::Error + Send + Sync>` converts with
-`?`.
+`ResultExt::context`, imported as `climax::ResultExt`, turns any `Send + Sync`
+error into an application error that reads `message: source` and keeps the
+source, and `app_err` keeps the source's own text. The prelude leaves it out so
+that `anyhow::Context` can sit beside `climax::prelude::*`. A
+`Box<dyn std::error::Error + Send + Sync>` converts with `?`, and with the
+`anyhow` feature an `anyhow::Error` does too, keeping its chain as the source.
 
 An application that wants a mapping beyond that calls `try_run` and converts the
 `climax::Error` itself. Help and version arrive as a parse error that asks to

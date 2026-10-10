@@ -12,6 +12,7 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [features]
+anyhow      = [ "dep:anyhow" ]
 default     = [ "derive", "interactive", "parse", "render", "structured" ]
 derive      = [ "parse", "dep:climax-derive" ]
 interactive = [ "dep:bang" ]
@@ -28,6 +29,7 @@ name              = "status"
 required-features = [ "render" ]
 
 [dependencies]
+anyhow = { workspace = true, optional = true }
 bang = { workspace = true, optional = true }
 climax-derive = { workspace = true, optional = true }
 pound = { workspace = true, optional = true, features = [
