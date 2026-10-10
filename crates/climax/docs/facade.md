@@ -221,6 +221,7 @@ fn main() -> std::process::ExitCode {
 - 0 for success, and for help and version output on stdout.
 - 1 for an application error, printed to stderr as `error: ...`.
 - 2 for a parse failure printed to stderr (`main` only).
+- 141 when writing help or version output fails because stdout is a closed pipe (`main` only), and 1 for any other write failure.
 - 130 for a cancellation, including `Error::cancelled()`, or 128 plus the signal
   number when a signal interrupted a live prompt. Either exit is silent unless
   related errors are attached, in which case those print instead.
