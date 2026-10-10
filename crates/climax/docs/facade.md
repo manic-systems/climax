@@ -40,14 +40,12 @@ in the prelude.
 keeping the ordinary outcome in the facade.
 
 ```rust,ignore
-let outcome = cx
+let shell = cx
     .select("Shell")
     .choice("bash", Shell::Bash)
     .choice("zsh", Shell::Zsh)
-    .interact()?;
-let climax::PromptOutcome::Submit(shell) = outcome else {
-    return Ok(());
-};
+    .interact()?
+    .or_cancel()?;
 ```
 
 An ordinary application therefore needs only `climax`. It re-exports
@@ -55,7 +53,10 @@ An ordinary application therefore needs only `climax`. It re-exports
 review types that typed prompts return, consume, and configure.
 
 The submitted value is the user's `Shell`, not `bang_core::Value`, and leaving
-is a typed `PromptOutcome::Leave`. Select, multi-select, search, text,
+is a typed `PromptOutcome::Leave`. `or_cancel` turns it into a `Cancelled` error
+for a handler that cannot go on without an answer, `into_option` and `unwrap_or`
+give the fallbacks, and matching on the outcome handles leaving explicitly.
+Select, multi-select, search, text,
 password, confirm, date, and number prompts follow the same path. `Context`
 hands out `password`, `confirm`, `date`, and `number::<T>` alongside the list
 prompts. Every builder implements `bang::Configurable` with an associated
@@ -113,9 +114,11 @@ transient terminal, and ANSI presentation support. `InteractionMode` can force
 or disable interaction. Unavailable prompts return an error, and Climax never
 invents a typed fallback value.
 
-`StatusMode::Auto` animates only on a suitable transient terminal and is silent
-otherwise. Plain, live, and silent modes override it, and silent mode never
-emits status or final-message text. A status started with `during` prints
+`StatusMode::Auto` animates only on a suitable transient terminal and resolves
+to plain lines otherwise, so a piped run still reports its final message on
+success and its failure message on failure, one line each. Plain, live, and
+silent modes override it, and silent mode never emits status or final-message
+text. Set `StatusMode::Silent` for a `--quiet` flag. A status started with `during` prints
 `final_message` only when the operation succeeds, `failure_message` when it
 errors, unwinds, or the handle is dropped before finishing, and nothing when
 `failure_message` is unset. Status handles register widgets with one
@@ -203,13 +206,57 @@ fn main() -> std::process::ExitCode {
 }
 ```
 
-Help and version go to stdout with status 0, parse failures go to stderr with
-status 2, and application failures go to stderr with status 1. A cancellation
-that reaches `main` exits with status 130, or with 128 plus the signal number
-when a signal interrupted a live prompt. Either exit is silent unless related
-errors are attached, in which case those print instead. `try_run` and
-`try_run_from` are the non-reporting paths for embedding and tests. `run_with`
-starts from an already constructed command.
+`main_with` is the same entry point for an application that takes no arguments.
+
+```rust,ignore
+fn main() -> std::process::ExitCode {
+    climax::main_with(|cx: climax::Context| -> climax::Result<()> { run(&cx) })
+}
+```
+
+### Exit codes
+
+`main` and `main_with` map outcomes to exit codes in one place.
+
+- 0 for success, and for help and version output on stdout.
+- 1 for an application error, printed to stderr as `error: ...`.
+- 2 for a parse failure printed to stderr (`main` only).
+- 130 for a cancellation, including `Error::cancelled()`, or 128 plus the signal
+  number when a signal interrupted a live prompt. Either exit is silent unless
+  related errors are attached, in which case those print instead.
+- The code given to `Error::with_exit_code`, for an error of any kind. A
+  cancellation with an explicit code stays silent and any other error is still
+  printed.
+
+`try_run` and `try_run_from` are the non-reporting paths for embedding and
+tests. `run_with` starts from an already constructed command.
+
+`ResultExt`, in the prelude, adds `.context(message)` and `.app_err()` to any
+`Result` whose error is a `Send + Sync` `std::error::Error`, so
+`text.parse::<u32>().context("reading the count")?` becomes an application
+error that reads `reading the count: invalid digit found in string` and keeps
+the original as its source. A `Box<dyn std::error::Error + Send + Sync>`
+converts into `Error` with `?`.
+
+## Testing
+
+`climax::testing` runs an application in-process, with the reporting and exit
+codes of `main` and `main_with`. `testing::run(args, script, handler)` parses
+`args` like `main`, and `testing::run_with(script, handler)` is the form for an
+application without arguments. Both return an `Outcome` with `exit_code`,
+`stdout`, `stderr` and the `error`, and nothing touches the process.
+
+A `Script` lists the answer to each prompt in order, with `select_nth`,
+`multi_select_nth`, `text`, `text_attempts`, `confirm`, `enter`, `esc` and the
+`keys` escape hatch. Each method answers exactly one prompt. A script with
+input the application never read fails the run with a panic that counts the
+unused scripts and events, and a prompt after the script ends is an
+`ErrorKind::InputEnded` error. `Capture` is the cloneable `Write + Send`
+buffer behind the output streams, for tests that build their own `Context`
+with `with_output_writer`.
+
+`Capture` is always available. `Script` and `run_with` need `interactive`, and
+`run` needs `interactive` and `parse`.
 
 ## Results and sideband output
 
@@ -289,8 +336,13 @@ crate `pound-derive-impl`, which takes the root path and a help switch.
 The root path of `climax-derive` is fixed at `::climax::pound`, so a crate that
 renames its `climax` dependency cannot use the derive.
 
-Serde's derives need `#[serde(crate = "climax::serde")]` when serde is reached
-through `climax`.
+With the `derive` and `structured` features, `#[climax::serde(Serialize,
+Deserialize)]` derives serde's traits rooted at `::climax::serde` and adds
+`#[serde(crate = "::climax::serde")]`, keeping the item and its other
+attributes. It takes plain derive names, rejects an empty list, and must come
+before other derives that share serde's helper attributes. Without `derive`,
+serde's own derives need `#[serde(crate = "climax::serde")]` when serde is
+reached through `climax`.
 
 ## Ownership
 
@@ -312,6 +364,7 @@ and `Error::application_context` retain source chains without making dependency
 error enums part of the facade contract. Uncaught cancellation exits with
 status 130, or 128 plus the signal number for an interrupted prompt, silently
 unless related errors are attached, in which case those print instead.
+`Error::with_exit_code` replaces the code for any kind.
 
 A cancelled `select`, `multi_select`, `search`, `text`, `password`, `confirm`,
 `date`, `number`, or `review` resolves to `PromptOutcome::Leave`, leaving the
