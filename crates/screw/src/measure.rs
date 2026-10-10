@@ -162,6 +162,30 @@ pub fn truncate(text: &str, columns: usize) -> &str {
     text
 }
 
+/// Reduces `text` to a single line that is safe to print to a terminal.
+///
+/// Escapes and other controls that [`Surface::write`](crate::Surface::write) drops are removed, and
+/// every line break or tab becomes one space.
+///
+/// ```
+/// assert_eq!(screw::single_line("a\x1b[0m\nb\tc"), "a[0m b c");
+/// assert_eq!(screw::single_line("plain"), "plain");
+/// ```
+#[must_use]
+pub fn single_line(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(char::is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut line = String::with_capacity(text.len());
+    for (_, segment) in segments(text) {
+        match segment {
+            Segment::Newline | Segment::Tab => line.push(' '),
+            Segment::Cluster { text, .. } => line.push_str(text),
+        }
+    }
+    Cow::Owned(line)
+}
+
 /// Splits `missing` columns of padding into the amounts before and after text.
 pub(crate) const fn split_padding(missing: usize, align: Align) -> (usize, usize) {
     match align {
