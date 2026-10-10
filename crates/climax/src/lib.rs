@@ -28,15 +28,21 @@
     ),
     doc = include_str!("../README.md")
 )]
+#![doc = include_str!("../docs/facade.md")]
+#![warn(missing_docs)]
 
 mod app;
+/// The application error type and its categories.
 pub mod error;
 pub mod output;
 pub mod prelude;
 mod sync;
+/// Terminal capability facts, policy overrides and terminal applications.
 pub mod terminal;
 
-#[cfg(feature = "render")] pub mod status;
+/// Transient status lines drawn on the shared renderer.
+#[cfg(feature = "render")]
+pub mod status;
 
 pub use app::{
     Context,

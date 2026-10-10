@@ -54,6 +54,13 @@ where
     run_with(C::try_parse_from(args)?, f)
 }
 
+/// Run an application from an already built command and report its result.
+///
+/// The handler gets a fresh `Context` and the command. When it succeeds the
+/// registered results are written and transient output is flushed. When it fails
+/// they are discarded and its error is returned, with any cleanup failure attached
+/// as a related error. Nothing is parsed and no process exit status is chosen,
+/// which `main` does for a parsed command.
 pub fn run_with<C, F>(command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
@@ -229,6 +236,9 @@ impl Default for Context {
 
 impl Context {
     #[must_use]
+    /// A context for the current process, using stdin, stdout and stderr.
+    ///
+    /// Terminal capabilities are detected once here, and output starts in text mode.
     pub fn new() -> Self {
         let terminal = crate::terminal::TerminalPolicy::process();
         #[cfg(feature = "render")]
@@ -349,11 +359,25 @@ impl Context {
 
     #[cfg(feature = "render")]
     #[must_use]
+    /// Start building a transient status line for a long operation.
+    ///
+    /// Statuses share one renderer on the transient channel, and prompts suspend them
+    /// while they hold the terminal. Call `start`, `finish` or `during` on the result
+    /// to show it.
+    ///
+    /// Ctrl-C during a live status with no prompt open uses the default signal
+    /// disposition, so the process dies and the spinner line is left on the screen.
+    /// Only a prompt installs the handlers that restore the terminal and turn the
+    /// signal into an error.
     pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
         crate::status::Status::new(message, self.transient.clone())
     }
 
     #[must_use]
+    /// The output handle for results, streams and notices.
+    ///
+    /// Every handle shares one lifecycle, so a second finite result through any of them
+    /// is an error. Take it after choosing a format with `Self::set_output_format`.
     pub fn output(&self) -> crate::output::Output {
         self.output.clone()
     }
@@ -398,11 +422,17 @@ impl Context {
     }
 
     #[must_use]
+    /// The terminal policy this context applies, with its capabilities and any mode
+    /// overrides.
     pub const fn terminal(&self) -> crate::terminal::TerminalPolicy {
         self.terminal
     }
 
     #[must_use]
+    /// Whether prompts can run under the current policy.
+    ///
+    /// Forced interaction reports `true` and disabled interaction `false`. Otherwise
+    /// it needs a terminal stdin, a terminal transient stream and ANSI support.
     pub const fn interaction_available(&self) -> bool {
         self.terminal.interaction_available()
     }
@@ -544,6 +574,11 @@ impl Context {
         not(any(feature = "interactive", feature = "render")),
         allow(clippy::missing_const_for_fn)
     )]
+    /// Replace the detected terminal capabilities, for tests or for a host that knows
+    /// better.
+    ///
+    /// The interaction driver is rederived unless one was injected, and the status mode
+    /// is reapplied, which fails when the status coordinator cannot switch.
     pub fn set_terminal_capabilities(
         &mut self,
         capabilities: crate::terminal::TerminalCapabilities,
@@ -585,6 +620,9 @@ impl Context {
     }
 
     #[cfg_attr(not(feature = "render"), allow(clippy::missing_const_for_fn))]
+    /// Override how statuses present, see [`StatusMode`](crate::terminal::StatusMode).
+    ///
+    /// Fails when the status coordinator cannot apply the resulting mode.
     pub fn set_status_mode(&mut self, mode: crate::terminal::StatusMode) -> Result<()> {
         self.terminal.set_status_mode(mode);
         #[cfg(feature = "render")]
@@ -594,6 +632,11 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
+    /// Use `interaction` for every prompt made afterwards and force interaction on,
+    /// since the caller supplied the driver.
+    ///
+    /// Later capability changes no longer replace it. Prompts made earlier keep the
+    /// driver they captured.
     pub fn set_interaction(&mut self, interaction: bang::Interaction) {
         self.terminal
             .set_interaction_mode(crate::terminal::InteractionMode::Force);
@@ -603,12 +646,15 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     #[must_use]
+    /// Builder form of [`Self::set_interaction`].
     pub fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
         self.set_interaction(interaction);
         self
     }
 
     #[must_use]
+    /// Write finite results and streams to `writer` instead of stdout, directly and not
+    /// around a live status. Notices keep their own destination.
     pub fn with_output_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
         self.output = self.output.with_writer(writer);
         self
@@ -679,6 +725,7 @@ impl Context {
         Ok(self)
     }
 
+    /// Builder form of [`Self::set_terminal_capabilities`].
     pub fn with_terminal_capabilities(
         mut self,
         capabilities: crate::terminal::TerminalCapabilities,
@@ -688,11 +735,13 @@ impl Context {
     }
 
     #[must_use]
+    /// Builder form of [`Self::set_interaction_mode`].
     pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
         self.set_interaction_mode(mode);
         self
     }
 
+    /// Builder form of [`Self::set_status_mode`], failing for the same reason.
     pub fn with_status_mode(mut self, mode: crate::terminal::StatusMode) -> Result<Self> {
         self.set_status_mode(mode)?;
         Ok(self)
