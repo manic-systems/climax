@@ -1107,6 +1107,14 @@ mod tests {
     }
 
     #[test]
+    fn positionals_are_named_as_usage_names_them() {
+        let Err(ErrorKind::MissingRequired(name)) = parse(&FLAT, &[]) else {
+            panic!("expected a missing positional");
+        };
+        assert_eq!(name, "NAME");
+    }
+
+    #[test]
     fn errors() {
         assert!(matches!(
             parse(&FLAT, &["--nope"]),
