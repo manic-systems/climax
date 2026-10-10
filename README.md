@@ -23,14 +23,14 @@ enum Shell {
     Zsh,
 }
 
-let outcome = bang::select("Shell")
+let outcome = climax::bang::select("Shell")
     .choice("bash", Shell::Bash)
     .choice("zsh", Shell::Zsh)
     .interact()?;
-let bang::PromptOutcome::Submit(shell) = outcome else {
+let climax::PromptOutcome::Submit(shell) = outcome else {
     return Ok(());
 };
-# Ok::<(), bang::Error>(())
+# Ok::<(), climax::bang::Error>(())
 ```
 
 Bang is an interactive layer over screw. Every bang widget is also a
