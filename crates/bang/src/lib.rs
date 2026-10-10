@@ -48,8 +48,11 @@ pub use prompt::{
     MultiSelectConfig,
     MultiSelectPrompt,
     PromptOutcome,
+    SearchConfig,
+    SearchPrompt,
     SelectConfig,
     SelectPrompt,
     multi_select,
+    search,
     select,
 };
