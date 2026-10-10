@@ -152,4 +152,119 @@ result's commit-on-success guarantee. Streamed output is written around the
 live status region, and while a prompt holds the terminal a stream write from
 another thread waits for the release.
 
+## Recipes
+
+### A `--json` flag
+
+`Context` starts in text mode. Switch it with `Context::set_output_format`, or
+build one with `Context::with_output_format` when you construct the context
+yourself, before taking `cx.output()` so the handle you hold sees the format.
+In `Format::Json` a registered result is serialized as its natural JSON shape
+rather than its text projection, a `stream` writes JSON Lines, and `notice`
+output is suppressed so stdout and stderr stay machine readable.
+
+```rust,no_run
+use climax::prelude::*;
+
+#[derive(climax::serde::Serialize)]
+#[serde(crate = "climax::serde")]
+struct Report {
+    files: usize,
+}
+
+/// scan the tree
+#[derive(Parse)]
+struct Args {
+    /// print the result as JSON
+    #[pound(long)]
+    json: bool,
+}
+
+fn main() -> std::process::ExitCode {
+    climax::main(|mut cx, args: Args| {
+        if args.json {
+            cx.set_output_format(Format::Json);
+        }
+        cx.output().notice("scanning")?;
+        let report = Report { files: 3 };
+        cx.output()
+            .result(&report)
+            .text(|report| format!("{} files", report.files))
+            .emit()
+    })
+}
+```
+
+### A `--yes` flag that skips prompts
+
+A prompt is ordinary control flow, so skip it by not asking. Without a
+terminal on stdin a prompt fails with `ErrorKind::InteractionUnavailable`
+instead of guessing an answer, which is what a script that forgot `--yes`
+should see.
+
+```rust,no_run
+use climax::prelude::*;
+
+/// deploy the build
+#[derive(Parse)]
+struct Args {
+    /// do not ask for confirmation
+    #[pound(long)]
+    yes: bool,
+}
+
+fn main() -> std::process::ExitCode {
+    climax::main(|cx, args: Args| {
+        if !args.yes {
+            let PromptOutcome::Submit(true) = cx.confirm("Deploy now?").interact()? else {
+                return Ok(());
+            };
+        }
+        cx.output().result(&"deployed").text(|state| *state).emit()
+    })
+}
+```
+
+### Exit codes
+
+`climax::main` exits 0 on success, 1 for an application error, 2 for a parse
+failure and 130, or 128 plus the signal number, for a cancellation. An
+application that wants its own mapping calls `try_run` and converts the
+`climax::Error` itself. Help and version arrive as a parse error that asks to
+exit, which this recipe prints and treats as success.
+
+```rust,no_run
+use std::process::ExitCode;
+
+use climax::prelude::*;
+
+/// check the tree
+#[derive(Parse)]
+struct Args {}
+
+fn run(_cx: Context, _args: Args) -> climax::Result<()> {
+    Err(Error::message("tree is dirty"))
+}
+
+fn main() -> ExitCode {
+    let Err(error) = climax::try_run(run) else {
+        return ExitCode::SUCCESS;
+    };
+    let parse = error
+        .source_error()
+        .and_then(|source| source.downcast_ref::<climax::pound::Error>());
+    if let Some(parse) = parse.filter(|parse| parse.is_exit()) {
+        println!("{}", parse.render());
+        return ExitCode::SUCCESS;
+    }
+    eprintln!("error: {error}");
+    ExitCode::from(match error.kind() {
+        ErrorKind::Parse => 2,
+        ErrorKind::Cancelled => 130,
+        ErrorKind::InteractionUnavailable => 3,
+        _ => 1,
+    })
+}
+```
+
 The suite is at an early stage and its APIs are not yet stable.
