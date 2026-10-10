@@ -54,7 +54,7 @@ impl<W> RetainedRenderer<W>
 where
     W: Write,
 {
-    pub const fn new(writer: W) -> Self {
+    pub fn new(writer: W) -> Self {
         Self {
             renderer: Renderer::new(writer),
         }

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{
-    self,
-    Write,
+use std::{
+    io::{
+        self,
+        Write,
+    },
+    sync::OnceLock,
 };
 
 use crate::{
@@ -64,6 +67,16 @@ pub struct Renderer<W> {
     pending_cursor: Option<bool>,
     force_full: bool,
     rendition_uncertain: bool,
+    colors: bool,
+}
+
+/// Whether the environment permits colour output.
+///
+/// This is false when `NO_COLOR` is set to a non-empty value, following <https://no-color.org>.
+/// The environment is read once, on first use, and every [`Renderer`] starts from the result.
+pub fn colors_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()))
 }
 
 impl<W> Renderer<W>
@@ -71,8 +84,8 @@ where
     W: Write,
 {
     /// Creates a renderer over `writer` with no width or height limit, clipping, the default theme
-    /// and untouched cursor visibility.
-    pub const fn new(writer: W) -> Self {
+    /// and untouched cursor visibility. Colours follow [`colors_enabled`].
+    pub fn new(writer: W) -> Self {
         Self {
             writer,
             previous: None,
@@ -86,7 +99,16 @@ where
             pending_cursor: None,
             force_full: false,
             rendition_uncertain: false,
+            colors: colors_enabled(),
         }
+    }
+
+    /// Chooses whether foreground and background colours are written. Other attributes such as
+    /// bold and reverse are kept either way. Overrides the `NO_COLOR` default of [`Renderer::new`].
+    #[must_use]
+    pub const fn colors(mut self, enabled: bool) -> Self {
+        self.colors = enabled;
+        self
     }
 
     /// Sets the terminal width in columns, which rows are clipped or wrapped to.
@@ -305,6 +327,9 @@ where
 
     fn layout_surface(&self, surface: Surface) -> Surface {
         let mut surface = layout_surface(surface, self.width.map(usable_columns), self.layout_mode);
+        if !self.colors {
+            surface.drop_colors();
+        }
         if let Some(height) = self.height {
             surface.fit_height(height);
         }
@@ -752,7 +777,7 @@ mod tests {
     use std::io;
 
     use crate::{
-        CursorMerge, CursorVisibility, Edge, Fill, Floating, Insets, Layers, LayoutMode, Position,
+        Color, CursorMerge, CursorVisibility, Edge, Fill, Floating, Insets, Layers, LayoutMode, Position,
         Renderer, Size, Style, Surface, Widget, renderer::layout_surface,
     };
 
@@ -1289,6 +1314,24 @@ mod tests {
             update, b"\x1b[0mabc\x1b[K",
             "a redraw after a failed write must start below the cursor, not climb: {update:?}"
         );
+    }
+
+    #[test]
+    fn disabling_colours_keeps_the_other_attributes() {
+        let mut surface = Surface::new();
+        surface.write(
+            "x",
+            Style::new().fg(Color::Red).bg(Color::Rgb(1, 2, 3)).bold().reverse(),
+        );
+        surface.write("y", Style::new().fg(Color::Indexed(9)));
+
+        let mut plain = Renderer::new(Vec::new()).colors(false);
+        plain.draw_surface(surface.clone()).unwrap();
+        let mut coloured = Renderer::new(Vec::new()).colors(true);
+        coloured.draw_surface(surface).unwrap();
+
+        assert_eq!(plain.into_inner(), b"\x1b[0;1;7mx\x1b[0my\x1b[K");
+        assert!(String::from_utf8_lossy(&coloured.into_inner()).contains("31"));
     }
 
     fn styled_surface(text: &str) -> Surface {
