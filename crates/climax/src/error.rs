@@ -292,6 +292,39 @@ impl From<Box<dyn error::Error + Send + Sync + 'static>> for Error {
     }
 }
 
+/// an `anyhow::Error` becomes the source of an [`ErrorKind::Application`]
+/// error, and its whole chain is kept so it prints under `Caused by:`
+#[cfg(feature = "anyhow")]
+impl From<anyhow::Error> for Error {
+    fn from(value: anyhow::Error) -> Self {
+        Self::with_source(ErrorKind::Application, AnyhowSource(value))
+    }
+}
+
+#[cfg(feature = "anyhow")]
+struct AnyhowSource(anyhow::Error);
+
+#[cfg(feature = "anyhow")]
+impl fmt::Debug for AnyhowSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+#[cfg(feature = "anyhow")]
+impl fmt::Display for AnyhowSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[cfg(feature = "anyhow")]
+impl error::Error for AnyhowSource {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        error::Error::source(&*self.0)
+    }
+}
+
 struct BoxedSource(Box<dyn error::Error + Send + Sync + 'static>);
 
 impl fmt::Debug for BoxedSource {
@@ -315,12 +348,15 @@ impl error::Error for BoxedSource {
 /// converts a foreign `Result` into a [`Result`], making the error the source
 /// of an [`ErrorKind::Application`] error
 ///
-/// Implemented for every `Result<T, E>` whose error is a `Send + Sync`
-/// `std::error::Error`, and in the prelude. The error becomes the source of an
-/// [`ErrorKind::Application`] error.
+/// implemented for every `Result<T, E>` with a `Send + Sync`
+/// `std::error::Error`, and imported by name because the prelude leaves it out
+/// to avoid clashing with `anyhow::Context`
 ///
 /// ```
-/// use climax::prelude::*;
+/// use climax::{
+///     ResultExt as _,
+///     prelude::*,
+/// };
 ///
 /// fn count(text: &str) -> climax::Result<u32> {
 ///     let count = text.parse::<u32>().context("reading the count")?;
@@ -343,15 +379,7 @@ pub trait ResultExt<T> {
     /// fails when `self` is an `Err`
     fn context(self, message: impl Into<String>) -> Result<T>;
 
-    /// Turn the error into an application error carrying the original error's
-    /// text and keeping it as the source.
-    ///
-    /// ```
-    /// use climax::prelude::*;
-    ///
-    /// let error = "x".parse::<u8>().app_err().unwrap_err();
-    /// assert_eq!(error.kind(), ErrorKind::Application);
-    /// ```
+    /// carries the original error's text and keeps it as the source
     ///
     /// # Errors
     ///
@@ -417,6 +445,25 @@ mod tests {
             format!("{converted:?}"),
             "could not save\n\nCaused by:\n    disk full"
         );
+    }
+
+    #[cfg(feature = "anyhow")]
+    #[test]
+    fn anyhow_errors_keep_their_context_chain_as_the_source() {
+        fn read() -> Result<u8> {
+            let value = anyhow::Context::context("x".parse::<u8>(), "reading the count")?;
+            Ok(value)
+        }
+
+        let error = read().unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Application);
+        assert_eq!(error.to_string(), "reading the count");
+        assert_eq!(
+            format!("{error:?}"),
+            "reading the count\n\nCaused by:\n    invalid digit found in string",
+        );
+        let source = error.source_error().expect("the anyhow error is kept");
+        assert_eq!(source.to_string(), "reading the count");
     }
 
     #[test]
