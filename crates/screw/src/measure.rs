@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
+use core::iter;
 
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
@@ -123,8 +124,8 @@ pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
     for (_, segment) in segments(text) {
         match segment {
             Segment::Newline => {},
-            Segment::Tab => expanded.extend(std::iter::repeat_n(' ', segment.advance(col) - col)),
-            Segment::Cluster { text, .. } => expanded.push_str(text),
+            Segment::Tab => expanded.extend(iter::repeat_n(' ', segment.advance(col) - col)),
+            Segment::Cluster { text: cluster, .. } => expanded.push_str(cluster),
         }
         col = segment.advance(col);
     }
@@ -183,6 +184,37 @@ pub fn truncate(text: &str, columns: usize) -> &str {
     text
 }
 
+const fn is_line_break(ch: char) -> bool {
+    matches!(ch, '\r' | '\x0b' | '\x0c' | '\u{85}')
+}
+
+/// `text` reduced to one printable line, dropped controls are removed and
+/// breaks become spaces
+///
+/// ```
+/// assert_eq!(screw::single_line("a\x1b[0m\nb\tc"), "a[0m b c");
+/// assert_eq!(screw::single_line("plain"), "plain");
+/// ```
+#[must_use]
+pub fn single_line(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(char::is_control) {
+        return Cow::Borrowed(text);
+    }
+    let mut line = String::with_capacity(text.len());
+    for (index, part) in text.replace("\r\n", "\n").split(is_line_break).enumerate() {
+        if index > 0 {
+            line.push(' ');
+        }
+        for (_, segment) in segments(part) {
+            match segment {
+                Segment::Newline | Segment::Tab => line.push(' '),
+                Segment::Cluster { text: cluster, .. } => line.push_str(cluster),
+            }
+        }
+    }
+    Cow::Owned(line)
+}
+
 /// `missing` columns of padding split into the amounts before and after text
 pub(crate) const fn split_padding(missing: usize, align: Align) -> (usize, usize) {
     match align {
@@ -214,12 +246,16 @@ fn pad_row(row: &str, columns: usize, align: Align) -> Cow<'_, str> {
         return Cow::Borrowed(row);
     }
     let (before, after) = split_padding(missing, align);
-    let row = if before > 0 && row.contains('\t') {
+    let content = if before > 0 && row.contains('\t') {
         expand_tabs(row)
     } else {
         Cow::Borrowed(row)
     };
-    Cow::Owned(format!("{}{row}{}", " ".repeat(before), " ".repeat(after)))
+    Cow::Owned(format!(
+        "{}{content}{}",
+        " ".repeat(before),
+        " ".repeat(after)
+    ))
 }
 
 #[cfg(test)]
@@ -298,6 +334,15 @@ mod tests {
         assert_eq!(truncate(text, 3), text);
         assert_eq!(pad(text, 5, Align::Left), format!("{text}  "));
         assert_eq!(pad(text, 5, Align::Right), format!("  {text}"));
+    }
+
+    #[test]
+    fn single_line_breaks_at_every_control_line_break() {
+        assert_eq!(
+            single_line("a\rb\x0bc\x0cd\u{85}e\nf\r\ng"),
+            "a b c d e f g"
+        );
+        assert_eq!(single_line("a\r\n\r\nb"), "a  b");
     }
 
     #[test]
