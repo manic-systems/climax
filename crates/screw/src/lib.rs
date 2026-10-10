@@ -7,6 +7,7 @@
 extern crate alloc;
 
 mod geometry;
+mod layers;
 mod layout;
 mod plain;
 mod renderer;
@@ -24,6 +25,11 @@ pub use geometry::{
     Rect,
     Size,
     Viewport,
+};
+pub use layers::{
+    Edge,
+    Floating,
+    Layers,
 };
 pub use layout::{
     LayoutBuilder,
@@ -58,6 +64,8 @@ pub use style::{
 };
 pub use surface::{
     Cell,
+    CursorMerge,
+    Fill,
     Position,
     Row,
     RowBreak,

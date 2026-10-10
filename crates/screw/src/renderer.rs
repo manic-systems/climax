@@ -100,13 +100,21 @@ where
     }
 
     pub const fn resize(&mut self, width: usize) {
+        if matches!(self.width, Some(current) if current == width) {
+            return;
+        }
         self.width = Some(width);
-        // Terminal resize reflow is emulator- and mode-dependent. Retained
-        // state cannot safely infer the old physical frame at the new width.
         self.force_full = true;
     }
 
-    pub const fn resize_viewport(&mut self, width: usize, height: usize) {
+    pub fn resize_viewport(&mut self, width: usize, height: usize) {
+        if self
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous.physical.height() > height)
+        {
+            self.force_full = true;
+        }
         self.height = Some(height);
         self.resize(width);
     }
@@ -155,9 +163,13 @@ where
 
         if self.force_full {
             if let Some(previous) = &previous_physical {
-                move_to_top(&mut self.writer, final_position(previous), &mut cursor)?;
-                clear_surface(previous, &mut self.writer, &mut cursor, &mut stats)?;
-                cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
+                clear_reflowed(
+                    previous,
+                    self.width,
+                    &mut self.writer,
+                    &mut cursor,
+                    &mut stats,
+                )?;
             }
             write_initial_surface(
                 &next_physical,
@@ -205,19 +217,34 @@ where
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
 
-        move_to_top(
-            &mut self.writer,
-            final_position(&previous_physical),
-            &mut cursor,
-        )?;
-        clear_surface(
-            &previous_physical,
-            &mut self.writer,
-            &mut cursor,
-            &mut stats,
-        )?;
-        cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
-        self.update_cursor_visibility(false)?;
+        if self.force_full {
+            clear_reflowed(
+                &previous_physical,
+                self.width,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+            )?;
+        } else {
+            move_to_top(
+                &mut self.writer,
+                final_position(&previous_physical),
+                &mut cursor,
+            )?;
+            clear_surface(
+                &previous_physical,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+            )?;
+            cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
+        }
+        // restore visibility only if this renderer hid the cursor
+        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            && self.cursor_visible == Some(false)
+        {
+            self.update_cursor_visibility(true)?;
+        }
         self.writer.flush()?;
         self.force_full = false;
         Ok(stats)
@@ -281,10 +308,10 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
         let cursor_on_row = cursor.filter(|cursor| cursor.row == logical_row);
 
         if row.is_empty() {
-            if cursor_on_row.is_some_and(|cursor| cursor.col == 0) {
+            if let Some(cursor) = cursor_on_row {
                 physical_cursor = Some(Position {
                     row: out.height().saturating_sub(1),
-                    col: 0,
+                    col: cursor.col.min(max_columns),
                 });
             }
             previous_break = row.break_after();
@@ -396,6 +423,60 @@ fn move_to_top(writer: &mut impl Write, from: Position, cursor: &mut Cursor) -> 
     }
     *cursor = Cursor::default();
     Ok(())
+}
+
+/// reflowing terminals rewrap each hard-broken row from its original width, so
+/// after any resizes the frame top is the sum of those rewraps above the
+/// anchor, the erase below catches lines the estimate misses
+fn clear_reflowed(
+    previous: &Surface,
+    width: Option<usize>,
+    writer: &mut impl Write,
+    cursor: &mut Cursor,
+    stats: &mut RenderStats,
+) -> io::Result<()> {
+    let anchor = final_position(previous);
+    let row = width
+        .filter(|&width| width > 0)
+        .map_or(anchor.row, |width| {
+            previous
+                .rows()
+                .iter()
+                .take(anchor.row)
+                .map(|row| wrapped_lines(row.cells(), width))
+                .sum::<usize>()
+                + previous
+                    .rows()
+                    .get(anchor.row)
+                    .map_or(0, |row| wraps_before_column(row.cells(), width, anchor.col))
+        });
+    move_to_top(writer, Position { row, col: 0 }, cursor)?;
+    writer.write_all(b"\x1b[J")?;
+    stats.changed_rows += previous.height();
+    Ok(())
+}
+
+fn wrapped_lines(cells: &[Cell], width: usize) -> usize {
+    1 + wraps_before_column(cells, width, usize::MAX)
+}
+
+/// wraps of `cells` at `width` before `column`, counted per cell for wide cells
+fn wraps_before_column(cells: &[Cell], width: usize, column: usize) -> usize {
+    let mut wraps = 0;
+    let mut used = 0;
+    let mut consumed = 0;
+    for cell in cells {
+        if consumed >= column {
+            break;
+        }
+        if used + cell.width > width {
+            wraps += 1;
+            used = 0;
+        }
+        used += cell.width;
+        consumed += cell.width;
+    }
+    wraps
 }
 
 fn write_initial_surface(
@@ -603,5 +684,530 @@ impl Cursor {
             self.style = style;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        CursorMerge,
+        CursorVisibility,
+        Edge,
+        Fill,
+        Floating,
+        Insets,
+        Layers,
+        LayoutMode,
+        Position,
+        Renderer,
+        Size,
+        Style,
+        Surface,
+        Widget,
+        renderer::layout_surface,
+    };
+
+    fn surface(lines: &[&str], cursor: Option<Position>) -> Surface {
+        let mut surface = Surface::new();
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                surface.newline();
+            }
+            surface.write(line, Style::default());
+        }
+        if let Some(cursor) = cursor {
+            surface.set_cursor(cursor);
+        }
+        surface
+    }
+
+    #[test]
+    fn a_hard_break_after_an_empty_soft_continuation_row_starts_a_new_row() {
+        let mut logical = Surface::new();
+        logical.write("ab", Style::default());
+        logical.soft_wrap();
+        logical.newline();
+        logical.write("c", Style::default());
+        let laid_out = layout_surface(logical, Some(20), LayoutMode::Wrap);
+        assert_eq!(laid_out.plain_text(), "ab\nc");
+    }
+
+    #[test]
+    fn growing_frame_allocates_rows_before_diffing_them() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(&["one", "two"], None))
+            .unwrap();
+        let before = renderer.writer.len();
+
+        renderer
+            .draw_surface(surface(&["one", "two", "three", "four"], None))
+            .unwrap();
+
+        let update = &renderer.writer[before..];
+        assert!(
+            update.starts_with(b"\r\r\n\r\n\r\x1b[3A"),
+            "taller diff must create two rows before moving to the top: {update:?}"
+        );
+    }
+
+    #[test]
+    fn shrinking_cursor_anchored_frame_clears_every_removed_row() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(
+                &["search: ", "alpha", "bravo", "charlie", "help"],
+                Some(Position { row: 0, col: 8 }),
+            ))
+            .unwrap();
+        let before = renderer.writer.len();
+
+        renderer
+            .draw_surface(surface(
+                &["search: c", "charlie", "help"],
+                Some(Position { row: 0, col: 9 }),
+            ))
+            .unwrap();
+
+        let update = &renderer.writer[before..];
+        assert_eq!(
+            update
+                .windows(b"\x1b[2K".len())
+                .filter(|part| *part == b"\x1b[2K")
+                .count(),
+            2,
+            "both removed result rows must be erased: {update:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_visibility_can_follow_surface_intent() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25h".len())
+                .filter(|part| *part == b"\x1b[?25h")
+                .count(),
+            1
+        );
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25l".len())
+                .filter(|part| *part == b"\x1b[?25l")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn cursor_visibility_is_preserved_by_default() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+
+        assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25"));
+    }
+
+    #[test]
+    fn renderer_height_clips_rows_and_an_outside_cursor() {
+        let renderer = Renderer::new(Vec::new()).height(2);
+        let physical = renderer.layout_surface(surface(
+            &["one", "two", "three"],
+            Some(Position { row: 2, col: 1 }),
+        ));
+
+        assert_eq!(physical.height(), 2);
+        assert_eq!(physical.cursor(), None);
+    }
+
+    #[test]
+    fn usable_width_reserves_the_terminal_final_column_once() {
+        assert_eq!(super::usable_columns(0), 1);
+        assert_eq!(super::usable_columns(1), 1);
+        assert_eq!(super::usable_columns(2), 1);
+        assert_eq!(super::usable_columns(80), 79);
+
+        let renderer = Renderer::new(Vec::new()).width(6);
+        let physical = renderer.layout_surface(surface(&["abcdef"], None));
+        assert_eq!(physical.plain_text(), "abcde");
+    }
+
+    #[test]
+    fn removing_a_floating_pane_clears_its_materialized_canvas_rows() {
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
+        renderer.draw(&Layers::new("document")).unwrap();
+        renderer
+            .draw(
+                &Layers::new("document").float(
+                    "panel",
+                    Floating::new(Edge::BOTTOM | Edge::RIGHT)
+                        .margin(Insets::bottom(1))
+                        .max_size(Size::new(10, 3))
+                        .fill(Fill::Opaque(Style::PLAIN))
+                        .cursor(CursorMerge::PreserveBase),
+                ),
+            )
+            .unwrap();
+        let before = renderer.writer.len();
+
+        let stats = renderer.draw(&Layers::new("document")).unwrap();
+        let update = &renderer.writer[before..];
+        assert_eq!(stats.changed_rows, 4);
+        assert_eq!(
+            update
+                .windows(b"\x1b[2K".len())
+                .filter(|part| *part == b"\x1b[2K")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn unchanged_floating_frame_uses_the_retained_fast_path() {
+        let pane = || {
+            Layers::new("document").float(
+                "panel",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            )
+        };
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
+        renderer.draw(&pane()).unwrap();
+        assert_eq!(renderer.draw(&pane()).unwrap().changed_rows, 0);
+    }
+
+    #[test]
+    fn shrinking_a_pane_restores_every_vacated_cell() {
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(5);
+        renderer
+            .draw(&Layers::new("underlying document").float(
+                "large pane",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+        let before = renderer.writer.len();
+        let stats = renderer
+            .draw(&Layers::new("underlying document").float(
+                "x",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+
+        let physical = &renderer.previous.as_ref().unwrap().physical;
+        assert!(!physical.plain_text().contains("large pane"));
+        assert_eq!(text_at(physical, Position { row: 4, col: 19 }), Some("x"));
+        assert_eq!(stats.changed_rows, 1);
+        assert!(renderer.writer.len() > before);
+    }
+
+    #[test]
+    fn resize_remeasures_and_reanchors_a_floating_child() {
+        let pane = || {
+            Layers::new("document").float(
+                "panel",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            )
+        };
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
+        renderer.draw(&pane()).unwrap();
+        assert_eq!(
+            text_at(&renderer.previous.as_ref().unwrap().physical, Position {
+                row: 5,
+                col: 15,
+            },),
+            Some("p"),
+        );
+
+        renderer.resize_viewport(11, 4);
+        renderer.draw(&pane()).unwrap();
+        let smaller = &renderer.previous.as_ref().unwrap().physical;
+        assert!(smaller.height() <= 4);
+        assert!(smaller.display_width() <= 10);
+        assert_eq!(text_at(smaller, Position { row: 3, col: 5 }), Some("p"));
+
+        renderer.resize_viewport(31, 8);
+        renderer.draw(&pane()).unwrap();
+        let larger = &renderer.previous.as_ref().unwrap().physical;
+        assert!(larger.height() <= 8);
+        assert!(larger.display_width() <= 30);
+        assert_eq!(text_at(larger, Position { row: 7, col: 25 }), Some("p"));
+    }
+
+    #[test]
+    fn moving_a_floating_pane_restores_its_old_footprint() {
+        let base = "01234567890123456789\nabcdefghijklmnopqrst\nABCDEFGHIJKLMNOPQRST";
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(3);
+        renderer
+            .draw(&Layers::new(base).float(
+                "pane",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+
+        let stats = renderer
+            .draw(&Layers::new(base).float(
+                "pane",
+                Floating::new(Edge::BOTTOM | Edge::LEFT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+        let physical = &renderer.previous.as_ref().unwrap().physical;
+
+        assert_eq!(stats.changed_rows, 1);
+        assert_eq!(text_at(physical, Position { row: 2, col: 0 }), Some("p"));
+        assert_eq!(text_at(physical, Position { row: 2, col: 16 }), Some("Q"));
+        assert_eq!(
+            physical.plain_text(),
+            "01234567890123456789\nabcdefghijklmnopqrst\npaneEFGHIJKLMNOPQRST"
+        );
+    }
+
+    #[test]
+    fn resize_clips_and_restores_surface_cursor_visibility() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(10)
+            .height(2)
+            .cursor_visibility(CursorVisibility::FromSurface);
+        let frame = || surface(&["search:", "value"], Some(Position { row: 1, col: 5 }));
+
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize_viewport(10, 1);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize_viewport(10, 2);
+        renderer.draw_surface(frame()).unwrap();
+
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25h".len())
+                .filter(|part| *part == b"\x1b[?25h")
+                .count(),
+            2,
+            "cursor transitions: {:?}",
+            String::from_utf8_lossy(&renderer.writer),
+        );
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25l".len())
+                .filter(|part| *part == b"\x1b[?25l")
+                .count(),
+            1,
+        );
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.cursor(),
+            Some(Position { row: 1, col: 5 }),
+        );
+    }
+
+    #[test]
+    fn repeated_viewport_resizes_rewrap_logical_content_to_each_new_width() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(6)
+            .height(6)
+            .layout_mode(crate::LayoutMode::Wrap);
+        let logical = || surface(&["abcdefghij"], None);
+
+        renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            "abcde\nfghij",
+        );
+
+        renderer.resize_viewport(4, 6);
+        renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            "abc\ndef\nghi\nj",
+        );
+
+        renderer.resize_viewport(7, 6);
+        let before = renderer.writer.len();
+        let stats = renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            "abcdef\nghij",
+        );
+        assert!(stats.changed_rows > 0);
+        assert!(renderer.writer.len() > before);
+    }
+
+    #[test]
+    fn rewrapping_consumes_soft_boundaries_but_preserves_hard_ones() {
+        let mut prewrapped = surface(&["abc"], None);
+        prewrapped.soft_wrap();
+        prewrapped.write("def", Style::PLAIN);
+        assert_eq!(
+            layout_surface(prewrapped, Some(10), LayoutMode::Wrap).plain_text(),
+            "abcdef",
+        );
+
+        let hard = surface(&["abc", "def"], None);
+        assert_eq!(
+            layout_surface(hard, Some(10), LayoutMode::Wrap).plain_text(),
+            "abc\ndef",
+        );
+    }
+
+    struct CursorDocument;
+
+    impl Widget for CursorDocument {
+        fn render(&self, _ctx: &crate::RenderCtx, out: &mut Surface) {
+            out.write("document", Style::PLAIN);
+            out.set_cursor(Position { row: 0, col: 3 });
+        }
+    }
+
+    #[test]
+    fn display_only_pane_keeps_cursor_visibility_stable() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(21)
+            .height(5)
+            .cursor_visibility(CursorVisibility::FromSurface);
+        for text in ["one", "different pane", "x"] {
+            renderer
+                .draw(
+                    &Layers::new(CursorDocument).float(
+                        text,
+                        Floating::new(Edge::BOTTOM | Edge::RIGHT)
+                            .fill(Fill::Opaque(Style::PLAIN))
+                            .cursor(CursorMerge::PreserveBase),
+                    ),
+                )
+                .unwrap();
+            assert_eq!(
+                renderer.previous.as_ref().unwrap().physical.cursor(),
+                Some(Position { row: 0, col: 3 }),
+            );
+        }
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25h".len())
+                .filter(|part| *part == b"\x1b[?25h")
+                .count(),
+            1,
+        );
+        assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25l"));
+    }
+
+    #[test]
+    fn explicit_teardown_restores_a_hidden_surface_cursor() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+        let hidden = renderer
+            .writer
+            .windows(b"\x1b[?25l".len())
+            .filter(|part| *part == b"\x1b[?25l")
+            .count();
+        assert_eq!(hidden, 1);
+
+        renderer.clear().unwrap();
+        let shown = renderer
+            .writer
+            .windows(b"\x1b[?25h".len())
+            .filter(|part| *part == b"\x1b[?25h")
+            .count();
+        assert_eq!(
+            shown, 2,
+            "teardown must return the terminal to a visible cursor"
+        );
+    }
+
+    #[test]
+    fn explicit_teardown_leaves_preserved_visibility_alone() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+        renderer.clear().unwrap();
+        assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25"));
+    }
+
+    #[test]
+    fn narrowing_climbs_to_the_rewrapped_frame_top() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        let frame = || surface(&["abcdefghij", "xy"], None);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize(4);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame()).unwrap();
+        let update = &renderer.writer[before..];
+        assert!(update.starts_with(b"\r\x1b[3A\x1b[J"), "{update:?}");
+        assert!(!update.windows(4).any(|part| part == b"\x1b[2K"));
+    }
+
+    #[test]
+    fn widening_keeps_the_hard_broken_row_count() {
+        let mut renderer = Renderer::new(Vec::new()).width(4);
+        let frame = || surface(&["abcd", "xy"], None);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize(10);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame()).unwrap();
+        assert!(renderer.writer[before..].starts_with(b"\r\x1b[1A\x1b[J"));
+    }
+
+    #[test]
+    fn unchanged_width_resize_keeps_diffing() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        renderer.resize_viewport(10, 5);
+        let stats = renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        assert_eq!(stats.changed_rows, 0);
+    }
+
+    fn text_at(surface: &Surface, wanted: Position) -> Option<&str> {
+        let row = surface.rows().get(wanted.row)?;
+        let mut col = 0;
+        for cell in row.cells() {
+            if col == wanted.col {
+                return Some(cell.text.as_str());
+            }
+            col += cell.width;
+        }
+        None
+    }
+
+    #[test]
+    fn narrowing_estimates_the_anchor_rows_wrap_around_a_wide_character() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        let mut frame = Surface::new();
+        frame.write("a", Style::PLAIN);
+        frame.write("界", Style::PLAIN);
+        frame.write("bc", Style::PLAIN);
+        frame.set_cursor(Position { row: 0, col: 3 });
+        renderer.draw_surface(frame.clone()).unwrap();
+
+        renderer.resize(3);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame).unwrap();
+        let update = &renderer.writer[before..];
+        assert!(
+            update.starts_with(b"\r\x1b[J"),
+            "the wide anchor cell fills the reflowed row exactly, so no climb is needed: \
+             {update:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_surface_keeps_a_cursor_on_a_blank_row_past_column_zero() {
+        let mut logical = Surface::new();
+        logical.newline();
+        logical.set_cursor(Position { row: 1, col: 5 });
+
+        let wrapped = super::wrap_surface(&logical, 10);
+        assert_eq!(wrapped.cursor(), Some(Position { row: 1, col: 5 }));
     }
 }
