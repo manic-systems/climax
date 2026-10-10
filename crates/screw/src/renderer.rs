@@ -37,22 +37,19 @@ pub enum CursorVisibility {
     FromSurface,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RenderedFrame {
-    physical: Surface,
-}
-
 pub struct Renderer<W> {
-    writer:            W,
-    previous:          Option<RenderedFrame>,
-    frame:             u64,
-    width:             Option<usize>,
-    height:            Option<usize>,
-    layout_mode:       LayoutMode,
-    theme:             Theme,
-    cursor_visibility: CursorVisibility,
-    cursor_visible:    Option<bool>,
-    force_full:        bool,
+    writer:              W,
+    previous:            Option<Surface>,
+    frame:               u64,
+    width:               Option<usize>,
+    height:              Option<usize>,
+    layout_mode:         LayoutMode,
+    theme:               Theme,
+    cursor_visibility:   CursorVisibility,
+    cursor_visible:      Option<bool>,
+    force_full:          bool,
+    rendition_uncertain: bool,
+    resync:              bool,
 }
 
 impl<W> Renderer<W>
@@ -71,6 +68,8 @@ where
             cursor_visibility: CursorVisibility::Preserve,
             cursor_visible: None,
             force_full: false,
+            rendition_uncertain: false,
+            resync: false,
         }
     }
 
@@ -111,7 +110,7 @@ where
         if self
             .previous
             .as_ref()
-            .is_some_and(|previous| previous.physical.height() > height)
+            .is_some_and(|previous| previous.height() > height)
         {
             self.force_full = true;
         }
@@ -145,24 +144,36 @@ where
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
         let next_physical = self.layout_surface(next_logical);
 
-        let previous_physical = self
-            .previous
-            .as_ref()
-            .map(|previous| previous.physical.clone());
-
-        if !self.force_full && previous_physical.as_ref() == Some(&next_physical) {
-            self.previous = Some(RenderedFrame {
-                physical: next_physical,
-            });
+        if !self.force_full && self.previous.as_ref() == Some(&next_physical) {
+            self.previous = Some(next_physical);
             return Ok(RenderStats::default());
         }
 
+        match self.write_frame(&next_physical) {
+            Ok(stats) => {
+                self.previous = Some(next_physical);
+                Ok(stats)
+            },
+            Err(error) => {
+                self.previous = None;
+                self.rendition_uncertain = true;
+                self.resync = true;
+                Err(error)
+            },
+        }
+    }
+
+    fn write_frame(&mut self, next_physical: &Surface) -> io::Result<RenderStats> {
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
         let columns = self.width.unwrap_or(usize::MAX);
 
+        if self.resync {
+            self.writer.write_all(b"\r\x1b[J")?;
+            self.resync = false;
+        }
         if self.force_full {
-            if let Some(previous) = &previous_physical {
+            if let Some(previous) = self.previous.as_ref() {
                 clear_reflowed(
                     previous,
                     self.width,
@@ -172,19 +183,19 @@ where
                 )?;
             }
             write_initial_surface(
-                &next_physical,
+                next_physical,
                 &mut self.writer,
                 &mut cursor,
                 &mut stats,
                 columns,
             )?;
             self.force_full = false;
-        } else if let Some(previous) = &previous_physical {
-            let from = extend_for_growth(previous, &next_physical, &mut self.writer, &mut cursor)?;
+        } else if let Some(previous) = self.previous.as_ref() {
+            let from = extend_for_growth(previous, next_physical, &mut self.writer, &mut cursor)?;
             move_to_top(&mut self.writer, from, &mut cursor)?;
             diff_surfaces(
                 previous,
-                &next_physical,
+                next_physical,
                 &mut self.writer,
                 &mut cursor,
                 &mut stats,
@@ -192,7 +203,7 @@ where
             )?;
         } else {
             write_initial_surface(
-                &next_physical,
+                next_physical,
                 &mut self.writer,
                 &mut cursor,
                 &mut stats,
@@ -200,20 +211,26 @@ where
             )?;
         }
 
-        cursor.move_to(&mut self.writer, final_position(&next_physical))?;
+        cursor.move_to(&mut self.writer, final_position(next_physical))?;
         self.update_cursor_visibility(next_physical.cursor().is_some())?;
-        self.writer.flush()?;
-        self.previous = Some(RenderedFrame {
-            physical: next_physical,
-        });
+        self.flush_retrying_interrupts()?;
         Ok(stats)
     }
 
+    fn flush_retrying_interrupts(&mut self) -> io::Result<()> {
+        loop {
+            match self.writer.flush() {
+                Ok(()) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     pub fn clear(&mut self) -> io::Result<RenderStats> {
-        let Some(previous) = self.previous.take() else {
+        let Some(previous_physical) = self.previous.take() else {
             return Ok(RenderStats::default());
         };
-        let previous_physical = previous.physical;
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
 
@@ -689,6 +706,8 @@ impl Cursor {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use crate::{
         CursorMerge,
         CursorVisibility,
@@ -901,7 +920,7 @@ mod tests {
             ))
             .unwrap();
 
-        let physical = &renderer.previous.as_ref().unwrap().physical;
+        let physical = renderer.previous.as_ref().unwrap();
         assert!(!physical.plain_text().contains("large pane"));
         assert_eq!(text_at(physical, Position { row: 4, col: 19 }), Some("x"));
         assert_eq!(stats.changed_rows, 1);
@@ -919,7 +938,7 @@ mod tests {
         let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
         renderer.draw(&pane()).unwrap();
         assert_eq!(
-            text_at(&renderer.previous.as_ref().unwrap().physical, Position {
+            text_at(renderer.previous.as_ref().unwrap(), Position {
                 row: 5,
                 col: 15,
             },),
@@ -928,14 +947,14 @@ mod tests {
 
         renderer.resize_viewport(11, 4);
         renderer.draw(&pane()).unwrap();
-        let smaller = &renderer.previous.as_ref().unwrap().physical;
+        let smaller = renderer.previous.as_ref().unwrap();
         assert!(smaller.height() <= 4);
         assert!(smaller.display_width() <= 10);
         assert_eq!(text_at(smaller, Position { row: 3, col: 5 }), Some("p"));
 
         renderer.resize_viewport(31, 8);
         renderer.draw(&pane()).unwrap();
-        let larger = &renderer.previous.as_ref().unwrap().physical;
+        let larger = renderer.previous.as_ref().unwrap();
         assert!(larger.height() <= 8);
         assert!(larger.display_width() <= 30);
         assert_eq!(text_at(larger, Position { row: 7, col: 25 }), Some("p"));
@@ -958,7 +977,7 @@ mod tests {
                 Floating::new(Edge::BOTTOM | Edge::LEFT).fill(Fill::Opaque(Style::PLAIN)),
             ))
             .unwrap();
-        let physical = &renderer.previous.as_ref().unwrap().physical;
+        let physical = renderer.previous.as_ref().unwrap();
 
         assert_eq!(stats.changed_rows, 1);
         assert_eq!(text_at(physical, Position { row: 2, col: 0 }), Some("p"));
@@ -1002,7 +1021,7 @@ mod tests {
             1,
         );
         assert_eq!(
-            renderer.previous.as_ref().unwrap().physical.cursor(),
+            renderer.previous.as_ref().unwrap().cursor(),
             Some(Position { row: 1, col: 5 }),
         );
     }
@@ -1017,14 +1036,14 @@ mod tests {
 
         renderer.draw_surface(logical()).unwrap();
         assert_eq!(
-            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            renderer.previous.as_ref().unwrap().plain_text(),
             "abcde\nfghij",
         );
 
         renderer.resize_viewport(4, 6);
         renderer.draw_surface(logical()).unwrap();
         assert_eq!(
-            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            renderer.previous.as_ref().unwrap().plain_text(),
             "abc\ndef\nghi\nj",
         );
 
@@ -1032,7 +1051,7 @@ mod tests {
         let before = renderer.writer.len();
         let stats = renderer.draw_surface(logical()).unwrap();
         assert_eq!(
-            renderer.previous.as_ref().unwrap().physical.plain_text(),
+            renderer.previous.as_ref().unwrap().plain_text(),
             "abcdef\nghij",
         );
         assert!(stats.changed_rows > 0);
@@ -1083,7 +1102,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                renderer.previous.as_ref().unwrap().physical.cursor(),
+                renderer.previous.as_ref().unwrap().cursor(),
                 Some(Position { row: 0, col: 3 }),
             );
         }
@@ -1178,6 +1197,85 @@ mod tests {
             col += cell.width;
         }
         None
+    }
+
+    #[derive(Default)]
+    struct FlakyWriter {
+        buffer:               Vec<u8>,
+        writes_until_failure: Option<usize>,
+        interrupted_flushes:  usize,
+    }
+
+    impl io::Write for FlakyWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if let Some(remaining) = &mut self.writes_until_failure {
+                if *remaining == 0 {
+                    self.writes_until_failure = None;
+                    return Err(io::Error::other("simulated write failure"));
+                }
+                *remaining -= 1;
+            }
+            self.buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.interrupted_flushes > 0 {
+                self.interrupted_flushes -= 1;
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "simulated"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_error_mid_frame_forces_a_fresh_frame_on_the_next_draw() {
+        let mut renderer = Renderer::new(FlakyWriter::default()).width(10);
+        renderer
+            .draw_surface(surface(&["one", "two"], None))
+            .unwrap();
+        renderer.resize(4);
+
+        renderer.writer.writes_until_failure = Some(1);
+        assert!(
+            renderer
+                .draw_surface(surface(&["abcdefghij", "xy"], None))
+                .is_err()
+        );
+        assert!(renderer.previous.is_none());
+
+        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        let update = &renderer.writer.buffer[before..];
+        assert_eq!(
+            update, b"\r\x1b[Jabc\x1b[K",
+            "a redraw after a failed write must restart at column zero and erase below without \
+             climbing: {update:?}"
+        );
+    }
+
+    #[test]
+    fn a_redraw_after_a_failed_write_does_not_continue_mid_row() {
+        let mut renderer = Renderer::new(FlakyWriter::default()).width(10);
+        renderer.writer.writes_until_failure = Some(3);
+        assert!(renderer.draw_surface(surface(&["HELLO"], None)).is_err());
+        assert_eq!(renderer.writer.buffer, b"HEL");
+
+        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(surface(&["HELLO"], None)).unwrap();
+        let update = &renderer.writer.buffer[before..];
+        assert!(update.starts_with(b"\r\x1b[JHELLO"), "{update:?}");
+    }
+
+    #[test]
+    fn interrupted_flush_is_retried_instead_of_desyncing_the_renderer() {
+        let mut renderer = Renderer::new(FlakyWriter::default());
+        renderer.writer.interrupted_flushes = 1;
+
+        let stats = renderer.draw_surface(surface(&["ok"], None)).unwrap();
+        assert_eq!(stats.changed_rows, 1);
+        assert!(renderer.previous.is_some());
+        assert_eq!(renderer.writer.buffer, b"ok\x1b[K");
     }
 
     #[test]
