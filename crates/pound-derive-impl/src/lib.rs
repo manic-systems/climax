@@ -78,6 +78,8 @@ pub struct Options {
 }
 
 impl Options {
+    /// options rooting the expansion at `root`, with doc comments baked in
+    /// when `help` is set
     #[must_use]
     pub const fn new(root: &'static str, help: bool) -> Self {
         Self { root, help }
@@ -98,6 +100,21 @@ impl Ctx {
     }
 }
 
+/// expands `#[derive(Parse)]` for the struct or enum in `input`, or yields a
+/// `compile_error!` naming the problem. the attributes it reads are the ones
+/// documented on `pound_derive::Parse`.
+///
+/// a crate that re-exports pound wraps it in its own proc-macro, so the
+/// generated code names that crate's path to the runtime.
+///
+/// ```ignore
+/// const OPTIONS: Options = Options::new("::climax::pound", cfg!(feature = "help"));
+///
+/// #[proc_macro_derive(Parse, attributes(pound))]
+/// pub fn derive_parse(input: TokenStream) -> TokenStream {
+///     pound_derive_impl::derive_parse(input.into(), &OPTIONS).into()
+/// }
+/// ```
 pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
     let cx = &Ctx::new(options);
     match parse_item(input) {
@@ -108,6 +125,9 @@ pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
     }
 }
 
+/// expands `#[derive(ValueEnum)]` for the unit-variant enum in `input`, or
+/// yields a `compile_error!` naming the problem. see [`derive_parse`] for how a
+/// re-exporting crate wraps it.
 pub fn derive_value_enum(input: TokenStream2, options: &Options) -> TokenStream2 {
     let cx = &Ctx::new(options);
     match parse_item(input) {
