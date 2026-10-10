@@ -88,8 +88,15 @@ impl Output {
         self
     }
 
+    #[cfg(not(feature = "render"))]
     pub(crate) fn with_notice_writer(mut self, writer: SharedWriter) -> Self {
         self.notices = writer;
+        self
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn with_transient(mut self, notices: crate::status::TransientNotice) -> Self {
+        self.notices = SharedWriter::Transient(notices);
         self
     }
 
@@ -112,8 +119,9 @@ impl Output {
 
     /// write human-facing context that stays out of the application result
     ///
-    /// Suppressed in structured output modes. Notices write straight to the
-    /// configured notice writer and return its write result.
+    /// suppressed in structured output modes. while a prompt or terminal
+    /// application holds the terminal the line is queued until release and
+    /// the call returns at once
     pub fn notice(&self, message: impl fmt::Display) -> Result<()> {
         if self.notice_format == Format::Text {
             write_text(self.notices.clone(), message)?;
@@ -345,12 +353,12 @@ impl fmt::Debug for Output {
     }
 }
 
-/// A cloneable destination. The process streams carry their own lock, so
-/// only a caller-supplied writer needs a mutex of its own.
 #[derive(Clone)]
 pub(crate) enum SharedWriter {
     Stdout,
     Stderr,
+    #[cfg(feature = "render")]
+    Transient(crate::status::TransientNotice),
     Custom(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
@@ -373,6 +381,8 @@ impl Write for SharedWriter {
         match self {
             Self::Stdout => io::stdout().write(buffer),
             Self::Stderr => io::stderr().write(buffer),
+            #[cfg(feature = "render")]
+            Self::Transient(notices) => notices.write(buffer),
             Self::Custom(inner) => lock(inner).write(buffer),
         }
     }
@@ -381,6 +391,8 @@ impl Write for SharedWriter {
         match self {
             Self::Stdout => io::stdout().flush(),
             Self::Stderr => io::stderr().flush(),
+            #[cfg(feature = "render")]
+            Self::Transient(notices) => notices.flush(),
             Self::Custom(inner) => lock(inner).flush(),
         }
     }

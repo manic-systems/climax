@@ -7,7 +7,13 @@ use std::{
     process::ExitCode,
 };
 
-#[cfg(feature = "render")] use crate::status::Status;
+#[cfg(feature = "render")]
+use crate::status::{
+    Status,
+    StatusCoordinator,
+    TransientNotice,
+    WidthSource,
+};
 use crate::{
     Result,
     error::ErrorKind,
@@ -18,6 +24,8 @@ use crate::{
     },
     terminal::{
         InteractionMode,
+        StatusMode,
+        TerminalCapabilities,
         TerminalPolicy,
     },
 };
@@ -79,17 +87,26 @@ where
 {
     let output = context.output();
     let diagnostic = context.diagnostic();
+    #[cfg(feature = "render")]
+    let transient = context.transient.clone();
     match f(context, command) {
         Ok(()) => {
             // `diagnostic` owns its own result slot, so committing only
             // `output` drops its results
             let mut failure = output.commit().err();
             collect_related(&mut failure, diagnostic.commit());
+            #[cfg(feature = "render")]
+            collect_related(&mut failure, transient.flush_transient());
             failure.map_or(Ok(()), Err)
         },
         Err(error) => {
             output.discard();
             diagnostic.discard();
+            #[cfg(feature = "render")]
+            let error = match transient.flush_transient() {
+                Ok(()) => error,
+                Err(cleanup) => error.with_related(cleanup),
+            };
             Err(error)
         },
     }
@@ -221,6 +238,8 @@ pub struct Context {
     interaction:        bang::Interaction,
     #[cfg(feature = "interactive")]
     custom_interaction: bool,
+    #[cfg(feature = "render")]
+    transient:          crate::status::StatusCoordinator,
     _not_send:          PhantomData<std::rc::Rc<()>>,
 }
 
@@ -234,15 +253,31 @@ impl Context {
     #[must_use]
     pub fn new() -> Self {
         let terminal = crate::terminal::TerminalPolicy::process();
+        #[cfg(feature = "render")]
+        let transient = crate::status::StatusCoordinator::new(
+            crate::output::SharedWriter::stderr(),
+            terminal.effective_status_mode(),
+        );
+        #[cfg(feature = "interactive")]
+        let interaction = interaction_for(terminal);
+        let diagnostic = crate::output::Output::new(crate::output::Format::Text)
+            .with_shared_writer(crate::output::SharedWriter::stderr());
+        #[cfg(feature = "render")]
+        let output = crate::output::Output::new(crate::output::Format::Text).with_transient(
+            crate::status::TransientNotice::coordinator(transient.clone()),
+        );
+        #[cfg(not(feature = "render"))]
+        let output = crate::output::Output::new(crate::output::Format::Text);
         Self {
-            output: crate::output::Output::new(crate::output::Format::Text),
-            diagnostic: crate::output::Output::new(crate::output::Format::Text)
-                .with_shared_writer(crate::output::SharedWriter::stderr()),
+            output,
+            diagnostic,
             terminal,
             #[cfg(feature = "interactive")]
-            interaction: interaction_for(terminal),
+            interaction,
             #[cfg(feature = "interactive")]
             custom_interaction: false,
+            #[cfg(feature = "render")]
+            transient,
             _not_send: PhantomData,
         }
     }
@@ -308,7 +343,7 @@ impl Context {
     #[cfg(feature = "render")]
     #[must_use]
     pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
-        crate::status::message(message)
+        crate::status::Status::new(message, self.transient.clone())
     }
 
     #[must_use]
@@ -350,6 +385,26 @@ impl Context {
         self.terminal.interaction_available()
     }
 
+    #[cfg_attr(
+        not(any(feature = "interactive", feature = "render")),
+        allow(clippy::missing_const_for_fn)
+    )]
+    pub fn set_terminal_capabilities(
+        &mut self,
+        capabilities: crate::terminal::TerminalCapabilities,
+    ) -> Result<()> {
+        self.terminal.set_capabilities(capabilities);
+        // an injected interaction belongs to the caller, so detection leaves it
+        #[cfg(feature = "interactive")]
+        if !self.custom_interaction {
+            self.set_interaction_mode(self.terminal.interaction_mode());
+        }
+        #[cfg(feature = "render")]
+        self.transient
+            .set_mode(self.terminal.effective_status_mode())?;
+        Ok(())
+    }
+
     #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
     pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
         self.terminal.set_interaction_mode(mode);
@@ -358,6 +413,15 @@ impl Context {
             self.interaction = interaction_for(self.terminal);
             self.custom_interaction = false;
         }
+    }
+
+    #[cfg_attr(not(feature = "render"), allow(clippy::missing_const_for_fn))]
+    pub fn set_status_mode(&mut self, mode: crate::terminal::StatusMode) -> Result<()> {
+        self.terminal.set_status_mode(mode);
+        #[cfg(feature = "render")]
+        self.transient
+            .set_mode(self.terminal.effective_status_mode())?;
+        Ok(())
     }
 
     #[cfg(feature = "interactive")]
@@ -381,20 +445,76 @@ impl Context {
         self
     }
 
-    /// Notices follow this writer too, so a diagnostic handle and its paired
-    /// output handle never disagree about where human-facing context goes.
+    /// without the `render` feature notices follow this writer too, with it
+    /// they belong to the transient channel, moved by
+    /// `with_transient_writer`
     #[must_use]
     pub fn with_diagnostic_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
         let writer = crate::output::SharedWriter::new(writer);
-        self.output = self.output.with_notice_writer(writer.clone());
+        #[cfg(not(feature = "render"))]
+        {
+            self.output = self.output.with_notice_writer(writer.clone());
+        }
         self.diagnostic = self.diagnostic.with_shared_writer(writer);
         self
+    }
+
+    /// moves status presentation and notices to `writer`
+    ///
+    /// Prompts keep the configured interaction driver, including a
+    /// caller-owned terminal set with [`Self::with_terminal`], and capability
+    /// detection still inspects stderr. The live region has the fallback
+    /// width, since a writer says nothing about its terminal. Fails while
+    /// statuses are live, a prompt holds the terminal or failed transient
+    /// lines are still queued, because those belong to the current writer.
+    #[cfg(feature = "render")]
+    pub fn with_transient_writer(
+        mut self,
+        writer: impl std::io::Write + Send + 'static,
+    ) -> Result<Self> {
+        if !self.transient.is_idle() {
+            return Err(crate::Error::with_source(
+                crate::error::ErrorKind::Output,
+                std::io::Error::other(
+                    "the transient writer cannot change while status output is in use",
+                ),
+            ));
+        }
+        let mode = self.terminal.effective_status_mode();
+        let previous = std::mem::replace(
+            &mut self.transient,
+            crate::status::StatusCoordinator::with_width(
+                crate::output::SharedWriter::new(writer),
+                mode,
+                crate::status::WidthSource::FALLBACK,
+            ),
+        );
+        previous.supersede(&self.transient);
+        self.output = self
+            .output
+            .with_transient(crate::status::TransientNotice::coordinator(
+                self.transient.clone(),
+            ));
+        Ok(self)
+    }
+
+    pub fn with_terminal_capabilities(
+        mut self,
+        capabilities: crate::terminal::TerminalCapabilities,
+    ) -> Result<Self> {
+        self.set_terminal_capabilities(capabilities)?;
+        Ok(self)
     }
 
     #[must_use]
     pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
         self.set_interaction_mode(mode);
         self
+    }
+
+    pub fn with_status_mode(mut self, mode: crate::terminal::StatusMode) -> Result<Self> {
+        self.set_status_mode(mode)?;
+        Ok(self)
     }
 
     #[cfg(feature = "interactive")]
@@ -443,8 +563,9 @@ mod tests {
         }
     }
 
+    #[cfg(not(feature = "render"))]
     #[test]
-    fn diagnostic_writer_carries_notices() {
+    fn diagnostic_writer_carries_notices_without_render() {
         let sink = Sink::default();
         let mut context = Context::new().with_diagnostic_writer(sink.clone());
         context.output().notice("heads up").unwrap();
@@ -458,6 +579,32 @@ mod tests {
         context.set_output_format(crate::output::Format::Json);
         context.diagnostic().notice("heads up").unwrap();
         assert!(sink.0.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn diagnostic_notices_follow_the_transient_writer() {
+        let sink = Sink::default();
+        let mut context = Context::new().with_transient_writer(sink.clone()).unwrap();
+        context.diagnostic().notice("heads up").unwrap();
+        assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
+
+        sink.0.lock().unwrap().clear();
+        context.set_output_format(crate::output::Format::Json);
+        context.diagnostic().notice("heads up").unwrap();
+        assert!(sink.0.lock().unwrap().is_empty());
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn transient_writer_cannot_change_under_a_live_status() {
+        let context = Context::new()
+            .with_transient_writer(Sink::default())
+            .unwrap();
+        let status = context.status("working").start();
+        let error = context.with_transient_writer(Sink::default()).unwrap_err();
+        assert_eq!(error.kind(), crate::error::ErrorKind::Output);
+        status.finish().unwrap();
     }
 
     #[cfg(feature = "structured")]
@@ -683,6 +830,22 @@ mod tests {
                 .unwrap(),
             crate::PromptOutcome::Submit(2)
         );
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn auto_policy_rejects_interaction_when_capabilities_are_absent() {
+        let context = Context::new()
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
+            .unwrap();
+        let error = context
+            .select("shell")
+            .choice("bash", 1)
+            .interact()
+            .unwrap_err();
+        assert_eq!(error.kind(), bang::ErrorKind::InteractionUnavailable);
     }
 
     #[cfg(feature = "interactive")]
