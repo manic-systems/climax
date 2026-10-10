@@ -46,6 +46,7 @@ pub mod prelude;
 mod sync;
 /// terminal capability facts, policy overrides and terminal applications
 pub mod terminal;
+pub mod testing;
 
 /// transient status lines drawn on the shared renderer
 #[cfg(feature = "render")]
