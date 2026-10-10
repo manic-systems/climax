@@ -75,6 +75,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "unicode-segmentation",
 ]
 
 [[package]]
