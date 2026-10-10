@@ -286,12 +286,10 @@ impl ReviewList {
 
     /// The index of the selected row, or `None` when no row is visible.
     #[must_use]
-    pub const fn selected_index(&self) -> Option<usize> {
-        if self.items.is_empty() {
-            None
-        } else {
-            Some(self.selected)
-        }
+    pub fn selected_index(&self) -> Option<usize> {
+        self.visible_iter()
+            .any(|index| index == self.selected)
+            .then_some(self.selected)
     }
 
     /// The state of the row at `index`, or `None` past the end.
@@ -662,6 +660,25 @@ mod tests {
         assert_eq!(output.get("exit").and_then(Value::as_str), Some(exit));
         assert_eq!(output.get("action").and_then(Value::as_str), action);
         assert!(matches!(output.get("rows"), Some(Value::List(_))));
+    }
+
+    #[test]
+    fn no_row_is_selected_once_every_visible_row_is_removed() {
+        let mut review = ReviewList::new("review", ["alpha", "beta"])
+            .with_states([ReviewState::Denied, ReviewState::Denied])
+            .with_show_removed(false);
+        let mut cx = Context::new();
+        assert_eq!(review.selected_index(), None);
+
+        for key in ['y', 'u', 'x'] {
+            assert_eq!(review.handle(Event::char(key), &mut cx), Reaction::Ignored);
+        }
+        assert_eq!(
+            review.handle(Event::key(Key::Tab), &mut cx),
+            Reaction::Ignored
+        );
+        assert_eq!(review.state(0), Some(ReviewState::Denied));
+        assert_eq!(review.state(1), Some(ReviewState::Denied));
     }
 
     #[test]
