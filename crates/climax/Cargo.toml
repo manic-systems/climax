@@ -15,7 +15,7 @@ rust-version.workspace = true
 anyhow      = [ "dep:anyhow" ]
 default     = [ "derive", "interactive", "parse", "render", "structured" ]
 derive      = [ "parse", "dep:climax-derive" ]
-interactive = [ "dep:bang" ]
+interactive = [ "dep:bang", "dep:unicode-segmentation" ]
 parse       = [ "dep:pound" ]
 render      = [ "dep:screw" ]
 structured  = [ "dep:serde", "dep:serde_json" ]
@@ -39,6 +39,7 @@ pound = { workspace = true, optional = true, features = [
 screw = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = [ "derive" ] }
 serde_json = { workspace = true, optional = true }
+unicode-segmentation = { workspace = true, optional = true }
 
 [dev-dependencies]
 libc.workspace = true
