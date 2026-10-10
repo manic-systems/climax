@@ -20,8 +20,8 @@
 //! derives serde's traits rooted at `::climax::serde` for the same reason.
 //!
 //! `main` and [`main_with`] report errors and choose the process exit code,
-//! and [`ResultExt`] adds `.context("reading the count")` to foreign
-//! `Result`s. The exit-code mapping is listed below.
+//! and [`ResultExt`], imported by name, adds `.context("reading the count")` to
+//! foreign `Result`s. The exit-code mapping is listed below.
 
 #![cfg_attr(
     all(
