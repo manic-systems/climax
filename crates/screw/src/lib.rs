@@ -20,6 +20,7 @@ mod widget;
 pub use layout::{
     LayoutBuilder,
     layout,
+    local_layout,
 };
 pub use plain::{
     render_plain,
@@ -56,6 +57,7 @@ pub use surface::{
 };
 pub use template::{
     TemplateError,
+    local_template,
     template,
 };
 pub use terminal::{
@@ -94,5 +96,17 @@ macro_rules! screw {
             &[$((stringify!($name), $crate::widget($widget))),*],
         )
         .expect("invalid screw! template")
+    }};
+}
+
+/// Compose a template from widgets which remain on the current thread.
+#[macro_export]
+macro_rules! local_screw {
+    ($template:literal $(, $name:ident = $widget:expr)* $(,)?) => {{
+        $crate::local_template(
+            $template,
+            &[$((stringify!($name), $crate::local_widget($widget))),*],
+        )
+        .expect("invalid local_screw! template")
     }};
 }
