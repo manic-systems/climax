@@ -3,147 +3,7 @@
 `climax` composes parsing, rendering, typed prompts, output routing and application policy, and
 re-exports each component whole, so an application needs no other dependency
 
-## Promise
-
-`climax` is the application product. It composes parsing, rendering, typed
-interaction, output routing, and application policy without making users learn
-the component crates behind them. An application needs `climax` as its only
-dependency, since each component is re-exported whole behind the feature that
-enables it.
-
-The root surface is small.
-
-```text
-climax::{main, try_run, try_run_from, run_with, Context, Error, ErrorKind, Result,
-    PromptOutcome, Configurable, Date, the config type and the prompt type of
-    each prompt, ReviewConfig, ReviewExit, ReviewOutcome, ReviewState, Reviewed}
-```
-
-`main`, `try_run` and `try_run_from` need the `parse` feature. `PromptOutcome`,
-`Configurable`, the prompt config types, and the review types need
-`interactive`, and so do the prompt builders on `Context` such as `select` and
-`confirm`. `run_with`, `Context`, `Error`, `ErrorKind`, and `Result` are always present.
-
-`climax::prelude` re-exports those same lifecycle functions plus `Context`,
-`Error`, `ErrorKind`, `Result`, and `output::Format` always, `FromArg` and `ValueError` under `parse`, and four terminal policy types from the
-`terminal` module, `InteractionMode`, `StatusMode`, `TerminalCapabilities`, and
-`TerminalPolicy`. Under `interactive` it adds `PromptOutcome`, `Configurable`,
-the prompt config types, and the review types. The `output` module is always
-present and is named explicitly instead of being folded into the prelude. It is
-reached only through `Context::output` and `Context::diagnostic`, since
-`Output::new` is crate-private. `status` is likewise named explicitly, and it
-exists only when the `render` feature is on. Component internals do not belong
-in the prelude.
-
-## Typed prompts
-
-`Context` delegates prompt construction to the public `bang` product while
-keeping the ordinary outcome in the facade.
-
-```rust,ignore
-let outcome = cx
-    .select("Shell")
-    .choice("bash", Shell::Bash)
-    .choice("zsh", Shell::Zsh)
-    .interact()?;
-let climax::PromptOutcome::Submit(shell) = outcome else {
-    return Ok(());
-};
-```
-
-An ordinary application therefore needs only `climax`. It re-exports
-`PromptOutcome`, `Configurable`, the config type of every prompt, and the
-review types that typed prompts return, consume, and configure.
-
-The submitted value is the user's `Shell`, not `bang_core::Value`, and leaving
-is a typed `PromptOutcome::Leave`. Select, multi-select, search, text,
-password, confirm, date, and number prompts follow the same path. `Context`
-hands out `password`, `confirm`, `date`, and `number::<T>` alongside the list
-prompts. Every builder implements `bang::Configurable` with an associated
-prompt-specific config, so list presentation cannot be applied to a text
-prompt, while choices and their typed values stay on the builder. Presentation
-is set through `with_config` and the config type, or through the same settings
-as direct builder methods. `select`, `multi_select`, `search`, and `review`
-take the visible header text and `.id(...)` is optional. Every list prompt
-rejects zero choices, and page keys clamp at the ends of a list while single
-steps still wrap.
-
-An action-free review follows the ordinary shape and returns
-`PromptOutcome<Vec<bang::Reviewed<T>>>`. Calling its first intrinsic `.action`
-transitions to `bang::ReviewPromptWithActions<T, A>`. Further actions use the
-same `A`, and interaction returns `bang::ReviewOutcome<T, A>`. Arbitrary action
-layers remain an advanced widget facility. Prompt implementation and
-live-session orchestration belong to `bang`, which draws its widgets through
-`screw` and re-exports it as `bang::screw`. `climax` supplies application
-policy and maps errors at the facade boundary.
-
-Bang prompt builders carry an opaque, cloneable `bang::Interaction`. The
-default driver uses stdin and stderr, and deterministic and custom drivers are
-available through `bang::advanced`. Climax injects its configured driver into
-every prompt created by `Context`.
-
-### Signals
-
-A signal that arrives during a live prompt makes bang restore the terminal and
-return `ErrorKind::Interrupted`, with `bang::Error::signal()` naming the
-signal. Bang never re-raises it, so the host process keeps running. A signal
-the host set to ignored before the session stays ignored and does not interrupt
-the prompt, and any other previous handler is restored on exit rather than
-invoked. Applications that want the Unix convention of dying by the signal can
-re-raise it themselves after the terminal is restored. The signal is a
-`bang::terminal::Signal` (`INT`, `TERM`, `HUP` and `QUIT`, with `as_raw` and
-`name`), which bang owns so that no dependency's signal type is public.
-
-Climax maps the error to `ErrorKind::Cancelled` and keeps the signal number,
-which `climax::Error::signal()` returns. `climax::main` exits with 128 plus
-that number for such an error, and with 130 for any other cancellation. A
-signal that lands while the session is already tearing down is still reported,
-even if the prompt had submitted.
-
-## Terminal and stream policy
-
-`Context` snapshots process terminal capabilities and owns three logical output
-channels.
-
-- Durable application output goes to stdout by default.
-- Diagnostics go to stderr by default.
-- Transient prompts, status presentation, and notices go to stderr by default.
-
-Automatic prompt interaction requires terminal-capable stdin, a suitable
-transient terminal, and ANSI presentation support. `InteractionMode` can force
-or disable interaction. Unavailable prompts return an error, and Climax never
-invents a typed fallback value.
-
-`StatusMode::Auto` animates only on a suitable transient terminal and is silent
-otherwise. Plain, live, and silent modes override it, and silent mode never
-emits status or final-message text. A status started with `during` prints
-`final_message` only when the operation succeeds, `failure_message` when it
-errors, unwinds, or the handle is dropped before finishing, and nothing when
-`failure_message` is unset. Status handles register widgets with one
-coordinator and one renderer, allowing multiple animations to coexist without
-competing cursor writes. Human-only notices share that transient coordinator,
-so a notice never interleaves with a status final line. Diagnostics on the
-default stderr go through it too, and when stdout is also the terminal, `stream`
-output clears the live region before it is written. An interactive prompt or
-custom terminal application temporarily suspends status presentation and defers
-finishing status lines until its exclusive lease releases. A second prompt on
-the default driver waits on the stdin lock and runs after the first. Bang's
-`InteractionBusy` appears only when the prompt uses a different terminal handle
-or an outside `SignalGuard` already holds the signal handlers. Climax's own
-status lease is separate, and a prompt or terminal application that finds it
-held gets the same `InteractionBusy` category.
-
-Streamed output respects that lease. A stream write from another thread while
-a prompt or terminal application holds the lease is deferred and written when
-the lease releases, and the call returns after the write. A stream write from
-the thread that holds the lease fails with an error, because it would wait on
-itself. The wait is bounded by the same ten second timeout as every coordinator
-request, so a lease holder that joins a worker which is streaming sees the
-worker's write fail and the join complete, and the write is dropped. A
-`diagnostic().stream` write behaves like a notice. It blocks until written, or
-is queued while a lease is held.
-
-Scoped work uses a status.
+## Features
 
 | feature       | provides                                                   | component       |
 |---------------|------------------------------------------------------------|-----------------|
@@ -169,13 +29,31 @@ fn main() -> std::process::ExitCode {
 }
 ```
 
-Help and version go to stdout with status 0, parse failures go to stderr with
-status 2, and application failures go to stderr with status 1. A cancellation
-that reaches `main` exits with status 130, or with 128 plus the signal number
-when a signal interrupted a live prompt. Either exit is silent unless related
-errors are attached, in which case those print instead. `try_run` and
-`try_run_from` are the non-reporting paths for embedding and tests. `run_with`
-starts from an already constructed command.
+### Exit codes
+
+`main` and `main_with` map outcomes to exit codes in one place.
+
+- 0 for success, and for help and version output on stdout.
+- 1 for an application error, printed to stderr as `error: ...`.
+- 2 for a parse failure printed to stderr (`main` only).
+- 130 for a cancellation, including `Error::cancelled()`, or 128 plus the signal
+  number when a signal interrupted a live prompt. Either exit is silent unless
+  related errors are attached, in which case those print instead.
+- The code given to `Error::with_exit_code`, for an error of any kind. A
+  cancellation with an explicit code stays silent and any other error is still
+  printed.
+
+`Error::cancelled()` is a cancellation of your own, and an explicit code keeps it silent
+
+`ResultExt`, in the prelude, adds `.context(message)` and `.app_err()` to any
+`Result` whose error is a `Send + Sync` `std::error::Error`, so
+`text.parse::<u32>().context("reading the count")?` becomes an application
+error that reads `reading the count: invalid digit found in string` and keeps
+the original as its source. A `Box<dyn std::error::Error + Send + Sync>`
+converts into `Error` with `?`.
+
+a signal during a prompt restores the terminal and surfaces as `Cancelled` with
+`Error::signal()` set, `main` exits 128 plus the number, and the host is never killed by it
 
 ## Output
 
@@ -229,8 +107,13 @@ crate `pound-derive-impl`, which takes the root path and a help switch.
 The root path of `climax-derive` is fixed at `::climax::pound`, so a crate that
 renames its `climax` dependency cannot use the derive.
 
-Serde's derives need `#[serde(crate = "climax::serde")]` when serde is reached
-through `climax`.
+With the `derive` and `structured` features, `#[climax::serde(Serialize,
+Deserialize)]` derives serde's traits rooted at `::climax::serde` and adds
+`#[serde(crate = "::climax::serde")]`, keeping the item and its other
+attributes. It takes plain derive names, rejects an empty list, and must come
+before other derives that share serde's helper attributes. Without `derive`,
+serde's own derives need `#[serde(crate = "climax::serde")]` when serde is
+reached through `climax`.
 
 ## Ownership
 
@@ -252,6 +135,7 @@ and `Error::application_context` retain source chains without making dependency
 error enums part of the facade contract. Uncaught cancellation exits with
 status 130, or 128 plus the signal number for an interrupted prompt, silently
 unless related errors are attached, in which case those print instead.
+`Error::with_exit_code` replaces the code for any kind.
 
 `climax::Error` has a stable `ErrorKind` and keeps dependency errors as opaque sources.
 `climax::ResultExt` adds `.context(message)` and `.app_err()` to any `Result` of a
