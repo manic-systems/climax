@@ -1,25 +1,35 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    any::Any,
+use alloc::{
     collections::{
         BTreeMap,
         VecDeque,
     },
+    sync::Arc,
+};
+#[cfg(feature = "interactive")] use core::result;
+use core::{
+    any::Any,
     fmt,
-    io::Write as _,
-    os::fd::OwnedFd,
-    panic::{
-        AssertUnwindSafe,
-        catch_unwind,
+    mem,
+    panic::AssertUnwindSafe,
+    sync::atomic::{
+        AtomicU64,
+        Ordering,
     },
+    time::Duration,
+};
+use std::{
+    io::{
+        self,
+        Error as IoError,
+        ErrorKind as IoErrorKind,
+        Write as _,
+    },
+    os::fd::OwnedFd,
+    panic::catch_unwind,
     sync::{
-        Arc,
         OnceLock,
-        atomic::{
-            AtomicU64,
-            Ordering,
-        },
         mpsc::{
             self,
             Receiver,
@@ -32,10 +42,7 @@ use std::{
         JoinHandle,
         ThreadId,
     },
-    time::{
-        Duration,
-        Instant,
-    },
+    time::Instant,
 };
 
 use screw::{
@@ -187,8 +194,8 @@ impl Status {
     }
 
     fn root_widget(&self) -> WidgetRef {
-        let body = self.widget.clone();
-        match (self.spinner, body) {
+        let custom = self.widget.clone();
+        match (self.spinner, custom) {
             (false, Some(body)) => body,
             (false, None) => widget(Text::new(self.message.clone())),
             (true, body) => {
@@ -284,7 +291,7 @@ impl WidthSource {
     fn measure(&self) -> Option<screw::Viewport> {
         match self {
             Self::Fixed(_) => None,
-            Self::Stderr => screw::Viewport::of(&std::io::stderr()).ok(),
+            Self::Stderr => screw::Viewport::of(&io::stderr()).ok(),
             Self::Terminal(handle) => screw::Viewport::of(handle).ok(),
         }
     }
@@ -364,16 +371,16 @@ impl Inner {
         let latest = self.mode.load(Ordering::Acquire);
         if latest > spawned_with {
             let (reply, _discarded) = mpsc::channel();
-            let _ = channel.sender.send(Command::SetMode {
+            drop(channel.sender.send(Command::SetMode {
                 stamp: latest,
                 reply,
-            });
+            }));
         }
     }
 
     fn publish_mode(&self, mode: StatusMode) -> u64 {
         let next =
-            |stamp: u64| ((stamp >> MODE_BITS) + 1) << MODE_BITS | u64::from(mode_to_u8(mode));
+            |stamp: u64| (((stamp >> MODE_BITS) + 1) << MODE_BITS) | u64::from(mode_to_u8(mode));
         let previous = self
             .mode
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |stamp| {
@@ -391,12 +398,12 @@ impl Drop for Inner {
                 return;
             }
             let (done, stopped) = mpsc::channel();
-            let _ = channel.sender.send(Command::Stop { done });
+            drop(channel.sender.send(Command::Stop { done }));
             drop(channel.sender);
             match stopped.recv_timeout(self.request_timeout) {
                 Err(RecvTimeoutError::Timeout) => {},
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => {
-                    let _ = channel.thread.join();
+                    drop(channel.thread.join());
                 },
             }
         }
@@ -416,6 +423,7 @@ const fn mode_to_u8(mode: StatusMode) -> u8 {
 /// replayed or reordered update from the latest one
 const MODE_BITS: u32 = 8;
 
+#[expect(clippy::as_conversions, reason = "the mask keeps only the low byte")]
 const fn mode_from_stamp(stamp: u64) -> StatusMode {
     mode_from_u8((stamp & ((1 << MODE_BITS) - 1)) as u8)
 }
@@ -459,10 +467,15 @@ enum Command {
     #[cfg(feature = "interactive")]
     AcquireLease {
         holder: ThreadId,
-        reply:  Sender<std::result::Result<(), LeaseError>>,
+        token:  u64,
+        reply:  Sender<result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
+    #[cfg(feature = "interactive")]
+    CancelLease {
+        token: u64,
+    },
     SetMode {
         stamp: u64,
         reply: Sender<Result<()>>,
@@ -473,6 +486,15 @@ enum Command {
     IsIdle {
         reply: Sender<bool>,
     },
+}
+
+#[cfg_attr(
+    not(feature = "interactive"),
+    expect(dead_code, reason = "only a prompt lease sets or reads it")
+)]
+struct Lease {
+    holder: ThreadId,
+    token:  u64,
 }
 
 #[cfg(feature = "interactive")]
@@ -492,14 +514,14 @@ impl From<Failure> for Error {
         match failure {
             Failure::Stopped => actor_stopped(),
             Failure::TimedOut => {
-                output_error(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
+                output_error(IoError::new(
+                    IoErrorKind::TimedOut,
                     "the transient actor did not answer in time, a status widget may be blocking \
                      it",
                 ))
             },
             Failure::OnActor => {
-                output_error(std::io::Error::other(
+                output_error(IoError::other(
                     "a status widget called into the transient actor it runs on, which would wait \
                      on itself",
                 ))
@@ -537,7 +559,7 @@ impl StatusCoordinator {
     }
 
     fn send(&self, command: Command) {
-        let _ = self.inner.channel().sender.send(command);
+        drop(self.inner.channel().sender.send(command));
     }
 
     fn request<T>(
@@ -550,7 +572,7 @@ impl StatusCoordinator {
             return failed(Failure::OnActor);
         }
         let (reply, receiver) = mpsc::channel();
-        let _ = channel.sender.send(command(reply));
+        drop(channel.sender.send(command(reply)));
         match receiver.recv_timeout(self.inner.request_timeout) {
             Ok(value) => value,
             Err(RecvTimeoutError::Timeout) => failed(Failure::TimedOut),
@@ -650,7 +672,7 @@ impl StatusCoordinator {
     /// make `next` replace this coordinator, so a flush of this handle also
     /// reaches whatever the caller moved to
     pub(crate) fn supersede(&self, next: &Self) {
-        let _ = self.inner.successor.set(next.clone());
+        drop(self.inner.successor.set(next.clone()));
     }
 
     /// end of the successor chain, where a handle kept from before a
@@ -683,37 +705,7 @@ impl StatusCoordinator {
             (Ok(()), Ok(())) => Ok(()),
         }
     }
-}
 
-fn actor_stopped() -> Error {
-    output_error(std::io::Error::other("the transient actor thread stopped"))
-}
-
-#[derive(Clone)]
-pub(crate) struct TransientNotice {
-    coordinator: StatusCoordinator,
-}
-
-impl TransientNotice {
-    pub(crate) const fn coordinator(coordinator: StatusCoordinator) -> Self {
-        Self { coordinator }
-    }
-}
-
-impl std::io::Write for TransientNotice {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.coordinator
-            .notice(buffer)
-            .map(|()| buffer.len())
-            .map_err(std::io::Error::other)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl StatusCoordinator {
     #[cfg(feature = "interactive")]
     pub(crate) fn prompt_guard(&self) -> bang::Result<PromptGuard> {
         let this = self.current();
@@ -743,21 +735,57 @@ impl StatusCoordinator {
     }
 
     #[cfg(feature = "interactive")]
-    fn acquire_lease(&self) -> std::result::Result<(), LeaseError> {
+    fn acquire_lease(&self) -> result::Result<(), LeaseError> {
+        let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         self.request(
             |reply| {
                 Command::AcquireLease {
                     holder: thread::current().id(),
+                    token,
                     reply,
                 }
             },
-            |failure| Err(LeaseError::Clear(failure.into())),
+            |failure| {
+                // the actor may grant after the bound expires but before the
+                // reply receiver drops, leaving a lease nobody
+                // releases
+                self.send(Command::CancelLease { token });
+                Err(LeaseError::Clear(failure.into()))
+            },
         )
     }
 
     #[cfg(feature = "interactive")]
     pub(crate) fn writer(&self) -> SharedWriter {
         self.current().inner.writer.clone()
+    }
+}
+
+fn actor_stopped() -> Error {
+    output_error(IoError::other("the transient actor thread stopped"))
+}
+
+#[derive(Clone)]
+pub(crate) struct TransientNotice {
+    coordinator: StatusCoordinator,
+}
+
+impl TransientNotice {
+    pub(crate) const fn coordinator(coordinator: StatusCoordinator) -> Self {
+        Self { coordinator }
+    }
+}
+
+impl io::Write for TransientNotice {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.coordinator
+            .notice(buf)
+            .map(|()| buf.len())
+            .map_err(IoError::other)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -833,8 +861,8 @@ impl ErrorLog {
     }
 }
 
-fn is_permanent(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::BrokenPipe || error.raw_os_error() == Some(5)
+fn is_permanent(error: &IoError) -> bool {
+    error.kind() == IoErrorKind::BrokenPipe || error.raw_os_error() == Some(5)
 }
 
 struct ActorConfig {
@@ -867,7 +895,7 @@ struct Actor {
     pending:          VecDeque<Vec<u8>>,
     accepted:         usize,
     flush_owed:       bool,
-    lease_holder:     Option<ThreadId>,
+    lease:            Option<Lease>,
     #[cfg(feature = "structured")]
     deferred:         VecDeque<DeferredAround>,
     dead:             bool,
@@ -894,7 +922,7 @@ impl Actor {
             pending: VecDeque::new(),
             accepted: 0,
             flush_owed: false,
-            lease_holder: None,
+            lease: None,
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
             dead: false,
@@ -904,7 +932,7 @@ impl Actor {
     }
 
     const fn leased(&self) -> bool {
-        self.lease_holder.is_some()
+        self.lease.is_some()
     }
 
     #[cfg(feature = "structured")]
@@ -912,17 +940,19 @@ impl Actor {
         if Instant::now() >= write.deadline {
             return;
         }
-        match self.lease_holder {
+        match self.lease.as_ref().map(|lease| lease.holder) {
             Some(holder) if holder == requester => {
-                let _ = write.reply.send(Err(output_error(std::io::Error::other(
+                drop(write.reply.send(Err(output_error(IoError::other(
                     "the calling thread holds the terminal, so a stream write would wait on itself",
-                ))));
+                )))));
             },
             Some(_) => self.deferred.push_back(write),
             None => {
-                let _ = write
-                    .reply
-                    .send(self.write_around(write.writer, &write.bytes));
+                drop(
+                    write
+                        .reply
+                        .send(self.write_around(write.writer, &write.bytes)),
+                );
             },
         }
     }
@@ -931,22 +961,42 @@ impl Actor {
     fn acquire_lease(
         &mut self,
         holder: ThreadId,
-        reply: &Sender<std::result::Result<(), LeaseError>>,
+        token: u64,
+        reply: &Sender<result::Result<(), LeaseError>>,
     ) {
         if self.leased() {
-            let _ = reply.send(Err(LeaseError::Busy));
+            drop(reply.send(Err(LeaseError::Busy)));
             return;
         }
         match self.clear_immediate() {
             Ok(()) => {
                 if reply.send(Ok(())).is_ok() {
-                    self.lease_holder = Some(holder);
+                    self.lease = Some(Lease { holder, token });
                 }
             },
             Err(error) => {
-                let _ = reply.send(Err(LeaseError::Clear(error)));
+                drop(reply.send(Err(LeaseError::Clear(error))));
             },
         }
+    }
+
+    #[cfg(feature = "interactive")]
+    fn release_lease(&mut self) {
+        self.lease = None;
+        self.drain_pending();
+        #[cfg(feature = "structured")]
+        while let Some(DeferredAround {
+            writer,
+            bytes,
+            deadline,
+            reply,
+        }) = self.deferred.pop_front()
+        {
+            if Instant::now() < deadline {
+                drop(reply.send(self.write_around(writer, &bytes)));
+            }
+        }
+        self.dirty = true;
     }
 
     fn remove(&mut self, id: u64, success: bool) {
@@ -971,8 +1021,8 @@ impl Actor {
                 // silent.
                 (StatusMode::Silent | StatusMode::Auto, _) => None,
             };
-            if let Some(line) = line {
-                self.enqueue(format!("{line}\n").into_bytes());
+            if let Some(text) = line {
+                self.enqueue(format!("{text}\n").into_bytes());
             }
             self.drain_pending();
         }
@@ -988,7 +1038,7 @@ impl Actor {
             Command::Remove { id, success, reply } => {
                 self.remove(id, success);
                 let panic = self.panicked.remove(&id);
-                let _ = reply.send(self.report(panic));
+                drop(reply.send(self.report(panic)));
             },
             Command::MarkDirty => self.dirty = true,
             Command::Stop { .. } => {},
@@ -1000,7 +1050,7 @@ impl Actor {
                     self.drain_pending();
                     self.notice_result()
                 };
-                let _ = reply.send(result);
+                drop(reply.send(result));
             },
             #[cfg(feature = "structured")]
             Command::Around {
@@ -1021,28 +1071,26 @@ impl Actor {
                 );
             },
             #[cfg(feature = "interactive")]
-            Command::AcquireLease { holder, reply } => self.acquire_lease(holder, &reply),
+            Command::AcquireLease {
+                holder,
+                token,
+                reply,
+            } => self.acquire_lease(holder, token, &reply),
             #[cfg(feature = "interactive")]
-            Command::ReleaseLease => {
-                self.lease_holder = None;
-                self.drain_pending();
-                #[cfg(feature = "structured")]
-                while let Some(DeferredAround {
-                    writer,
-                    bytes,
-                    deadline,
-                    reply,
-                }) = self.deferred.pop_front()
+            Command::ReleaseLease => self.release_lease(),
+            #[cfg(feature = "interactive")]
+            Command::CancelLease { token } => {
+                if self
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.token == token)
                 {
-                    if Instant::now() < deadline {
-                        let _ = reply.send(self.write_around(writer, &bytes));
-                    }
+                    self.release_lease();
                 }
-                self.dirty = true;
             },
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
-                    let _ = reply.send(Ok(()));
+                    drop(reply.send(Ok(())));
                     return;
                 }
                 let mode = mode_from_stamp(stamp);
@@ -1055,18 +1103,18 @@ impl Actor {
                 };
                 self.mode = mode;
                 self.dirty = true;
-                let _ = reply.send(result);
+                drop(reply.send(result));
             },
             Command::Flush { reply } => {
                 self.drain_pending();
-                let _ = reply.send(self.report_all());
+                drop(reply.send(self.report_all()));
             },
             Command::IsIdle { reply } => {
                 let idle = self.entries.is_empty()
                     && self.pending.is_empty()
                     && !self.flush_owed
                     && !self.leased();
-                let _ = reply.send(idle);
+                let _acknowledged = reply.send(idle);
             },
         }
     }
@@ -1083,7 +1131,7 @@ impl Actor {
             return Err(self
                 .errors
                 .take()
-                .unwrap_or_else(|| output_error(std::io::ErrorKind::BrokenPipe.into())));
+                .unwrap_or_else(|| output_error(IoErrorKind::BrokenPipe.into())));
         }
         Ok(())
     }
@@ -1093,7 +1141,7 @@ impl Actor {
     }
 
     fn report_all(&mut self) -> Result<()> {
-        let panics = std::mem::take(&mut self.panicked);
+        let panics = mem::take(&mut self.panicked);
         collect_reports(self.errors.take().into_iter().chain(panics.into_values()))
     }
 
@@ -1103,10 +1151,10 @@ impl Actor {
             panic_message(payload)
         );
         for id in ids {
-            let error = Error::message(message.clone());
+            let fresh = Error::message(message.clone());
             let error = match self.panicked.remove(id) {
-                Some(first) => first.with_related(error),
-                None => error,
+                Some(first) => first.with_related(fresh),
+                None => fresh,
             };
             self.panicked.insert(*id, error);
         }
@@ -1128,8 +1176,8 @@ impl Actor {
             .iter()
             .filter(|(_, entry)| {
                 catch_unwind(AssertUnwindSafe(|| {
-                    let _ = screw::render_plain(&*entry.widget);
-                    let _ = entry.widget.tick_interest();
+                    drop(screw::render_plain(&*entry.widget));
+                    let _interest = entry.widget.tick_interest();
                 }))
                 .is_err()
             })
@@ -1161,11 +1209,12 @@ impl Actor {
         self.accepted = 0;
         self.flush_owed = false;
         if discarded > 0 {
-            self.errors.note_discarded(discarded as u64);
+            self.errors
+                .note_discarded(u64::try_from(discarded).unwrap_or(u64::MAX));
         }
     }
 
-    fn record_transient_failure(&mut self, error: std::io::Error) {
+    fn record_transient_failure(&mut self, error: IoError) {
         let permanent = is_permanent(&error);
         self.errors.record(output_error(error));
         if permanent {
@@ -1173,7 +1222,7 @@ impl Actor {
         }
     }
 
-    fn immediate_failure(&mut self, error: std::io::Error) -> Error {
+    fn immediate_failure(&mut self, error: IoError) -> Error {
         if is_permanent(&error) {
             self.kill();
         }
@@ -1226,7 +1275,7 @@ impl Actor {
             let line_len = line.len();
             match result {
                 Ok(0) => {
-                    self.record_transient_failure(std::io::ErrorKind::WriteZero.into());
+                    self.record_transient_failure(IoErrorKind::WriteZero.into());
                     return;
                 },
                 Ok(accepted) => {
@@ -1237,7 +1286,7 @@ impl Actor {
                         self.accepted = 0;
                     }
                 },
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
+                Err(error) if error.kind() == IoErrorKind::Interrupted => {},
                 Err(error) => {
                     self.record_transient_failure(error);
                     return;
@@ -1278,7 +1327,7 @@ impl Actor {
         let widgets: Vec<WidgetRef> = self
             .entries
             .values()
-            .map(|entry| entry.widget.clone())
+            .map(|entry| Arc::clone(&entry.widget))
             .collect();
         match catch_unwind(AssertUnwindSafe(|| {
             self.renderer.draw(&StatusStack(widgets))
@@ -1363,13 +1412,17 @@ impl Actor {
 fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
     let mut actor = Actor::new(config);
     loop {
-        let event = match actor.next_wake() {
-            None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            Some(wait) => receiver.recv_timeout(wait),
-        };
+        let event = actor.next_wake().map_or_else(
+            || {
+                receiver
+                    .recv()
+                    .map_err(|_disconnected| RecvTimeoutError::Disconnected)
+            },
+            |wait| receiver.recv_timeout(wait),
+        );
         match event {
             Ok(Command::Stop { done }) => {
-                let _ = done.send(());
+                let _closed = done.send(());
                 break;
             },
             Ok(command) => actor.apply(command),
@@ -1384,10 +1437,10 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
 }
 
 fn collect_reports(errors: impl IntoIterator<Item = Error>) -> Result<()> {
-    let mut errors = errors.into_iter();
-    errors
-        .next()
-        .map_or(Ok(()), |first| Err(errors.fold(first, Error::with_related)))
+    let mut remaining = errors.into_iter();
+    remaining.next().map_or(Ok(()), |first| {
+        Err(remaining.fold(first, Error::with_related))
+    })
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {
@@ -1401,12 +1454,12 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
 struct StatusStack(Vec<WidgetRef>);
 
 impl Widget for StatusStack {
-    fn render(&self, context: &RenderCtx, output: &mut Surface) {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         for (index, widget) in self.0.iter().enumerate() {
             if index > 0 {
-                output.newline();
+                out.newline();
             }
-            widget.render(context, output);
+            widget.render(ctx, out);
         }
     }
 }
@@ -1427,28 +1480,28 @@ fn wants_frame_tick(interest: TickInterest, elapsed: Duration) -> bool {
     }
 }
 
-fn output_error(error: std::io::Error) -> Error {
+fn output_error(error: IoError) -> Error {
     Error::with_source(ErrorKind::Output, error)
 }
 
 #[cfg(test)]
 mod tests {
+    use core::{
+        sync::atomic::{
+            AtomicBool,
+            AtomicUsize,
+            Ordering,
+        },
+        time::Duration,
+    };
     use std::{
         collections::HashSet,
-        io,
+        fs,
         sync::{
             Barrier,
             Mutex,
-            atomic::{
-                AtomicBool,
-                AtomicUsize,
-                Ordering,
-            },
         },
-        time::{
-            Duration,
-            Instant,
-        },
+        time::Instant,
     };
 
     use super::*;
@@ -1464,9 +1517,9 @@ mod tests {
     }
 
     impl io::Write for Capture {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            lock(&self.0).extend_from_slice(buffer);
-            Ok(buffer.len())
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -1490,7 +1543,7 @@ mod tests {
     fn wait_for(mut condition: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !condition() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(1));
         }
         assert!(condition(), "condition was not met within the deadline");
     }
@@ -1592,11 +1645,11 @@ mod tests {
 
     #[test]
     fn concurrent_statuses_share_one_render_thread() {
-        struct Probe(Arc<Mutex<HashSet<std::thread::ThreadId>>>);
+        struct Probe(Arc<Mutex<HashSet<thread::ThreadId>>>);
 
         impl Widget for Probe {
             fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-                lock(&self.0).insert(std::thread::current().id());
+                lock(&self.0).insert(thread::current().id());
                 out.write("working", screw::Style::PLAIN);
             }
         }
@@ -1605,17 +1658,17 @@ mod tests {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let barrier = Arc::new(Barrier::new(17));
-        let ids = std::thread::scope(|scope| {
+        let ids = thread::scope(|scope| {
             let mut threads = Vec::new();
             for _ in 0..16 {
-                let seen = Arc::clone(&seen);
-                let barrier = Arc::clone(&barrier);
-                let coordinator = coordinator.clone();
+                let thread_seen = Arc::clone(&seen);
+                let thread_barrier = Arc::clone(&barrier);
+                let thread_coordinator = coordinator.clone();
                 threads.push(scope.spawn(move || {
-                    barrier.wait();
-                    coordinator.insert(
+                    thread_barrier.wait();
+                    thread_coordinator.insert(
                         StatusEntry {
-                            widget:          widget(Probe(seen)),
+                            widget:          widget(Probe(thread_seen)),
                             plain:           "working".to_owned(),
                             final_message:   None,
                             failure_message: None,
@@ -1763,7 +1816,7 @@ mod tests {
         }
 
         let writer = FailingWriter::default();
-        let attempts = writer.0.clone();
+        let attempts = Arc::clone(&writer.0);
         let coordinator = StatusCoordinator::new(SharedWriter::new(writer), StatusMode::Live);
         let status = Status::new("working", coordinator.clone())
             .final_message("finished")
@@ -1825,7 +1878,7 @@ mod tests {
         assert!(coordinator.prompt_guard().is_err());
         let before = capture.text();
         coordinator.mark_dirty().unwrap();
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
         assert_eq!(capture.text(), before, "no draw happens while leased");
 
         drop(guard);
@@ -1858,12 +1911,12 @@ mod tests {
         }
 
         impl io::Write for FailOnce {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 if self.fail {
                     self.fail = false;
                     return Err(io::Error::other("first write failed"));
                 }
-                self.output.write(bytes)
+                self.output.write(buf)
             }
 
             fn flush(&mut self) -> io::Result<()> {
@@ -1921,14 +1974,14 @@ mod tests {
         }
 
         impl io::Write for Partial {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 match self.limit.take() {
                     Some(0) => Err(io::ErrorKind::WouldBlock.into()),
                     Some(limit) => {
                         self.limit = Some(0);
-                        self.output.write(&bytes[..limit])
+                        self.output.write(&buf[..limit])
                     },
-                    None => self.output.write(bytes),
+                    None => self.output.write(buf),
                 }
             }
 
@@ -1959,16 +2012,16 @@ mod tests {
         }
 
         impl io::Write for Buffered {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                self.buffer.extend_from_slice(bytes);
-                Ok(bytes.len())
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.buffer.extend_from_slice(buf);
+                Ok(buf.len())
             }
 
             fn flush(&mut self) -> io::Result<()> {
-                if std::mem::take(&mut self.fail_flush) {
+                if mem::take(&mut self.fail_flush) {
                     return Err(io::ErrorKind::WouldBlock.into());
                 }
-                self.output.write_all(&std::mem::take(&mut self.buffer))
+                self.output.write_all(&mem::take(&mut self.buffer))
             }
         }
 
@@ -1995,13 +2048,13 @@ mod tests {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
         let barrier = Arc::new(Barrier::new(9));
-        std::thread::scope(|scope| {
+        thread::scope(|scope| {
             for index in 0..8 {
-                let coordinator = coordinator.clone();
-                let barrier = Arc::clone(&barrier);
+                let thread_coordinator = coordinator.clone();
+                let thread_barrier = Arc::clone(&barrier);
                 scope.spawn(move || {
-                    barrier.wait();
-                    Status::new(format!("work-{index}"), coordinator)
+                    thread_barrier.wait();
+                    Status::new(format!("work-{index}"), thread_coordinator)
                         .final_message(format!("done-{index}"))
                         .finish()
                         .unwrap();
@@ -2022,13 +2075,13 @@ mod tests {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let stop = Arc::new(AtomicBool::new(false));
-        std::thread::scope(|scope| {
+        thread::scope(|scope| {
             for _ in 0..8 {
-                let coordinator = coordinator.clone();
-                let stop = Arc::clone(&stop);
+                let thread_coordinator = coordinator.clone();
+                let thread_stop = Arc::clone(&stop);
                 scope.spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        Status::new("working", coordinator.clone())
+                    while !thread_stop.load(Ordering::Relaxed) {
+                        Status::new("working", thread_coordinator.clone())
                             .start()
                             .finish()
                             .unwrap();
@@ -2037,7 +2090,7 @@ mod tests {
             }
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
-                let _ = format!("{coordinator:?}");
+                drop(format!("{coordinator:?}"));
             }
             stop.store(true, Ordering::Relaxed);
         });
@@ -2189,7 +2242,11 @@ mod tests {
         struct Panics;
 
         impl io::Write for Panics {
-            fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            #[expect(
+                clippy::panic_in_result_fn,
+                reason = "the writer panics to kill the actor thread"
+            )]
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
                 panic!("writer exploded");
             }
 
@@ -2231,11 +2288,11 @@ mod tests {
             .unwrap_err();
         assert!(own.to_string().contains("would wait on itself"));
 
-        let other = std::thread::scope(|scope| {
+        let other = thread::scope(|scope| {
             let streaming = scope.spawn(|| {
                 coordinator.write_around(SharedWriter::new(capture.clone()), b"other\n".to_vec())
             });
-            std::thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100));
             assert!(
                 capture.text().is_empty(),
                 "the write must wait for the lease"
@@ -2255,6 +2312,27 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn a_lease_granted_to_a_caller_that_gave_up_is_released_by_its_cancellation() {
+        let mut actor = actor_with(WidthSource::Fixed(40));
+        let (reply, _abandoned) = mpsc::channel();
+        actor.apply(Command::AcquireLease {
+            holder: thread::current().id(),
+            token: 7,
+            reply,
+        });
+        assert!(actor.leased());
+
+        actor.apply(Command::CancelLease { token: 8 });
+        assert!(
+            actor.leased(),
+            "another request's cancellation must not release the lease"
+        );
+        actor.apply(Command::CancelLease { token: 7 });
+        assert!(!actor.leased());
+    }
+
     fn drawn_static_status(actor: &mut Actor) {
         actor.apply(Command::Insert {
             id:    0,
@@ -2270,7 +2348,7 @@ mod tests {
         drawn_static_status(&mut fixed);
         assert_eq!(fixed.next_wake(), None);
 
-        let null = std::fs::File::open("/dev/null").unwrap();
+        let null = fs::File::open("/dev/null").unwrap();
         let mut not_a_terminal = actor_with(WidthSource::Terminal(null.into()));
         drawn_static_status(&mut not_a_terminal);
         assert_eq!(not_a_terminal.next_wake(), None);
@@ -2280,7 +2358,7 @@ mod tests {
     fn stderr_is_polled_for_resizes_only_when_it_is_a_terminal() {
         let mut actor = actor_with(WidthSource::Stderr);
         drawn_static_status(&mut actor);
-        let is_terminal = screw::Viewport::of(&std::io::stderr()).is_ok();
+        let is_terminal = screw::Viewport::of(&io::stderr()).is_ok();
         assert_eq!(actor.next_wake().is_some(), is_terminal);
     }
 
@@ -2422,7 +2500,7 @@ mod tests {
             )))
             .start();
         barrier.wait();
-        let _ = output.stream(&2).text(|value| value).emit();
+        drop(output.stream(&2).text(|value| value).emit());
         wait_for(|| lock(&seen).is_some());
         let (error, elapsed) = lock(&seen).take().unwrap();
         assert!(
@@ -2510,7 +2588,7 @@ mod tests {
         );
         let guard = coordinator.prompt_guard().unwrap();
 
-        let error = std::thread::scope(|scope| {
+        let error = thread::scope(|scope| {
             scope
                 .spawn(|| {
                     coordinator.write_around(SharedWriter::new(capture.clone()), b"late\n".to_vec())
