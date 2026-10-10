@@ -186,17 +186,50 @@ impl Script {
         self.keys(keys)
     }
 
-    /// Answer a text, password, number or date prompt by typing `text` and
-    /// submitting.
+    /// answers a text, password or number prompt by typing `text` and
+    /// submitting
     ///
-    /// ```
-    /// # use climax::testing::Script;
-    /// let script = Script::new().text("2026-10-10");
-    /// # drop(script);
-    /// ```
+    /// a date prompt takes no typed text, use [`Script::date`]
     #[must_use]
     pub fn text(self, text: &str) -> Self {
         self.text_attempts([text])
+    }
+
+    /// answers a date prompt that opens on `from` by moving to `to` and
+    /// submitting
+    ///
+    /// no key jumps to a fixed date, so `from` must be the date the prompt
+    /// opens on, its default or today, and a wrong `from` submits a shifted
+    /// date
+    #[must_use]
+    pub fn date(self, from: bang::Date, to: bang::Date) -> Self {
+        use bang::advanced::{
+            Event,
+            Key,
+            KeyEvent,
+            Modifiers,
+        };
+
+        let months = (i64::from(to.year) - i64::from(from.year)) * 12 + i64::from(to.month)
+            - i64::from(from.month);
+        let page = || {
+            if months < 0 {
+                Key::PageUp
+            } else {
+                Key::PageDown
+            }
+        };
+        let years = (0..months.unsigned_abs() / 12)
+            .map(|_| Event::Key(KeyEvent::with_modifiers(page(), Modifiers::SHIFT)));
+        let rest = (0..months.unsigned_abs() % 12).map(|_| Event::Key(KeyEvent::new(page())));
+        let days = (1..to.day).map(|_| Event::Key(KeyEvent::new(Key::Right)));
+        let mut events: Vec<Event> = years.chain(rest).collect();
+        events.push(Event::Key(KeyEvent::new(Key::Home)));
+        events.extend(days);
+        events.push(Event::Key(KeyEvent::new(Key::Enter)));
+        let mut script = self;
+        script.0.push(events);
+        script
     }
 
     /// Answer one text prompt whose validator rejects the earlier attempts, by
