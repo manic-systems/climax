@@ -272,54 +272,72 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
         bang::select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
         bang::multi_select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
         bang::search(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
         bang::review(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
         bang::text(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
         bang::password(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
         bang::confirm(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
         bang::date(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
+    /// The builder keeps the interaction driver the context holds now, so a later
+    /// `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
     where
@@ -532,6 +550,8 @@ impl Context {
         Ok(())
     }
 
+    /// Prompt builders made earlier keep the driver they captured, so only builders
+    /// made after this call see the new mode.
     #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
     pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
         self.terminal.set_interaction_mode(mode);
