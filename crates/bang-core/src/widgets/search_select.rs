@@ -38,6 +38,9 @@ use crate::{
 };
 
 /// a single-choice list filtered by a query typed above it
+///
+/// Ctrl-Home and Ctrl-End jump to the first and last match, Home and End move
+/// the query cursor
 #[derive(Debug)]
 pub struct SearchSelect {
     id:        WidgetId,
@@ -322,6 +325,10 @@ impl SearchSelect {
                             navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                         }
                     },
+                    Key::Home if only_control(key) => self.move_to(0),
+                    Key::End if only_control(key) => {
+                        self.move_to(self.matches.len().saturating_sub(1))
+                    },
                     Key::Enter => self.submit(),
                     Key::Esc => Reaction::Cancel,
                     Key::Char(_)
@@ -500,6 +507,33 @@ mod tests {
         assert!(matches_query("école", "É"));
         assert_eq!(find_match("Étage", "TAG"), Some(2..5));
         assert_eq!(find_match("Étage", "zzz"), None);
+    }
+
+    fn ctrl_key(key: Key) -> Event {
+        Event::Key(KeyEvent::with_modifiers(key, Modifiers::CONTROL))
+    }
+
+    #[test]
+    fn ctrl_home_and_ctrl_end_jump_while_plain_home_moves_the_query_cursor() {
+        let mut select =
+            SearchSelect::new("s", ["alpha", "beta", "gamma"]).with_selected_match_index(1);
+        let mut cx = Context::new();
+
+        select.handle(Event::char('a'), &mut cx);
+        assert_eq!(
+            select.handle(ctrl_key(Key::End), &mut cx),
+            Reaction::Changed
+        );
+        assert_eq!(select.selected_match_index(), Some(2));
+        assert_eq!(
+            select.handle(ctrl_key(Key::Home), &mut cx),
+            Reaction::Changed
+        );
+        assert_eq!(select.selected_match_index(), Some(0));
+
+        select.handle(Event::Key(KeyEvent::new(Key::Home)), &mut cx);
+        select.handle(Event::char('x'), &mut cx);
+        assert_eq!(select.query(), "xa");
     }
 
     #[test]
