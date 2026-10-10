@@ -14,6 +14,8 @@ pub use crate::{
     Error,
     ErrorKind,
     Result,
+    ResultExt,
+    main_with,
     output::Format,
     run_with,
     terminal::{
