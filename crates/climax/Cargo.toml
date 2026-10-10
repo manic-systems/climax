@@ -1,6 +1,6 @@
 [package]
 name                 = "climax"
-version              = "0.0.1"
+version              = "0.1.0"
 authors.workspace    = true
 categories           = [ "command-line-interface", "command-line-utilities" ]
 description          = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
