@@ -193,17 +193,53 @@ impl Script {
         self.keys(keys)
     }
 
-    /// Answer a text, password, number or date prompt by typing `text` and
-    /// submitting.
+    /// Answer a text, password or number prompt by typing `text` and
+    /// submitting. A date prompt takes no typed text, use [`Script::date`].
     ///
     /// ```
     /// # use climax::testing::Script;
-    /// let script = Script::new().text("2026-10-10");
+    /// let script = Script::new().text("eu-west");
     /// # drop(script);
     /// ```
     #[must_use]
     pub fn text(self, text: &str) -> Self {
         self.text_attempts([text])
+    }
+
+    /// Answer a date prompt that opens on `from` by moving to `to` and
+    /// submitting.
+    ///
+    /// A date prompt has no key that jumps to a fixed date, so `from` must be
+    /// the date the prompt opens on, which is its default or today. A wrong
+    /// `from` submits a shifted date, so pass the default the application sets.
+    ///
+    /// ```
+    /// # use climax::testing::Script;
+    /// use climax::bang::Date;
+    ///
+    /// let from = Date::new(2026, 10, 10).unwrap();
+    /// let to = Date::new(2027, 1, 31).unwrap();
+    /// let script = Script::new().date(from, to);
+    /// # drop(script);
+    /// ```
+    #[must_use]
+    pub fn date(self, from: bang::Date, to: bang::Date) -> Self {
+        use bang::advanced::{Event, Key, KeyEvent, Modifiers};
+
+        let months = (i64::from(to.year) - i64::from(from.year)) * 12 + i64::from(to.month)
+            - i64::from(from.month);
+        let page = || if months < 0 { Key::PageUp } else { Key::PageDown };
+        let years = (0..months.unsigned_abs() / 12)
+            .map(|_| Event::Key(KeyEvent::with_modifiers(page(), Modifiers::SHIFT)));
+        let rest = (0..months.unsigned_abs() % 12).map(|_| Event::Key(KeyEvent::new(page())));
+        let days = (1..to.day).map(|_| Event::Key(KeyEvent::new(Key::Right)));
+        let mut events: Vec<Event> = years.chain(rest).collect();
+        events.push(Event::Key(KeyEvent::new(Key::Home)));
+        events.extend(days);
+        events.push(Event::Key(KeyEvent::new(Key::Enter)));
+        let mut script = self;
+        script.0.push(events);
+        script
     }
 
     /// Answer one text prompt whose validator rejects the earlier attempts, by

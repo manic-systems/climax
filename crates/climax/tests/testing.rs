@@ -7,6 +7,7 @@
 ))]
 
 use climax::{
+    bang::Date,
     prelude::*,
     testing::{self, Script},
 };
@@ -242,4 +243,30 @@ fn multi_select_nth_replaces_the_preselection() {
     });
     assert_eq!(outcome.exit_code, 0);
     assert_eq!(outcome.stderr, "[\"c\"]\n");
+}
+
+fn date_flow(from: Date, to: Date) -> Date {
+    let picked = std::cell::Cell::new(None);
+    let outcome = testing::run_with(Script::new().date(from, to), |cx| {
+        picked.set(Some(cx.date("When").default(from).interact()?.or_cancel()?));
+        Ok(())
+    });
+    assert_eq!(outcome.exit_code, 0);
+    picked.get().unwrap()
+}
+
+#[test]
+fn date_moves_forward_across_years_and_clamped_months() {
+    let from = Date::new(2026, 10, 31).unwrap();
+    let to = Date::new(2028, 2, 29).unwrap();
+    assert_eq!(date_flow(from, to), to);
+}
+
+#[test]
+fn date_moves_backward_and_within_a_month() {
+    let from = Date::new(2026, 3, 31).unwrap();
+    let to = Date::new(2024, 12, 5).unwrap();
+    assert_eq!(date_flow(from, to), to);
+    let to = Date::new(2026, 3, 2).unwrap();
+    assert_eq!(date_flow(from, to), to);
 }
