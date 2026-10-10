@@ -17,11 +17,14 @@ use crate::alloc_prelude::*;
 /// it into [`crate::ErrorKind::Value`] once it knows which arg it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValueError {
+    /// the text that failed to parse
     pub value: String,
+    /// why it failed
     pub msg: String,
 }
 
 impl ValueError {
+    /// a failure for `value`, with `msg` saying why
     pub fn new(value: &str, msg: impl fmt::Display) -> Self {
         Self {
             value: value.to_owned(),

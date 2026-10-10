@@ -12,7 +12,9 @@ use crate::alloc_prelude::*;
 pub enum ErrorKind {
     /// unrecognized `--flag` or `-x`
     Unknown {
+        /// the spelling that was not recognized
         arg: String,
+        /// the known spelling it was probably meant to be, when one is close
         closest: Option<String>,
     },
     /// an option that takes a value got none
@@ -25,39 +27,63 @@ pub enum ErrorKind {
     UnexpectedValue(String),
     /// first positional named a subcommand that does not exist
     UnknownSubcommand {
+        /// the word that named no subcommand
         name: String,
+        /// the known subcommand it was probably meant to be, when one is close
         closest: Option<String>,
     },
     /// a subcommand was required but none given
     MissingSubcommand,
     /// a value failed to parse into its target type
     Value {
+        /// the argument the value was given to, as usage spells it
         arg: String,
+        /// the text that failed to parse
         value: String,
+        /// why it failed, with the possible values appended for a choice type
         msg: String,
     },
     /// two members of a mutually-exclusive group were both set
     Conflict {
+        /// the group both were members of, empty for a `conflicts_with` pair
         group: String,
+        /// the first of the two arguments
         first: String,
+        /// the second of the two arguments
         second: String,
     },
     /// an arg was set without the other arg it obliges
-    Requires { arg: String, needs: String },
+    Requires {
+        /// the argument that was set
+        arg:   String,
+        /// the argument it obliges, which was absent
+        needs: String,
+    },
     /// a list arg got fewer values than it accepts
     TooFewValues {
+        /// the list argument
         arg: String,
+        /// the fewest values it accepts
         min: usize,
+        /// how many it got
         got: usize,
     },
     /// a list arg got more values than it accepts
     TooManyValues {
+        /// the list argument
         arg: String,
+        /// the most values it accepts
         max: usize,
+        /// how many it got
         got: usize,
     },
     /// a required group had none of its members set
-    MissingGroup { group: String, options: String },
+    MissingGroup {
+        /// the group name
+        group:   String,
+        /// the members to choose from, comma separated
+        options: String,
+    },
     /// `-h` / `--help`, payload is rendered help
     Help(String),
     /// `--version`, payload is the version line
@@ -120,7 +146,9 @@ impl fmt::Display for ErrorKind {
 /// command in the tree raised it
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    /// what happened
     pub kind:      ErrorKind,
+    /// the usage line of the command that raised it, when it came from a parse
     pub usage:     Option<String>,
     /// the spelling that still reaches the generated help, if any does
     pub help_flag: Option<&'static str>,

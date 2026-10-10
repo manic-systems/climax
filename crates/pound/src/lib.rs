@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![warn(missing_docs)]
 
 //! pound: a low footprint, derive-first cli parser.
 //!

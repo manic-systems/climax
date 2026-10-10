@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![warn(missing_docs)]
+
 //! expansion behind pound's derive macros, as a plain library so more than one
 //! proc-macro crate can root the generated code at its own path to the pound
 //! runtime. `derive_parse` turns a struct into a flat command and an enum into
@@ -76,6 +78,8 @@ pub struct Options {
 }
 
 impl Options {
+    /// options rooting the expansion at `root`, with doc comments baked in
+    /// when `help` is set
     #[must_use]
     pub const fn new(root: &'static str, help: bool) -> Self {
         Self { root, help }
@@ -96,6 +100,24 @@ impl Ctx {
     }
 }
 
+/// expands `#[derive(Parse)]` for the struct or enum in `input`, or yields a
+/// `compile_error!` naming the problem. the attributes it reads are the ones
+/// documented on `pound_derive::Parse`.
+///
+/// a crate that re-exports pound wraps it in its own proc-macro, so the
+/// generated code names that crate's path to the runtime.
+///
+/// ```
+/// use pound_derive_impl::{derive_parse, Options};
+///
+/// // the body of `#[proc_macro_derive(Parse, attributes(pound))]` in a crate
+/// // that re-exports pound as `climax::pound`
+/// const OPTIONS: Options = Options::new("::climax::pound", true);
+///
+/// let input = "struct Args { #[pound(long)] verbose: bool }".parse().unwrap();
+/// let output = derive_parse(input, &OPTIONS).to_string();
+/// assert!(output.contains(":: climax :: pound :: Parse for Args"));
+/// ```
 pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
     let cx = &Ctx::new(options);
     match parse_item(input) {
@@ -106,6 +128,17 @@ pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
     }
 }
 
+/// expands `#[derive(ValueEnum)]` for the unit-variant enum in `input`, or
+/// yields a `compile_error!` naming the problem. see [`derive_parse`] for how a
+/// re-exporting crate wraps it.
+///
+/// ```
+/// use pound_derive_impl::{derive_value_enum, Options};
+///
+/// let input = "enum Format { Json, PlainText }".parse().unwrap();
+/// let output = derive_value_enum(input, &Options::new("::pound", true)).to_string();
+/// assert!(output.contains("\"plain-text\""));
+/// ```
 pub fn derive_value_enum(input: TokenStream2, options: &Options) -> TokenStream2 {
     let cx = &Ctx::new(options);
     match parse_item(input) {

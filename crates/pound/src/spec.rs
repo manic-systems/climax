@@ -48,11 +48,15 @@ pub enum Kind {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct ArgSpec {
+    /// the `--name` spelling, without the dashes
     pub long: Option<&'static str>,
     /// extra long names that also match this arg, kept out of help
     pub aliases: &'static [&'static str],
+    /// the `-n` spelling
     pub short: Option<char>,
+    /// the shape of the argument
     pub kind: Kind,
+    /// parsing fails when it is absent and no fallback fills it
     pub required: bool,
     /// `Vec<T>` field, accept the option/positional more than once
     pub multi: bool,
@@ -60,7 +64,9 @@ pub struct ArgSpec {
     pub min_values: Option<usize>,
     /// most values a `multi` arg accepts
     pub max_values: Option<usize>,
+    /// the mutual-exclusion group this arg belongs to, see [`GroupSpec`]
     pub group: Option<&'static str>,
+    /// the value used when the arg is not given and no env var supplies one
     pub default: Option<&'static str>,
     /// value a [`Kind::Opt`] takes when given with no `=value`, which also
     /// stops it consuming the following token
@@ -70,19 +76,24 @@ pub struct ArgSpec {
     pub env: Option<&'static str>,
     /// long name that switches a [`Kind::Flag`] back off, without the `--`
     pub negate: Option<&'static str>,
+    /// the placeholder shown for the value, see [`Self::metavar`]
     pub value_name: &'static str,
+    /// the short description help shows
     pub help: &'static str,
     /// fuller help shown by `--help`, `None` when it adds nothing
     pub long_help: Option<&'static str>,
     /// section this arg is listed under in help, `Options` when unset
     pub heading: Option<&'static str>,
+    /// the values a choice type accepts, `None` for free text
     pub possible: Option<&'static [&'static str]>,
     /// kept out of help output, but accepted by parser
     pub hidden: bool,
+    /// also accepted by every subcommand below this command
     pub global: bool,
 }
 
 impl ArgSpec {
+    /// an arg of `kind` with nothing else set
     #[must_use]
     pub const fn new(kind: Kind) -> Self {
         Self {
@@ -109,102 +120,119 @@ impl ArgSpec {
         }
     }
 
+    /// set the long name
     #[must_use]
     pub const fn long(mut self, long: &'static str) -> Self {
         self.long = Some(long);
         self
     }
 
+    /// set the extra long names
     #[must_use]
     pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
         self.aliases = aliases;
         self
     }
 
+    /// set the short name
     #[must_use]
     pub const fn short(mut self, short: char) -> Self {
         self.short = Some(short);
         self
     }
 
+    /// mark the arg required
     #[must_use]
     pub const fn required(mut self) -> Self {
         self.required = true;
         self
     }
 
+    /// accept the arg more than once
     #[must_use]
     pub const fn multi(mut self) -> Self {
         self.multi = true;
         self
     }
 
+    /// set the fewest values a `multi` arg accepts
     #[must_use]
     pub const fn min_values(mut self, min_values: usize) -> Self {
         self.min_values = Some(min_values);
         self
     }
 
+    /// set the most values a `multi` arg accepts
     #[must_use]
     pub const fn max_values(mut self, max_values: usize) -> Self {
         self.max_values = Some(max_values);
         self
     }
 
+    /// put the arg in a mutual-exclusion group
     #[must_use]
     pub const fn group(mut self, group: &'static str) -> Self {
         self.group = Some(group);
         self
     }
 
+    /// set the value used when the arg is not given
     #[must_use]
     pub const fn default(mut self, default: &'static str) -> Self {
         self.default = Some(default);
         self
     }
 
+    /// set the value an option takes when written without one
     #[must_use]
     pub const fn default_missing(mut self, default_missing: &'static str) -> Self {
         self.default_missing = Some(default_missing);
         self
     }
 
+    /// set the environment variable to fall back to
     #[must_use]
     pub const fn env(mut self, env: &'static str) -> Self {
         self.env = Some(env);
         self
     }
 
+    /// set the long name that switches a flag off
     #[must_use]
     pub const fn negate(mut self, negate: &'static str) -> Self {
         self.negate = Some(negate);
         self
     }
 
+    /// set the placeholder shown for the value
     #[must_use]
     pub const fn value_name(mut self, value_name: &'static str) -> Self {
         self.value_name = value_name;
         self
     }
 
+    /// set the short description help shows
     #[must_use]
     pub const fn help(mut self, help: &'static str) -> Self {
         self.help = help;
         self
     }
 
+    /// set the fuller description `--help` shows
     #[must_use]
     pub const fn long_help(mut self, long_help: &'static str) -> Self {
         self.long_help = Some(long_help);
         self
     }
 
+    /// set the help section the arg is listed under
     #[must_use]
     pub const fn heading(mut self, heading: &'static str) -> Self {
         self.heading = Some(heading);
         self
     }
 
+    /// set the values a choice type accepts
     #[must_use]
     pub const fn possible(mut self, possible: &'static [&'static str]) -> Self {
         self.possible = Some(possible);
@@ -218,12 +246,14 @@ impl ArgSpec {
         self
     }
 
+    /// keep the arg out of help while still accepting it
     #[must_use]
     pub const fn hidden(mut self) -> Self {
         self.hidden = true;
         self
     }
 
+    /// make the arg available to every subcommand below this command
     #[must_use]
     pub const fn global(mut self) -> Self {
         self.global = true;
@@ -266,6 +296,7 @@ impl ArgSpec {
         false
     }
 
+    /// whether `-c` reaches this arg
     #[must_use]
     pub const fn answers_short(&self, short: char) -> bool {
         matches!(self.short, Some(own) if own == short)
@@ -283,6 +314,7 @@ impl ArgSpec {
         name.to_uppercase()
     }
 
+    /// how errors and usage name this arg, its `--long`, else its `-s`, else its placeholder
     #[must_use]
     pub fn display_name(&self) -> String {
         if let Some(long) = self.long {
@@ -299,12 +331,14 @@ impl ArgSpec {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct GroupSpec {
+    /// the name args use to join the group
     pub name: &'static str,
     /// exactly one member must be set
     pub required: bool,
 }
 
 impl GroupSpec {
+    /// an optional group named `name`
     #[must_use]
     pub const fn new(name: &'static str) -> Self {
         Self {
@@ -313,6 +347,7 @@ impl GroupSpec {
         }
     }
 
+    /// require exactly one member
     #[must_use]
     pub const fn required(mut self) -> Self {
         self.required = true;
@@ -324,7 +359,9 @@ impl GroupSpec {
 /// `flattened`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArgumentOrder {
+    /// the index of an arg in `args`
     Direct(usize),
+    /// the index of a struct in `flattened`
     Flattened(usize),
 }
 
@@ -332,10 +369,13 @@ pub enum ArgumentOrder {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct SubSpec {
+    /// the name that selects the subcommand
     pub name:      &'static str,
     /// extra names that also select this subcommand, kept out of help
     pub aliases:   &'static [&'static str],
+    /// the short description subcommand listings show
     pub about:     &'static str,
+    /// the subcommand's own description
     pub spec:      &'static CommandSpec,
     /// kept out of help output, still selectable on the command line
     pub hidden:    bool,
@@ -367,18 +407,21 @@ impl SubSpec {
         }
     }
 
+    /// set the extra names that select this subcommand
     #[must_use]
     pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
         self.aliases = aliases;
         self
     }
 
+    /// set the short description subcommand listings show
     #[must_use]
     pub const fn about(mut self, about: &'static str) -> Self {
         self.about = about;
         self
     }
 
+    /// keep the subcommand out of help while still selectable
     #[must_use]
     pub const fn hidden(mut self) -> Self {
         self.hidden = true;
@@ -390,13 +433,17 @@ impl SubSpec {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct CommandSpec {
+    /// the command name usage and help show
     pub name:           &'static str,
+    /// the text `--version` prints, empty when there is none
     pub version:        &'static str,
     /// commit hash for the compiled program's source
     pub hash:           Option<&'static str>,
+    /// the short description help shows
     pub about:          &'static str,
     /// fuller description shown by `--help`, empty when it adds nothing
     pub long_about:     &'static str,
+    /// the args declared directly on this command
     pub args:           &'static [ArgSpec],
     /// structs embedded with `#[pound(flatten)]`, whose args parse at this
     /// level
@@ -404,6 +451,7 @@ pub struct CommandSpec {
     /// where each direct arg and flattened struct was declared, empty to put
     /// the direct args first
     pub argument_order: &'static [ArgumentOrder],
+    /// the mutual-exclusion groups the args refer to
     pub groups:         &'static [GroupSpec],
     /// pairs of arg indices that cannot be set together
     pub conflicts:      &'static [(usize, usize)],
@@ -437,12 +485,14 @@ impl CommandSpec {
         }
     }
 
+    /// set the version text
     #[must_use]
     pub const fn version(mut self, version: &'static str) -> Self {
         self.version = version;
         self
     }
 
+    /// set the build hash
     #[must_use]
     pub const fn hash(mut self, hash: &'static str) -> Self {
         self.hash = Some(hash);
@@ -458,29 +508,34 @@ impl CommandSpec {
         }
     }
 
+    /// whether `--version` has anything to print
     #[must_use]
     pub const fn has_version_info(&self) -> bool {
         !self.version.is_empty() || self.hash.is_some()
     }
 
+    /// set the short description help shows
     #[must_use]
     pub const fn about(mut self, about: &'static str) -> Self {
         self.about = about;
         self
     }
 
+    /// set the fuller description `--help` shows
     #[must_use]
     pub const fn long_about(mut self, long_about: &'static str) -> Self {
         self.long_about = long_about;
         self
     }
 
+    /// set the directly declared args
     #[must_use]
     pub const fn args(mut self, args: &'static [ArgSpec]) -> Self {
         self.args = args;
         self
     }
 
+    /// set the embedded structs
     #[must_use]
     pub const fn flattened(mut self, flattened: &'static [&'static Self]) -> Self {
         self.flattened = flattened;
@@ -495,24 +550,28 @@ impl CommandSpec {
         self
     }
 
+    /// set the mutual-exclusion groups
     #[must_use]
     pub const fn groups(mut self, groups: &'static [GroupSpec]) -> Self {
         self.groups = groups;
         self
     }
 
+    /// set the pairs of arg indices that cannot be set together
     #[must_use]
     pub const fn conflicts(mut self, conflicts: &'static [(usize, usize)]) -> Self {
         self.conflicts = conflicts;
         self
     }
 
+    /// set the pairs where setting the first arg obliges the second
     #[must_use]
     pub const fn requires(mut self, requires: &'static [(usize, usize)]) -> Self {
         self.requires = requires;
         self
     }
 
+    /// set the declared subcommands
     #[must_use]
     pub const fn subs(mut self, subs: &'static [SubSpec]) -> Self {
         self.subs = subs;
