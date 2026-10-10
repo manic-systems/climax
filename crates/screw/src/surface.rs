@@ -275,6 +275,16 @@ impl Surface {
         self.current_row_mut().cells.push(cell.clone());
     }
 
+    /// Turns every soft break into a hard one, so a later wrap pass cannot rejoin rows whose
+    /// cells were placed by composition.
+    pub(crate) fn harden_soft_breaks(&mut self) {
+        for row in &mut self.rows {
+            if row.break_after() == RowBreak::Soft {
+                row.set_break_after(RowBreak::Hard);
+            }
+        }
+    }
+
     /// Stops the next write from joining the cells already on the row, so a boundary between
     /// independently measured pieces cannot merge clusters.
     pub(crate) const fn seal(&mut self) {
