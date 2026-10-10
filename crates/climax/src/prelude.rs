@@ -32,6 +32,7 @@ pub use crate::{
     Error,
     ErrorKind,
     Result,
+    output::Format,
     run_with,
     terminal::{
         InteractionMode,

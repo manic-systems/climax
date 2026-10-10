@@ -19,17 +19,18 @@
 //! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
 //! for the same reason.
 
+#![cfg_attr(
+
 extern crate alloc;
 
-#[cfg(all(
-    doctest,
-    feature = "derive",
-    feature = "interactive",
-    feature = "render",
-    feature = "structured"
-))]
-#[doc = include_str!("../README.md")]
-struct ReadmeDoctests;
+    all(
+        feature = "derive",
+        feature = "interactive",
+        feature = "render",
+        feature = "structured"
+    ),
+    doc = include_str!("../README.md")
+)]
 
 mod app;
 pub mod error;
