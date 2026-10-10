@@ -14,6 +14,8 @@
 //! run, see [`Script`].
 //!
 //! ```
+//! # #[cfg(feature = "interactive")]
+//! # {
 //! use climax::{
 //!     prelude::*,
 //!     testing::{self, Script},
@@ -27,6 +29,7 @@
 //! });
 //! assert_eq!(outcome.exit_code, 3);
 //! assert_eq!(outcome.stderr, "error: not deploying\n");
+//! # }
 //! ```
 
 use std::{
@@ -96,12 +99,15 @@ impl io::Write for Capture {
 /// the `error: ...` line `main` prints.
 ///
 /// ```
+/// # #[cfg(feature = "interactive")]
+/// # {
 /// use climax::testing::{self, Script};
 ///
 /// let outcome = testing::run_with(Script::new(), |_cx| Ok(()));
 /// assert_eq!(outcome.exit_code, 0);
 /// assert!(outcome.error.is_none());
 /// assert!(outcome.stdout.is_empty() && outcome.stderr.is_empty());
+/// # }
 /// ```
 #[derive(Debug)]
 #[non_exhaustive]
