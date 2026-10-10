@@ -8,7 +8,7 @@ use std::{
 };
 
 use bang_core::{
-    Context, Date, Event, Reaction, Value, Widget, WidgetId,
+    Context, Date, Event, Key, Modifiers, Reaction, Value, Widget, WidgetId,
     widgets::{DatePicker, Select, SelectItem},
 };
 use screw::{
@@ -18,10 +18,12 @@ use screw::{
 
 use crate::{
     Configurable, Error, Interaction, PromptOutcome, Result,
+    interaction::Summary,
     prompt::{TextConfig, resolve_prompt, resolve_text, text_widget},
 };
 
 const DEFAULT_MASK: char = '*';
+const SECRET_SUMMARY_WIDTH: usize = 8;
 
 /// Ask the user for a secret, echoing a mask character per typed character.
 #[must_use]
@@ -60,6 +62,15 @@ macro_rules! password_options {
         #[must_use]
         pub fn id(mut self, id: impl Into<String>) -> Self {
             self$(.$base)*.text = self$(.$base)*.text.id(id);
+            self
+        }
+
+        /// Choose whether submitting leaves a one-line summary in the
+        /// scrollback, overriding the interaction's setting. The summary shows
+        /// the prompt followed by a fixed run of mask characters.
+        #[must_use]
+        pub fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.text = self$(.$base)*.text.summary(summary);
             self
         }
 
@@ -148,6 +159,8 @@ impl PasswordPrompt {
     /// isn't interactive.
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
+        let summary = self.config.text.summary;
+        let hidden = self.config.mask.to_string().repeat(SECRET_SUMMARY_WIDTH);
         let widget = text_widget(
             self.prompt,
             self.config.text,
@@ -155,7 +168,12 @@ impl PasswordPrompt {
             Some(self.config.mask),
         );
         resolve_prompt(
-            self.interaction.interact_named(Some(&prompt), widget, []),
+            self.interaction.interact_named(
+                Some(&prompt),
+                widget,
+                [],
+                Summary::new(summary, &|_| Some(hidden.clone())),
+            ),
             resolve_text,
         )
     }
@@ -182,10 +200,19 @@ macro_rules! confirm_options {
             self
         }
 
-        /// Choose the answer that is highlighted first. Defaults to `true`.
+        /// Choose the answer that is highlighted first. Defaults to `false`,
+        /// so that pressing Enter without reading declines.
         #[must_use]
         pub const fn default(mut self, default: bool) -> Self {
             self$(.$base)*.default = default;
+            self
+        }
+
+        /// Choose whether submitting leaves a one-line summary in the
+        /// scrollback, overriding the interaction's setting.
+        #[must_use]
+        pub const fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.summary = Some(summary);
             self
         }
     };
@@ -199,13 +226,15 @@ macro_rules! confirm_options {
 pub struct ConfirmConfig {
     id: String,
     default: bool,
+    summary: Option<bool>,
 }
 
 impl Default for ConfirmConfig {
     fn default() -> Self {
         Self {
             id: "confirm".to_owned(),
-            default: true,
+            default: false,
+            summary: None,
         }
     }
 }
@@ -252,12 +281,14 @@ impl ConfirmPrompt {
 
     /// Run the prompt to completion.
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// answering. Fails with `ErrorKind::InputEnded` if input ends first, and
+    /// Pressing `y` or `n` (either case) answers at once. Enter takes the
+    /// highlighted answer, which is No unless [`default`](Self::default) says
+    /// otherwise. Returns `Ok(PromptOutcome::Leave)` when the user leaves
+    /// without answering. Fails with `ErrorKind::InputEnded` if input ends first, and
     /// with `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<bool>> {
-        let widget = Select::new(
+        let select = Select::new(
             self.config.id,
             [
                 SelectItem::new("Yes", "yes"),
@@ -266,7 +297,15 @@ impl ConfirmPrompt {
         )
         .with_header(self.prompt.clone())
         .with_selected_index(usize::from(!self.config.default));
-        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, []), |value| {
+        let widget = YesNoKeys(select);
+        let summary = Summary::new(self.config.summary, &|value| {
+            match value.as_str() {
+                Some("yes") => Some("yes".to_owned()),
+                Some("no") => Some("no".to_owned()),
+                _ => None,
+            }
+        });
+        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, [], summary), |value| {
             match value.as_str() {
                 Some("yes") => Ok(true),
                 Some("no") => Ok(false),
@@ -302,6 +341,14 @@ macro_rules! date_options {
             self$(.$base)*.default = Some(default);
             self
         }
+
+        /// Choose whether submitting leaves a one-line summary in the
+        /// scrollback, overriding the interaction's setting.
+        #[must_use]
+        pub const fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.summary = Some(summary);
+            self
+        }
     };
 }
 
@@ -313,6 +360,7 @@ macro_rules! date_options {
 pub struct DateConfig {
     id: String,
     default: Option<Date>,
+    summary: Option<bool>,
 }
 
 impl Default for DateConfig {
@@ -320,6 +368,7 @@ impl Default for DateConfig {
         Self {
             id: "date".to_owned(),
             default: None,
+            summary: None,
         }
     }
 }
@@ -376,7 +425,10 @@ impl DatePrompt {
         let picker = DatePicker::new(self.config.id, self.config.default.unwrap_or(today))
             .with_today(today);
         let widget = Headed::new(self.prompt.clone(), picker);
-        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, []), |value| {
+        let summary = Summary::new(self.config.summary, &|value| {
+            value.as_date().map(|date| date.to_string())
+        });
+        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, [], summary), |value| {
             value.as_date().ok_or_else(|| Error::unexpected("a date"))
         })
     }
@@ -408,6 +460,14 @@ macro_rules! number_options {
         #[must_use]
         pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
             self$(.$base)*.text = self$(.$base)*.text.placeholder(placeholder);
+            self
+        }
+
+        /// Choose whether submitting leaves a one-line summary in the
+        /// scrollback, overriding the interaction's setting.
+        #[must_use]
+        pub fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.text = self$(.$base)*.text.summary(summary);
             self
         }
 
@@ -527,8 +587,11 @@ where
             check.as_ref().map_or(Ok(()), |check| check(&parsed))
         });
         let prompt = self.prompt.clone();
+        let summary = Summary::new(text.summary, &|value| {
+            value.as_str().map(|text| text.trim().to_owned())
+        });
         let widget = text_widget(self.prompt, text, "number", None);
-        resolve_prompt(self.interaction.interact_named(Some(&prompt), widget, []), |value| {
+        resolve_prompt(self.interaction.interact_named(Some(&prompt), widget, [], summary), |value| {
             let text = resolve_text(value)?;
             parse_number::<T>(&text).map_err(|_message| Error::unexpected("a number"))
         })
@@ -581,6 +644,50 @@ where
     text.trim()
         .parse()
         .map_err(|error| format!("not a valid number ({error})"))
+}
+
+/// Answers a yes or no `Select` immediately on `y` or `n`.
+struct YesNoKeys<W>(W);
+
+impl<W: Widget> screw::Widget for YesNoKeys<W> {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.0.render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.0.tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.0.vertical_size()
+    }
+}
+
+impl<W: Widget> Widget for YesNoKeys<W> {
+    fn id(&self) -> WidgetId {
+        self.0.id()
+    }
+
+    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        if let Event::Key(key) = &event {
+            let held = key.modifiers;
+            let chorded = held.contains(Modifiers::CONTROL)
+                || held.contains(Modifiers::ALT)
+                || held.contains(Modifiers::SUPER);
+            if !chorded {
+                match key.key {
+                    Key::Char('y' | 'Y') => return Reaction::Submit(Value::from("yes")),
+                    Key::Char('n' | 'N') => return Reaction::Submit(Value::from("no")),
+                    _ => {},
+                }
+            }
+        }
+        self.0.handle(event, cx)
+    }
+
+    fn current_value(&self) -> Option<Value> {
+        self.0.current_value()
+    }
 }
 
 /// Shows a prompt line above a widget that has no header of its own.
@@ -721,23 +828,66 @@ mod tests {
     }
 
     #[test]
-    fn confirm_answers_yes_by_default_and_no_after_moving() {
+    fn confirm_declines_by_default_and_accepts_when_defaulted_or_moved() {
         let interaction = scripted_interaction([
             vec![enter()],
-            keys([Key::Down, Key::Enter]),
             vec![enter()],
+            keys([Key::Down, Key::Enter]),
         ]);
 
         let first = confirm("sure?").interaction(interaction.clone()).interact();
-        let second = confirm("sure?").interaction(interaction.clone()).interact();
-        let third = confirm("sure?")
-            .default(false)
-            .interaction(interaction)
+        let second = confirm("sure?")
+            .default(true)
+            .interaction(interaction.clone())
             .interact();
+        let third = confirm("sure?").interaction(interaction).interact();
 
-        assert_eq!(first.unwrap(), PromptOutcome::Submit(true));
-        assert_eq!(second.unwrap(), PromptOutcome::Submit(false));
-        assert_eq!(third.unwrap(), PromptOutcome::Submit(false));
+        assert_eq!(first.unwrap(), PromptOutcome::Submit(false));
+        assert_eq!(second.unwrap(), PromptOutcome::Submit(true));
+        assert_eq!(third.unwrap(), PromptOutcome::Submit(true));
+    }
+
+    #[test]
+    fn confirm_answers_at_once_on_y_and_n_in_either_case() {
+        let interaction = scripted_interaction([
+            keys([Key::Char('y')]),
+            keys([Key::Char('Y')]),
+            keys([Key::Char('n')]),
+            keys([Key::Char('N')]),
+        ]);
+
+        let answers = (0..4)
+            .map(|_| {
+                confirm("sure?")
+                    .default(true)
+                    .interaction(interaction.clone())
+                    .interact()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            answers,
+            [
+                PromptOutcome::Submit(true),
+                PromptOutcome::Submit(true),
+                PromptOutcome::Submit(false),
+                PromptOutcome::Submit(false),
+            ]
+        );
+    }
+
+    #[test]
+    fn confirm_ignores_y_and_n_held_with_a_control_chord() {
+        let chord = Event::Key(KeyEvent::with_modifiers(
+            Key::Char('y'),
+            Modifiers::CONTROL,
+        ));
+        let interaction = scripted_interaction([vec![chord, enter()]]);
+
+        let outcome = confirm("sure?").interaction(interaction).interact().unwrap();
+
+        assert_eq!(outcome, PromptOutcome::Submit(false));
     }
 
     #[test]

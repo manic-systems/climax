@@ -28,8 +28,14 @@
 //!   one thread.
 //! - `interact` consumes the prompt. Clone it first to ask again.
 //! - A cancel, whether Esc or Ctrl-C, maps to [`PromptOutcome::Leave`] rather
-//!   than an error. Ended input, a non-interactive terminal and terminal
-//!   failures are errors, see [`ErrorKind`].
+//!   than an error. [`PromptOutcome::or_cancel`] turns it back into a
+//!   [`ErrorKind::Cancelled`] error when the caller cannot go on without an
+//!   answer.
+//! - A submitted prompt leaves a dimmed one-line summary in the scrollback,
+//!   such as `Shell › bash`, and leaving leaves nothing. Turn it off per prompt
+//!   with `summary(false)` or for a driver with [`Interaction::with_summaries`].
+//! - Ended input, a non-interactive terminal and terminal failures are errors,
+//!   see [`ErrorKind`].
 //! - The entry point takes the text the user sees. The widget id is optional
 //!   and set with `.id(...)`.
 //! - List prompts need at least one choice and fail with
