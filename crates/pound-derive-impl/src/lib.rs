@@ -630,6 +630,7 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
     let mut arms = Vec::new();
     let mut spellings = Vec::new();
     let mut variants = Vec::new();
+    let mut variant_names = Vec::new();
     for (variant, _) in &e.variants.inner {
         if !matches!(variant.fields, Fields::Unit) {
             return err("pound: ValueEnum needs unit variants only");
@@ -645,6 +646,13 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
         let label = vattr
             .name
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
+        if let Some(first) = names.iter().position(|n| *n == label) {
+            return err(&format!(
+                "pound: ValueEnum variants `{}` and `{vname}` both spell `{label}`, so `{vname}` could never be parsed",
+                variant_names[first]
+            ));
+        }
+        variant_names.push(vname.to_string());
         arms.push(quote! { #label => ::core::result::Result::Ok(Self::#vname), });
         spellings.push(quote! { Self::#vname => #label, });
         variants.push(quote! { Self::#vname });
@@ -1565,6 +1573,30 @@ mod tests {
         assert!(out.contains(". help (\"the target\")"), "{out}");
         assert!(out.contains(". help (\"waits...\")"), "{out}");
         assert!(out.contains(". help (\"explicit.\")"), "{out}");
+    }
+
+    fn expand_enum(body: &str) -> String {
+        let input: TokenStream2 = format!("enum Mode {{ {body} }}").parse().unwrap();
+        derive_value_enum(input, &Options::new("::pound", true)).to_string()
+    }
+
+    #[test]
+    fn two_variants_with_one_spelling_are_rejected() {
+        let renamed = expand_enum(r#"Fast, #[pound(name = "fast")] Quick"#);
+        assert!(
+            renamed.contains("`Fast` and `Quick` both spell `fast`"),
+            "{renamed}"
+        );
+        let explicit = expand_enum(r#"#[pound(name = "x")] A, #[pound(name = "x")] B"#);
+        assert!(explicit.contains("`A` and `B` both spell `x`"), "{explicit}");
+        let kebab = expand_enum(r#"#[pound(name = "my-mode")] Plain, MyMode"#);
+        assert!(kebab.contains("`Plain` and `MyMode` both spell `my-mode`"), "{kebab}");
+    }
+
+    #[test]
+    fn distinct_spellings_expand() {
+        let out = expand_enum(r#"Fast, #[pound(name = "slow")] Quick"#);
+        assert!(!out.contains("compile_error"), "{out}");
     }
 
     #[test]
