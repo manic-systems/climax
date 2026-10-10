@@ -1,6 +1,6 @@
 [package]
 name                 = "climax-derive"
-version              = "0.0.1"
+version              = "0.1.0"
 description          = "Pound derive macros rooted at climax's re-export"
 keywords             = [ "cli", "args", "derive" ]
 categories           = [ "development-tools::procedural-macro-helpers" ]

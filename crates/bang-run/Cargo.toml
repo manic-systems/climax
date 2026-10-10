@@ -1,6 +1,6 @@
 [package]
 name                 = "bang-run"
-version              = "0.0.1"
+version              = "0.1.0"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
 description          = "Command-line tool that runs bang prompts and prints their answers"
