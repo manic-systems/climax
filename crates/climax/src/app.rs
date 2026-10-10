@@ -1,8 +1,33 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#[cfg(feature = "parse")]
+use std::{io, process::ExitCode};
 use std::marker::PhantomData;
 
 use crate::Result;
+
+/// Run a parsed command-line application and report its process outcome.
+///
+/// Help and version are written to stdout with a successful exit code, parse
+/// failures are written to stderr with exit code 2, and application failures
+/// are written to stderr with exit code 1. A cancellation that reaches this
+/// function exits with 130, or with 128 plus the signal number when a signal
+/// interrupted a live prompt (see [`crate::Error::signal`]). Both are silent
+/// unless related errors are attached, in which case those are printed.
+///
+/// A typed prompt the user cancels resolves to `PromptOutcome::Leave` so the
+/// handler decides what leaving means. A signal delivered during a live prompt
+/// instead surfaces as an error that carries the signal. Exit 130 without a
+/// signal comes from `Context::with_terminal_application` or a direct
+/// `bang` dependency that builds a cancelled error.
+#[cfg(feature = "parse")]
+pub fn main<C, F>(f: F) -> ExitCode
+where
+    C: pound::Parse,
+    F: FnOnce(Context, C) -> Result<()>,
+{
+    complete(C::try_parse(), f).report()
+}
 
 /// Run a parsed application without handling output or process exit status.
 #[cfg(feature = "parse")]
@@ -52,6 +77,109 @@ where
             Err(error)
         },
     }
+}
+
+#[cfg(feature = "parse")]
+fn complete<C, F>(parsed: std::result::Result<C, pound::Error>, f: F) -> Completion
+where
+    F: FnOnce(Context, C) -> Result<()>,
+{
+    match parsed {
+        Ok(command) => match run_with(command, f) {
+            Ok(()) => Completion::success(),
+            Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
+                let code = cancelled_code(&error);
+                if error.related_errors().is_empty() {
+                    Completion::cancelled(code)
+                } else {
+                    Completion::error(code, error)
+                }
+            },
+            Err(error) => Completion::error(1, error),
+        },
+        Err(error) if error.is_exit() => Completion::output(error.render()),
+        Err(error) => Completion {
+            code: 2,
+            stream: Some(CompletionStream::Stderr),
+            message: Some(error.render()),
+        },
+    }
+}
+
+#[cfg(feature = "parse")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Completion {
+    code: u8,
+    stream: Option<CompletionStream>,
+    message: Option<String>,
+}
+
+#[cfg(feature = "parse")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CompletionStream {
+    Stdout,
+    Stderr,
+}
+
+#[cfg(feature = "parse")]
+impl Completion {
+    const fn success() -> Self {
+        Self {
+            code: 0,
+            stream: None,
+            message: None,
+        }
+    }
+
+    const fn cancelled(code: u8) -> Self {
+        Self {
+            code,
+            stream: None,
+            message: None,
+        }
+    }
+
+    const fn output(message: String) -> Self {
+        Self {
+            code: 0,
+            stream: Some(CompletionStream::Stdout),
+            message: Some(message),
+        }
+    }
+
+    fn error(code: u8, error: impl std::fmt::Display) -> Self {
+        Self {
+            code,
+            stream: Some(CompletionStream::Stderr),
+            message: Some(format!("error: {error}")),
+        }
+    }
+
+    fn report(self) -> ExitCode {
+        let Some(stream) = self.stream else {
+            return ExitCode::from(self.code);
+        };
+        let message = self.message.expect("a completion stream has a message");
+        let result = match stream {
+            CompletionStream::Stdout => write_message(io::stdout().lock(), &message),
+            CompletionStream::Stderr => write_message(io::stderr().lock(), &message),
+        };
+        ExitCode::from(if result.is_ok() { self.code } else { 1 })
+    }
+}
+
+#[cfg(feature = "parse")]
+fn cancelled_code(error: &crate::Error) -> u8 {
+    error
+        .signal()
+        .and_then(|signal| u8::try_from(128 + signal).ok())
+        .unwrap_or(130)
+}
+
+#[cfg(feature = "parse")]
+fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
+    writer.write_all(message.as_bytes())?;
+    writer.write_all(b"\n")
 }
 
 /// Application policy and access to the composed command-line facilities.
@@ -385,6 +513,84 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.to_string(), "later failure");
         assert_eq!(capture.text(), "");
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn lifecycle_distinguishes_early_exit_parse_and_application_errors() {
+        let help = complete::<(), _>(
+            Err(pound::ErrorKind::Help("help".to_owned()).into()),
+            |_, ()| unreachable!(),
+        );
+        assert_eq!(help.code, 0);
+        assert_eq!(help.stream, Some(CompletionStream::Stdout));
+        assert_eq!(help.message.as_deref(), Some("help"));
+
+        let parse = complete::<(), _>(
+            Err(pound::Error {
+                kind: pound::ErrorKind::Unknown {
+                    arg: "--wat".to_owned(),
+                    closest: Some("--watch".to_owned()),
+                },
+                usage: Some("Usage: demo [OPTION]...".to_owned()),
+                help_flag: None,
+            }),
+            |_, ()| unreachable!(),
+        );
+        assert_eq!(parse.code, 2);
+        assert_eq!(parse.stream, Some(CompletionStream::Stderr));
+        assert_eq!(
+            parse.message.as_deref(),
+            Some("error: unrecognized argument '--wat'\n\n  tip: did you mean '--watch'\n\nUsage: demo [OPTION]...")
+        );
+
+        let application = complete(Ok(()), |_, ()| Err(crate::Error::message("boom")));
+        assert_eq!(application.code, 1);
+        assert_eq!(application.stream, Some(CompletionStream::Stderr));
+        assert_eq!(application.message.as_deref(), Some("error: boom"));
+
+        let cancelled = complete(Ok(()), |_, ()| {
+            Err(crate::Error::with_source(
+                crate::error::ErrorKind::Cancelled,
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"),
+            ))
+        });
+        assert_eq!(cancelled.code, 130);
+        assert_eq!(cancelled.stream, None);
+
+        let interrupted = complete(Ok(()), |_, ()| {
+            let mut error = crate::Error::with_source(
+                crate::error::ErrorKind::Cancelled,
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "interrupted by signal SIGTERM"),
+            );
+            error.signal = Some(15);
+            Err(error)
+        });
+        assert_eq!(interrupted.code, 143);
+        assert_eq!(interrupted.stream, None);
+
+        let cancelled_with_related = complete(Ok(()), |_, ()| {
+            Err(crate::Error::with_source(
+                crate::error::ErrorKind::Cancelled,
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"),
+            )
+            .with_related(crate::Error::message("cleanup failed")))
+        });
+        assert_eq!(cancelled_with_related.code, 130);
+        assert_eq!(cancelled_with_related.stream, Some(CompletionStream::Stderr));
+        assert!(cancelled_with_related.message.unwrap().contains("cleanup failed"));
+
+        let interrupted_with_cleanup = complete(Ok(()), |_, ()| {
+            let mut error = crate::Error::with_source(
+                crate::error::ErrorKind::Cancelled,
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "interrupted by signal SIGTERM"),
+            );
+            error.signal = Some(15);
+            Err(error.with_related(crate::Error::message("terminal cleanup failed, RawMode: EIO")))
+        });
+        assert_eq!(interrupted_with_cleanup.code, 143);
+        assert_eq!(interrupted_with_cleanup.stream, Some(CompletionStream::Stderr));
+        assert!(interrupted_with_cleanup.message.unwrap().contains("RawMode: EIO"));
     }
 
     #[cfg(feature = "interactive")]
