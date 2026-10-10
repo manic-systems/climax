@@ -12,6 +12,7 @@ pub use crate::pound::{
 pub use crate::{
     Configurable,
     ConfirmConfig,
+    Date,
     DateConfig,
     MultiSelectConfig,
     NumberConfig,
@@ -29,6 +30,7 @@ pub use crate::{
 pub use crate::{
     Context,
     Error,
+    ErrorKind,
     Result,
     run_with,
     terminal::{
@@ -49,3 +51,16 @@ pub use crate::{
     try_run,
     try_run_from,
 };
+
+#[cfg(all(test, feature = "interactive"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_prelude_names_dates_and_error_kinds() {
+        let date = Date::new(2026, 10, 10).expect("a valid date");
+        assert_eq!(date, crate::Date::new(2026, 10, 10).unwrap());
+        assert_eq!(Error::message("x").kind(), ErrorKind::Message);
+        let _: crate::ErrorKind = ErrorKind::Parse;
+    }
+}
