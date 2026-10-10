@@ -7,6 +7,16 @@ updates:
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+      exclude: [manic-systems/*]
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: nix
     directory: "/"
     schedule:
