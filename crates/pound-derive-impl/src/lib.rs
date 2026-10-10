@@ -17,13 +17,12 @@ use std::{
 };
 
 use proc_macro2::{
+    Ident,
+    Span,
     TokenStream as TokenStream2,
     TokenTree,
 };
-use quote::{
-    format_ident,
-    quote,
-};
+use quote::quote;
 use venial::{
     Fields,
     Item,
@@ -234,7 +233,7 @@ struct FlattenField {
 }
 
 impl FlattenField {
-    fn reader(&self, cx: &Ctx, i: usize, m: &TokenStream2) -> TokenStream2 {
+    fn reader(&self, cx: &Ctx, i: usize, m: &Ident) -> TokenStream2 {
         let root = &cx.root;
         let Self { ident, ty } = self;
         quote! {
@@ -296,6 +295,10 @@ impl FieldPlan {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one cohesive codegen pass reads best whole"
+)]
 fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
     let root = &cx.root;
     let fields = match analyze(&s.fields) {
@@ -331,8 +334,15 @@ fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
     let hash_call = git_hash_call();
     let (about, long_about) = about_calls(cx, &attr::doc(&s.attributes));
 
-    let m = quote!(m);
-    let sp = quote!(spec);
+    let m = local("m");
+    let sp = local("spec");
+    let (args_id, groups_id, conflicts_id, requires_id, cmd_id) = (
+        generated("ARGS"),
+        generated("GROUPS"),
+        generated("CONFLICTS"),
+        generated("REQUIRES"),
+        generated("CMD"),
+    );
     let readers = plans.iter().enumerate().map(|(i, p)| reader(cx, p, i, &m, &sp));
     let flattened_readers = fields
         .flattened
@@ -342,20 +352,20 @@ fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
     let sub_reader = sub.as_ref().map(|sf| sub_reader(cx, sf, &m));
     let flatten_calls = fields.flatten_calls(cx);
     let unique_message = format!("pound: two args of `{name}` answer to the same spelling");
-    let group_asserts = group_asserts(cx, plans, &item.required_groups, &format_ident!("CMD"));
-    let selector_assert = fields.selector_assert(cx, &name.to_string(), &format_ident!("CMD"));
-    let positional_assert = positional_assert(cx, &name.to_string(), &format_ident!("CMD"));
+    let group_asserts = group_asserts(cx, plans, &item.required_groups, &cmd_id);
+    let selector_assert = fields.selector_assert(cx, &name.to_string(), &cmd_id);
+    let positional_assert = positional_assert(cx, &name.to_string(), &cmd_id);
 
     // avoid unused-param warnings when a command carries only a subcommand.
     let spec_param = if plans.is_empty() {
-        quote!(_spec)
+        local("_spec")
     } else {
-        quote!(spec)
+        sp.clone()
     };
     let m_param = if plans.is_empty() && fields.flattened.is_empty() && sub.is_none() {
-        quote!(_m)
+        local("_m")
     } else {
-        quote!(m)
+        m.clone()
     };
 
     // parameterless builder, so only chain it when the flag is actually set.
@@ -369,27 +379,27 @@ fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
         impl #root::Parse for #name {
             const SPEC: &'static #root::CommandSpec = {
                 #(#default_asserts)*
-                const ARGS: &[#root::ArgSpec] = &[ #(#args),* ];
-                const GROUPS: &[#root::GroupSpec] = &[ #(#groups),* ];
-                const CONFLICTS: &[(usize, usize)] = #conflicts;
-                const REQUIRES: &[(usize, usize)] = #requires;
-                const CMD: #root::CommandSpec = #root::CommandSpec::new(#name_expr)
+                const #args_id: &[#root::ArgSpec] = &[ #(#args),* ];
+                const #groups_id: &[#root::GroupSpec] = &[ #(#groups),* ];
+                const #conflicts_id: &[(usize, usize)] = #conflicts;
+                const #requires_id: &[(usize, usize)] = #requires;
+                const #cmd_id: #root::CommandSpec = #root::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
                     #about
                     #long_about
-                    .args(ARGS)
+                    .args(#args_id)
                     #flatten_calls
-                    .groups(GROUPS)
-                    .conflicts(CONFLICTS)
-                    .requires(REQUIRES)
+                    .groups(#groups_id)
+                    .conflicts(#conflicts_id)
+                    .requires(#requires_id)
                     .subs(#subs)
                     #sub_optional_call;
-                const _: () = ::core::assert!(#root::checks::names_unique(&CMD), #unique_message);
+                const _: () = ::core::assert!(#root::checks::names_unique(&#cmd_id), #unique_message);
                 #group_asserts
                 #selector_assert
                 #positional_assert
-                &CMD
+                &#cmd_id
             };
 
             fn from_matches(#spec_param: &'static #root::CommandSpec, #m_param: &#root::Matches)
@@ -422,6 +432,8 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
     let hash_call = git_hash_call();
     let (about, long_about) = about_calls(cx, &attr::doc(&e.attributes));
 
+    let (sm, spec_ident, m_ident) = (local("sm"), local("spec"), local("m"));
+    let (subs_id, root_id) = (generated("SUBS"), generated("ROOT"));
     let mut sub_consts = Vec::new();
     let mut sub_specs = Vec::new();
     let mut arms = Vec::new();
@@ -447,10 +459,10 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
                 #root::SubSpec::flatten(#root::checks::subcommand_spec::<#ty>())
             });
             arms.push(quote! {
-                ::core::option::Option::Some((#idx, __sm)) => ::core::result::Result::Ok(
+                ::core::option::Option::Some((#idx, #sm)) => ::core::result::Result::Ok(
                     Self::#vname(<#ty as #root::Parse>::from_matches(
                         <#ty as #root::Parse>::SPEC,
-                        __sm,
+                        #sm,
                     )?),
                 ),
             });
@@ -493,11 +505,11 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
         let groups = group_exprs(cx, plans, &vattr.required_groups);
         let conflicts = index_pairs(&conflicts);
         let (subs, sub_optional) = sub_parts(cx, sub.as_ref());
-        let ak = format_ident!("ARGS{}", idx);
-        let gk = format_ident!("GROUPS{}", idx);
-        let xk = format_ident!("CONFLICTS{}", idx);
-        let rk = format_ident!("REQUIRES{}", idx);
-        let ck = format_ident!("CMD{}", idx);
+        let ak = generated(&format!("ARGS{idx}"));
+        let gk = generated(&format!("GROUPS{idx}"));
+        let xk = generated(&format!("CONFLICTS{idx}"));
+        let rk = generated(&format!("REQUIRES{idx}"));
+        let ck = generated(&format!("CMD{idx}"));
         let flatten_calls = fields.flatten_calls(cx);
         let unique_message = format!(
             "pound: two args of `{name}::{}` answer to the same spelling",
@@ -542,8 +554,8 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
                 #hidden_call
         });
 
-        let m = quote!(__sm);
-        let sp = quote!(__s);
+        let m = sm.clone();
+        let sp = local("s");
         arms.push(if plans.is_empty() && fields.flattened.is_empty() && sub.is_none() {
             quote! { ::core::option::Option::Some((#idx, _)) => ::core::result::Result::Ok(Self::#vname), }
         } else {
@@ -557,10 +569,10 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
                 uses_spec = true;
                 indexed_variants += 1;
                 last_spec_index = idx;
-                quote! { let __s = spec.subs[#idx].spec; }
+                quote! { let #sp = #spec_ident.subs[#idx].spec; }
             };
             quote! {
-                ::core::option::Option::Some((#idx, __sm)) => {
+                ::core::option::Option::Some((#idx, #sm)) => {
                     #bind
                     ::core::result::Result::Ok(Self::#vname {
                         #(#readers,)* #(#flattened_readers,)* #sub_r
@@ -572,12 +584,12 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
 
     // `spec` is only read when some variant has its own args
     let spec_param = if uses_spec {
-        quote!(spec)
+        spec_ident.clone()
     } else {
-        quote!(_spec)
+        local("_spec")
     };
     let spec_assert = if indexed_variants > 1 {
-        quote! { assert!(spec.subs.len() > #last_spec_index); }
+        quote! { assert!(#spec_ident.subs.len() > #last_spec_index); }
     } else {
         quote! {}
     };
@@ -589,25 +601,25 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
         impl #root::Parse for #name {
             const SPEC: &'static #root::CommandSpec = {
                 #(#sub_consts)*
-                const SUBS: &[#root::SubSpec] = &[ #(#sub_specs),* ];
+                const #subs_id: &[#root::SubSpec] = &[ #(#sub_specs),* ];
                 const _: () = ::core::assert!(
-                    #root::checks::commands_unique(SUBS),
+                    #root::checks::commands_unique(#subs_id),
                     #unique_message
                 );
-                const ROOT: #root::CommandSpec = #root::CommandSpec::new(#name_expr)
+                const #root_id: #root::CommandSpec = #root::CommandSpec::new(#name_expr)
                     .version(#version_expr)
                     #hash_call
                     #about
                     #long_about
-                    .subs(SUBS);
-                &ROOT
+                    .subs(#subs_id);
+                &#root_id
             };
 
-            fn from_matches(#spec_param: &'static #root::CommandSpec, m: &#root::Matches)
+            fn from_matches(#spec_param: &'static #root::CommandSpec, #m_ident: &#root::Matches)
                 -> ::core::result::Result<Self, #root::Error>
             {
                 #spec_assert
-                match #root::Matches::sub(m) {
+                match #root::Matches::sub(#m_ident) {
                     #(#arms)*
                     _ => ::core::result::Result::Err(#root::ErrorKind::MissingSubcommand.into()),
                 }
@@ -659,16 +671,17 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
         names.push(label);
     }
 
+    let (raw, other) = (local("s"), local("other"));
     quote! {
         impl #root::FromArg for #name {
             const POSSIBLE: ::core::option::Option<&'static [&'static str]> =
                 ::core::option::Option::Some(&[ #(#names),* ]);
 
-            fn from_arg(s: &str) -> ::core::result::Result<Self, #root::ValueError> {
-                match s {
+            fn from_arg(#raw: &str) -> ::core::result::Result<Self, #root::ValueError> {
+                match #raw {
                     #(#arms)*
-                    other => ::core::result::Result::Err(
-                        #root::ValueError::new(other, "unrecognized value")
+                    #other => ::core::result::Result::Err(
+                        #root::ValueError::new(#other, "unrecognized value")
                     ),
                 }
             }
@@ -801,7 +814,7 @@ fn sub_parts(cx: &Ctx, sub: Option<&SubField>) -> (TokenStream2, bool) {
 }
 
 // the `field: <built subcommand>` reader for a subcommand field.
-fn sub_reader(cx: &Ctx, sf: &SubField, m: &TokenStream2) -> TokenStream2 {
+fn sub_reader(cx: &Ctx, sf: &SubField, m: &Ident) -> TokenStream2 {
     let root = &cx.root;
     let ident = &sf.ident;
     let ty = &sf.ty;
@@ -1195,7 +1208,7 @@ fn arg_expr(cx: &Ctx, p: &Plan) -> TokenStream2 {
     quote! { #e.help(#help) }
 }
 
-fn reader(cx: &Ctx, p: &Plan, i: usize, m: &TokenStream2, spec: &TokenStream2) -> TokenStream2 {
+fn reader(cx: &Ctx, p: &Plan, i: usize, m: &Ident, spec: &Ident) -> TokenStream2 {
     let fname = &p.ident;
     let body = match p.kind {
         ArgKind::Flag => quote! { #m.switch(#spec, #i) },
@@ -1249,27 +1262,29 @@ fn conversion_closure(cx: &Ctx, conversion: &Conversion, inner: &TokenStream2) -
         },
         Conversion::FromArg => None,
     };
+    let (sv, val) = (local("s"), local("value"));
     quote! {
-        |__s: &str| -> ::core::result::Result<#inner, #root::ValueError> {
+        |#sv: &str| -> ::core::result::Result<#inner, #root::ValueError> {
             #max_len
-            let __value = #parse;
+            let #val = #parse;
             #min
             #max
             #validate
-            ::core::result::Result::Ok(__value)
+            ::core::result::Result::Ok(#val)
         }
     }
 }
 
 fn parse_value_expr(cx: &Ctx, conversion: &Conversion, inner: &TokenStream2) -> TokenStream2 {
     let root = &cx.root;
+    let (sv, fail) = (local("s"), local("msg"));
     match conversion {
         Conversion::FromArg | Conversion::CheckedFromArg { .. } => {
-            quote! { <#inner as #root::FromArg>::from_arg(__s)? }
+            quote! { <#inner as #root::FromArg>::from_arg(#sv)? }
         },
         Conversion::CustomParse { parse, .. } => {
             quote! {
-                (#parse)(__s).map_err(|__msg| #root::ValueError::new(__s, __msg))?
+                (#parse)(#sv).map_err(|#fail| #root::ValueError::new(#sv, #fail))?
             }
         },
     }
@@ -1277,11 +1292,12 @@ fn parse_value_expr(cx: &Ctx, conversion: &Conversion, inner: &TokenStream2) -> 
 
 fn max_len_check(cx: &Ctx, value: &str) -> TokenStream2 {
     let root = &cx.root;
+    let sv = local("s");
     if let Ok(max) = TokenStream2::from_str(value) {
         quote! {
-            if __s.chars().count() > (#max) {
+            if #sv.chars().count() > (#max) {
                 return ::core::result::Result::Err(#root::ValueError::new(
-                    __s,
+                    #sv,
                     ::core::concat!("must be at most ", ::core::stringify!(#max), " chars"),
                 ));
             }
@@ -1304,20 +1320,22 @@ fn bound_check(cx: &Ctx, inner: &TokenStream2, kind: &str, value: &str) -> Token
     } else {
         quote! { ::core::concat!("invalid max: ", #value) }
     };
+    let (sv, val, bnd) = (local("s"), local("value"), local("bound"));
     quote! {
-        let __bound = <#inner as #root::FromArg>::from_arg(#value)
-            .map_err(|_| #root::ValueError::new(__s, #invalid))?;
-        if __value #op __bound {
-            return ::core::result::Result::Err(#root::ValueError::new(__s, #msg));
+        let #bnd = <#inner as #root::FromArg>::from_arg(#value)
+            .map_err(|_| #root::ValueError::new(#sv, #invalid))?;
+        if #val #op #bnd {
+            return ::core::result::Result::Err(#root::ValueError::new(#sv, #msg));
         }
     }
 }
 
 fn validate_check(cx: &Ctx, check: &TokenStream2) -> TokenStream2 {
     let root = &cx.root;
+    let (sv, val, fail) = (local("s"), local("value"), local("msg"));
     quote! {
-        if let ::core::result::Result::Err(__msg) = (#check)(&__value) {
-            return ::core::result::Result::Err(#root::ValueError::new(__s, __msg));
+        if let ::core::result::Result::Err(#fail) = (#check)(&#val) {
+            return ::core::result::Result::Err(#root::ValueError::new(#sv, #fail));
         }
     }
 }
@@ -1510,6 +1528,16 @@ fn camel_to_kebab(name: &str) -> String {
     out
 }
 
+// mixed-site spans still let a user's unit struct or const capture a binding
+// pattern or an item reference, so generated names also carry a prefix.
+fn local(name: &str) -> Ident {
+    Ident::new(&format!("__pound_{name}"), Span::mixed_site())
+}
+
+fn generated(name: &str) -> Ident {
+    Ident::new(&format!("__POUND_{name}"), Span::mixed_site())
+}
+
 fn err(msg: &str) -> TokenStream2 {
     quote! { ::core::compile_error!(#msg); }
 }
@@ -1535,7 +1563,7 @@ mod tests {
     #[test]
     fn a_turbofish_comma_stays_inside_the_expression() {
         let out = expand_field("long, parse = pair::<u8, u16>, default = { DEFAULT }");
-        assert!(out.contains("(pair ::< u8 , u16 >) (__s)"), "{out}");
+        assert!(out.contains("(pair ::< u8 , u16 >) (__pound_s)"), "{out}");
         assert!(out.contains("default (DEFAULT)"), "{out}");
     }
 
