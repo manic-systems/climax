@@ -156,8 +156,9 @@ impl Script {
 
     /// Answer a select or search prompt by picking row `n` and submitting.
     ///
-    /// The script presses Home first, so the row is absolute whatever the
-    /// prompt preselected. A search prompt starts on its first row already.
+    /// The script presses Ctrl-Home first, so the row is absolute whatever the
+    /// prompt preselected. A search prompt keeps plain Home for its query
+    /// cursor, so Ctrl-Home is the key that jumps to its first match.
     ///
     /// ```
     /// # use climax::testing::Script;
@@ -166,10 +167,14 @@ impl Script {
     /// ```
     #[must_use]
     pub fn select_nth(self, n: usize) -> Self {
-        let mut keys = vec![bang::advanced::Key::Home];
-        keys.extend(vec![bang::advanced::Key::Down; n]);
-        keys.push(bang::advanced::Key::Enter);
-        self.keys(keys)
+        use bang::advanced::{Event, Key, KeyEvent, Modifiers};
+
+        let mut events = vec![Event::Key(KeyEvent::with_modifiers(Key::Home, Modifiers::CONTROL))];
+        events.extend(vec![Event::Key(KeyEvent::new(Key::Down)); n]);
+        events.push(Event::Key(KeyEvent::new(Key::Enter)));
+        let mut script = self;
+        script.0.push(events);
+        script
     }
 
     /// Answer a multi-select prompt by checking exactly the rows at `indices`
