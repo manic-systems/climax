@@ -84,11 +84,13 @@ impl Output {
     }
 
     #[must_use]
+    /// format this handle writes
     pub const fn format(&self) -> Format {
         self.format
     }
 
     #[must_use]
+    /// switch the format, which also decides whether notices are suppressed
     pub const fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self.notice_format = format;
@@ -96,6 +98,7 @@ impl Output {
     }
 
     #[must_use]
+    /// write finite results and streams to `writer` instead of stdout
     pub fn with_writer(mut self, writer: impl Write + Send + 'static) -> Self {
         self.writer = SharedWriter::new(writer);
         #[cfg(all(feature = "render", feature = "structured"))]
@@ -170,6 +173,34 @@ impl Output {
     /// register the invocation's single finite result
     ///
     /// the projection is buffered until the handler succeeds
+    ///
+    /// Serde derives reached through climax need `#[serde(crate =
+    /// "climax::serde")]`, because the derive otherwise expands to a path
+    /// in the `serde` crate, which an application depending on climax alone
+    /// does not have. Forgetting it gives an error that points at the
+    /// compiler and not at the missing attribute.
+    ///
+    /// ```text
+    /// error[E0658]: use of unstable library feature `rustc_private`: this crate is being loaded from the sysroot, an unstable location; did you mean to load this crate from crates.io via `Cargo.toml` instead?
+    ///  --> src/main.rs:23:30
+    ///   |
+    /// 23 | #[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
+    ///   |                              ^^^^^^^^^
+    /// ```
+    ///
+    /// It is followed by an unsatisfied `serde::Serialize` bound on your type
+    /// and a note that there are multiple different versions of crate
+    /// `serde_core`.
+    ///
+    /// ```
+    /// use climax::prelude::*;
+    ///
+    /// #[derive(climax::serde::Serialize)]
+    /// #[serde(crate = "climax::serde")]
+    /// struct Report {
+    ///     files: usize,
+    /// }
+    /// ```
     pub const fn result<'a, T>(&'a self, value: &'a T) -> ResultBuilder<'a, T, MissingText>
     where
         T: Serialize + ?Sized,
@@ -184,6 +215,12 @@ impl Output {
 
     #[cfg(feature = "structured")]
     /// begin an immediate result stream
+    ///
+    /// Serde derives reached through climax need `#[serde(crate =
+    /// "climax::serde")]`, because the derive otherwise expands to a path
+    /// in the `serde` crate. Without it rustc reports `E0658` about the
+    /// unstable `rustc_private` feature on the derive, and [`Self::result`]
+    /// shows the full error.
     ///
     /// a write on a [`crate::Context::diagnostic`] handle behaves like a
     /// notice. any other write that must wait for a prompt on the calling
@@ -377,6 +414,8 @@ enum EmissionMode {
 #[doc(hidden)]
 pub struct MissingText;
 
+/// result or stream value being built, supply [`ResultBuilder::text`] then call
+/// [`ResultBuilder::emit`]
 #[cfg(feature = "structured")]
 #[must_use]
 pub struct ResultBuilder<'a, T: ?Sized, F> {

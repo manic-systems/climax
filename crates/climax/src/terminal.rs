@@ -80,18 +80,23 @@ impl<'a> TerminalApplication<'a> {
     }
 
     #[must_use]
+    /// capabilities in force when the application started
     pub const fn capabilities(&self) -> TerminalCapabilities {
         self.capabilities
     }
 
+    /// terminal input, a handle to `/dev/tty` or process stdin
     pub fn input(&mut self) -> &mut (dyn TerminalInput + 'a) {
         &mut *self.input
     }
 
+    /// transient output writer
     pub fn output(&mut self) -> &mut dyn Write {
         &mut *self.output
     }
 
+    /// input and output borrowed together, which separate `input` and `output`
+    /// calls cannot
     pub fn split(&mut self) -> (&mut (dyn TerminalInput + 'a), &mut (dyn Write + 'a)) {
         (&mut *self.input, &mut *self.output)
     }
@@ -110,6 +115,8 @@ impl Write for TerminalApplication<'_> {
 
 impl TerminalCapabilities {
     #[must_use]
+    /// capabilities from explicit facts, for tests and hosts that detect
+    /// terminals themselves
     pub const fn new(input_terminal: bool, transient_terminal: bool, ansi: bool) -> Self {
         Self {
             input_terminal,
@@ -119,6 +126,7 @@ impl TerminalCapabilities {
     }
 
     #[must_use]
+    /// detect from process stdin, process stderr and `TERM`
     pub fn detect() -> Self {
         Self::new(
             io::stdin().is_terminal(),
@@ -134,26 +142,33 @@ impl TerminalCapabilities {
     }
 
     #[must_use]
+    /// whether input comes from a terminal
     pub const fn input_terminal(self) -> bool {
         self.input_terminal
     }
 
     #[must_use]
+    /// whether the transient stream, stderr by default, is a terminal
     pub const fn transient_terminal(self) -> bool {
         self.transient_terminal
     }
 
     #[must_use]
+    /// whether ANSI escapes should work, true unless `TERM` is `dumb`
     pub const fn ansi(self) -> bool {
         self.ansi
     }
 
     #[must_use]
+    /// whether prompts can run, needing terminal input, a terminal transient
+    /// stream and ANSI
     pub const fn interaction_available(self) -> bool {
         self.input_terminal && self.transient_terminal && self.ansi
     }
 
     #[must_use]
+    /// whether a live status can animate, needing a terminal transient stream
+    /// and ANSI
     pub const fn live_status_available(self) -> bool {
         self.transient_terminal && self.ansi
     }
@@ -178,21 +193,25 @@ impl TerminalPolicy {
     }
 
     #[must_use]
+    /// detected or injected capabilities
     pub const fn capabilities(self) -> TerminalCapabilities {
         self.capabilities
     }
 
     #[must_use]
+    /// interaction override, [`InteractionMode::Auto`] unless changed
     pub const fn interaction_mode(self) -> InteractionMode {
         self.interaction
     }
 
     #[must_use]
+    /// status override, [`StatusMode::Auto`] unless changed
     pub const fn status_mode(self) -> StatusMode {
         self.status
     }
 
     #[must_use]
+    /// whether prompts can run once the interaction override is applied
     pub const fn interaction_available(self) -> bool {
         match self.interaction {
             InteractionMode::Auto => self.capabilities.interaction_available(),
@@ -202,6 +221,8 @@ impl TerminalPolicy {
     }
 
     #[must_use]
+    /// The status mode after resolving `Auto`, which is `Live` on a terminal
+    /// that supports it and `Silent` otherwise.
     pub const fn effective_status_mode(self) -> StatusMode {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,

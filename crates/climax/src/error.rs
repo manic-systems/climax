@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use core::{
     error,
     fmt,
-    io,
+    result,
+};
+use std::io;
+
+#[cfg(feature = "interactive")]
+use bang::{
+    advanced::LiveSessionError,
+    terminal::Signal,
 };
 
-pub type Result<T> = std::result::Result<T, Error>;
+/// result type used across `climax`, with [`Error`] as the error
+pub type Result<T> = result::Result<T, Error>;
 
 /// stable, high-level category of an application error
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,6 +51,10 @@ pub enum ErrorKind {
 /// `Debug` prints the report `fn main() -> climax::Result<()>` should show, the
 /// message followed by any source or related error text it does not already
 /// carry
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the output module sets the signal when it relays an interrupted error"
+)]
 pub struct Error {
     kind:              ErrorKind,
     message:           String,
@@ -53,6 +65,7 @@ pub struct Error {
 
 impl Error {
     #[must_use]
+    /// error with only a message, of kind [`ErrorKind::Message`]
     pub fn message(message: impl Into<String>) -> Self {
         Self {
             kind:    ErrorKind::Message,
@@ -64,31 +77,37 @@ impl Error {
     }
 
     #[must_use]
+    /// wraps `source` as an [`ErrorKind::Application`] error with its text as
+    /// the message
     pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
         Self::with_source(ErrorKind::Application, source)
     }
 
     #[must_use]
+    /// like [`Error::application`], with the text reading `message: source`
     pub fn application_context(
         message: impl Into<String>,
         source: impl error::Error + Send + Sync + 'static,
     ) -> Self {
-        let message = format!("{}: {source}", message.into());
+        let combined = format!("{}: {source}", message.into());
         Self {
-            kind: ErrorKind::Application,
-            message,
-            signal: None,
-            source: Some(Box::new(source)),
+            kind:    ErrorKind::Application,
+            message: combined,
+            signal:  None,
+            source:  Some(Box::new(source)),
             related: Vec::new(),
         }
     }
 
     #[must_use]
+    /// category of this error
     pub const fn kind(&self) -> ErrorKind {
         self.kind
     }
 
     #[must_use]
+    /// retained source, keeping the `Send` and `Sync` bounds
+    /// `std::error::Error::source` erases
     pub fn source_error(&self) -> Option<&(dyn error::Error + Send + Sync + 'static)> {
         self.source.as_deref()
     }
@@ -128,9 +147,7 @@ impl Error {
             related: Vec::new(),
         }
     }
-}
 
-impl Error {
     fn chain_texts(&self) -> Vec<String> {
         let mut texts = Vec::new();
         let mut collect = |error: &Self| {
@@ -172,7 +189,7 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.source
             .as_deref()
-            .map(|source| source as &(dyn error::Error + 'static))
+            .map(|source| -> &(dyn error::Error + 'static) { source })
     }
 }
 
@@ -191,9 +208,12 @@ impl From<bang::Error> for Error {
             bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
             bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
             bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
-            _ => ErrorKind::Interactive,
+            bang::ErrorKind::InvalidConfiguration
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => ErrorKind::Interactive,
         };
-        let signal = value.signal().map(bang::terminal::Signal::as_raw);
+        let signal = value.signal().map(Signal::as_raw);
         let cleanup = if kind == ErrorKind::Cancelled {
             cleanup_errors(error::Error::source(&value))
         } else {
@@ -210,8 +230,8 @@ impl From<bang::Error> for Error {
 #[cfg(feature = "interactive")]
 fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
     source
-        .and_then(|source| source.downcast_ref::<bang::advanced::LiveSessionError>())
-        .map_or(&[][..], bang::advanced::LiveSessionError::cleanup_failures)
+        .and_then(|inner| inner.downcast_ref::<LiveSessionError>())
+        .map_or(&[][..], LiveSessionError::cleanup_failures)
         .iter()
         .map(|failure| {
             Error::with_source(

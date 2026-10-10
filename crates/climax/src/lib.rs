@@ -28,16 +28,24 @@
     ),
     doc = include_str!("../README.md")
 )]
+#![cfg_attr(doc, doc = include_str!("../docs/facade.md"))]
+#![warn(missing_docs)]
+
+extern crate alloc;
 
 mod app;
+/// the application error type and its categories
 pub mod error;
 #[cfg(feature = "complete")] pub mod install;
 pub mod output;
 pub mod prelude;
 mod sync;
+/// terminal capability facts, policy overrides and terminal applications
 pub mod terminal;
 
-#[cfg(feature = "render")] pub mod status;
+/// transient status lines drawn on the shared renderer
+#[cfg(feature = "render")]
+pub mod status;
 
 pub use app::{
     Context,
