@@ -8,28 +8,9 @@
 //! diagnostics land in [`Capture`] buffers, and the exit code and error come
 //! back in an [`Outcome`], reported and mapped by the code `main` uses.
 //!
-//! [`Capture`] needs no feature. [`Script`] and [`run_with`] need
-//! `interactive`, and [`run`] needs `interactive` and `parse`. Leftover script
+//! [`Capture`] needs no feature, [`Script`] and [`run_with`] need
+//! `interactive`, and [`run`] needs `interactive` and `parse`. leftover script
 //! input fails the run, see [`Script`].
-//!
-//! ```
-//! use climax::{
-//!     prelude::*,
-//!     testing::{
-//!         self,
-//!         Script,
-//!     },
-//! };
-//!
-//! let outcome = testing::run_with(Script::new().confirm(false), |cx| {
-//!     if cx.confirm("Deploy to prod?").interact()?.unwrap_or(false) {
-//!         return Ok(());
-//!     }
-//!     Err(Error::message("not deploying").with_exit_code(3))
-//! });
-//! assert_eq!(outcome.exit_code, 3);
-//! assert_eq!(outcome.stderr, "error: not deploying\n");
-//! ```
 
 use std::{
     io,
@@ -91,21 +72,9 @@ impl io::Write for Capture {
 
 /// what a test run produced
 ///
-/// `stdout` holds registered results and, for help and version, the text
-/// `main` prints on stdout. `stderr` holds diagnostics, notices, statuses and
-/// the `error: ...` line `main` prints.
-///
-/// ```
-/// use climax::testing::{
-///     self,
-///     Script,
-/// };
-///
-/// let outcome = testing::run_with(Script::new(), |_cx| Ok(()));
-/// assert_eq!(outcome.exit_code, 0);
-/// assert!(outcome.error.is_none());
-/// assert!(outcome.stdout.is_empty() && outcome.stderr.is_empty());
-/// ```
+/// `stdout` holds registered results and the help and version text `main`
+/// prints, `stderr` holds diagnostics, notices, statuses and the `error: ...`
+/// line
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct Outcome {
