@@ -418,17 +418,25 @@ impl Context {
         self.output.clone()
     }
 
+    /// format `output` handles from this context currently use
     #[must_use]
     pub const fn output_format(&self) -> Format {
         self.output.format()
     }
 
+    /// builds this context with `format`, so results and streams are written as
+    /// JSON under [`Format::Json`](crate::output::Format::Json)
+    ///
+    /// handles taken before the change keep the old format
     #[must_use]
     pub fn with_output_format(mut self, format: Format) -> Self {
         self.output = self.output.with_format(format);
         self
     }
 
+    /// sets the format for `output` handles taken after this call
+    ///
+    /// notices are suppressed in JSON mode and streams write JSON Lines
     pub fn set_output_format(&mut self, format: Format) {
         self.output = self.output.clone().with_format(format);
     }
