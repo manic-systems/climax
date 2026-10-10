@@ -14,6 +14,14 @@ can depend on `climax` alone, which re-exports each component whole behind the
 feature that enables it. Exact version pins keep one `climax` release on one
 tested set of component versions.
 
+## Platforms and Rust version
+
+The suite targets Unix. It is tested on Linux and macOS, and Windows is not
+supported yet because terminal input, raw mode and signal handling use Unix
+file descriptors. The minimum supported Rust version is 1.88, set as
+`rust-version` in the workspace package metadata. The crates use edition 2024
+and let chains, and development follows current stable.
+
 ## Typed interaction with Bang
 
 ```rust,no_run
