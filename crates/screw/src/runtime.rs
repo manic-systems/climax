@@ -711,3 +711,180 @@ fn fps_interval(fps: u16) -> Duration {
     let fps = u64::from(fps.max(1));
     Duration::from_nanos(1_000_000_000 / fps)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
+
+    use crate::{Position, Stack, Style, Widget, local_widget};
+
+    use super::*;
+
+    type RecordedFrame = (u64, Option<usize>, Option<usize>);
+    type RecordedFrames = Arc<Mutex<Vec<RecordedFrame>>>;
+
+    struct CursorWidget;
+
+    impl Widget for CursorWidget {
+        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+            out.write("cursor", Style::PLAIN);
+            out.set_cursor(Position { row: 0, col: 2 });
+        }
+    }
+
+    #[test]
+    fn synchronous_runtime_threads_viewport_and_cursor_policy_to_renderer() {
+        let root: WidgetRef = Arc::new(CursorWidget);
+        let mut runtime = Runtime::new(Vec::new(), root)
+            .viewport(10, 3)
+            .cursor_visibility(CursorVisibility::FromSurface);
+        runtime.draw_now(Instant::now()).unwrap();
+        runtime.resize_viewport(6, 2);
+        runtime.draw_now(Instant::now()).unwrap();
+        let output = runtime.into_inner();
+        assert!(output.windows(6).any(|part| part == b"\x1b[?25h"));
+    }
+
+    struct LocalValue(Rc<RefCell<String>>);
+
+    impl Widget for LocalValue {
+        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+            out.write(&*self.0.borrow(), Style::PLAIN);
+        }
+    }
+
+    #[test]
+    fn synchronous_runtime_accepts_a_local_root() {
+        let value = Rc::new(RefCell::new("before".to_owned()));
+        let root = local_widget(LocalValue(value.clone()));
+        let mut runtime = Runtime::new(Vec::new(), root).width(12);
+        runtime.draw_now(Instant::now()).unwrap();
+        *value.borrow_mut() = "after".to_owned();
+        runtime.mark_dirty();
+        runtime.draw_now(Instant::now()).unwrap();
+        assert!(!runtime.into_inner().is_empty());
+    }
+
+    struct SendOnlyWidget(Cell<usize>);
+
+    impl Widget for SendOnlyWidget {
+        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+            self.0.set(self.0.get() + 1);
+            out.write("owned", Style::PLAIN);
+        }
+    }
+
+    #[test]
+    fn live_runtime_requires_send_but_not_sync_for_an_owned_root() {
+        let child: Box<dyn Widget + Send> = Box::new(SendOnlyWidget(Cell::new(0)));
+        let output = Runtime::new(Vec::new(), Stack::new(vec![child]))
+            .start()
+            .finish()
+            .unwrap();
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn configured_final_widget_has_an_independent_type() {
+        let plain = Runtime::auto(Vec::new(), "plain root", false)
+            .final_widget("plain final".to_owned())
+            .start()
+            .finish()
+            .unwrap();
+        assert_eq!(plain, b"plain final");
+
+        let live = Runtime::new(Vec::new(), "live root")
+            .final_widget("live final".to_owned())
+            .start()
+            .finish()
+            .unwrap();
+        assert!(!live.is_empty());
+    }
+
+    #[test]
+    fn finish_with_accepts_a_third_widget_type() {
+        let output = Runtime::new(Vec::new(), "root")
+            .final_widget("configured".to_owned())
+            .start()
+            .finish_with(Box::new("override") as Box<dyn Widget + Send>)
+            .unwrap();
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn plain_auto_runtime_honours_resized_width_and_height() {
+        let root: WidgetRef = Arc::new("one\ntwo\nthree".to_owned());
+        let mut runtime = Runtime::auto(Vec::new(), root, false)
+            .viewport(8, 3)
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .start();
+        runtime.resize_viewport(4, 1).unwrap();
+        assert_eq!(runtime.finish().unwrap(), b"one");
+    }
+
+    #[derive(Clone)]
+    struct ConstraintRecorder {
+        seen: RecordedFrames,
+    }
+
+    impl Widget for ConstraintRecorder {
+        fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+            self.seen.lock().unwrap().push((
+                ctx.frame(),
+                ctx.available_columns(),
+                ctx.available_rows(),
+            ));
+            out.write("frame", Style::PLAIN);
+        }
+    }
+
+    fn recording_widget() -> (WidgetRef, RecordedFrames) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        (Arc::new(ConstraintRecorder { seen: seen.clone() }), seen)
+    }
+
+    #[test]
+    fn synchronous_live_and_plain_resize_paths_share_viewport_semantics() {
+        let (synchronous_root, synchronous_seen) = recording_widget();
+        let mut synchronous = Runtime::new(Vec::new(), synchronous_root).viewport(8, 3);
+        synchronous.draw_now(Instant::now()).unwrap();
+        synchronous.resize_viewport(5, 2);
+        synchronous.draw_now(Instant::now()).unwrap();
+        assert_eq!(
+            synchronous_seen.lock().unwrap().as_slice(),
+            [(0, Some(7), Some(3)), (1, Some(4), Some(2)),],
+        );
+
+        let (live_root, live_seen) = recording_widget();
+        let live = Runtime::new(Vec::new(), live_root).viewport(8, 3).start();
+        live.resize_viewport(5, 2).unwrap();
+        live.finish().unwrap();
+        let live_frames = live_seen.lock().unwrap();
+        assert_eq!(
+            live_frames
+                .last()
+                .map(|(_, columns, rows)| (*columns, *rows)),
+            Some((Some(4), Some(2))),
+        );
+        assert!(
+            live_frames.len() >= 2,
+            "initial and resized frames are rendered"
+        );
+        drop(live_frames);
+
+        let (plain_root, plain_seen) = recording_widget();
+        let mut plain = Runtime::auto(Vec::new(), plain_root, false)
+            .viewport(8, 3)
+            .start();
+        plain.resize_viewport(5, 2).unwrap();
+        plain.finish().unwrap();
+        assert_eq!(
+            plain_seen.lock().unwrap().as_slice(),
+            [(0, Some(4), Some(2))],
+        );
+    }
+}

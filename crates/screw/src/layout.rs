@@ -78,6 +78,8 @@ pub fn local_layout<'a>() -> LayoutBuilder<LocalWidgetRef<'a>> {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use super::*;
     use crate::{
         Looping,
@@ -122,5 +124,26 @@ mod tests {
             render_cursor(&app),
             Some(crate::Position { row: 4, col: 2 })
         );
+    }
+
+    struct LocalText(Rc<RefCell<String>>);
+
+    impl crate::Widget for LocalText {
+        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+            out.write(&*self.0.borrow(), Style::PLAIN);
+        }
+    }
+
+    #[test]
+    fn local_builder_composes_rc_refcell_widgets() {
+        let value = Rc::new(RefCell::new("before".to_owned()));
+        let app = local_layout()
+            .line(vec![local_widget(LocalText(value.clone()))])
+            .widget(local_widget("tail"))
+            .build();
+
+        assert_eq!(crate::render_plain(&app), "before\ntail");
+        *value.borrow_mut() = "after".to_owned();
+        assert_eq!(crate::render_plain(&app), "after\ntail");
     }
 }

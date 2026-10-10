@@ -300,3 +300,109 @@ fn previous_start(
     }
     Some(previous)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LayoutMode, Renderer, Stack, Text, widget};
+
+    #[test]
+    fn viewport_allocates_wrapped_children_around_an_anchor() {
+        let children = vec![
+            widget(Text::new("one")),
+            widget(Text::new("abcdef")),
+            widget(Text::new("three")),
+            widget(Text::new("four")),
+        ];
+        let viewport = VerticalViewport::new(children)
+            .requested_start(0)
+            .anchor(Some(2));
+        let report = viewport.report_handle();
+        let mut output = Vec::new();
+        Renderer::new(&mut output)
+            .width(6)
+            .height(3)
+            .layout_mode(LayoutMode::Wrap)
+            .draw(&viewport)
+            .unwrap();
+
+        assert_eq!(report.report().visible, 1..3);
+        assert_eq!(report.report().fully_visible, 1..3);
+    }
+
+    #[test]
+    fn viewport_reports_physical_page_targets() {
+        let children = vec![
+            widget(Text::new("one")),
+            widget(Text::new("two\ncontinued")),
+            widget(Text::new("three")),
+            widget(Text::new("four")),
+        ];
+        let viewport = VerticalViewport::new(children).anchor(Some(0));
+        let report = viewport.report_handle();
+        let mut output = Vec::new();
+        Renderer::new(&mut output)
+            .height(3)
+            .layout_mode(LayoutMode::Clip)
+            .draw(&viewport)
+            .unwrap();
+
+        assert_eq!(report.report().visible, 0..2);
+        assert_eq!(report.report().page_down, Some(2));
+    }
+
+    #[test]
+    fn trailing_content_can_consume_the_entire_viewport() {
+        let viewport = VerticalViewport::new(vec![widget(Text::new("one"))])
+            .trailing(widget(Text::new("help")));
+        let report = viewport.report_handle();
+        let mut output = Vec::new();
+        Renderer::new(&mut output)
+            .height(1)
+            .draw(&viewport)
+            .unwrap();
+
+        assert_eq!(report.report().visible, 0..0);
+    }
+
+    #[test]
+    fn viewport_respects_rows_already_used_by_a_stack() {
+        let viewport = VerticalViewport::new(vec![
+            widget(Text::new("one")),
+            widget(Text::new("two")),
+            widget(Text::new("three")),
+        ]);
+        let report = viewport.report_handle();
+        let root = Stack::new(vec![widget(Text::new("header")), widget(viewport)]);
+        let mut output = Vec::new();
+        Renderer::new(&mut output).height(3).draw(&root).unwrap();
+
+        assert_eq!(report.report().visible, 0..2);
+    }
+
+    #[test]
+    fn stack_shares_remaining_rows_between_viewports() {
+        let first = VerticalViewport::new(vec![
+            widget(Text::new("one")),
+            widget(Text::new("two")),
+            widget(Text::new("three")),
+        ]);
+        let first_report = first.report_handle();
+        let second = VerticalViewport::new(vec![
+            widget(Text::new("four")),
+            widget(Text::new("five")),
+            widget(Text::new("six")),
+        ]);
+        let second_report = second.report_handle();
+        let root = Stack::new(vec![
+            widget(Text::new("header")),
+            widget(first),
+            widget(second),
+        ]);
+        let mut output = Vec::new();
+        Renderer::new(&mut output).height(5).draw(&root).unwrap();
+
+        assert_eq!(first_report.report().visible, 0..2);
+        assert_eq!(second_report.report().visible, 0..2);
+    }
+}
