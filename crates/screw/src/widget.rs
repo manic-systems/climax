@@ -307,9 +307,12 @@ pub struct Looping {
 }
 
 impl Looping {
-    pub fn new<const N: usize>(frames: [&str; N]) -> Self {
+    /// Creates a loop over `frames`.
+    ///
+    /// A loop with no frames renders nothing.
+    pub fn new(frames: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Self {
-            frames: frames.map(ToOwned::to_owned).into(),
+            frames: frames.into_iter().map(|frame| frame.as_ref().to_owned()).collect(),
             style:  Style::default(),
         }
     }
@@ -1070,9 +1073,26 @@ impl Widget for String {
     }
 }
 
-impl Widget for &'static str {
+impl Widget for &str {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         out.write(*self, Style::default());
+    }
+}
+
+impl<T> Widget for &T
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        (**self).render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        (**self).tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        (**self).vertical_size()
     }
 }
 
@@ -1290,6 +1310,43 @@ mod tests {
         surface.write("pre: ", Style::new());
         wide.render(&RenderCtx::new().with_constraints(Some(13), None), &mut surface);
         assert_eq!(surface.plain_text(), "pre: abcd… xy");
+    }
+
+    #[test]
+    fn borrowed_widgets_and_strings_render_without_a_static_lifetime() {
+        let owned = String::from("owned");
+        let borrowed: &str = &owned;
+        assert_eq!(render_plain(&borrowed), "owned");
+
+        let text = Text::new("text");
+        let reference: &dyn Widget = &text;
+        assert_eq!(render_plain(&reference), "text");
+        assert_eq!(render_plain(&&text), "text");
+
+        let stack = Stack::new(vec![&text as &dyn Widget, &"tail"]);
+        assert_eq!(render_plain(&stack), "text\ntail");
+    }
+
+    #[test]
+    fn looping_accepts_borrowed_arrays_vectors_and_iterators() {
+        let frames: &[&str] = &["a", "b"];
+        let render = |looping: Looping| {
+            let mut surface = Surface::new();
+            looping.render(&RenderCtx::new(), &mut surface);
+            surface.plain_text()
+        };
+        assert_eq!(render(Looping::new(frames)), "a");
+        assert_eq!(render(Looping::new(["a", "b"])), "a");
+        assert_eq!(render(Looping::new(vec!["a".to_owned()])), "a");
+        assert_eq!(render(Looping::new(frames.iter().copied())), "a");
+        assert_eq!(render(Looping::new(Vec::<String>::new())), "");
+    }
+
+    #[test]
+    fn reference_forwarding_keeps_tick_interest_and_vertical_size() {
+        let looping = Looping::new(["a", "b"]);
+        assert_eq!(looping.tick_interest(), TickInterest::EveryFrame);
+        assert_eq!((&&"x").vertical_size(), VerticalSize::Content);
     }
 
     #[test]
