@@ -1,14 +1,15 @@
 [package]
-name                 = "bang-run"
-version              = "0.1.0"
-authors.workspace    = true
-categories           = [ "command-line-interface" ]
-description          = "Command-line tool that runs bang prompts and prints their answers"
-edition.workspace    = true
-keywords             = [ "cli", "input", "terminal", "widgets" ]
-license.workspace    = true
-readme               = "../../README.md"
-repository.workspace = true
+name                   = "bang-run"
+version                = "0.1.0"
+authors.workspace      = true
+categories             = [ "command-line-interface" ]
+description            = "Command-line tool that runs bang prompts and prints their answers"
+edition.workspace      = true
+keywords               = [ "cli", "input", "terminal", "widgets" ]
+license.workspace      = true
+readme                 = "../../README.md"
+repository.workspace   = true
+rust-version.workspace = true
 
 [dependencies]
 bang.workspace      = true

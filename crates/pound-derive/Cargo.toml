@@ -1,14 +1,15 @@
 [package]
-name                 = "pound-derive"
-version              = "0.2.1"
-description          = "Derive macros for pound"
-keywords             = [ "cli", "args", "derive" ]
-categories           = [ "development-tools::procedural-macro-helpers" ]
-readme               = "README.md"
-authors.workspace    = true
-edition.workspace    = true
-license.workspace    = true
-repository.workspace = true
+name                   = "pound-derive"
+version                = "0.2.1"
+description            = "Derive macros for pound"
+keywords               = [ "cli", "args", "derive" ]
+categories             = [ "development-tools::procedural-macro-helpers" ]
+readme                 = "README.md"
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
 
 [features]
 # forwarded from pound's `help` feature, see pound/Cargo.toml
