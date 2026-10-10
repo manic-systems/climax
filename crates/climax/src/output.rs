@@ -31,6 +31,8 @@ use crate::{
     sync::lock,
 };
 
+/// how output is written, chosen with
+/// [`Context::set_output_format`](crate::Context::set_output_format)
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Format {
     /// plain text
