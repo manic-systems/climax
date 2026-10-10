@@ -45,12 +45,11 @@ fn main() -> std::process::ExitCode {
 
 `Error::cancelled()` is a cancellation of your own, and an explicit code keeps it silent
 
-`ResultExt`, in the prelude, adds `.context(message)` and `.app_err()` to any
-`Result` whose error is a `Send + Sync` `std::error::Error`, so
-`text.parse::<u32>().context("reading the count")?` becomes an application
-error that reads `reading the count: invalid digit found in string` and keeps
-the original as its source. A `Box<dyn std::error::Error + Send + Sync>`
-converts into `Error` with `?`.
+## Prompts
+
+prompts return `PromptOutcome`, either `Submit` with the user's type or `Leave` when cancelled,
+and `or_cancel` turns leaving into a `Cancelled` error that exits 130. without a terminal on
+stdin a prompt fails with `InteractionUnavailable`, it never invents a value
 
 a signal during a prompt restores the terminal and surfaces as `Cancelled` with
 `Error::signal()` set, `main` exits 128 plus the number, and the host is never killed by it
@@ -141,34 +140,7 @@ unless related errors are attached, in which case those print instead.
 `climax::ResultExt` adds `.context(message)` and `.app_err()` to any `Result` of a
 `Send + Sync` error, and stays out of the prelude so `anyhow::Context` can sit beside it
 
-A cancellation whose terminal restore then fails is not classified as
-cancelled at all. `bang` reports it as a terminal error instead, so it reaches
-an application through the ordinary error path and exits 1 rather than 130.
-
-Pound preserves source declaration order across direct and flattened fields
-for positional parsing, help, and introspection, and rejects ambiguous long
-names, aliases, or short names within a flattened command level. Screw runtime
-root and configured-final widgets have independent types, and only widgets sent
-to an already running renderer thread are type-erased.
-
-## Features
-
-- `derive` provides `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]`
-  and implies `parse`.
-- `parse` provides the lifecycle entry points and Pound integration.
-- `render` provides status rendering and Screw integration.
-- `interactive` provides typed Bang prompts.
-- `structured` provides Serde-backed application results and JSON and JSON
-  Lines output.
-
-All five are on by default. The dependency fixtures under
-`tests/compile-fixtures` build and test `climax` with no default features and
-with each of `derive`, `interactive`, `parse`, `render` and `structured` alone.
-Another fixture checks that a direct dependency on a component unifies with the
-one `climax` re-exports.
-
-The README code blocks are compiled as `climax` doctests only when `derive`,
-`interactive`, `render` and `structured` are all on.
+## Testing
 
 `climax::testing::run` runs an application in process with the reporting and exit codes of `main`,
 and returns an `Outcome` with `exit_code`, `stdout`, `stderr` and `error`. a `Script` answers
