@@ -246,6 +246,8 @@ pub struct Context {
     interaction: bang::Interaction,
     #[cfg(feature = "interactive")]
     custom_interaction: bool,
+    #[cfg(feature = "interactive")]
+    prompt_summaries: Option<bool>,
     #[cfg(feature = "render")]
     transient:          crate::status::StatusCoordinator,
     #[cfg(any(feature = "render", feature = "interactive"))]
@@ -298,6 +300,8 @@ impl Context {
             interaction,
             #[cfg(feature = "interactive")]
             custom_interaction: false,
+            #[cfg(feature = "interactive")]
+            prompt_summaries: None,
             #[cfg(feature = "render")]
             transient,
             #[cfg(any(feature = "render", feature = "interactive"))]
@@ -671,6 +675,40 @@ impl Context {
         self.custom_interaction = true;
     }
 
+    /// Choose whether submitted prompts leave a one-line summary in the
+    /// scrollback, such as `Deploy to prod? › no`.
+    ///
+    /// The choice is kept on the context and applied to every prompt built
+    /// afterwards, so it survives [`Self::with_terminal`], capability changes
+    /// and [`Self::set_interaction`]. A prompt's own `summary` setting still
+    /// wins. Without a call each driver keeps its own default, which is on.
+    ///
+    /// ```
+    /// use climax::Context;
+    ///
+    /// let mut context = Context::new();
+    /// context.set_prompt_summaries(false);
+    /// ```
+    #[cfg(feature = "interactive")]
+    pub const fn set_prompt_summaries(&mut self, summaries: bool) {
+        self.prompt_summaries = Some(summaries);
+    }
+
+    /// Builder form of [`Self::set_prompt_summaries`].
+    ///
+    /// ```
+    /// use climax::Context;
+    ///
+    /// let context = Context::new().with_prompt_summaries(false);
+    /// # drop(context);
+    /// ```
+    #[cfg(feature = "interactive")]
+    #[must_use]
+    pub const fn with_prompt_summaries(mut self, summaries: bool) -> Self {
+        self.set_prompt_summaries(summaries);
+        self
+    }
+
     #[cfg(feature = "interactive")]
     #[must_use]
     /// Builder form of [`Self::set_interaction`].
@@ -776,12 +814,16 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
+        let interaction = match self.prompt_summaries {
+            Some(summaries) => self.interaction.clone().with_summaries(summaries),
+            None => self.interaction.clone(),
+        };
         #[cfg(feature = "render")]
         {
-            guarded_interaction(self.interaction.clone(), &self.transient)
+            guarded_interaction(interaction, &self.transient)
         }
         #[cfg(not(feature = "render"))]
-        self.interaction.clone()
+        interaction
     }
 
 }

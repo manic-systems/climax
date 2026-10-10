@@ -14,8 +14,11 @@ use climax::{Context, terminal::InteractionMode};
 
 const STDERR: RawFd = 2;
 
+static PROMPTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_stderr() {
+    let _serial = PROMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut master, slave) = open_pty();
     let captured_stderr = StderrCapture::install();
 
@@ -171,4 +174,52 @@ impl StderrCapture {
         }
         buffer
     }
+}
+
+fn answered_select_output(context: &Context, mut master: File) -> Vec<u8> {
+    let mut write_handle = master.try_clone().expect("clone master for the writer thread");
+    let writer = thread::spawn(move || {
+        write_handle.write_all(b"\r").expect("submit the highlighted choice");
+    });
+    context
+        .select::<&str>("choice")
+        .choice("first", "first")
+        .interact()
+        .expect("select prompt resolved");
+    writer.join().expect("writer thread panicked");
+    set_nonblocking(&master);
+    let mut collected = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    while let Ok(read) = master.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        collected.extend_from_slice(&buffer[..read]);
+    }
+    collected
+}
+
+#[test]
+fn a_submitted_prompt_leaves_a_summary_on_the_terminal_handle_by_default() {
+    let _serial = PROMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (master, slave) = open_pty();
+    let context = Context::new()
+        .with_terminal(slave)
+        .expect("with_terminal")
+        .with_interaction_mode(InteractionMode::Force);
+    let output = answered_select_output(&context, master);
+    assert!(contains(&output, "choice › first".as_bytes()), "got {output:?}");
+}
+
+#[test]
+fn prompt_summaries_off_survives_a_later_terminal_and_mode_change() {
+    let _serial = PROMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (master, slave) = open_pty();
+    let context = Context::new()
+        .with_prompt_summaries(false)
+        .with_terminal(slave)
+        .expect("with_terminal")
+        .with_interaction_mode(InteractionMode::Force);
+    let output = answered_select_output(&context, master);
+    assert!(!contains(&output, "choice › first".as_bytes()), "got {output:?}");
 }
