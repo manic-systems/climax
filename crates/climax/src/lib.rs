@@ -9,6 +9,11 @@
 //! application needs no direct dependency on any of them, and the versions it
 //! sees are the ones `climax` was tested against.
 //!
+//! The prompt builders on [`Context`] return the prompt types, which are
+//! re-exported at the root next to their config types, `PromptOutcome` and
+//! the review types, so a signature such as `fn ask(cx: &Context) -> SelectPrompt<String>`
+//! needs no path through `climax::bang`.
+//!
 //! The `derive` feature provides `#[derive(climax::Parse)]` and
 //! `#[derive(climax::ValueEnum)]`, whose expansion refers to
 //! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
@@ -39,14 +44,15 @@ pub use app::{
 };
 #[cfg(feature = "parse")]
 pub use app::{main, try_run, try_run_from};
-/// Types needed to build and match review prompts and to call `with_config`,
-/// at the crate root, next to the `Context` methods that build them.
 #[cfg(feature = "interactive")]
 pub use bang::{
-    Configurable, ConfirmConfig, Date, DateConfig, MultiSelectConfig, NumberConfig, PasswordConfig,
-    PromptOutcome, ReviewExit, ReviewOutcome, ReviewState,
-    Reviewed, SearchConfig, SelectConfig, TextConfig,
+    Configurable, ConfirmConfig, ConfirmPrompt, Date, DateConfig, DatePrompt, MultiSelectConfig,
+    MultiSelectPrompt, NumberConfig, NumberPrompt, PasswordConfig, PasswordPrompt, PromptOutcome,
+    ReviewExit, ReviewOutcome, ReviewPrompt, ReviewPromptWithActions, ReviewState, Reviewed,
+    SearchConfig, SearchPrompt, SelectConfig, SelectPrompt, TextConfig, TextPrompt,
 };
+/// Presentation settings for a review prompt, passed to `with_config`.
+///
 /// ```no_run
 /// use climax::{Configurable as _, ReviewConfig, ReviewExit, ReviewState};
 ///
