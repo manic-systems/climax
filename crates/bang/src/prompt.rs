@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use alloc::rc::Rc;
+use core::{
+    convert::Infallible,
     fmt,
-    rc::Rc,
+    result,
 };
 
 use bang_core::{
@@ -23,6 +25,7 @@ use crate::{
     Error,
     Interaction,
     Result,
+    interaction::Summary,
 };
 
 const DEFAULT_PAGE_SIZE: usize = 9;
@@ -79,6 +82,7 @@ struct ListConfig {
     wrap:      bool,
     page_size: usize,
     selected:  Option<usize>,
+    summary:   Option<bool>,
 }
 
 impl Default for ListConfig {
@@ -88,6 +92,7 @@ impl Default for ListConfig {
             wrap:      true,
             page_size: DEFAULT_PAGE_SIZE,
             selected:  None,
+            summary:   None,
         }
     }
 }
@@ -135,6 +140,13 @@ macro_rules! list_options {
         #[must_use]
         pub const fn selected(mut self, selected: usize) -> Self {
             self.$($list).+.selected = Some(selected);
+            self
+        }
+
+        /// whether submitting leaves a summary line, overriding the interaction
+        #[must_use]
+        pub const fn summary(mut self, summary: bool) -> Self {
+            self.$($list).+.summary = Some(summary);
             self
         }
     };
@@ -211,18 +223,30 @@ impl SearchConfig {
     }
 }
 
-type Validator = dyn Fn(&str) -> std::result::Result<(), String> + 'static;
+type Validator = dyn Fn(&str) -> result::Result<(), String> + 'static;
 
 /// presentation settings for [`TextPrompt`]
 #[derive(Clone, Default)]
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the prompt modules read the summary choice directly"
+)]
 pub struct TextConfig {
-    id:          Option<String>,
-    value:       Option<String>,
-    placeholder: Option<String>,
-    validator:   Option<Rc<Validator>>,
+    id:                 Option<String>,
+    value:              Option<String>,
+    placeholder:        Option<String>,
+    validator:          Option<Rc<Validator>>,
+    pub(crate) summary: Option<bool>,
 }
 
 impl TextConfig {
+    /// whether submitting leaves a summary line, overriding the interaction
+    #[must_use]
+    pub const fn summary(mut self, summary: bool) -> Self {
+        self.summary = Some(summary);
+        self
+    }
+
     /// set the widget id. defaults to `text`
     #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
@@ -248,7 +272,7 @@ impl TextConfig {
     #[must_use]
     pub fn validator(
         mut self,
-        validator: impl Fn(&str) -> std::result::Result<(), String> + 'static,
+        validator: impl Fn(&str) -> result::Result<(), String> + 'static,
     ) -> Self {
         self.validator = Some(Rc::new(validator));
         self
@@ -256,13 +280,13 @@ impl TextConfig {
 }
 
 impl fmt::Debug for TextConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("TextConfig")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextConfig")
             .field("id", &self.id)
             .field("value", &self.value)
             .field("placeholder", &self.placeholder)
             .field("validator", &self.validator.as_ref().map(|_| ".."))
+            .field("summary", &self.summary)
             .finish()
     }
 }
@@ -301,6 +325,60 @@ pub enum PromptOutcome<T> {
     Submit(T),
     /// the user left the prompt without submitting
     Leave,
+}
+
+impl<T> PromptOutcome<T> {
+    /// whether the user submitted a value
+    #[must_use]
+    pub const fn is_submit(&self) -> bool {
+        matches!(self, Self::Submit(_))
+    }
+
+    /// whether the user left without submitting
+    #[must_use]
+    pub const fn is_leave(&self) -> bool {
+        matches!(self, Self::Leave)
+    }
+
+    /// the submitted value, or `None` when the user left
+    #[must_use]
+    pub fn into_option(self) -> Option<T> {
+        match self {
+            Self::Submit(value) => Some(value),
+            Self::Leave => None,
+        }
+    }
+
+    /// the submitted value, or `default` when the user left
+    #[must_use]
+    pub fn unwrap_or(self, default: T) -> T {
+        self.into_option().unwrap_or(default)
+    }
+
+    /// the submitted value, or an
+    /// [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) error when the
+    /// user left
+    ///
+    /// for ending through `?`, `climax` applications exit with status 130 on it
+    ///
+    /// ```
+    /// use bang::{
+    ///     ErrorKind,
+    ///     PromptOutcome,
+    /// };
+    ///
+    /// assert_eq!(PromptOutcome::Submit(3).or_cancel().unwrap(), 3);
+    /// let error = PromptOutcome::<u8>::Leave.or_cancel().unwrap_err();
+    /// assert_eq!(error.kind(), ErrorKind::Cancelled);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) when
+    /// the user left
+    pub fn or_cancel(self) -> Result<T> {
+        self.into_option().ok_or_else(Error::cancelled)
+    }
 }
 
 /// how a review interaction ended
@@ -549,27 +627,32 @@ impl<T> ReviewPrompt<T> {
 
     /// run the prompt to completion
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves or cancels
-    /// without accepting the review. Fails with
-    /// `ErrorKind::InvalidConfiguration` if no item was added, with
-    /// `ErrorKind::InputEnded` if input ends first,
-    /// and with `ErrorKind::InteractionUnavailable` if the driver's terminal
-    /// isn't interactive.
+    /// returns `Ok(PromptOutcome::Leave)` when the user leaves or cancels
+    /// without accepting the review
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InvalidConfiguration` if no item was added, and
+    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<Vec<Reviewed<T>>>> {
         let interaction = self.core.interaction.clone();
         let header = self.core.config.list.header.clone();
-        let (widget, choices) = self
-            .core
-            .into_widget(&[] as &[ReviewPromptAction<std::convert::Infallible>])?;
-        let value = match interaction.interact_named(header.as_deref(), widget, []) {
+        let summary = self.core.config.list.summary;
+        let no_actions: [ReviewPromptAction<Infallible>; 0] = [];
+        let (widget, choices) = self.core.into_widget(&no_actions)?;
+        let value = match interaction.interact_named(
+            header.as_deref(),
+            widget,
+            [],
+            Summary::new(summary, &review_summary),
+        ) {
             Ok(value) => value,
             Err(error) if error.kind() == crate::ErrorKind::Cancelled => {
                 return Ok(PromptOutcome::Leave);
             },
             Err(error) => return Err(error),
         };
-        let outcome: ReviewOutcome<T, std::convert::Infallible> =
-            resolve_review(value, choices, Vec::new())?;
+        let outcome: ReviewOutcome<T, Infallible> = resolve_review(value, choices, Vec::new())?;
         let (exit, items) = outcome.into_parts();
         match exit {
             ReviewExit::Submit => {
@@ -619,19 +702,26 @@ impl<T, A> ReviewPromptWithActions<T, A> {
 
     /// run the prompt to completion
     ///
-    /// The outcome's `exit()` is `ReviewExit::Leave` when the user leaves or
-    /// cancels without accepting the review, and `ReviewExit::Action` when an
-    /// intrinsic action fires. Fails with `ErrorKind::InvalidConfiguration` if
-    /// no item was added or an action key is reserved or repeated, with
-    /// `ErrorKind::InputEnded` if input ends first, and with
-    /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
-    /// interactive.
+    /// `exit()` is `ReviewExit::Leave` when the user leaves,
+    /// `ReviewExit::Action` when an action fires
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InvalidConfiguration` if no item was added or an
+    /// action key is reserved or repeated, and with `ErrorKind::InputEnded`
+    /// or `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<ReviewOutcome<T, A>> {
         validate_review_actions(&self.actions)?;
         let interaction = self.core.interaction.clone();
         let header = self.core.config.list.header.clone();
+        let summary = self.core.config.list.summary;
         let (widget, choices) = self.core.into_widget(&self.actions)?;
-        match interaction.interact_named(header.as_deref(), widget, []) {
+        match interaction.interact_named(
+            header.as_deref(),
+            widget,
+            [],
+            Summary::new(summary, &review_summary),
+        ) {
             Ok(value) => resolve_review(value, choices, self.actions),
             Err(error) if error.kind() == crate::ErrorKind::Cancelled => {
                 Ok(ReviewOutcome {
@@ -719,19 +809,26 @@ impl<T> SelectPrompt<T> {
         config.list
     );
 
-    /// Run the prompt to completion.
+    /// run the prompt to completion, `Ok(PromptOutcome::Leave)` when the user
+    /// leaves
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// submitting. Fails with `ErrorKind::InvalidConfiguration` if no choice
-    /// was added, with `ErrorKind::InputEnded` if input ends first, and with
-    /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
-    /// interactive.
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InvalidConfiguration` if no choice was added, and
+    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
+        let summary = self.config.list.summary;
         let (widget, choices) = self.into_widget()?;
+        let labels = choice_labels(&choices);
         resolve_prompt(
-            interaction.interact_named(header.as_deref(), widget, []),
+            interaction.interact_named(
+                header.as_deref(),
+                widget,
+                [],
+                Summary::new(summary, &|value| one_label(value, &labels)),
+            ),
             |value| resolve_one(&value, choices),
         )
     }
@@ -812,19 +909,26 @@ impl<T> MultiSelectPrompt<T> {
         self
     }
 
-    /// Run the prompt to completion.
+    /// run the prompt to completion, `Ok(PromptOutcome::Leave)` when the user
+    /// leaves
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// submitting. Fails with `ErrorKind::InvalidConfiguration` if no choice
-    /// was added, with `ErrorKind::InputEnded` if input ends first, and with
-    /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
-    /// interactive.
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InvalidConfiguration` if no choice was added, and
+    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<Vec<T>>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
+        let summary = self.config.list.summary;
         let (widget, choices) = self.into_widget()?;
+        let labels = choice_labels(&choices);
         resolve_prompt(
-            interaction.interact_named(header.as_deref(), widget, []),
+            interaction.interact_named(
+                header.as_deref(),
+                widget,
+                [],
+                Summary::new(summary, &|value| many_labels(value, &labels)),
+            ),
             |value| resolve_many(value, choices),
         )
     }
@@ -904,19 +1008,26 @@ impl<T> SearchPrompt<T> {
         self
     }
 
-    /// Run the prompt to completion.
+    /// run the prompt to completion, `Ok(PromptOutcome::Leave)` when the user
+    /// leaves
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// submitting. Fails with `ErrorKind::InvalidConfiguration` if no choice
-    /// was added, with `ErrorKind::InputEnded` if input ends first, and with
-    /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
-    /// interactive.
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InvalidConfiguration` if no choice was added, and
+    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
+        let summary = self.config.list.summary;
         let (widget, choices) = self.into_widget()?;
+        let labels = choice_labels(&choices);
         resolve_prompt(
-            interaction.interact_named(header.as_deref(), widget, []),
+            interaction.interact_named(
+                header.as_deref(),
+                widget,
+                [],
+                Summary::new(summary, &|value| one_label(value, &labels)),
+            ),
             |value| resolve_one(&value, choices),
         )
     }
@@ -997,9 +1108,16 @@ impl TextPrompt {
     #[must_use]
     pub fn validator(
         mut self,
-        validator: impl Fn(&str) -> std::result::Result<(), String> + 'static,
+        validator: impl Fn(&str) -> result::Result<(), String> + 'static,
     ) -> Self {
         self.config = self.config.validator(validator);
+        self
+    }
+
+    /// whether submitting leaves a summary line, overriding the interaction
+    #[must_use]
+    pub const fn summary(mut self, summary: bool) -> Self {
+        self.config.summary = Some(summary);
         self
     }
 
@@ -1010,17 +1128,24 @@ impl TextPrompt {
         self
     }
 
-    /// Run the prompt to completion.
+    /// run the prompt to completion, `Ok(PromptOutcome::Leave)` when the user
+    /// leaves
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// submitting. Fails with `ErrorKind::InputEnded` if input ends first,
-    /// and with `ErrorKind::InteractionUnavailable` if the driver's terminal
-    /// isn't interactive.
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InputEnded` or
+    /// `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
+        let summary = self.config.summary;
         let widget = text_widget(self.prompt, self.config, "text", None);
         resolve_prompt(
-            self.interaction.interact_named(Some(&prompt), widget, []),
+            self.interaction.interact_named(
+                Some(&prompt),
+                widget,
+                [],
+                Summary::new(summary, &|value| value.as_str().map(str::to_owned)),
+            ),
             resolve_text,
         )
     }
@@ -1043,16 +1168,22 @@ pub(crate) fn text_widget(
     if let Some(validator) = config.validator {
         widget = widget.with_validator(move |value| validator(value));
     }
-    if let Some(mask) = mask {
-        widget = widget.with_mask(mask);
+    if let Some(symbol) = mask {
+        widget = widget.with_mask(symbol);
     }
     widget
 }
 
 pub(crate) fn resolve_text(value: Value) -> Result<String> {
     match value {
-        Value::String(value) => Ok(value),
-        _ => Err(Error::unexpected("text")),
+        Value::String(text) => Ok(text),
+        Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::Date(_)
+        | Value::List(_)
+        | Value::Object(_)
+        | _ => Err(Error::unexpected("text")),
     }
 }
 
@@ -1090,10 +1221,50 @@ pub(crate) fn resolve_prompt<T>(
     }
 }
 
+fn choice_labels<T>(choices: &[Choice<T>]) -> Vec<String> {
+    choices.iter().map(|choice| choice.label.clone()).collect()
+}
+
+fn one_label(value: &Value, labels: &[String]) -> Option<String> {
+    let index = value.as_str()?.parse::<usize>().ok()?;
+    labels.get(index).cloned()
+}
+
+fn many_labels(value: &Value, labels: &[String]) -> Option<String> {
+    let picked = value
+        .as_list()?
+        .iter()
+        .map(|item| one_label(item, labels))
+        .collect::<Option<Vec<_>>>()?;
+    Some(if picked.is_empty() {
+        "none".to_owned()
+    } else {
+        picked.join(", ")
+    })
+}
+
+fn review_summary(value: &Value) -> Option<String> {
+    let output = value.as_object()?;
+    if output.get("exit")?.as_str()? != "submit" {
+        return None;
+    }
+    let rows = output.get("rows")?.as_list()?;
+    let confirmed = rows
+        .iter()
+        .filter(|row| {
+            row.as_object()
+                .and_then(|fields| fields.get("state"))
+                .and_then(Value::as_str)
+                == Some("confirmed")
+        })
+        .count();
+    Some(format!("{confirmed} of {} confirmed", rows.len()))
+}
+
 fn resolve_one<T>(value: &Value, mut choices: Vec<Choice<T>>) -> Result<T> {
     let index = value
         .as_str()
-        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|text| text.parse::<usize>().ok())
         .ok_or_else(|| Error::unexpected("a choice"))?;
     if index >= choices.len() {
         return Err(Error::unexpected("a known choice"));
@@ -1107,10 +1278,10 @@ fn resolve_many<T>(value: Value, choices: Vec<Choice<T>>) -> Result<Vec<T>> {
     };
     let mut indices = values
         .into_iter()
-        .map(|value| {
-            value
+        .map(|entry| {
+            entry
                 .as_str()
-                .and_then(|value| value.parse::<usize>().ok())
+                .and_then(|text| text.parse::<usize>().ok())
                 .ok_or_else(|| Error::unexpected("known choices"))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1118,13 +1289,19 @@ fn resolve_many<T>(value: Value, choices: Vec<Choice<T>>) -> Result<Vec<T>> {
         return Err(Error::unexpected("known choices"));
     }
     indices.sort_unstable();
-    if indices.windows(2).any(|pair| pair[0] == pair[1]) {
+    if indices
+        .windows(2)
+        .any(|pair| matches!(pair, [first, second] if first == second))
+    {
         return Err(Error::unexpected("distinct choices"));
     }
     let mut output = Vec::with_capacity(indices.len());
-    let mut choices = choices.into_iter().map(Some).collect::<Vec<_>>();
+    let mut slots = choices.into_iter().map(Some).collect::<Vec<_>>();
     for index in indices {
-        output.push(choices[index].take().expect("indices are distinct").value);
+        let choice = slots[index]
+            .take()
+            .ok_or_else(|| Error::unexpected("distinct choices"))?;
+        output.push(choice.value);
     }
     Ok(output)
 }
@@ -1137,23 +1314,23 @@ fn resolve_review<T, A>(
     let Value::Object(mut output) = value else {
         return Err(Error::unexpected("a review outcome"));
     };
-    let exit = output
+    let exit_name = output
         .remove("exit")
-        .and_then(|value| value.as_str().map(str::to_owned))
+        .and_then(|entry| entry.as_str().map(str::to_owned))
         .ok_or_else(|| Error::unexpected("a review exit"))?;
-    if exit == "leave" {
+    if exit_name == "leave" {
         return Ok(ReviewOutcome {
             exit:           ReviewExit::Leave,
             accepted_items: None,
         });
     }
 
-    let exit = match exit.as_str() {
+    let exit = match exit_name.as_str() {
         "submit" => ReviewExit::Submit,
         "action" => {
             let index = output
                 .remove("action")
-                .and_then(|value| value.as_str().and_then(|value| value.parse::<usize>().ok()))
+                .and_then(|entry| entry.as_str()?.parse::<usize>().ok())
                 .ok_or_else(|| Error::unexpected("a review action"))?;
             let action = actions
                 .into_iter()
@@ -1170,23 +1347,23 @@ fn resolve_review<T, A>(
     if rows.len() != choices.len() {
         return Err(Error::unexpected("all review rows"));
     }
-    let mut choices = choices.into_iter().map(Some).collect::<Vec<_>>();
+    let mut slots = choices.into_iter().map(Some).collect::<Vec<_>>();
     let mut accepted_items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let Value::Object(mut row) = row else {
+    for entry in rows {
+        let Value::Object(mut row) = entry else {
             return Err(Error::unexpected("a review row"));
         };
         let index = row
             .remove("value")
-            .and_then(|value| value.as_str().and_then(|value| value.parse::<usize>().ok()))
+            .and_then(|field| field.as_str()?.parse::<usize>().ok())
             .ok_or_else(|| Error::unexpected("a known review item"))?;
-        let state = row
+        let state_name = row
             .remove("state")
-            .and_then(|value| value.as_str().map(str::to_owned))
+            .and_then(|field| field.as_str().map(str::to_owned))
             .ok_or_else(|| Error::unexpected("a review state"))?;
-        let state = ReviewState::try_from(state.as_str())
+        let state = ReviewState::try_from(state_name.as_str())
             .map_err(|_error| Error::unexpected("a known review state"))?;
-        let choice = choices
+        let choice = slots
             .get_mut(index)
             .and_then(Option::take)
             .ok_or_else(|| Error::unexpected("distinct known review items"))?;
@@ -1204,9 +1381,11 @@ fn resolve_review<T, A>(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use alloc::collections::BTreeMap;
+    use core::cell::RefCell;
 
     use super::*;
+    use crate::advanced::scripted_interaction;
 
     #[test]
     fn prompt_specific_configs_cover_normal_presentation_state() {
@@ -1329,7 +1508,7 @@ mod tests {
 
     #[test]
     fn review_leave_discards_provisional_items() {
-        let value = Value::Object(std::collections::BTreeMap::from([
+        let value = Value::Object(BTreeMap::from([
             ("exit".to_owned(), Value::from("leave")),
             ("rows".to_owned(), Value::List(Vec::new())),
         ]));
@@ -1349,11 +1528,11 @@ mod tests {
 
     #[test]
     fn review_action_recovers_typed_action_and_changed_items() {
-        let row = Value::Object(std::collections::BTreeMap::from([
+        let row = Value::Object(BTreeMap::from([
             ("value".to_owned(), Value::from("0")),
             ("state".to_owned(), Value::from("confirmed")),
         ]));
-        let value = Value::Object(std::collections::BTreeMap::from([
+        let value = Value::Object(BTreeMap::from([
             ("exit".to_owned(), Value::from("action")),
             ("action".to_owned(), Value::from("0")),
             ("rows".to_owned(), Value::List(vec![row])),
@@ -1404,9 +1583,9 @@ mod tests {
     fn action_free_review_uses_the_ordinary_prompt_outcome() {
         let outcome = review("review")
             .item("one", 42, ReviewState::Unconfirmed)
-            .interaction(crate::advanced::scripted_interaction([vec![
-                bang_core::Event::key(bang_core::Key::Enter),
-            ]]))
+            .interaction(scripted_interaction([vec![bang_core::Event::key(
+                bang_core::Key::Enter,
+            )]]))
             .interact()
             .unwrap();
 
@@ -1418,7 +1597,7 @@ mod tests {
 
     #[test]
     fn scripted_interaction_drives_typed_prompts_without_a_terminal() {
-        let interaction = crate::advanced::scripted_interaction([
+        let interaction = scripted_interaction([
             vec![
                 bang_core::Event::key(bang_core::Key::Down),
                 bang_core::Event::key(bang_core::Key::Enter),
@@ -1455,7 +1634,7 @@ mod tests {
                     .then_some(())
                     .ok_or_else(|| "empty".to_owned())
             })
-            .interaction(crate::advanced::scripted_interaction([
+            .interaction(scripted_interaction([
                 vec![
                     bang_core::Event::key(bang_core::Key::Enter),
                     bang_core::Event::char('A'),
@@ -1481,7 +1660,7 @@ mod tests {
 
     #[test]
     fn cancellation_leaves_each_ordinary_typed_prompt() {
-        let interaction = crate::advanced::scripted_interaction([
+        let interaction = scripted_interaction([
             vec![bang_core::Event::key(bang_core::Key::Esc)],
             vec![bang_core::Event::key(bang_core::Key::Esc)],
             vec![bang_core::Event::key(bang_core::Key::Esc)],
@@ -1524,8 +1703,7 @@ mod tests {
             bang_core::Key::Char('c'),
             bang_core::Modifiers::CONTROL,
         ));
-        let interaction =
-            crate::advanced::scripted_interaction([vec![control_c.clone()], vec![control_c]]);
+        let interaction = scripted_interaction([vec![control_c.clone()], vec![control_c]]);
 
         assert_eq!(
             review("files")
@@ -1548,7 +1726,7 @@ mod tests {
 
     #[test]
     fn input_ending_without_a_decision_remains_an_error() {
-        let interaction = crate::advanced::scripted_interaction([Vec::new()]);
+        let interaction = scripted_interaction([Vec::new()]);
         let error = text("name")
             .interaction(interaction)
             .interact()

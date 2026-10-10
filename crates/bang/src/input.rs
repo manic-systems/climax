@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use alloc::rc::Rc;
+use core::{
     fmt,
-    rc::Rc,
+    mem,
+    result,
     str::FromStr,
-    time::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
+};
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
 };
 
 use bang_core::{
     Context,
     Date,
     Event,
+    Key,
+    Modifiers,
     Reaction,
     Value,
     Widget,
@@ -43,6 +47,7 @@ use crate::{
     Interaction,
     PromptOutcome,
     Result,
+    interaction::Summary,
     prompt::{
         TextConfig,
         resolve_prompt,
@@ -52,6 +57,7 @@ use crate::{
 };
 
 const DEFAULT_MASK: char = '*';
+const SECRET_SUMMARY_WIDTH: usize = 8;
 
 /// ask the user for a secret, echoing a mask character per typed character
 #[must_use]
@@ -91,6 +97,13 @@ macro_rules! password_options {
             self
         }
 
+        /// whether submitting leaves a summary line of mask characters, overriding the interaction
+        #[must_use]
+        pub fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.text = self$(.$base)*.text.summary(summary);
+            self
+        }
+
         /// set the character echoed for every typed character. defaults to `*`
         #[must_use]
         pub const fn mask(mut self, mask: char) -> Self {
@@ -109,7 +122,7 @@ macro_rules! password_options {
         #[must_use]
         pub fn validator(
             mut self,
-            validator: impl Fn(&str) -> std::result::Result<(), String> + 'static,
+            validator: impl Fn(&str) -> result::Result<(), String> + 'static,
         ) -> Self {
             self$(.$base)*.text = self$(.$base)*.text.validator(validator);
             self
@@ -165,14 +178,17 @@ impl PasswordPrompt {
         self
     }
 
-    /// Run the prompt to completion.
+    /// run the prompt to completion, `Ok(PromptOutcome::Leave)` when the user
+    /// leaves
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// submitting. Fails with `ErrorKind::InputEnded` if input ends first,
-    /// and with `ErrorKind::InteractionUnavailable` if the driver's terminal
-    /// isn't interactive.
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InputEnded` or
+    /// `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
+        let summary = self.config.text.summary;
+        let hidden = self.config.mask.to_string().repeat(SECRET_SUMMARY_WIDTH);
         let widget = text_widget(
             self.prompt,
             self.config.text,
@@ -180,7 +196,12 @@ impl PasswordPrompt {
             Some(self.config.mask),
         );
         resolve_prompt(
-            self.interaction.interact_named(Some(&prompt), widget, []),
+            self.interaction.interact_named(
+                Some(&prompt),
+                widget,
+                [],
+                Summary::new(summary, &|_| Some(hidden.clone())),
+            ),
             resolve_text,
         )
     }
@@ -204,10 +225,18 @@ macro_rules! confirm_options {
             self
         }
 
-        /// Choose the answer that is highlighted first. Defaults to `true`.
+        /// choose the answer that is highlighted first. defaults to `false`,
+        /// so that pressing enter without reading declines
         #[must_use]
         pub const fn default(mut self, default: bool) -> Self {
             self$(.$base)*.default = default;
+            self
+        }
+
+        /// whether submitting leaves a summary line, overriding the interaction
+        #[must_use]
+        pub const fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.summary = Some(summary);
             self
         }
     };
@@ -221,17 +250,23 @@ macro_rules! confirm_options {
 pub struct ConfirmConfig {
     id:      String,
     default: bool,
+    summary: Option<bool>,
 }
 
 impl Default for ConfirmConfig {
     fn default() -> Self {
         Self {
             id:      "confirm".to_owned(),
-            default: true,
+            default: false,
+            summary: None,
         }
     }
 }
 
+#[expect(
+    clippy::same_name_method,
+    reason = "default is a builder setter, not Default::default"
+)]
 impl ConfirmConfig {
     /// a config with every setting at its default
     #[must_use]
@@ -272,20 +307,31 @@ impl ConfirmPrompt {
 
     /// run the prompt to completion
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// answering. Fails with `ErrorKind::InputEnded` if input ends first, and
-    /// with `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
-    /// interactive.
+    /// `y` or `n` answers at once and enter takes the highlighted answer, no
+    /// unless [`default`](Self::default) says otherwise
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InputEnded` or
+    /// `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<bool>> {
-        let widget = Select::new(self.config.id, [
+        let select = Select::new(self.config.id, [
             SelectItem::new("Yes", "yes"),
             SelectItem::new("No", "no"),
         ])
         .with_header(self.prompt.clone())
         .with_selected_index(usize::from(!self.config.default));
+        let widget = YesNoKeys(select);
+        let summary = Summary::new(self.config.summary, &|value| {
+            match value.as_str() {
+                Some("yes") => Some("yes".to_owned()),
+                Some("no") => Some("no".to_owned()),
+                _ => None,
+            }
+        });
         resolve_prompt(
             self.interaction
-                .interact_named(Some(&self.prompt), widget, []),
+                .interact_named(Some(&self.prompt), widget, [], summary),
             |value| {
                 match value.as_str() {
                     Some("yes") => Ok(true),
@@ -323,6 +369,13 @@ macro_rules! date_options {
             self$(.$base)*.default = Some(default);
             self
         }
+
+        /// whether submitting leaves a summary line, overriding the interaction
+        #[must_use]
+        pub const fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.summary = Some(summary);
+            self
+        }
     };
 }
 
@@ -334,6 +387,7 @@ macro_rules! date_options {
 pub struct DateConfig {
     id:      String,
     default: Option<Date>,
+    summary: Option<bool>,
 }
 
 impl Default for DateConfig {
@@ -341,10 +395,15 @@ impl Default for DateConfig {
         Self {
             id:      "date".to_owned(),
             default: None,
+            summary: None,
         }
     }
 }
 
+#[expect(
+    clippy::same_name_method,
+    reason = "default is a builder setter, not Default::default"
+)]
 impl DateConfig {
     /// a config with every setting at its default
     #[must_use]
@@ -387,6 +446,9 @@ impl DatePrompt {
     ///
     /// today and the default date come from the local time zone. returns
     /// `Ok(PromptOutcome::Leave)` when the user leaves without submitting
+    ///
+    /// # Errors
+    ///
     /// fails with `ErrorKind::InputEnded` or
     /// `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<Date>> {
@@ -394,9 +456,12 @@ impl DatePrompt {
         let picker =
             DatePicker::new(self.config.id, self.config.default.unwrap_or(today)).with_today(today);
         let widget = Headed::new(self.prompt.clone(), picker);
+        let summary = Summary::new(self.config.summary, &|value| {
+            value.as_date().map(|date| date.to_string())
+        });
         resolve_prompt(
             self.interaction
-                .interact_named(Some(&self.prompt), widget, []),
+                .interact_named(Some(&self.prompt), widget, [], summary),
             |value| value.as_date().ok_or_else(|| Error::unexpected("a date")),
         )
     }
@@ -411,7 +476,7 @@ impl Configurable for DatePrompt {
     }
 }
 
-type NumberCheck<T> = dyn Fn(&T) -> std::result::Result<(), String> + 'static;
+type NumberCheck<T> = dyn Fn(&T) -> result::Result<(), String> + 'static;
 
 /// builder methods shared by [`NumberPrompt`] and [`NumberConfig`]. `$base` is
 /// the path from `self` to the `NumberConfig`, empty when `self` is one
@@ -431,11 +496,18 @@ macro_rules! number_options {
             self
         }
 
+        /// whether submitting leaves a summary line, overriding the interaction
+        #[must_use]
+        pub fn summary(mut self, summary: bool) -> Self {
+            self$(.$base)*.text = self$(.$base)*.text.summary(summary);
+            self
+        }
+
         /// reject submission with the validator's message until it accepts
         #[must_use]
         pub fn validator(
             mut self,
-            validator: impl Fn(&T) -> std::result::Result<(), String> + 'static,
+            validator: impl Fn(&T) -> result::Result<(), String> + 'static,
         ) -> Self {
             self$(.$base)*.check = Some(Rc::new(validator));
             self
@@ -487,9 +559,8 @@ impl<T> Clone for NumberConfig<T> {
 }
 
 impl<T> fmt::Debug for NumberConfig<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("NumberConfig")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NumberConfig")
             .field("text", &self.text)
             .field("check", &self.check.as_ref().map(|_| ".."))
             .finish()
@@ -528,25 +599,30 @@ where
         self
     }
 
-    /// Run the prompt to completion.
+    /// run the prompt to completion, `Ok(PromptOutcome::Leave)` when the user
+    /// leaves
     ///
-    /// Returns `Ok(PromptOutcome::Leave)` when the user leaves without
-    /// submitting. Fails with `ErrorKind::InputEnded` if input ends first,
-    /// and with `ErrorKind::InteractionUnavailable` if the driver's terminal
-    /// isn't interactive.
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::InputEnded` or
+    /// `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let check = self.config.check;
         let text = self.config.text.validator(move |text| {
             let parsed = parse_number::<T>(text)?;
-            check.as_ref().map_or(Ok(()), |check| check(&parsed))
+            check.as_ref().map_or(Ok(()), |validate| validate(&parsed))
         });
         let prompt = self.prompt.clone();
+        let summary = Summary::new(text.summary, &|value| {
+            value.as_str().map(|raw| raw.trim().to_owned())
+        });
         let widget = text_widget(self.prompt, text, "number", None);
         resolve_prompt(
-            self.interaction.interact_named(Some(&prompt), widget, []),
+            self.interaction
+                .interact_named(Some(&prompt), widget, [], summary),
             |value| {
-                let text = resolve_text(value)?;
-                parse_number::<T>(&text).map_err(|_message| Error::unexpected("a number"))
+                let answer_text = resolve_text(value)?;
+                parse_number::<T>(&answer_text).map_err(|_message| Error::unexpected("a number"))
             },
         )
     }
@@ -580,9 +656,8 @@ impl<T> Clone for NumberPrompt<T> {
 }
 
 impl<T> fmt::Debug for NumberPrompt<T> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("NumberPrompt")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NumberPrompt")
             .field("prompt", &self.prompt)
             .field("config", &self.config)
             .field("interaction", &self.interaction)
@@ -590,7 +665,7 @@ impl<T> fmt::Debug for NumberPrompt<T> {
     }
 }
 
-fn parse_number<T>(text: &str) -> std::result::Result<T, String>
+fn parse_number<T>(text: &str) -> result::Result<T, String>
 where
     T: FromStr,
     T::Err: fmt::Display,
@@ -598,6 +673,66 @@ where
     text.trim()
         .parse()
         .map_err(|error| format!("not a valid number ({error})"))
+}
+
+/// answers a yes or no `Select` immediately on `y` or `n`
+struct YesNoKeys<W>(W);
+
+impl<W: Widget> screw::Widget for YesNoKeys<W> {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.0.render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.0.tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.0.vertical_size()
+    }
+}
+
+impl<W: Widget> Widget for YesNoKeys<W> {
+    fn id(&self) -> WidgetId {
+        self.0.id()
+    }
+
+    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        if let Event::Key(key) = &event {
+            let held = key.modifiers;
+            let chorded = held.contains(Modifiers::CONTROL)
+                || held.contains(Modifiers::ALT)
+                || held.contains(Modifiers::SUPER);
+            if !chorded {
+                match key.key {
+                    Key::Char('y' | 'Y') => return Reaction::Submit(Value::from("yes")),
+                    Key::Char('n' | 'N') => return Reaction::Submit(Value::from("no")),
+                    Key::Char(_)
+                    | Key::Enter
+                    | Key::Esc
+                    | Key::Tab
+                    | Key::Backtab
+                    | Key::Backspace
+                    | Key::Delete
+                    | Key::Up
+                    | Key::Down
+                    | Key::Left
+                    | Key::Right
+                    | Key::Home
+                    | Key::End
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::Function(_)
+                    | _ => {},
+                }
+            }
+        }
+        self.0.handle(event, cx)
+    }
+
+    fn current_value(&self) -> Option<Value> {
+        self.0.current_value()
+    }
 }
 
 /// shows a prompt line above a widget that has no header of its own
@@ -663,24 +798,26 @@ fn date_at(unix_seconds: i64, offset_seconds: i64) -> Date {
     )
 }
 
-#[allow(
-    clippy::useless_conversion,
-    reason = "c_long and time_t are 32 bit on some targets"
-)]
+fn convert<T, U: TryFrom<T>>(value: T) -> Option<U> {
+    U::try_from(value).ok()
+}
+
 fn local_offset_seconds(unix_seconds: i64) -> i64 {
-    let time = libc::time_t::try_from(unix_seconds).unwrap_or_default();
+    let time = convert::<_, libc::time_t>(unix_seconds).unwrap_or_default();
     // SAFETY: a zeroed tm is plain data that localtime_r overwrites on success
-    let mut local = unsafe { std::mem::zeroed::<libc::tm>() };
+    let mut local = unsafe { mem::zeroed::<libc::tm>() };
     // SAFETY: both pointers are valid for the call, and localtime_r keeps no
     // state of its own beyond the time zone data libc guards internally
     if unsafe { libc::localtime_r(&raw const time, &raw mut local) }.is_null() {
         return 0;
     }
-    i64::from(local.tm_gmtoff)
+    convert(local.tm_gmtoff).unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
+    use core::iter;
+
     use bang_core::{
         Event,
         Key,
@@ -755,20 +892,60 @@ mod tests {
     }
 
     #[test]
-    fn confirm_answers_yes_by_default_and_no_after_moving() {
+    fn confirm_declines_by_default_and_accepts_when_defaulted_or_moved() {
         let interaction =
-            scripted_interaction([vec![enter()], keys([Key::Down, Key::Enter]), vec![enter()]]);
+            scripted_interaction([vec![enter()], vec![enter()], keys([Key::Down, Key::Enter])]);
 
         let first = confirm("sure?").interaction(interaction.clone()).interact();
-        let second = confirm("sure?").interaction(interaction.clone()).interact();
-        let third = confirm("sure?")
-            .default(false)
-            .interaction(interaction)
+        let second = confirm("sure?")
+            .default(true)
+            .interaction(interaction.clone())
             .interact();
+        let third = confirm("sure?").interaction(interaction).interact();
 
-        assert_eq!(first.unwrap(), PromptOutcome::Submit(true));
-        assert_eq!(second.unwrap(), PromptOutcome::Submit(false));
-        assert_eq!(third.unwrap(), PromptOutcome::Submit(false));
+        assert_eq!(first.unwrap(), PromptOutcome::Submit(false));
+        assert_eq!(second.unwrap(), PromptOutcome::Submit(true));
+        assert_eq!(third.unwrap(), PromptOutcome::Submit(true));
+    }
+
+    #[test]
+    fn confirm_answers_at_once_on_y_and_n_in_either_case() {
+        let interaction = scripted_interaction([
+            keys([Key::Char('y')]),
+            keys([Key::Char('Y')]),
+            keys([Key::Char('n')]),
+            keys([Key::Char('N')]),
+        ]);
+
+        let answers = iter::repeat_with(|| {
+            confirm("sure?")
+                .default(true)
+                .interaction(interaction.clone())
+                .interact()
+                .unwrap()
+        })
+        .take(4)
+        .collect::<Vec<_>>();
+
+        assert_eq!(answers, [
+            PromptOutcome::Submit(true),
+            PromptOutcome::Submit(true),
+            PromptOutcome::Submit(false),
+            PromptOutcome::Submit(false),
+        ]);
+    }
+
+    #[test]
+    fn confirm_ignores_y_and_n_held_with_a_control_chord() {
+        let chord = Event::Key(KeyEvent::with_modifiers(Key::Char('y'), Modifiers::CONTROL));
+        let interaction = scripted_interaction([vec![chord, enter()]]);
+
+        let outcome = confirm("sure?")
+            .interaction(interaction)
+            .interact()
+            .unwrap();
+
+        assert_eq!(outcome, PromptOutcome::Submit(false));
     }
 
     #[test]
@@ -859,11 +1036,11 @@ mod tests {
 
     #[test]
     fn number_parses_integers_and_floats() {
-        let mut integer = typed(" 42 ");
-        integer.push(enter());
-        let mut float = typed("-1.5");
-        float.push(enter());
-        let interaction = scripted_interaction([integer, float]);
+        let mut integer_script = typed(" 42 ");
+        integer_script.push(enter());
+        let mut float_script = typed("-1.5");
+        float_script.push(enter());
+        let interaction = scripted_interaction([integer_script, float_script]);
 
         let integer = number::<i64>("n: ")
             .interaction(interaction.clone())
@@ -882,10 +1059,10 @@ mod tests {
     fn number_refuses_text_and_values_the_validator_rejects() {
         let mut script = typed("abc");
         script.push(enter());
-        script.extend(std::iter::repeat_n(Event::key(Key::Backspace), 3));
+        script.extend(iter::repeat_n(Event::key(Key::Backspace), 3));
         script.extend(typed("-4"));
         script.push(enter());
-        script.extend(std::iter::repeat_n(Event::key(Key::Backspace), 2));
+        script.extend(iter::repeat_n(Event::key(Key::Backspace), 2));
         script.extend(typed("7"));
         script.push(enter());
 
