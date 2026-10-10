@@ -116,6 +116,10 @@ from_str! {
     i8, i16, i32, i64, i128, isize,
     u8, u16, u32, u64, u128, usize,
     f32, f64,
+    core::num::NonZeroI8, core::num::NonZeroI16, core::num::NonZeroI32,
+    core::num::NonZeroI64, core::num::NonZeroI128, core::num::NonZeroIsize,
+    core::num::NonZeroU8, core::num::NonZeroU16, core::num::NonZeroU32,
+    core::num::NonZeroU64, core::num::NonZeroU128, core::num::NonZeroUsize,
     core::net::IpAddr,
     core::net::Ipv4Addr,
     core::net::Ipv6Addr,
@@ -127,4 +131,23 @@ from_str! {
 #[cfg(feature = "std")]
 from_str! {
     std::path::PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use core::num::{
+        NonZeroI8,
+        NonZeroU16,
+        NonZeroUsize,
+    };
+
+    use super::*;
+
+    #[test]
+    fn nonzero_integers_reject_zero() {
+        assert_eq!(NonZeroUsize::from_arg("4").unwrap().get(), 4);
+        assert_eq!(NonZeroI8::from_arg("-3").unwrap().get(), -3);
+        assert!(NonZeroU16::from_arg("0").is_err());
+        assert!(NonZeroU16::from_arg("x").is_err());
+    }
 }
