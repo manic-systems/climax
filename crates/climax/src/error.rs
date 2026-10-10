@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use core::{
     error,
     fmt,
-    io,
+    result,
+};
+use std::io;
+
+#[cfg(feature = "interactive")]
+use bang::{
+    advanced::LiveSessionError,
+    terminal::Signal,
 };
 
 pub type Result<T> = result::Result<T, Error>;
@@ -39,7 +46,14 @@ pub enum ErrorKind {
 /// error reported through the `climax` facade
 ///
 /// dependency errors are kept as opaque sources, not variants
-#[derive(Debug)]
+///
+/// `Debug` prints the report `fn main() -> climax::Result<()>` should show, the
+/// message followed by any source or related error text it does not already
+/// carry
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the output module sets the signal when it relays an interrupted error"
+)]
 pub struct Error {
     kind:              ErrorKind,
     message:           String,
@@ -70,12 +84,12 @@ impl Error {
         message: impl Into<String>,
         source: impl error::Error + Send + Sync + 'static,
     ) -> Self {
-        let message = format!("{}: {source}", message.into());
+        let combined = format!("{}: {source}", message.into());
         Self {
-            kind: ErrorKind::Application,
-            message,
-            signal: None,
-            source: Some(Box::new(source)),
+            kind:    ErrorKind::Application,
+            message: combined,
+            signal:  None,
+            source:  Some(Box::new(source)),
             related: Vec::new(),
         }
     }
@@ -125,6 +139,36 @@ impl Error {
             related: Vec::new(),
         }
     }
+
+    fn chain_texts(&self) -> Vec<String> {
+        let mut texts = Vec::new();
+        let mut collect = |error: &Self| {
+            let mut source = error::Error::source(error);
+            while let Some(cause) = source {
+                texts.push(cause.to_string());
+                source = cause.source();
+            }
+        };
+        collect(self);
+        self.related.iter().for_each(&mut collect);
+        texts.retain(|text| !self.message.contains(text.as_str()));
+        texts.dedup();
+        texts
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)?;
+        let texts = self.chain_texts();
+        if !texts.is_empty() {
+            f.write_str("\n\nCaused by:")?;
+            for text in texts {
+                write!(f, "\n    {text}")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for Error {
@@ -137,7 +181,7 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.source
             .as_deref()
-            .map(|source| source as &(dyn error::Error + 'static))
+            .map(|source| -> &(dyn error::Error + 'static) { source })
     }
 }
 
@@ -156,9 +200,12 @@ impl From<bang::Error> for Error {
             bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
             bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
             bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
-            _ => ErrorKind::Interactive,
+            bang::ErrorKind::InvalidConfiguration
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => ErrorKind::Interactive,
         };
-        let signal = value.signal().map(bang::terminal::Signal::as_raw);
+        let signal = value.signal().map(Signal::as_raw);
         let cleanup = if kind == ErrorKind::Cancelled {
             cleanup_errors(error::Error::source(&value))
         } else {
@@ -175,8 +222,8 @@ impl From<bang::Error> for Error {
 #[cfg(feature = "interactive")]
 fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
     source
-        .and_then(|source| source.downcast_ref::<bang::advanced::LiveSessionError>())
-        .map_or(&[][..], bang::advanced::LiveSessionError::cleanup_failures)
+        .and_then(|inner| inner.downcast_ref::<LiveSessionError>())
+        .map_or(&[][..], LiveSessionError::cleanup_failures)
         .iter()
         .map(|failure| {
             Error::with_source(
@@ -252,6 +299,43 @@ mod tests {
             "terminal cleanup failed, screen failed, no tty"
         );
         assert!(cleanup_errors(Some(&LiveSessionError::Cancelled)).is_empty());
+    }
+
+    #[derive(Debug)]
+    struct Layered(io::Error);
+
+    impl fmt::Display for Layered {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("could not save")
+        }
+    }
+
+    impl error::Error for Layered {
+        fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    #[test]
+    fn debug_prints_the_message_and_the_unseen_source_chain() {
+        let error = Error::application(Layered(io::Error::other("disk full")));
+        assert_eq!(
+            format!("{error:?}"),
+            "could not save\n\nCaused by:\n    disk full"
+        );
+        assert_eq!(format!("{:?}", Error::message("boom")), "boom");
+        let context = Error::application_context("cannot query", io::Error::other("closed"));
+        assert_eq!(format!("{context:?}"), "cannot query: closed");
+    }
+
+    #[test]
+    fn debug_includes_related_errors_and_their_sources() {
+        let error = Error::message("primary")
+            .with_related(Error::application(Layered(io::Error::other("no tty"))));
+        assert_eq!(
+            format!("{error:?}"),
+            "primary, and could not save\n\nCaused by:\n    no tty",
+        );
     }
 
     #[test]
