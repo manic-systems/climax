@@ -442,6 +442,7 @@ where
                 (result, completion)
             },
             Err(error) => {
+                drop(script.into_interaction());
                 let completion = crate::app::parse_completion(&error);
                 (Err(crate::Error::from(error)), completion)
             },
