@@ -20,5 +20,8 @@ proc-macro = true
 [dependencies]
 pound-derive-impl = { version = "=0.2.0", path = "../pound-derive-impl" }
 
+[dev-dependencies]
+pound = { path = "../pound" }
+
 [lints]
 workspace = true
