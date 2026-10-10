@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
+use core::{
+    fmt,
+    iter,
     marker::PhantomData,
     ops::{
         BitOr,
@@ -108,6 +110,14 @@ pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
     lifetime: PhantomData<&'a ()>,
 }
 
+impl<B, H> fmt::Debug for Layers<'_, B, H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Layers")
+            .field("floating", &self.floating.len())
+            .finish()
+    }
+}
+
 impl<'a, B> Layers<'a, B> {
     pub const fn new(base: B) -> Self {
         Self {
@@ -159,27 +169,27 @@ where
     H: Widget,
 {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let ctx = &ctx.with_constraints(
+        let area = ctx.with_constraints(
             ctx.available_columns()
                 .map(|columns| columns.saturating_sub(out.current_col())),
             ctx.available_rows()
                 .map(|rows| rows.saturating_sub(out.height().saturating_sub(1))),
         );
         let mut composed = Surface::new();
-        self.base.render(ctx, &mut composed);
-        composed = layout_surface(composed, ctx.available_columns(), ctx.layout_mode());
-        if let Some(rows) = ctx.available_rows() {
+        self.base.render(&area, &mut composed);
+        composed = layout_surface(composed, area.available_columns(), area.layout_mode());
+        if let Some(rows) = area.available_rows() {
             composed.fit_height(rows);
         }
 
-        let canvas = match (ctx.available_columns(), ctx.available_rows()) {
+        let canvas = match (area.available_columns(), area.available_rows()) {
             (Some(columns), Some(rows)) => Rect::new(0, 0, columns, rows),
             (Some(columns), None) => Rect::new(0, 0, columns, composed.height().max(1)),
             (None, Some(rows)) => Rect::new(0, 0, composed.display_width(), rows),
             (None, None) => Rect::new(0, 0, composed.display_width(), composed.height()),
         };
         for floating in &self.floating {
-            render_floating(&mut composed, ctx, canvas, floating);
+            render_floating(&mut composed, &area, canvas, floating);
         }
         if !self.floating.is_empty() {
             composed.harden_soft_breaks();
@@ -189,7 +199,7 @@ where
 
     fn tick_interest(&self) -> TickInterest {
         combine_tick_interest(
-            std::iter::once(self.base.tick_interest()).chain(
+            iter::once(self.base.tick_interest()).chain(
                 self.floating
                     .iter()
                     .map(|child| child.widget.tick_interest()),
@@ -292,15 +302,15 @@ fn resolve_axis(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::RefCell,
+    use alloc::{
         rc::Rc,
-        sync::{
-            Arc,
-            Mutex,
-        },
+        sync::Arc,
+    };
+    use core::{
+        cell::RefCell,
         time::Duration,
     };
+    use std::sync::Mutex;
 
     use super::*;
     use crate::{
@@ -401,7 +411,7 @@ mod tests {
             .with_layout_mode(LayoutMode::Wrap)
             .with_theme(Theme::DEFAULT);
         layers.render(&ctx, &mut surface);
-        let wrapped = crate::renderer::layout_surface(surface, Some(4), LayoutMode::Wrap);
+        let wrapped = layout_surface(surface, Some(4), LayoutMode::Wrap);
         assert_eq!(wrapped.rows()[0].cells().len(), 3);
         assert_eq!(wrapped.rows()[1].cells()[0].text, "X");
     }
@@ -418,7 +428,7 @@ mod tests {
     fn local_layers_accept_rc_refcell_widgets() {
         let value = Rc::new(RefCell::new("x".to_owned()));
         let layers = Layers::local("base").float(
-            LocalOverlay(value.clone()),
+            LocalOverlay(Rc::clone(&value)),
             Floating::new(Edge::TOP | Edge::RIGHT),
         );
         let mut surface = Surface::new();
@@ -426,9 +436,9 @@ mod tests {
         assert_eq!(surface.plain_text(), "base   x");
 
         *value.borrow_mut() = "yz".to_owned();
-        let mut surface = Surface::new();
-        layers.render(&context(8, 2), &mut surface);
-        assert_eq!(surface.plain_text(), "base  yz");
+        let mut updated = Surface::new();
+        layers.render(&context(8, 2), &mut updated);
+        assert_eq!(updated.plain_text(), "base  yz");
     }
 
     struct BorrowedOverlay<'a>(&'a str);
@@ -455,7 +465,7 @@ mod tests {
     fn bottom_right_child_receives_exact_local_constraints() {
         let seen = Arc::new(Mutex::new(None));
         let layers = Layers::new(Base).float(
-            Probe(seen.clone()),
+            Probe(Arc::clone(&seen)),
             Floating::new(Edge::BOTTOM | Edge::RIGHT)
                 .margin(Insets::bottom(1))
                 .max_size(Size::new(6, 3)),
@@ -499,7 +509,7 @@ mod tests {
         let mut surface = Surface::new();
         Layers::new(Base)
             .float(
-                ContextProbe(seen.clone()),
+                ContextProbe(Arc::clone(&seen)),
                 Floating::new(Edge::RIGHT).max_size(Size::new(4, 3)),
             )
             .render(&ctx, &mut surface);

@@ -43,6 +43,7 @@ pub enum CursorVisibility {
     FromSurface,
 }
 
+#[derive(Debug)]
 pub struct Renderer<W> {
     writer:              Sink<W>,
     on_drop:             fn(&mut Self),

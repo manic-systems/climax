@@ -1,19 +1,21 @@
-use std::{
-    collections::{
-        HashMap,
-        VecDeque,
-    },
-    hash::Hash,
+use alloc::{
+    collections::VecDeque,
     rc::Rc,
-    sync::{
-        Arc,
-        Mutex,
-        atomic::{
-            AtomicU32,
-            Ordering,
-        },
+    sync::Arc,
+};
+use core::{
+    fmt,
+    hash::Hash,
+    ops::Range,
+    sync::atomic::{
+        AtomicU32,
+        Ordering,
     },
     time::Duration,
+};
+use std::{
+    collections::HashMap,
+    sync::Mutex,
 };
 
 use crate::{
@@ -292,9 +294,9 @@ impl Spans {
 }
 
 impl<S: Into<Span>> FromIterator<S> for Spans {
-    fn from_iter<I: IntoIterator<Item = S>>(spans: I) -> Self {
+    fn from_iter<I: IntoIterator<Item = S>>(iter: I) -> Self {
         Self {
-            spans: spans.into_iter().map(Into::into).collect(),
+            spans: iter.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -373,12 +375,12 @@ impl WindowedLines {
         if self.capacity == 0 {
             return;
         }
-        let line = line.into();
+        let text = line.into();
         let mut lines = lock(&self.lines);
         if lines.len() == self.capacity {
             lines.pop_front();
         }
-        lines.push_back(line);
+        lines.push_back(text);
     }
 
     pub fn lines(&self) -> Vec<String> {
@@ -408,10 +410,10 @@ pub struct List {
 
 impl List {
     pub fn new(rows: impl Into<Vec<String>>) -> Self {
-        let rows = rows.into();
-        let height = rows.len().max(1);
+        let owned = rows.into();
+        let height = owned.len().max(1);
         Self {
-            rows: rows.into(),
+            rows: owned.into(),
             selected: 0,
             height,
             normal: Role::Normal,
@@ -438,7 +440,7 @@ impl List {
         self
     }
 
-    pub fn visible_range(&self) -> std::ops::Range<usize> {
+    pub fn visible_range(&self) -> Range<usize> {
         if self.rows.is_empty() || self.height == 0 {
             return 0..0;
         }
@@ -586,9 +588,9 @@ impl Table {
 
     fn cell_lines(&self, value: &str, columns: usize) -> Vec<String> {
         let mut lines = Vec::new();
-        for line in value.split('\n') {
-            let line = expand_tabs(line);
-            let line = line.as_ref();
+        for raw in value.split('\n') {
+            let expanded = expand_tabs(raw);
+            let line = expanded.as_ref();
             if width(line) <= columns {
                 lines.push(line.to_owned());
                 continue;
@@ -730,10 +732,13 @@ impl ProgressBar {
 }
 
 impl Widget for ProgressBar {
-    #[allow(
+    #[expect(
+        clippy::as_conversions,
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        clippy::float_arithmetic,
+        reason = "the fill count is a bounded display ratio"
     )]
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         let filled = (self.fraction() * self.width as f32).round() as usize;
@@ -840,6 +845,14 @@ pub struct Line<H = WidgetRef> {
     children: Box<[H]>,
 }
 
+impl<H> fmt::Debug for Line<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Line")
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
 impl<H> Line<H> {
     pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
@@ -872,6 +885,14 @@ pub struct Stack<H = WidgetRef> {
     children: Box<[H]>,
 }
 
+impl<H> fmt::Debug for Stack<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Stack")
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
 impl<H> Stack<H> {
     pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
@@ -899,9 +920,9 @@ where
         let mut fixed_height = 0_usize;
         for (index, child) in self.children.iter().enumerate() {
             if child.vertical_size() == VerticalSize::Content {
-                let mut surface = Surface::new();
-                child.render(&ctx.with_rows(None), &mut surface);
-                let surface = layout_surface(surface, ctx.available_columns(), ctx.layout_mode());
+                let mut raw = Surface::new();
+                child.render(&ctx.with_rows(None), &mut raw);
+                let surface = layout_surface(raw, ctx.available_columns(), ctx.layout_mode());
                 fixed_height = fixed_height.saturating_add(surface.height());
                 let height = surface.height();
                 rendered[index] = Some((surface, height));
@@ -964,6 +985,15 @@ where
 pub struct Stateful<S, H = WidgetRef> {
     state: Mutex<S>,
     cases: HashMap<S, H>,
+}
+
+impl<S: fmt::Debug, H> fmt::Debug for Stateful<S, H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Stateful")
+            .field("state", &*lock(&self.state))
+            .field("cases", &self.cases.len())
+            .finish()
+    }
 }
 
 impl<S, H> Stateful<S, H>
@@ -1366,7 +1396,8 @@ mod tests {
         assert_eq!(render_plain(&reference), "text");
         assert_eq!(render_plain(&&text), "text");
 
-        let stack = Stack::new(vec![&text as &dyn Widget, &"tail"]);
+        let dynamic: &dyn Widget = &text;
+        let stack = Stack::new(vec![dynamic, &"tail"]);
         assert_eq!(render_plain(&stack), "text\ntail");
     }
 
@@ -1390,6 +1421,19 @@ mod tests {
         let looping = Looping::new(["a", "b"]);
         assert_eq!(looping.tick_interest(), TickInterest::EveryFrame);
         assert_eq!((&&"x").vertical_size(), VerticalSize::Content);
+    }
+
+    #[test]
+    fn public_composite_types_implement_debug() {
+        fn debuggable<T: fmt::Debug>(_: &T) {}
+        debuggable(&Line::<WidgetRef>::new(Vec::new()));
+        debuggable(&Stack::<WidgetRef>::new(Vec::new()));
+        debuggable(&Stateful::<u8>::new(0));
+        debuggable(&crate::layout());
+        debuggable(&crate::VerticalViewport::<WidgetRef>::new(Vec::new()));
+        debuggable(&crate::Layers::new("base"));
+        debuggable(&crate::Renderer::new(Vec::new()));
+        debuggable(&crate::Runtime::new(Vec::new(), "root"));
     }
 
     #[test]
