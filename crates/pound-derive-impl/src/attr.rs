@@ -197,6 +197,16 @@ pub fn summary(doc: &str) -> &str {
     doc.split("\n\n").next().unwrap_or(doc)
 }
 
+/// the summary as short help shows it, without the period that ends the
+/// sentence
+pub fn short_help(doc: &str) -> &str {
+    let summary = summary(doc);
+    match summary.strip_suffix('.') {
+        Some(rest) if !rest.ends_with('.') => rest,
+        _ => summary,
+    }
+}
+
 fn path_is(attr: &Attribute, name: &str) -> bool {
     attr.path.len() == 1 && matches!(&attr.path[0], TokenTree::Ident(id) if *id == name)
 }

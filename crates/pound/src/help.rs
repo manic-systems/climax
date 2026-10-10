@@ -298,7 +298,7 @@ pub(crate) fn render(
     }
 
     let builtins = &mut sections[0].1;
-    if let Some(row) = builtin_row(&own, globals, 'h', "help", "display this help and exit") {
+    if let Some(row) = builtin_row(&own, globals, 'h', "help", "Print help") {
         builtins.push(row);
     }
     if spec.has_version_info()
@@ -307,7 +307,7 @@ pub(crate) fn render(
             globals,
             'V',
             "version",
-            "output version information and exit",
+            "Print version",
         )
     {
         builtins.push(row);
@@ -409,6 +409,14 @@ mod tests {
             format!("how to run [possible values: fast, slow] [default: fast]{env}")
         );
         assert_eq!(help_text(&ARGS[2], false), "[default: .]");
+    }
+
+    #[test]
+    fn builtin_rows_use_the_clap_wording() {
+        const VERSIONED: CommandSpec = CommandSpec::new("run").version("1.0");
+        let text = render(&VERSIONED, &[], &[], false);
+        assert!(text.contains("-h, --help") && text.contains("  Print help"), "{text}");
+        assert!(text.contains("  Print version"), "{text}");
     }
 
     #[test]

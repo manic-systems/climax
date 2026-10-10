@@ -435,7 +435,7 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
             .clone()
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
         let variant_doc = attr::doc(&variant.attributes);
-        let sub_about = help_lit(cx, attr::summary(&variant_doc));
+        let sub_about = help_lit(cx, attr::short_help(&variant_doc));
         let (about_call, long_about_call) = about_calls(cx, &variant_doc);
         let hidden = vattr.hidden;
 
@@ -927,8 +927,16 @@ fn plan_field(field: &NamedField, a: Pound) -> Result<Plan, String> {
     }
 
     let doc = a.help.clone().unwrap_or_else(|| attr::doc(&field.attributes));
-    let help = attr::summary(&doc).to_owned();
-    let long_help = a.long_help.clone().or_else(|| (help != doc).then(|| doc.clone()));
+    let help = if a.help.is_some() {
+        attr::summary(&doc)
+    } else {
+        attr::short_help(&doc)
+    }
+    .to_owned();
+    let long_help = a
+        .long_help
+        .clone()
+        .or_else(|| (attr::summary(&doc) != doc).then(|| doc.clone()));
 
     check_kind(&a, kind, &field.name)?;
     let (min_values, max_values) = arity(&a, card == Card::Many, &field.name)?;
@@ -1415,7 +1423,7 @@ fn git_hash_call() -> TokenStream2 {
 // the `.about()` / `.long_about()` calls for a doc comment. the long form is
 // chained only when it says more than the summary already does.
 fn about_calls(cx: &Ctx, doc: &str) -> (TokenStream2, TokenStream2) {
-    let summary = help_lit(cx, attr::summary(doc));
+    let summary = help_lit(cx, attr::short_help(doc));
     let about = quote! { .about(#summary) };
     if attr::summary(doc) == doc {
         return (about, quote!());
@@ -1480,6 +1488,36 @@ mod tests {
     fn a_string_that_is_no_path_is_rejected() {
         let out = expand_field("long, parse = \"not a path (\"");
         assert!(out.contains("is not a valid path"), "{out}");
+    }
+
+    #[test]
+    fn a_summary_loses_one_trailing_period_and_long_help_keeps_it() {
+        let input: TokenStream2 = r#"
+            /// runs the thing.
+            ///
+            /// more detail here.
+            struct Args {
+                /// the target.
+                ///
+                /// extra about the target.
+                #[pound(long)]
+                target: String,
+                /// waits...
+                #[pound(long)]
+                wait: bool,
+                #[pound(long, help = "explicit.")]
+                kept: bool,
+            }
+        "#
+        .parse()
+        .unwrap();
+        let out = derive_parse(input, &Options::new("::pound", true)).to_string();
+        assert!(out.contains(". about (\"runs the thing\")"), "{out}");
+        assert!(out.contains("runs the thing.\\n\\nmore detail here."), "{out}");
+        assert!(out.contains(". long_help ("), "{out}");
+        assert!(out.contains(". help (\"the target\")"), "{out}");
+        assert!(out.contains(". help (\"waits...\")"), "{out}");
+        assert!(out.contains(". help (\"explicit.\")"), "{out}");
     }
 
     #[test]
