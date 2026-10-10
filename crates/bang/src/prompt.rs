@@ -543,10 +543,11 @@ impl<T> ReviewPrompt<T> {
     /// isn't interactive.
     pub fn interact(self) -> Result<PromptOutcome<Vec<Reviewed<T>>>> {
         let interaction = self.core.interaction.clone();
+        let header = self.core.config.list.header.clone();
         let (widget, choices) = self
             .core
             .into_widget(&[] as &[ReviewPromptAction<std::convert::Infallible>])?;
-        let value = match interaction.interact(widget, []) {
+        let value = match interaction.interact_named(header.as_deref(), widget, []) {
             Ok(value) => value,
             Err(error) if error.kind() == crate::ErrorKind::Cancelled => {
                 return Ok(PromptOutcome::Leave);
@@ -612,8 +613,9 @@ impl<T, A> ReviewPromptWithActions<T, A> {
     pub fn interact(self) -> Result<ReviewOutcome<T, A>> {
         validate_review_actions(&self.actions)?;
         let interaction = self.core.interaction.clone();
+        let header = self.core.config.list.header.clone();
         let (widget, choices) = self.core.into_widget(&self.actions)?;
-        match interaction.interact(widget, []) {
+        match interaction.interact_named(header.as_deref(), widget, []) {
             Ok(value) => resolve_review(value, choices, self.actions),
             Err(error) if error.kind() == crate::ErrorKind::Cancelled => Ok(ReviewOutcome {
                 exit: ReviewExit::Leave,
@@ -708,10 +710,12 @@ impl<T> SelectPrompt<T> {
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
+        let header = self.config.list.header.clone();
         let (widget, choices) = self.into_widget()?;
-        resolve_prompt(interaction.interact(widget, []), |value| {
-            resolve_one(&value, choices)
-        })
+        resolve_prompt(
+            interaction.interact_named(header.as_deref(), widget, []),
+            |value| resolve_one(&value, choices),
+        )
     }
 
     fn into_widget(self) -> Result<(Select, Vec<Choice<T>>)> {
@@ -799,10 +803,12 @@ impl<T> MultiSelectPrompt<T> {
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<Vec<T>>> {
         let interaction = self.interaction.clone();
+        let header = self.config.list.header.clone();
         let (widget, choices) = self.into_widget()?;
-        resolve_prompt(interaction.interact(widget, []), |value| {
-            resolve_many(value, choices)
-        })
+        resolve_prompt(
+            interaction.interact_named(header.as_deref(), widget, []),
+            |value| resolve_many(value, choices),
+        )
     }
 
     fn into_widget(self) -> Result<(MultiSelect, Vec<Choice<T>>)> {
@@ -889,10 +895,12 @@ impl<T> SearchPrompt<T> {
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
+        let header = self.config.list.header.clone();
         let (widget, choices) = self.into_widget()?;
-        resolve_prompt(interaction.interact(widget, []), |value| {
-            resolve_one(&value, choices)
-        })
+        resolve_prompt(
+            interaction.interact_named(header.as_deref(), widget, []),
+            |value| resolve_one(&value, choices),
+        )
     }
 
     fn into_widget(self) -> Result<(SearchSelect, Vec<Choice<T>>)> {
@@ -994,8 +1002,12 @@ impl TextPrompt {
     /// and with `ErrorKind::InteractionUnavailable` if the driver's terminal
     /// isn't interactive.
     pub fn interact(self) -> Result<PromptOutcome<String>> {
+        let prompt = self.prompt.clone();
         let widget = text_widget(self.prompt, self.config, "text", None);
-        resolve_prompt(self.interaction.interact(widget, []), resolve_text)
+        resolve_prompt(
+            self.interaction.interact_named(Some(&prompt), widget, []),
+            resolve_text,
+        )
     }
 }
 
@@ -1526,6 +1538,10 @@ mod tests {
             .interact()
             .unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::InputEnded);
+        assert_eq!(
+            error.to_string(),
+            "input ended before \"name\" was answered, so supply the answer or run in a terminal"
+        );
     }
 
     #[test]
@@ -1536,6 +1552,19 @@ mod tests {
             .interact()
             .unwrap_err();
         assert_eq!(error.kind(), crate::ErrorKind::InteractionUnavailable);
+        assert_eq!(
+            error.to_string(),
+            "cannot ask \"shell\" because there is no interactive terminal, so pass the answer another way or run in a terminal"
+        );
+    }
+
+    #[test]
+    fn a_trailing_colon_is_dropped_from_the_prompt_name() {
+        let error = text("name: ")
+            .interaction(Interaction::disabled())
+            .interact()
+            .unwrap_err();
+        assert!(error.to_string().starts_with("cannot ask \"name\" because"));
     }
 
     #[test]

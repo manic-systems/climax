@@ -129,6 +129,27 @@ impl Error {
         }
     }
 
+    pub(crate) fn naming_prompt(mut self, prompt: &str) -> Self {
+        let prompt = prompt.trim().trim_end_matches(':').trim_end();
+        if prompt.is_empty() {
+            return self;
+        }
+        match self.kind {
+            ErrorKind::InteractionUnavailable => {
+                self.message = format!(
+                    "cannot ask \"{prompt}\" because there is no interactive terminal, so pass the answer another way or run in a terminal"
+                );
+            },
+            ErrorKind::InputEnded => {
+                self.message = format!(
+                    "input ended before \"{prompt}\" was answered, so supply the answer or run in a terminal"
+                );
+            },
+            _ => {},
+        }
+        self
+    }
+
     /// A driver built on [`crate::advanced::interaction_from_runner`] uses this
     /// to resolve a prompt to [`crate::PromptOutcome::Leave`] the same way a
     /// live session's own cancel does.

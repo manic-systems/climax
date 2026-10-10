@@ -104,6 +104,22 @@ impl Interaction {
         self
     }
 
+    pub(crate) fn interact_named<W>(
+        &self,
+        prompt: Option<&str>,
+        widget: W,
+        actions: impl IntoIterator<Item = ActionBinding>,
+    ) -> Result<Value>
+    where
+        W: Widget + 'static,
+    {
+        self.interact(widget, actions)
+            .map_err(|error| match prompt {
+                Some(prompt) => error.naming_prompt(prompt),
+                None => error,
+            })
+    }
+
     pub(crate) fn from_runner(runner: impl Fn(Box<dyn Widget>) -> Result<Value> + 'static) -> Self {
         Self {
             runner: Rc::new(runner),
