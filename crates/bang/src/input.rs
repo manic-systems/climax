@@ -147,13 +147,17 @@ impl PasswordPrompt {
     /// and with `ErrorKind::InteractionUnavailable` if the driver's terminal
     /// isn't interactive.
     pub fn interact(self) -> Result<PromptOutcome<String>> {
+        let prompt = self.prompt.clone();
         let widget = text_widget(
             self.prompt,
             self.config.text,
             "password",
             Some(self.config.mask),
         );
-        resolve_prompt(self.interaction.interact(widget, []), resolve_text)
+        resolve_prompt(
+            self.interaction.interact_named(Some(&prompt), widget, []),
+            resolve_text,
+        )
     }
 }
 
@@ -260,9 +264,9 @@ impl ConfirmPrompt {
                 SelectItem::new("No", "no"),
             ],
         )
-        .with_header(self.prompt)
+        .with_header(self.prompt.clone())
         .with_selected_index(usize::from(!self.config.default));
-        resolve_prompt(self.interaction.interact(widget, []), |value| {
+        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, []), |value| {
             match value.as_str() {
                 Some("yes") => Ok(true),
                 Some("no") => Ok(false),
@@ -371,8 +375,8 @@ impl DatePrompt {
         let today = today_local();
         let picker = DatePicker::new(self.config.id, self.config.default.unwrap_or(today))
             .with_today(today);
-        let widget = Headed::new(self.prompt, picker);
-        resolve_prompt(self.interaction.interact(widget, []), |value| {
+        let widget = Headed::new(self.prompt.clone(), picker);
+        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, []), |value| {
             value.as_date().ok_or_else(|| Error::unexpected("a date"))
         })
     }
@@ -522,8 +526,9 @@ where
             let parsed = parse_number::<T>(text)?;
             check.as_ref().map_or(Ok(()), |check| check(&parsed))
         });
+        let prompt = self.prompt.clone();
         let widget = text_widget(self.prompt, text, "number", None);
-        resolve_prompt(self.interaction.interact(widget, []), |value| {
+        resolve_prompt(self.interaction.interact_named(Some(&prompt), widget, []), |value| {
             let text = resolve_text(value)?;
             parse_number::<T>(&text).map_err(|_message| Error::unexpected("a number"))
         })
