@@ -48,7 +48,7 @@ where
 ///
 /// fn main() -> std::process::ExitCode {
 ///     climax::main_with(|cx: Context| -> climax::Result<()> {
-///         cx.output().result(&"hello").text(|text| *text).emit()
+///         cx.output().write_message(std::io::stdout(), "hello")
 ///     })
 /// }
 /// ```
