@@ -303,3 +303,24 @@ fn a_script_left_unused_by_help_fails_the_run() {
 fn a_script_left_unused_by_a_parse_failure_fails_the_run() {
     let _ = testing::run(["--wat"], Script::new().confirm(true), ship);
 }
+
+#[test]
+fn select_nth_is_absolute_over_a_preselected_search() {
+    for (n, expected) in [(0, "a"), (1, "b"), (4, "e")] {
+        let outcome = testing::run_with(Script::new().select_nth(n), |cx| {
+            let picked = cx
+                .search("Tool")
+                .choice("a", "a")
+                .choice("b", "b")
+                .choice("c", "c")
+                .choice("d", "d")
+                .choice("e", "e")
+                .selected(3)
+                .interact()?
+                .or_cancel()?;
+            cx.diagnostic().notice(picked.to_string())
+        });
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.stderr, format!("{expected}\n"), "select_nth({n})");
+    }
+}

@@ -16,6 +16,9 @@ use super::{
 use crate::{Context, Event, Key, Reaction, Widget, WidgetId};
 
 /// A single-choice list filtered by a query typed above it.
+///
+/// Up, Down, Ctrl-P and Ctrl-N move the selection and Ctrl-Home and Ctrl-End
+/// jump to the first and last match. Plain Home and End move the query cursor.
 pub struct SearchSelect {
     id:        WidgetId,
     input:     TextInput,
@@ -184,6 +187,10 @@ impl SearchSelect {
         Reaction::Changed
     }
 
+    fn move_to(&mut self, selected: usize) -> Reaction {
+        navigation::move_to(&mut self.selected, &mut self.top, selected, self.matches.len(), self.page_size)
+    }
+
     fn move_page(&mut self, target: usize) -> Reaction {
         page_move(&mut self.top, &mut self.selected, target, self.matches.len())
     }
@@ -290,6 +297,8 @@ impl Widget for SearchSelect {
                         navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                     }
                 },
+                Key::Home if only_control(key) => self.move_to(0),
+                Key::End if only_control(key) => self.move_to(self.matches.len().saturating_sub(1)),
                 Key::Enter => self.submit(),
                 Key::Esc => Reaction::Cancel,
                 _ => self.handle_input(event, cx),
@@ -381,6 +390,26 @@ mod tests {
         assert!(matches_query("école", "É"));
         assert_eq!(find_match("Étage", "TAG"), Some(2..5));
         assert_eq!(find_match("Étage", "zzz"), None);
+    }
+
+    fn ctrl_key(key: Key) -> Event {
+        Event::Key(KeyEvent::with_modifiers(key, Modifiers::CONTROL))
+    }
+
+    #[test]
+    fn ctrl_home_and_ctrl_end_jump_while_plain_home_moves_the_query_cursor() {
+        let mut select = SearchSelect::new("s", ["alpha", "beta", "gamma"]).with_selected_match_index(1);
+        let mut cx = Context::new();
+
+        select.handle(Event::char('a'), &mut cx);
+        assert_eq!(select.handle(ctrl_key(Key::End), &mut cx), Reaction::Changed);
+        assert_eq!(select.selected_match_index(), Some(2));
+        assert_eq!(select.handle(ctrl_key(Key::Home), &mut cx), Reaction::Changed);
+        assert_eq!(select.selected_match_index(), Some(0));
+
+        select.handle(Event::Key(KeyEvent::new(Key::Home)), &mut cx);
+        select.handle(Event::char('x'), &mut cx);
+        assert_eq!(select.query(), "xa");
     }
 
     #[test]

@@ -490,6 +490,8 @@ mod tests {
             (b"\x1b[1;2A".as_slice(), Key::Up, Modifiers::SHIFT),
             (b"\x1b[1;3B".as_slice(), Key::Down, Modifiers::ALT),
             (b"\x1b[1;5C".as_slice(), Key::Right, Modifiers::CONTROL),
+            (b"\x1b[1;5H".as_slice(), Key::Home, Modifiers::CONTROL),
+            (b"\x1b[1;5F".as_slice(), Key::End, Modifiers::CONTROL),
             (
                 b"\x1b[1;8D".as_slice(),
                 Key::Left,
