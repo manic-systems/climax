@@ -29,6 +29,6 @@ pub use bang_core::{Date, widgets::ReviewState};
 pub use error::{Error, ErrorKind, Result};
 pub use interaction::Interaction;
 pub use prompt::{
-    Configurable, MultiSelectConfig, MultiSelectPrompt, PromptOutcome, SelectConfig, SelectPrompt,
-    multi_select, select,
+    Configurable, MultiSelectConfig, MultiSelectPrompt, PromptOutcome, SearchConfig, SearchPrompt,
+    SelectConfig, SelectPrompt, multi_select, search, select,
 };
