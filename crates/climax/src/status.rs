@@ -258,6 +258,7 @@ pub(crate) struct StatusCoordinator {
 }
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const RESIZE_POLL: Duration = Duration::from_millis(250);
 
 /// where the live region reads its width from
 #[derive(Clone)]
@@ -281,6 +282,20 @@ impl WidthSource {
             Self::Fixed(columns) => *columns,
             Self::Stderr => self.measure().unwrap_or(screw::Viewport::FALLBACK).columns,
         }
+    }
+
+    /// a source that cannot be measured has nothing to follow, so it is pinned
+    /// to the fallback width instead of polled for resizes
+    fn resolved(self) -> Self {
+        if matches!(self, Self::Fixed(_)) || self.measure().is_some() {
+            self
+        } else {
+            Self::FALLBACK
+        }
+    }
+
+    const fn follows_terminal(&self) -> bool {
+        !matches!(self, Self::Fixed(_))
     }
 }
 
@@ -690,37 +705,45 @@ struct ActorConfig {
 
 /// state owned by the transient-terminal thread
 struct Actor {
-    renderer:   Renderer<SharedWriter>,
-    writer:     SharedWriter,
-    mode:       StatusMode,
-    mode_stamp: u64,
-    fps:        u16,
-    entries:    BTreeMap<u64, StatusEntry>,
-    dirty:      bool,
-    last_draw:  Option<Instant>,
-    pending:    VecDeque<Vec<u8>>,
-    accepted:   usize,
-    flush_owed: bool,
-    dead:       bool,
-    errors:     ErrorLog,
+    renderer:         Renderer<SharedWriter>,
+    writer:           SharedWriter,
+    mode:             StatusMode,
+    mode_stamp:       u64,
+    width:            WidthSource,
+    columns:          usize,
+    last_width_check: Instant,
+    fps:              u16,
+    entries:          BTreeMap<u64, StatusEntry>,
+    dirty:            bool,
+    last_draw:        Option<Instant>,
+    pending:          VecDeque<Vec<u8>>,
+    accepted:         usize,
+    flush_owed:       bool,
+    dead:             bool,
+    errors:           ErrorLog,
 }
 
 impl Actor {
     fn new(config: ActorConfig) -> Self {
+        let width = config.width.resolved();
+        let columns = width.columns();
         Self {
-            renderer:   Renderer::new(config.writer.clone()).width(config.width.columns()),
-            writer:     config.writer,
-            mode:       mode_from_stamp(config.stamp),
+            renderer: Renderer::new(config.writer.clone()).width(columns),
+            writer: config.writer,
+            mode: mode_from_stamp(config.stamp),
             mode_stamp: config.stamp,
-            fps:        15,
-            entries:    BTreeMap::new(),
-            dirty:      false,
-            last_draw:  None,
-            pending:    VecDeque::new(),
-            accepted:   0,
+            width,
+            columns,
+            last_width_check: Instant::now(),
+            fps: 15,
+            entries: BTreeMap::new(),
+            dirty: false,
+            last_draw: None,
+            pending: VecDeque::new(),
+            accepted: 0,
             flush_owed: false,
-            dead:       false,
-            errors:     ErrorLog::default(),
+            dead: false,
+            errors: ErrorLog::default(),
         }
     }
 
@@ -910,7 +933,29 @@ impl Actor {
         }
     }
 
+    fn refresh_width(&mut self) {
+        self.last_width_check = Instant::now();
+        let columns = self.width.columns();
+        if columns != self.columns {
+            self.columns = columns;
+            self.renderer.resize(columns);
+            self.dirty = true;
+        }
+    }
+
+    fn poll_width(&mut self) {
+        if self.width.follows_terminal()
+            && self.wants_periodic_ticks()
+            && self.last_width_check.elapsed() >= RESIZE_POLL
+        {
+            self.refresh_width();
+        }
+    }
+
     fn draw(&mut self) {
+        if self.width.follows_terminal() {
+            self.refresh_width();
+        }
         let widgets: Vec<WidgetRef> = self
             .entries
             .values()
@@ -963,7 +1008,7 @@ impl Actor {
         };
         let elapsed = Instant::now().saturating_duration_since(last_draw);
         let until_frame = self.frame_interval().saturating_sub(elapsed);
-        if self.dirty {
+        let until_draw = if self.dirty {
             Some(until_frame)
         } else {
             match self.tick_interest() {
@@ -973,6 +1018,16 @@ impl Actor {
                     Some(until_frame.max(interval.saturating_sub(elapsed)))
                 },
             }
+        };
+        // terminals give no resize notice without a signal handler, so their
+        // width is polled
+        let until_resize = self
+            .width
+            .follows_terminal()
+            .then(|| RESIZE_POLL.saturating_sub(self.last_width_check.elapsed()));
+        match (until_draw, until_resize) {
+            (Some(draw), Some(resize)) => Some(draw.min(resize)),
+            (wake, None) | (None, wake) => wake,
         }
     }
 }
@@ -993,6 +1048,7 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
             Err(RecvTimeoutError::Timeout) => {},
             Err(RecvTimeoutError::Disconnected) => break,
         }
+        actor.poll_width();
         if actor.should_draw() {
             actor.draw();
         }
@@ -1701,6 +1757,14 @@ mod tests {
         let mut fixed = actor_with(WidthSource::Fixed(40));
         drawn_static_status(&mut fixed);
         assert_eq!(fixed.next_wake(), None);
+    }
+
+    #[test]
+    fn stderr_is_polled_for_resizes_only_when_it_is_a_terminal() {
+        let mut actor = actor_with(WidthSource::Stderr);
+        drawn_static_status(&mut actor);
+        let is_terminal = screw::Viewport::of(&std::io::stderr()).is_ok();
+        assert_eq!(actor.next_wake().is_some(), is_terminal);
     }
 
     #[test]
