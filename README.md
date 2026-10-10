@@ -133,23 +133,107 @@ climax::try_run_from(["--shell", "zsh"], |context, args: Args| {
 # Ok::<(), climax::Error>(())
 ```
 
-`Context` owns terminal policy and logical output channels. Interactive prompts
-require terminal-capable stdin and transient stderr by default, and applications
-can force or disable interaction explicitly. Status widgets share one transient
-renderer, so multiple animations compose safely and prompts temporarily suspend
-them while taking exclusive input. Policy builders which may need to tear down
-active presentation, including `with_terminal_capabilities` and
-`with_status_mode`, return `Result<Context>` rather than hiding cleanup errors.
+exit codes, output formats, status lines and testing are in the crate docs
 
-Successful commands may register one finite result. Climax buffers that result
-until the handler succeeds, renders its text projection for people, and
-serializes its natural data shape in JSON mode. Human-only notices use the
-transient channel (stderr by default) in text mode and are suppressed in JSON
-mode. A notice blocks until it is written, except while a prompt or terminal
-application holds the terminal, when it is queued and written on release.
-Streaming is explicit and emits JSON Lines because it cannot share the finite
-result's commit-on-success guarantee. Streamed output is written around the
-live status region, and while a prompt holds the terminal a stream write from
-another thread waits for the release.
+#[derive(climax::serde::Serialize)]
+#[serde(crate = "climax::serde")]
+struct Report {
+    files: usize,
+}
+
+/// scan the tree
+#[derive(Parse)]
+struct Args {
+    /// print the result as JSON
+    #[pound(long)]
+    json: bool,
+}
+
+fn main() -> std::process::ExitCode {
+    climax::main(|mut cx, args: Args| {
+        if args.json {
+            cx.set_output_format(Format::Json);
+        }
+        cx.output().notice("scanning")?;
+        let report = Report { files: 3 };
+        cx.output()
+            .result(&report)
+            .text(|report| format!("{} files", report.files))
+            .emit()
+    })
+}
+```
+
+### A `--yes` flag that skips prompts
+
+A prompt is ordinary control flow, so skip it by not asking. Without a
+terminal on stdin a prompt fails with `ErrorKind::InteractionUnavailable`
+instead of guessing an answer, which is what a script that forgot `--yes`
+should see.
+
+```rust,no_run
+use climax::prelude::*;
+
+/// deploy the build
+#[derive(Parse)]
+struct Args {
+    /// do not ask for confirmation
+    #[pound(long)]
+    yes: bool,
+}
+
+fn main() -> std::process::ExitCode {
+    climax::main(|cx, args: Args| {
+        if !args.yes {
+            let PromptOutcome::Submit(true) = cx.confirm("Deploy now?").interact()? else {
+                return Ok(());
+            };
+        }
+        cx.output().result(&"deployed").text(|state| *state).emit()
+    })
+}
+```
+
+### Exit codes
+
+`climax::main` exits 0 on success, 1 for an application error, 2 for a parse
+failure and 130, or 128 plus the signal number, for a cancellation. An
+application that wants its own mapping calls `try_run` and converts the
+`climax::Error` itself. Help and version arrive as a parse error that asks to
+exit, which this recipe prints and treats as success.
+
+```rust,no_run
+use std::process::ExitCode;
+
+use climax::prelude::*;
+
+/// check the tree
+#[derive(Parse)]
+struct Args {}
+
+fn run(_cx: Context, _args: Args) -> climax::Result<()> {
+    Err(Error::message("tree is dirty"))
+}
+
+fn main() -> ExitCode {
+    let Err(error) = climax::try_run(run) else {
+        return ExitCode::SUCCESS;
+    };
+    let parse = error
+        .source_error()
+        .and_then(|source| source.downcast_ref::<climax::pound::Error>());
+    if let Some(parse) = parse.filter(|parse| parse.is_exit()) {
+        println!("{}", parse.render(climax::pound::Term::stdout()));
+        return ExitCode::SUCCESS;
+    }
+    eprintln!("error: {error}");
+    ExitCode::from(match error.kind() {
+        ErrorKind::Parse => 2,
+        ErrorKind::Cancelled => 130,
+        ErrorKind::InteractionUnavailable => 3,
+        _ => 1,
+    })
+}
+```
 
 unix only, tested on Linux and macOS, minimum Rust version 1.88, edition 2024
