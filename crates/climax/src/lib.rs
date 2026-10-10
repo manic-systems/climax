@@ -20,6 +20,7 @@ pub use app::{
 };
 #[cfg(feature = "parse")]
 pub use app::{
+    main,
     try_run,
     try_run_from,
 };
