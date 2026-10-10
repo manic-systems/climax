@@ -413,6 +413,9 @@ impl SubSpec {
 pub struct CommandSpec {
     /// the command name usage and help show
     pub name:           &'static str,
+    /// when true, parsing the process's argv shows the program's file name
+    /// in place of `name`
+    pub invoked_name:   bool,
     /// the text `--version` prints, empty when there is none
     pub version:        &'static str,
     /// commit hash for the compiled program's source
@@ -448,6 +451,7 @@ impl CommandSpec {
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
+            invoked_name: false,
             version: "",
             hash: None,
             about: "",
@@ -461,6 +465,12 @@ impl CommandSpec {
             subs: &[],
             sub_optional: false,
         }
+    }
+
+    #[must_use]
+    pub const fn invoked_name(mut self) -> Self {
+        self.invoked_name = true;
+        self
     }
 
     #[must_use]

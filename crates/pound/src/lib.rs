@@ -160,17 +160,32 @@ pub trait Parse: Sized {
     where
         I: IntoIterator<Item = &'a str>,
     {
-        let matches = parse::parse_spec(Self::SPEC, args)?;
-        Self::from_matches(Self::SPEC, &matches).map_err(|e| matches.locate(Self::SPEC, e))
+        parse_as(Self::SPEC, args)
     }
 
-    /// parse `std::env::args()` minus the program name.
+    /// parse `std::env::args()`, naming the program after its file when the
+    /// spec asks for [`CommandSpec::invoked_name`].
     #[cfg(feature = "std")]
     fn try_parse() -> Result<Self, Error> {
-        // env yields owned `String`s; hold them in a buffer the borrowed parse
-        // reads from, then return the owned `Self`.
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        Self::try_parse_from(args.iter().map(String::as_str))
+        static INVOKED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+        let mut argv = std::env::args();
+        let program = argv.next();
+        let args = argv.collect::<Vec<_>>();
+        let invoked = INVOKED.get_or_init(|| {
+            let path = std::path::Path::new(program.as_deref()?);
+            Some(path.file_name()?.to_str()?.to_owned())
+        });
+        let spec = match invoked {
+            Some(name) if Self::SPEC.invoked_name => {
+                CommandSpec {
+                    name,
+                    ..*Self::SPEC
+                }
+            },
+            _ => *Self::SPEC,
+        };
+        parse_as(&spec, args.iter().map(String::as_str))
     }
 
     /// parse argv, printing help/version or errors and exiting.
@@ -201,6 +216,14 @@ pub trait Parse: Sized {
 /// `#[pound(subcommand)]` field or a `#[pound(flatten)]` variant must hold.
 /// the derive implements it for every enum.
 pub trait Subcommands: Parse {}
+
+fn parse_as<'a, T: Parse>(
+    spec: &CommandSpec,
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<T, Error> {
+    let matches = parse::parse_spec(spec, args)?;
+    T::from_matches(T::SPEC, &matches).map_err(|e| matches.locate(spec, e))
+}
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.
 ///

@@ -1072,6 +1072,7 @@ mod tests {
     ];
     const FLAT: CommandSpec = CommandSpec {
         name:           "flat",
+        invoked_name:   false,
         version:        "0.1.0",
         hash:           None,
         long_about:     "",
@@ -1234,6 +1235,7 @@ mod tests {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("level").default("info")];
         const SPEC: CommandSpec = CommandSpec {
             name:           "d",
+            invoked_name:   false,
             version:        "",
             hash:           None,
             long_about:     "",
@@ -1311,6 +1313,7 @@ mod tests {
         ];
         const OPT: CommandSpec = CommandSpec {
             name:           "g",
+            invoked_name:   false,
             version:        "",
             hash:           None,
             long_about:     "",
@@ -1386,6 +1389,7 @@ mod tests {
         ];
         const SPEC: CommandSpec = CommandSpec {
             name:           "c",
+            invoked_name:   false,
             version:        "",
             hash:           None,
             long_about:     "",
@@ -1414,6 +1418,7 @@ mod tests {
     ];
     const ADD: CommandSpec = CommandSpec {
         name:           "add",
+        invoked_name:   false,
         version:        "",
         hash:           None,
         long_about:     "",
@@ -1437,6 +1442,7 @@ mod tests {
     }];
     const ROOT: CommandSpec = CommandSpec {
         name:           "prog",
+        invoked_name:   false,
         version:        "1.0.0",
         hash:           None,
         long_about:     "",
