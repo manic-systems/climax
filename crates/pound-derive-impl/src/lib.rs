@@ -1499,7 +1499,15 @@ fn index_pairs(pairs: &[(usize, usize)]) -> TokenStream2 {
 
 fn name_expr(item: &Pound) -> TokenStream2 {
     item.name.as_ref().map_or_else(
-        || quote! { ::core::env!("CARGO_PKG_NAME") },
+        || {
+            let bin = local("bin");
+            quote! {
+                match ::core::option_env!("CARGO_BIN_NAME") {
+                    ::core::option::Option::Some(#bin) => #bin,
+                    ::core::option::Option::None => ::core::env!("CARGO_PKG_NAME"),
+                }
+            }
+        },
         |n| quote! { #n },
     )
 }
@@ -1626,6 +1634,23 @@ mod tests {
         for ty in ["my::Option<u8>", "other::option::Option<u8>", "core::vec::Vec<u8>"] {
             assert!(expand_typed(ty).contains("required_map :: < "), "{ty}");
         }
+    }
+
+    #[test]
+    fn the_default_name_is_the_binary_then_the_package() {
+        let out = expand_field("long");
+        assert!(out.contains("option_env ! (\"CARGO_BIN_NAME\")"), "{out}");
+        assert!(out.contains("env ! (\"CARGO_PKG_NAME\")"), "{out}");
+    }
+
+    #[test]
+    fn an_explicit_name_skips_the_environment() {
+        let input: TokenStream2 = r#"#[pound(name = "tool")] struct Args { #[pound(long)] x: u8 }"#
+            .parse()
+            .unwrap();
+        let out = derive_parse(input, &Options::new("::pound", true)).to_string();
+        assert!(out.contains("CommandSpec :: new (\"tool\")"), "{out}");
+        assert!(!out.contains("CARGO_BIN_NAME"), "{out}");
     }
 
     #[test]

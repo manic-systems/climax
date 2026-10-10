@@ -75,7 +75,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// | attribute                | meaning                                                                                  |
 /// |--------------------------|------------------------------------------------------------------------------------------|
-/// | `name = "tool"`          | the command name shown in usage and help. defaults to `CARGO_PKG_NAME`                   |
+/// | `name = "tool"`          | the command name shown in usage and help. defaults to the binary name, else `CARGO_PKG_NAME` |
 /// | `version = EXPR`         | the `--version` text. any expression of type `&'static str`, defaults to `CARGO_PKG_VERSION` |
 /// | `required_group = "g"`   | exactly one member of group `g` must be given. may repeat, see [groups](#groups)         |
 ///
