@@ -135,6 +135,11 @@ impl RawConfig {
             .into_iter()
             .map(RawFieldConfig::finish)
             .collect::<Result<Vec<_>, _>>()?;
+        for (index, field) in fields.iter().enumerate() {
+            if fields[..index].iter().any(|earlier| earlier.name == field.name) {
+                return Err(format!("duplicate form field name '{}'", field.name));
+            }
+        }
 
         let is_review_list = self.kind == RawWidgetKind::ReviewList;
         let (actions, review_actions) = finish_actions(self.actions, is_review_list)?;
@@ -620,4 +625,28 @@ pub fn text_from_config(config: &WidgetConfig) -> TextInput {
         input = input.with_value(value.clone());
     }
     input
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_form_field_names_are_rejected() {
+        let error = WidgetConfig::parse(
+            r#"
+type = "form"
+
+[[fields]]
+name = "who"
+type = "text"
+
+[[fields]]
+name = "who"
+type = "text"
+"#,
+        )
+        .expect_err("duplicate names should be rejected");
+        assert!(error.contains("duplicate form field name 'who'"), "{error}");
+    }
 }
