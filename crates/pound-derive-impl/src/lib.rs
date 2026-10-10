@@ -1070,22 +1070,49 @@ fn classify(ty: &TypeExpr) -> (bool, Card, TokenStream2) {
     if s == "bool" {
         return (true, Card::One, quote!(bool));
     }
-    if let Some(inner) = strip_wrapper(toks, "Option") {
+    if let Some(inner) = strip_wrapper(toks, "Option", "option", &["core", "std"]) {
         return (false, Card::Opt, inner);
     }
-    if let Some(inner) = strip_wrapper(toks, "Vec") {
+    if let Some(inner) = strip_wrapper(toks, "Vec", "vec", &["alloc", "std"]) {
         return (false, Card::Many, inner);
     }
     (false, Card::One, toks.iter().cloned().collect())
 }
 
-// `Wrapper < Inner >` -> the `Inner` tokens.
-fn strip_wrapper(toks: &[TokenTree], wrapper: &str) -> Option<TokenStream2> {
-    let head_ok = matches!(toks.first(), Some(TokenTree::Ident(id)) if *id == wrapper);
-    let open_ok = matches!(toks.get(1), Some(TokenTree::Punct(p)) if p.as_char() == '<');
+// `Wrapper < Inner >` -> the `Inner` tokens, where `Wrapper` may also be
+// written `krate::module::Wrapper` with an optional leading `::`.
+fn strip_wrapper(
+    toks: &[TokenTree],
+    wrapper: &str,
+    module: &str,
+    crates: &[&str],
+) -> Option<TokenStream2> {
+    let is_colon =
+        |tok: Option<&TokenTree>| matches!(tok, Some(TokenTree::Punct(p)) if p.as_char() == ':');
+    let mut at = if is_colon(toks.first()) && is_colon(toks.get(1)) {
+        2
+    } else {
+        0
+    };
+    let mut path = Vec::new();
+    while let Some(TokenTree::Ident(id)) = toks.get(at) {
+        path.push(id.to_string());
+        at += 1;
+        if is_colon(toks.get(at)) && is_colon(toks.get(at + 1)) {
+            at += 2;
+        } else {
+            break;
+        }
+    }
+    let known = match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [name] => name == wrapper,
+        [krate, home, name] => crates.contains(&krate) && home == module && name == wrapper,
+        _ => false,
+    };
+    let open_ok = matches!(toks.get(at), Some(TokenTree::Punct(p)) if p.as_char() == '<');
     let close_ok = matches!(toks.last(), Some(TokenTree::Punct(p)) if p.as_char() == '>');
-    if toks.len() >= 4 && head_ok && open_ok && close_ok {
-        Some(toks[2..toks.len() - 1].iter().cloned().collect())
+    if known && open_ok && close_ok && toks.len() >= at + 3 {
+        Some(toks[at + 1..toks.len() - 1].iter().cloned().collect())
     } else {
         None
     }
