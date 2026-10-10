@@ -742,7 +742,9 @@ fn negation(
         ));
     }
     let Some(name) = long else {
-        return Err(format!("pound: #[pound(negate)] needs a long name (`{ident}`)"));
+        return Err(format!(
+            "pound: #[pound(negate)] needs a long name (`{ident}`)"
+        ));
     };
     let spelling = spelling.clone().unwrap_or_else(|| format!("no-{name}"));
     if spelling == name || a.aliases.contains(&spelling) {
@@ -759,15 +761,20 @@ fn arity(
     multi: bool,
     ident: &proc_macro2::Ident,
 ) -> Result<(Option<usize>, Option<usize>), String> {
-    let read = |name: &str, raw: Option<&String>| match raw {
-        None => Ok(None),
-        Some(_) if !multi => Err(format!(
-            "pound: #[pound({name})] needs a `Vec` field (`{ident}`)"
-        )),
-        Some(text) => text
-            .parse::<usize>()
-            .map(Some)
-            .map_err(|_| format!("pound: #[pound({name} = {text})] is not a count (`{ident}`)")),
+    let read = |name: &str, raw: Option<&String>| {
+        match raw {
+            None => Ok(None),
+            Some(_) if !multi => {
+                Err(format!(
+                    "pound: #[pound({name})] needs a `Vec` field (`{ident}`)"
+                ))
+            },
+            Some(text) => {
+                text.parse::<usize>().map(Some).map_err(|_| {
+                    format!("pound: #[pound({name} = {text})] is not a count (`{ident}`)")
+                })
+            },
+        }
     };
 
     let min = read("min_values", a.min_values.as_ref())?;
@@ -888,9 +895,15 @@ fn plan_field(field: &NamedField, a: Pound) -> Result<Plan, String> {
         }
     }
 
-    let doc = a.help.clone().unwrap_or_else(|| attr::doc(&field.attributes));
+    let doc = a
+        .help
+        .clone()
+        .unwrap_or_else(|| attr::doc(&field.attributes));
     let help = attr::summary(&doc).to_owned();
-    let long_help = a.long_help.clone().or_else(|| (help != doc).then(|| doc.clone()));
+    let long_help = a
+        .long_help
+        .clone()
+        .or_else(|| (help != doc).then(|| doc.clone()));
 
     check_kind(&a, kind, &field.name)?;
     let (min_values, max_values) = arity(&a, card == Card::Many, &field.name)?;

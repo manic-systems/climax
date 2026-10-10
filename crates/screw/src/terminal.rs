@@ -1,4 +1,7 @@
-use std::io::{self, IsTerminal as _};
+use std::io::{
+    self,
+    IsTerminal as _,
+};
 
 pub const FALLBACK_WIDTH: usize = 80;
 

@@ -48,38 +48,38 @@ pub enum Kind {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct ArgSpec {
-    pub long: Option<&'static str>,
+    pub long:            Option<&'static str>,
     /// extra long names that also match this arg, kept out of help
-    pub aliases: &'static [&'static str],
-    pub short: Option<char>,
-    pub kind: Kind,
-    pub required: bool,
+    pub aliases:         &'static [&'static str],
+    pub short:           Option<char>,
+    pub kind:            Kind,
+    pub required:        bool,
     /// `Vec<T>` field, accept the option/positional more than once
-    pub multi: bool,
+    pub multi:           bool,
     /// fewest values a `multi` arg accepts, waived when a fallback fills it
-    pub min_values: Option<usize>,
+    pub min_values:      Option<usize>,
     /// most values a `multi` arg accepts
-    pub max_values: Option<usize>,
-    pub group: Option<&'static str>,
-    pub default: Option<&'static str>,
+    pub max_values:      Option<usize>,
+    pub group:           Option<&'static str>,
+    pub default:         Option<&'static str>,
     /// value a [`Kind::Opt`] takes when given with no `=value`, which also
     /// stops it consuming the following token
     pub default_missing: Option<&'static str>,
     /// name of an environment variable to fall back to when the arg is not
     /// given on the command line. disabled in nostd.
-    pub env: Option<&'static str>,
+    pub env:             Option<&'static str>,
     /// long name that switches a [`Kind::Flag`] back off, without the `--`
-    pub negate: Option<&'static str>,
-    pub value_name: &'static str,
-    pub help: &'static str,
+    pub negate:          Option<&'static str>,
+    pub value_name:      &'static str,
+    pub help:            &'static str,
     /// fuller help shown by `--help`, `None` when it adds nothing
-    pub long_help: Option<&'static str>,
+    pub long_help:       Option<&'static str>,
     /// section this arg is listed under in help, `Options` when unset
-    pub heading: Option<&'static str>,
-    pub possible: Option<&'static [&'static str]>,
+    pub heading:         Option<&'static str>,
+    pub possible:        Option<&'static [&'static str]>,
     /// kept out of help output, but accepted by parser
-    pub hidden: bool,
-    pub global: bool,
+    pub hidden:          bool,
+    pub global:          bool,
 }
 
 impl ArgSpec {
@@ -289,7 +289,7 @@ impl ArgSpec {
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct GroupSpec {
-    pub name: &'static str,
+    pub name:     &'static str,
     /// exactly one member must be set
     pub required: bool,
 }
