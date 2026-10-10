@@ -43,7 +43,7 @@ pub use app::{main, try_run, try_run_from};
 /// at the crate root, next to the `Context` methods that build them.
 #[cfg(feature = "interactive")]
 pub use bang::{
-    Configurable, ConfirmConfig, DateConfig, MultiSelectConfig, NumberConfig, PasswordConfig,
+    Configurable, ConfirmConfig, Date, DateConfig, MultiSelectConfig, NumberConfig, PasswordConfig,
     PromptOutcome, ReviewExit, ReviewOutcome, ReviewState,
     Reviewed, SearchConfig, SelectConfig, TextConfig,
 };
@@ -71,6 +71,7 @@ pub use bang::{
 pub use bang::ReviewConfig;
 pub use error::{
     Error,
+    ErrorKind,
     Result,
 };
 #[cfg(feature = "interactive")] pub use bang;
