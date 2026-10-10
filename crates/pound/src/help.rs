@@ -297,17 +297,11 @@ pub(crate) fn render(
     }
 
     let builtins = &mut sections[0].1;
-    if let Some(row) = builtin_row(&own, globals, 'h', "help", "display this help and exit") {
+    if let Some(row) = builtin_row(&own, globals, 'h', "help", "Print help") {
         builtins.push(row);
     }
     if spec.has_version_info()
-        && let Some(row) = builtin_row(
-            &own,
-            globals,
-            'V',
-            "version",
-            "output version information and exit",
-        )
+        && let Some(row) = builtin_row(&own, globals, 'V', "version", "Print version")
     {
         builtins.push(row);
     }
