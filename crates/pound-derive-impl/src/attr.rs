@@ -2,16 +2,38 @@
 
 //! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    str::FromStr,
+};
 
 use proc_macro2::{
     Delimiter,
+    TokenStream,
     TokenTree,
 };
+use quote::quote;
 use venial::{
     Attribute,
     AttributeValue,
 };
+
+/// a `&'static str` attribute value, written as a literal or as a constant
+/// expression
+#[derive(Clone)]
+pub enum Text {
+    Lit(String),
+    Expr(Vec<TokenTree>),
+}
+
+impl Text {
+    pub fn tokens(&self) -> TokenStream {
+        match self {
+            Self::Lit(text) => quote! { #text },
+            Self::Expr(tokens) => tokens.iter().cloned().collect(),
+        }
+    }
+}
 
 /// the parsed `#[pound(...)]` options for one field or item
 // short/long are tristate: absent, bare, or with a value
@@ -35,7 +57,7 @@ pub struct Pound {
     /// named flag/option that descendant subcommands also accept
     pub global:          bool,
     pub group:           Option<String>,
-    pub default:         Option<String>,
+    pub default:         Option<Text>,
     /// value an option takes when written with no `=value`
     pub default_missing: Option<String>,
     pub env:             Option<String>,
@@ -60,10 +82,11 @@ pub struct Pound {
     pub min_values:      Option<String>,
     /// field-level: most values a `Vec` field accepts
     pub max_values:      Option<String>,
-    /// field-level: custom raw-value parser function
-    pub parse:           Option<String>,
-    /// field-level: custom parsed-value validation function
-    pub validate:        Option<String>,
+    /// field-level: custom raw-value parser, a path or any callable expression
+    pub parse:           Option<TokenStream>,
+    /// field-level: custom parsed-value validation, a path or any callable
+    /// expression
+    pub validate:        Option<TokenStream>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
@@ -110,7 +133,7 @@ impl Pound {
             "hidden"          => self.hidden          = bare(key, value.is_some())?,
             "global"          => self.global          = bare(key, value.is_some())?,
             "group"           => self.group           = Some(needed(key, value)?),
-            "default"         => self.default         = Some(needed(key, value)?),
+            "default"         => self.default         = Some(text(key, seg)?),
             "default_missing" => self.default_missing = Some(needed(key, value)?),
             "env"             => self.env             = Some(needed(key, value)?),
             "value_name"      => self.value_name      = Some(needed(key, value)?),
@@ -123,8 +146,8 @@ impl Pound {
             "max_len"         => self.max_len         = Some(needed(key, value)?),
             "min_values"      => self.min_values      = Some(needed(key, value)?),
             "max_values"      => self.max_values      = Some(needed(key, value)?),
-            "parse"           => self.parse           = Some(needed(key, value)?),
-            "validate"        => self.validate        = Some(needed(key, value)?),
+            "parse"           => self.parse           = Some(callable(key, seg)?),
+            "validate"        => self.validate        = Some(callable(key, seg)?),
             "required_group"  => self.required_groups.push(needed(key, value)?),
             "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, value)?)),
             "requires"        => self.requires.extend(csv(&needed(key, value)?)),
@@ -210,7 +233,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
         let value = match seg.as_slice() {
             [_] => None,
             [_, TokenTree::Punct(p), value] if p.as_char() == '=' => Some(unquote(value)),
-            _ if key == "version" && expr(&seg).is_some() => None,
+            _ if EXPR_KEYS.contains(&key.as_str()) && expr(&seg).is_some() => None,
             _ => return Err(format!("pound: malformed `{key}` attribute")),
         };
         out.set(&key, value, &seg)?;
@@ -218,6 +241,90 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// keys whose value is read as tokens rather than as a single literal
+const EXPR_KEYS: &[&str] = &["version", "default", "parse", "validate"];
+
+/// a `default` is a literal, a bare word, or a braced constant expression of
+/// type `&str`. a lone `{ CONST }` loses its braces, which would trip
+/// `unused_braces` in the deriving crate
+fn text(key: &str, seg: &[TokenTree]) -> Result<Text, String> {
+    let tokens = expr(seg).ok_or_else(|| format!("pound: `{key}` needs a value"))?;
+    let [tok] = tokens.as_slice() else {
+        return Err(braces_hint(key));
+    };
+
+    let tok = match tok {
+        TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
+            let mut inner = g.stream().into_iter();
+            match (inner.next(), inner.next()) {
+                (Some(only), None) => only,
+                _ => return Err(braces_hint(key)),
+            }
+        },
+        other => other.clone(),
+    };
+
+    match &tok {
+        TokenTree::Ident(word) if is_constant_name(&word.to_string()) => {
+            Err(format!(
+                "pound: `{key} = {word}` would be the text \"{word}\", write `{key} = {{ {word} \
+                 }}` for the constant or quote it for the text"
+            ))
+        },
+        TokenTree::Literal(_) | TokenTree::Ident(_) => Ok(Text::Lit(unquote(&tok))),
+        TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
+            let inner = g.stream().into_iter().collect::<Vec<_>>();
+            let has_statements = inner
+                .iter()
+                .any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';'));
+            Ok(Text::Expr(if has_statements { vec![tok] } else { inner }))
+        },
+        _ => Err(braces_hint(key)),
+    }
+}
+
+fn is_constant_name(word: &str) -> bool {
+    word.chars().any(|c| c.is_ascii_uppercase())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn braces_hint(key: &str) -> String {
+    format!("pound: `{key}` takes a literal, a bare word or a braced expression like `{{ CONST }}`")
+}
+
+/// a string literal names a path, anything else is already the callable
+fn callable(key: &str, seg: &[TokenTree]) -> Result<TokenStream, String> {
+    let tokens = expr(seg).ok_or_else(|| format!("pound: `{key}` needs a value"))?;
+    let stream = match tokens.as_slice() {
+        [tok] if is_quoted(tok) => {
+            TokenStream::from_str(&unquote(tok))
+                .map_err(|_| format!("pound: `{key}` is not a valid path"))?
+        },
+        _ => tokens.into_iter().collect(),
+    };
+
+    if stream.is_empty() {
+        return Err(format!("pound: `{key}` needs a value"));
+    }
+
+    Ok(stream)
+}
+
+/// a string literal, possibly forwarded through a `macro_rules!` `$x:expr` as
+/// a transparent group
+fn is_quoted(tok: &TokenTree) -> bool {
+    match tok {
+        TokenTree::Literal(l) => l.to_string().starts_with('"'),
+        TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
+            let mut inner = g.stream().into_iter();
+            matches!((inner.next(), inner.next()), (Some(tok), None) if is_quoted(&tok))
+        },
+        _ => false,
+    }
 }
 
 fn bare(key: &str, has_value: bool) -> Result<bool, String> {
@@ -262,8 +369,10 @@ fn csv(v: &str) -> impl Iterator<Item = String> + '_ {
 fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
     let mut segs = Vec::new();
     let mut cur = Vec::new();
-    for tok in tokens {
-        if matches!(tok, TokenTree::Punct(p) if p.as_char() == ',') {
+
+    for (i, tok) in tokens.iter().enumerate() {
+        if matches!(tok, TokenTree::Punct(p) if p.as_char() == ',') && starts_meta(&tokens[i + 1..])
+        {
             if !cur.is_empty() {
                 segs.push(std::mem::take(&mut cur));
             }
@@ -278,6 +387,43 @@ fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
 
     segs
 }
+
+// an expression value can hold top-level commas, in a turbofish or a
+// closure's parameters, so a comma separates two metas only when a
+// `key = ..`, a known bare key or the end follows it
+fn starts_meta(rest: &[TokenTree]) -> bool {
+    let [TokenTree::Ident(key), after @ ..] = rest else {
+        return rest.is_empty();
+    };
+
+    let key = key.to_string();
+
+    if !key.starts_with(|c: char| c.is_ascii_lowercase()) {
+        return false;
+    }
+
+    match after.first() {
+        None => true,
+        Some(TokenTree::Punct(p)) if p.as_char() == '=' => {
+            !matches!(after.get(1), Some(TokenTree::Punct(next)) if next.as_char() == '=')
+        },
+        Some(TokenTree::Punct(p)) if p.as_char() == ',' => BARE_KEYS.contains(&key.as_str()),
+        Some(_) => false,
+    }
+}
+
+const BARE_KEYS: &[&str] = &[
+    "short",
+    "long",
+    "negate",
+    "positional",
+    "trailing",
+    "count",
+    "subcommand",
+    "flatten",
+    "hidden",
+    "global",
+];
 
 fn unquote(tok: &TokenTree) -> String {
     let raw = match tok {
