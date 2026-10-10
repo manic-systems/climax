@@ -72,6 +72,56 @@ pub trait FromArg: Sized {
     }
 }
 
+/// the spellings of a choice type, for printing a value back out
+///
+/// `#[derive(ValueEnum)]` implements it with exactly the words [`FromArg`]
+/// accepts, so renames and kebab case carry over and `from_arg(v.as_str())`
+/// always gives `v` back. it is a trait and not inherent methods or a
+/// generated `Display`, so the derive cannot collide with an impl you write
+/// yourself. `ALL` lists the variants in declaration order.
+///
+/// forward `Display`, or a serde `Serialize`, to it so the printed form can
+/// never drift from the parsed one.
+///
+/// ```
+/// # #[cfg(feature = "derive")]
+/// # {
+/// use std::fmt;
+///
+/// use pound::{ArgValue, FromArg, ValueEnum};
+///
+/// #[derive(ValueEnum, Debug, PartialEq)]
+/// enum Format {
+///     Json,
+///     #[pound(name = "yml")]
+///     Yaml,
+///     PlainText,
+/// }
+///
+/// impl fmt::Display for Format {
+///     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+///         f.write_str(self.as_str())
+///     }
+/// }
+///
+/// // with serde, `serializer.serialize_str(self.as_str())` in `Serialize`
+/// // and `Format::from_arg` in `Deserialize` do the same job
+///
+/// assert_eq!(Format::PlainText.to_string(), "plain-text");
+/// assert_eq!(Format::Yaml.as_str(), "yml");
+/// let all: Vec<_> = Format::ALL.iter().map(Format::as_str).collect();
+/// assert_eq!(all, ["json", "yml", "plain-text"]);
+/// assert_eq!(Format::from_arg("yml").unwrap(), Format::Yaml);
+/// # }
+/// ```
+pub trait ArgValue: FromArg + 'static {
+    /// every value, in declaration order
+    const ALL: &'static [Self];
+
+    /// the word [`FromArg::from_arg`] accepts for this value
+    fn as_str(&self) -> &'static str;
+}
+
 // `str` has no const `PartialEq`, so compare the bytes by hand.
 pub(crate) const fn const_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());

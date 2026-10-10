@@ -123,6 +123,7 @@ pub use spec::{
     SubSpec,
 };
 pub use value::{
+    ArgValue,
     FromArg,
     ValueError,
 };

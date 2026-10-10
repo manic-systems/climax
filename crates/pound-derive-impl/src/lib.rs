@@ -628,6 +628,8 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
     }
     let mut names = Vec::new();
     let mut arms = Vec::new();
+    let mut spellings = Vec::new();
+    let mut variants = Vec::new();
     for (variant, _) in &e.variants.inner {
         if !matches!(variant.fields, Fields::Unit) {
             return err("pound: ValueEnum needs unit variants only");
@@ -644,6 +646,8 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
             .name
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
         arms.push(quote! { #label => ::core::result::Result::Ok(Self::#vname), });
+        spellings.push(quote! { Self::#vname => #label, });
+        variants.push(quote! { Self::#vname });
         names.push(label);
     }
 
@@ -658,6 +662,16 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
                     other => ::core::result::Result::Err(
                         #root::ValueError::new(other, "unrecognized value")
                     ),
+                }
+            }
+        }
+
+        impl #root::ArgValue for #name {
+            const ALL: &'static [Self] = &[ #(#variants),* ];
+
+            fn as_str(&self) -> &'static str {
+                match *self {
+                    #(#spellings)*
                 }
             }
         }

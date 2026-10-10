@@ -413,6 +413,8 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 /// each variant is spelled in kebab case on the command line, so `PlainText` is
 /// `plain-text`. `#[pound(name = "yml")]` on a variant picks its spelling.
 /// that is the only attribute accepted, and the enum itself takes none.
+/// it also implements `pound::ArgValue`, which gives each value's spelling back
+/// through `as_str` and lists them all in `ALL`, so `Display` can forward to it.
 /// an unrecognized word fails with the full list of possible values, help lists
 /// them, and a `default` naming something else fails the build.
 ///
