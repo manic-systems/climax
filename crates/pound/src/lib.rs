@@ -38,6 +38,22 @@
 //! let add = Add::parse(); // exits on -h/--help or a parse error
 //! ```
 //!
+//! `parse` and `validate` take a path or any callable expression, and `default`
+//! takes a string literal, a bare word such as `auto`, or a braced constant of
+//! type `&str`. the string form of
+//! `parse` and `validate` still names a path.
+//!
+//! ```ignore
+//! const SYSTEM_PROFILE: &str = "system";
+//!
+//! #[derive(Parse)]
+//! struct Run {
+//!     #[pound(long, parse = str::parse::<NonZeroUsize>)] jobs: NonZeroUsize,
+//!     #[pound(long, parse = my_fn, validate = |n: &u8| if *n > 0 { Ok(()) } else { Err("zero") })] level: u8,
+//!     #[pound(long, default = { SYSTEM_PROFILE })] profile: String,
+//! }
+//! ```
+//!
 //! you may also hand-build a [`spec::CommandSpec`] and impl [`Parse`] yourself.
 
 extern crate alloc;

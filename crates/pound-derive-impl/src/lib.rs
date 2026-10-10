@@ -31,7 +31,7 @@ use venial::{
     parse_item,
 };
 
-use crate::attr::Pound;
+use crate::attr::{Pound, Text};
 
 const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group"];
 const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group"];
@@ -150,11 +150,11 @@ enum Conversion {
         min:      Option<String>,
         max:      Option<String>,
         max_len:  Option<String>,
-        validate: Option<String>,
+        validate: Option<TokenStream2>,
     },
     CustomParse {
-        parse:    String,
-        validate: Option<String>,
+        parse:    TokenStream2,
+        validate: Option<TokenStream2>,
     },
 }
 
@@ -170,7 +170,7 @@ struct Plan {
     min_values:      Option<usize>,
     max_values:      Option<usize>,
     group:           Option<String>,
-    default:         Option<String>,
+    default:         Option<Text>,
     default_missing: Option<String>,
     env:             Option<String>,
     negate:          Option<String>,
@@ -1030,6 +1030,7 @@ fn strip_wrapper(toks: &[TokenTree], wrapper: &str) -> Option<TokenStream2> {
 fn default_assert(cx: &Ctx, p: &Plan) -> Option<TokenStream2> {
     let root = &cx.root;
     let default = p.default.as_ref()?;
+    let tokens = default.tokens();
     if !matches!(
         p.conversion,
         Some(Conversion::FromArg | Conversion::CheckedFromArg { .. })
@@ -1037,13 +1038,19 @@ fn default_assert(cx: &Ctx, p: &Plan) -> Option<TokenStream2> {
         return None;
     }
     let inner = &p.inner_ty;
-    let message = format!(
-        "pound: default \"{default}\" is not one of the possible values for `{}`",
-        p.ident
-    );
+    let message = match default {
+        Text::Lit(text) => format!(
+            "pound: default \"{text}\" is not one of the possible values for `{}`",
+            p.ident
+        ),
+        Text::Expr(_) => format!(
+            "pound: the default is not one of the possible values for `{}`",
+            p.ident
+        ),
+    };
     Some(quote! {
         const _: () = ::core::assert!(
-            #root::checks::default_allowed(#default, <#inner as #root::FromArg>::POSSIBLE),
+            #root::checks::default_allowed(#tokens, <#inner as #root::FromArg>::POSSIBLE),
             #message
         );
     })
@@ -1081,6 +1088,7 @@ fn arg_expr(cx: &Ctx, p: &Plan) -> TokenStream2 {
         e = quote! { #e.group(#g) };
     }
     if let Some(d) = &p.default {
+        let d = d.tokens();
         e = quote! { #e.default(#d) };
     }
     if let Some(dm) = &p.default_missing {
@@ -1175,7 +1183,7 @@ fn conversion_closure(cx: &Ctx, conversion: &Conversion, inner: &TokenStream2) -
     };
     let validate = match conversion {
         Conversion::CheckedFromArg { validate, .. } | Conversion::CustomParse { validate, .. } => {
-            validate.as_deref().map(|value| validate_check(cx, value))
+            validate.as_ref().map(|value| validate_check(cx, value))
         },
         Conversion::FromArg => None,
     };
@@ -1198,12 +1206,8 @@ fn parse_value_expr(cx: &Ctx, conversion: &Conversion, inner: &TokenStream2) -> 
             quote! { <#inner as #root::FromArg>::from_arg(__s)? }
         },
         Conversion::CustomParse { parse, .. } => {
-            if let Ok(path) = TokenStream2::from_str(parse) {
-                quote! {
-                    #path(__s).map_err(|__msg| #root::ValueError::new(__s, __msg))?
-                }
-            } else {
-                quote! { ::core::compile_error!("pound: invalid parse function path") }
+            quote! {
+                (#parse)(__s).map_err(|__msg| #root::ValueError::new(__s, __msg))?
             }
         },
     }
@@ -1247,16 +1251,12 @@ fn bound_check(cx: &Ctx, inner: &TokenStream2, kind: &str, value: &str) -> Token
     }
 }
 
-fn validate_check(cx: &Ctx, value: &str) -> TokenStream2 {
+fn validate_check(cx: &Ctx, check: &TokenStream2) -> TokenStream2 {
     let root = &cx.root;
-    if let Ok(path) = TokenStream2::from_str(value) {
-        quote! {
-            if let ::core::result::Result::Err(__msg) = #path(&__value) {
-                return ::core::result::Result::Err(#root::ValueError::new(__s, __msg));
-            }
+    quote! {
+        if let ::core::result::Result::Err(__msg) = (#check)(&__value) {
+            return ::core::result::Result::Err(#root::ValueError::new(__s, __msg));
         }
-    } else {
-        quote! { ::core::compile_error!("pound: invalid validate function path") }
     }
 }
 
@@ -1476,6 +1476,26 @@ mod tests {
             .parse()
             .unwrap();
         derive_parse(input, &Options::new("::pound", help)).to_string()
+    }
+
+    fn expand_field(attr: &str) -> String {
+        let input: TokenStream2 = format!("struct Args {{ #[pound({attr})] x: u8 }}")
+            .parse()
+            .unwrap();
+        derive_parse(input, &Options::new("::pound", true)).to_string()
+    }
+
+    #[test]
+    fn a_turbofish_comma_stays_inside_the_expression() {
+        let out = expand_field("long, parse = pair::<u8, u16>, default = { DEFAULT }");
+        assert!(out.contains("(pair ::< u8 , u16 >) (__s)"), "{out}");
+        assert!(out.contains("default (DEFAULT)"), "{out}");
+    }
+
+    #[test]
+    fn a_string_that_is_no_path_is_rejected() {
+        let out = expand_field("long, parse = \"not a path (\"");
+        assert!(out.contains("is not a valid path"), "{out}");
     }
 
     #[test]
