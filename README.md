@@ -395,7 +395,7 @@ let esc = testing::run(["dev"], Script::new().esc(), deploy);
 assert_eq!(esc.exit_code, 130);
 ```
 
-`Script` also has `select_nth`, `multi_select_nth`, `text`, `text_attempts`,
+`Script` also has `select_nth`, `multi_select_nth`, `text`, `text_attempts`, `date`,
 `enter` and `keys` for anything else. `testing::run_with` is the form for an
 application without arguments, and `Capture` can be handed to
 `Context::with_output_writer` when a test builds its own `Context`.
