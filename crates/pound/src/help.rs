@@ -17,6 +17,17 @@ use crate::spec::{
     claims_short,
 };
 
+/// the full invocation of `spec`, led by the names of the commands above it
+fn program(spec: &CommandSpec, path: &[&str]) -> String {
+    let mut out = String::new();
+    for name in path {
+        out.push_str(name);
+        out.push(' ');
+    }
+    out.push_str(spec.name);
+    out
+}
+
 const fn command_placeholder(spec: &CommandSpec) -> &'static str {
     if spec.subcommand_optional() {
         " [COMMAND]"
@@ -193,20 +204,26 @@ fn visible_globals(own: &[&ArgSpec], globals: &[&ArgSpec]) -> Vec<ArgSpec> {
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn usage_line(spec: &CommandSpec, globals: &[&ArgSpec]) -> String {
+pub(crate) fn usage_line(spec: &CommandSpec, path: &[&str], globals: &[&ArgSpec]) -> String {
     let own: Vec<&ArgSpec> = spec.arguments().collect();
     let visible_args: Vec<&ArgSpec> = own.iter().copied().filter(|a| !a.hidden).collect();
     usage(
         spec,
+        path,
         &visible_args,
         !visible_globals(&own, globals).is_empty(),
     )
 }
 
 #[cfg(feature = "help")]
-fn usage(spec: &CommandSpec, visible_args: &[&ArgSpec], has_globals: bool) -> String {
+fn usage(
+    spec: &CommandSpec,
+    path: &[&str],
+    visible_args: &[&ArgSpec],
+    has_globals: bool,
+) -> String {
     let mut out = String::from("Usage: ");
-    out.push_str(spec.name);
+    out.push_str(&program(spec, path));
     if has_globals || visible_args.iter().any(|a| !a.is_positional()) {
         out.push_str(" [OPTION]...");
     }
@@ -221,7 +238,12 @@ fn usage(spec: &CommandSpec, visible_args: &[&ArgSpec], has_globals: bool) -> St
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> String {
+pub(crate) fn render(
+    spec: &CommandSpec,
+    path: &[&str],
+    globals: &[&ArgSpec],
+    long: bool,
+) -> String {
     let mut out = String::new();
 
     let about = if long && !spec.long_about.is_empty() {
@@ -242,7 +264,7 @@ pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], long: bool) -> St
         .map(|a| (invocation(a), help_text(a, long)))
         .collect();
 
-    out.push_str(&usage(spec, &visible_args, !grows.is_empty()));
+    out.push_str(&usage(spec, path, &visible_args, !grows.is_empty()));
     out.push('\n');
 
     if !visible_subs.is_empty() {
@@ -335,8 +357,8 @@ fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn usage_line(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
-    let mut out = format!("Usage: {}", spec.name);
+pub(crate) fn usage_line(spec: &CommandSpec, path: &[&str], _globals: &[&ArgSpec]) -> String {
+    let mut out = format!("Usage: {}", program(spec, path));
     if spec.has_subs() {
         out.push_str(command_placeholder(spec));
     }
@@ -344,6 +366,11 @@ pub(crate) fn usage_line(spec: &CommandSpec, _globals: &[&ArgSpec]) -> String {
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn render(spec: &CommandSpec, globals: &[&ArgSpec], _long: bool) -> String {
-    usage_line(spec, globals)
+pub(crate) fn render(
+    spec: &CommandSpec,
+    path: &[&str],
+    globals: &[&ArgSpec],
+    _long: bool,
+) -> String {
+    usage_line(spec, path, globals)
 }
