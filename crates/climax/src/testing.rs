@@ -210,11 +210,8 @@ impl Script {
         script
     }
 
-    /// Answer one text prompt whose validator rejects the earlier attempts, by
-    /// typing and submitting each attempt in turn.
-    ///
-    /// The prompt keeps a rejected input, so the script erases what it typed
-    /// before the next attempt.
+    /// answers one text prompt whose validator rejects the earlier attempts,
+    /// typing and submitting each in turn
     ///
     /// the prompt keeps a rejected input, so one Backspace per grapheme cluster
     /// erases it before the next attempt
@@ -227,7 +224,7 @@ impl Script {
                 keys.push(bang::advanced::Key::End);
                 keys.extend(vec![bang::advanced::Key::Backspace; typed]);
             }
-            typed = attempt.chars().count();
+            typed = unicode_segmentation::UnicodeSegmentation::graphemes(attempt, true).count();
             keys.extend(attempt.chars().map(bang::advanced::Key::Char));
             keys.push(bang::advanced::Key::Enter);
         }
