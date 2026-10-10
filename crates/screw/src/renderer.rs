@@ -47,7 +47,9 @@ pub struct Renderer<W> {
     theme:          Theme,
     cursor_visibility: CursorVisibility,
     cursor_visible: Option<bool>,
+    pending_cursor: Option<bool>,
     force_full: bool,
+    rendition_uncertain: bool,
 }
 
 impl<W> Renderer<W>
@@ -65,7 +67,9 @@ where
             theme: Theme::DEFAULT,
             cursor_visibility: CursorVisibility::Preserve,
             cursor_visible: None,
+            pending_cursor: None,
             force_full: false,
+            rendition_uncertain: false,
         }
     }
 
@@ -153,12 +157,23 @@ where
             },
             Err(error) => {
                 self.previous = None;
+                self.rendition_uncertain = true;
                 Err(error)
             },
         }
     }
 
+    /// After a failed write the terminal may still hold the style of a half written cell, so the
+    /// next write starts by resetting it.
+    fn settle_rendition(&mut self) -> io::Result<()> {
+        if self.rendition_uncertain {
+            self.writer.write_all(Style::default().sgr().as_bytes())?;
+        }
+        Ok(())
+    }
+
     fn write_frame(&mut self, next_physical: &Surface) -> io::Result<RenderStats> {
+        self.settle_rendition()?;
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
 
@@ -191,7 +206,13 @@ where
     fn flush_retrying_interrupts(&mut self) -> io::Result<()> {
         loop {
             match self.writer.flush() {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    self.rendition_uncertain = false;
+                    if let Some(visible) = self.pending_cursor.take() {
+                        self.cursor_visible = Some(visible);
+                    }
+                    return Ok(());
+                },
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
                 Err(error) => return Err(error),
             }
@@ -199,10 +220,20 @@ where
     }
 
     pub fn clear(&mut self) -> io::Result<RenderStats> {
+        let reset_pending = self.rendition_uncertain;
+        let result = self.settle_rendition().and_then(|()| self.clear_frame(reset_pending));
+        if result.is_err() {
+            self.rendition_uncertain = true;
+        }
+        result
+    }
+
+    fn clear_frame(&mut self, reset_written: bool) -> io::Result<RenderStats> {
         let Some(previous_physical) = self.previous.take() else {
-            if self.cursor_visible == Some(false) {
+            if self.cursor_may_be_hidden() {
                 self.restore_cursor()?;
-                self.writer.flush()?;
+            } else if reset_written {
+                self.flush_retrying_interrupts()?;
             }
             return Ok(RenderStats::default());
         };
@@ -232,7 +263,7 @@ where
             cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
         }
         self.restore_cursor()?;
-        self.writer.flush()?;
+        self.flush_retrying_interrupts()?;
         self.force_full = false;
         Ok(stats)
     }
@@ -251,24 +282,31 @@ where
 
     /// Show the cursor again if this renderer hid it under `FromSurface`.
     pub fn restore_cursor(&mut self) -> io::Result<()> {
-        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
-            && self.cursor_visible == Some(false)
-        {
+        let settled = self.rendition_uncertain;
+        self.settle_rendition()?;
+        if self.cursor_may_be_hidden() {
             self.update_cursor_visibility(true)?;
-            self.writer.flush()?;
+            self.flush_retrying_interrupts()?;
+        } else if settled {
+            self.flush_retrying_interrupts()?;
         }
         Ok(())
     }
 
+    fn cursor_may_be_hidden(&self) -> bool {
+        matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            && (self.cursor_visible == Some(false) || self.pending_cursor == Some(false))
+    }
+
     fn update_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
         if !matches!(self.cursor_visibility, CursorVisibility::FromSurface)
-            || self.cursor_visible == Some(visible)
+            || (self.pending_cursor.is_none() && self.cursor_visible == Some(visible))
         {
             return Ok(());
         }
         self.writer
             .write_all(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" })?;
-        self.cursor_visible = Some(visible);
+        self.pending_cursor = Some(visible);
         Ok(())
     }
 }
@@ -1212,9 +1250,112 @@ mod tests {
         renderer.draw_surface(surface(&["abc"], None)).unwrap();
         let update = &renderer.writer.buffer[before..];
         assert_eq!(
-            update, b"abc\x1b[K",
+            update, b"\x1b[0mabc\x1b[K",
             "a redraw after a failed write must start below the cursor, not climb: {update:?}"
         );
+    }
+
+    fn styled_surface(text: &str) -> Surface {
+        let mut surface = Surface::new();
+        surface.write(text, Style::new().bold());
+        surface
+    }
+
+    #[test]
+    fn a_failed_write_after_an_sgr_is_reset_before_the_next_draw() {
+        let mut renderer = Renderer::new(FlakyWriter::default());
+        renderer.writer.writes_until_failure = Some(1);
+        assert!(renderer.draw_surface(styled_surface("red")).is_err());
+        assert!(renderer.writer.buffer.ends_with(b"1m"));
+
+        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(surface(&["plain"], None)).unwrap();
+        assert!(renderer.writer.buffer[before..].starts_with(b"\x1b[0m"));
+    }
+
+    #[test]
+    fn clear_and_restore_cursor_reset_a_style_left_by_a_failed_write() {
+        let mut renderer = Renderer::new(FlakyWriter::default());
+        renderer.writer.writes_until_failure = Some(1);
+        assert!(renderer.draw_surface(styled_surface("red")).is_err());
+
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(&renderer.writer.buffer[before..], b"\x1b[0m");
+
+        renderer.writer.writes_until_failure = Some(1);
+        assert!(renderer.draw_surface(styled_surface("red")).is_err());
+        let before = renderer.writer.buffer.len();
+        renderer.clear().unwrap();
+        assert!(renderer.writer.buffer[before..].starts_with(b"\x1b[0m"));
+    }
+
+    #[test]
+    fn clear_flushes_the_rendition_reset_when_no_frame_is_retained() {
+        let mut renderer = Renderer::new(io::BufWriter::new(Vec::new()));
+        renderer.rendition_uncertain = true;
+        renderer.clear().unwrap();
+        assert_eq!(renderer.writer.get_ref(), b"\x1b[0m");
+    }
+
+    #[test]
+    fn clear_flushes_the_erased_frame_when_the_cursor_is_preserved() {
+        let mut renderer = Renderer::new(io::BufWriter::with_capacity(1 << 16, Vec::new()));
+        renderer.draw_surface(surface(&["one", "two"], None)).unwrap();
+        let drawn = renderer.writer.get_ref().len();
+        renderer.clear().unwrap();
+        assert!(renderer.writer.get_ref().len() > drawn);
+    }
+
+    #[derive(Default)]
+    struct FlushOnceFailing {
+        buffer: Vec<u8>,
+        failing_flushes: usize,
+    }
+
+    impl io::Write for FlushOnceFailing {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.failing_flushes > 0 {
+                self.failing_flushes -= 1;
+                return Err(io::Error::other("simulated flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn restore_cursor_retries_after_a_failed_flush() {
+        let mut renderer = Renderer::new(FlushOnceFailing::default())
+            .cursor_visibility(CursorVisibility::FromSurface);
+        renderer.draw_surface(surface(&["a"], None)).unwrap();
+        assert!(renderer.writer.buffer.ends_with(b"\x1b[?25l"));
+
+        renderer.writer.failing_flushes = 1;
+        assert!(renderer.restore_cursor().is_err());
+
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(&renderer.writer.buffer[before..], b"\x1b[?25h");
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(renderer.writer.buffer.len(), before);
+    }
+
+    #[test]
+    fn rendition_reset_is_rewritten_after_a_failed_flush() {
+        let mut renderer = Renderer::new(FlushOnceFailing::default());
+        renderer.rendition_uncertain = true;
+        renderer.writer.failing_flushes = 1;
+        assert!(renderer.restore_cursor().is_err());
+
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(&renderer.writer.buffer[before..], b"\x1b[0m");
     }
 
     #[test]
