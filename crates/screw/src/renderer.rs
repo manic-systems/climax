@@ -1,6 +1,12 @@
-use std::io::{
-    self,
-    Write,
+use std::{
+    io::{
+        self,
+        Write,
+    },
+    ops::{
+        Deref,
+        DerefMut,
+    },
 };
 
 use crate::{
@@ -38,7 +44,8 @@ pub enum CursorVisibility {
 }
 
 pub struct Renderer<W> {
-    writer:              W,
+    writer:              Sink<W>,
+    on_drop:             fn(&mut Self),
     previous:            Option<Surface>,
     frame:               u64,
     width:               Option<usize>,
@@ -58,18 +65,19 @@ where
 {
     pub const fn new(writer: W) -> Self {
         Self {
-            writer,
-            previous: None,
-            frame: 0,
-            width: None,
-            height: None,
-            layout_mode: LayoutMode::Clip,
-            theme: Theme::DEFAULT,
-            cursor_visibility: CursorVisibility::Preserve,
-            cursor_visible: None,
-            force_full: false,
+            writer:              Sink(Some(writer)),
+            on_drop:             Self::restore_on_drop,
+            previous:            None,
+            frame:               0,
+            width:               None,
+            height:              None,
+            layout_mode:         LayoutMode::Clip,
+            theme:               Theme::DEFAULT,
+            cursor_visibility:   CursorVisibility::Preserve,
+            cursor_visible:      None,
+            force_full:          false,
             rendition_uncertain: false,
-            resync: false,
+            resync:              false,
         }
     }
 
@@ -229,6 +237,10 @@ where
 
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let Some(previous_physical) = self.previous.take() else {
+            if self.cursor_visible == Some(false) {
+                self.restore_cursor()?;
+                self.writer.flush()?;
+            }
             return Ok(RenderStats::default());
         };
         let mut cursor = Cursor::default();
@@ -256,19 +268,17 @@ where
             )?;
             cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
         }
-        // restore visibility only if this renderer hid the cursor
-        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
-            && self.cursor_visible == Some(false)
-        {
-            self.update_cursor_visibility(true)?;
-        }
+        self.restore_cursor()?;
         self.writer.flush()?;
         self.force_full = false;
         Ok(stats)
     }
 
-    pub fn into_inner(self) -> W {
+    pub fn into_inner(mut self) -> W {
         self.writer
+            .0
+            .take()
+            .expect("the writer is present until it is taken")
     }
 
     fn layout_surface(&self, surface: Surface) -> Surface {
@@ -277,6 +287,21 @@ where
             surface.fit_height(height);
         }
         surface
+    }
+
+    /// shows the cursor again if this renderer hid it under `FromSurface`
+    pub fn restore_cursor(&mut self) -> io::Result<()> {
+        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            && self.cursor_visible == Some(false)
+        {
+            self.update_cursor_visibility(true)?;
+            self.writer.flush()?;
+        }
+        Ok(())
+    }
+
+    fn restore_on_drop(&mut self) {
+        let _ = self.restore_cursor();
     }
 
     fn update_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
@@ -289,6 +314,45 @@ where
             .write_all(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" })?;
         self.cursor_visible = Some(visible);
         Ok(())
+    }
+}
+
+impl<W> Drop for Renderer<W> {
+    fn drop(&mut self) {
+        if self.writer.0.is_some() {
+            (self.on_drop)(self);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Sink<W>(Option<W>);
+
+impl<W> Deref for Sink<W> {
+    type Target = W;
+
+    fn deref(&self) -> &W {
+        self.0
+            .as_ref()
+            .expect("the writer is present until it is taken")
+    }
+}
+
+impl<W> DerefMut for Sink<W> {
+    fn deref_mut(&mut self) -> &mut W {
+        self.0
+            .as_mut()
+            .expect("the writer is present until it is taken")
+    }
+}
+
+impl<W: Write> Write for Sink<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (**self).write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (**self).flush()
     }
 }
 
@@ -752,6 +816,15 @@ mod tests {
     }
 
     #[test]
+    fn clear_without_a_retained_frame_still_restores_the_cursor() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.cursor_visible = Some(false);
+        renderer.clear().unwrap();
+        assert_eq!(renderer.into_inner(), b"\x1b[?25h");
+    }
+
+    #[test]
     fn growing_frame_allocates_rows_before_diffing_them() {
         let mut renderer = Renderer::new(Vec::new());
         renderer
@@ -824,6 +897,39 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[derive(Clone, Default)]
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl io::Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dropping_a_renderer_shows_a_cursor_it_hid() {
+        let shared = Shared::default();
+        let mut renderer =
+            Renderer::new(shared.clone()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+        assert!(shared.0.lock().unwrap().ends_with(b"\x1b[?25l"));
+        drop(renderer);
+        assert!(shared.0.lock().unwrap().ends_with(b"\x1b[?25l\x1b[?25h"));
+    }
+
+    #[test]
+    fn into_inner_leaves_a_hidden_cursor_to_the_caller() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+        assert!(renderer.into_inner().ends_with(b"\x1b[?25l"));
     }
 
     #[test]
