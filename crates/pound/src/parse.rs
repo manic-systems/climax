@@ -826,8 +826,9 @@ fn finalise(
     finalise_args(spec, m)?;
     finalise_groups(spec, m)?;
     if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
-        // empty/sub-less invocation shows help rather than a bare error
-        return Err(ErrorKind::Help(help::render(spec, path, globals, false)));
+        return Err(ErrorKind::MissingSubcommand {
+            help: Some(help::render(spec, path, globals, false)),
+        });
     }
     Ok(())
 }
@@ -1463,8 +1464,10 @@ mod tests {
             parse(&ROOT, &["nope"]),
             Err(ErrorKind::UnknownSubcommand { .. })
         ));
-        // bare invocation shows help
-        assert!(matches!(parse(&ROOT, &[]), Err(ErrorKind::Help(_))));
+        assert!(matches!(
+            parse(&ROOT, &[]),
+            Err(ErrorKind::MissingSubcommand { help: Some(_) })
+        ));
     }
 
     // positionals and subs on one command (`prog <process> <access> COMMAND`)
