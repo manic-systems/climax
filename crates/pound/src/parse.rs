@@ -236,12 +236,11 @@ impl<'a> Matches<'a> {
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<T, Error> {
         if let Some(s) = self.raw(i) {
-            return parse_with(spec, i, s, &convert);
+            return parse_with(spec, i, s, None, &convert);
         }
-        match fallback(spec, i) {
-            Some(c) => parse_with(spec, i, &c, &convert),
-            None => Err(ErrorKind::MissingRequired(spec.args[i].display_name()).into()),
-        }
+        parse_fallback(spec, i, &convert).unwrap_or_else(|| {
+            Err(ErrorKind::MissingRequired(spec.args[i].display_name()).into())
+        })
     }
 
     /// read an optional value
@@ -253,12 +252,9 @@ impl<'a> Matches<'a> {
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Option<T>, Error> {
         if let Some(s) = self.raw(i) {
-            return Ok(Some(parse_with(spec, i, s, &convert)?));
+            return Ok(Some(parse_with(spec, i, s, None, &convert)?));
         }
-        match fallback(spec, i) {
-            Some(c) => Ok(Some(parse_with(spec, i, &c, &convert)?)),
-            None => Ok(None),
-        }
+        parse_fallback(spec, i, &convert).transpose()
     }
 
     /// read every value
@@ -273,31 +269,56 @@ impl<'a> Matches<'a> {
         if !raws.is_empty() {
             return raws
                 .iter()
-                .map(|&s| parse_with(spec, i, s, &convert))
+                .map(|&s| parse_with(spec, i, s, None, &convert))
                 .collect();
         }
-        match fallback(spec, i) {
-            Some(c) => Ok(vec![parse_with(spec, i, &c, &convert)?]),
-            None => Ok(Vec::new()),
-        }
+        Ok(parse_fallback(spec, i, &convert)
+            .transpose()?
+            .into_iter()
+            .collect())
     }
 }
 
 /// the value to use when an arg was not given
 fn fallback(spec: &CommandSpec, i: usize) -> Option<Cow<'static, str>> {
-    #[cfg(feature = "std")]
-    if let Some(var) = spec.args[i].env
-        && let Ok(val) = std::env::var(var)
-    {
-        return Some(Cow::Owned(val));
+    match env_value(spec, i) {
+        Some((_, val)) => Some(Cow::Owned(val)),
+        None => spec.args[i].default.map(Cow::Borrowed),
     }
-    spec.args[i].default.map(Cow::Borrowed)
+}
+
+/// the env var an arg falls back to and its value, when the var is set
+#[cfg(feature = "std")]
+fn env_value(spec: &CommandSpec, i: usize) -> Option<(&'static str, String)> {
+    let var = spec.args[i].env?;
+    std::env::var(var).ok().map(|val| (var, val))
+}
+
+#[cfg(not(feature = "std"))]
+const fn env_value(_spec: &CommandSpec, _i: usize) -> Option<(&'static str, String)> {
+    None
+}
+
+/// convert the fallback value, naming the env var in the error when that is
+/// where the value came from
+fn parse_fallback<T>(
+    spec: &CommandSpec,
+    i: usize,
+    convert: &impl Fn(&str) -> Result<T, ValueError>,
+) -> Option<Result<T, Error>> {
+    if let Some((var, val)) = env_value(spec, i) {
+        return Some(parse_with(spec, i, &val, Some(var), convert));
+    }
+    spec.args[i]
+        .default
+        .map(|default| parse_with(spec, i, default, None, convert))
 }
 
 fn parse_with<T>(
     spec: &CommandSpec,
     i: usize,
     s: &str,
+    env: Option<&str>,
     convert: &impl Fn(&str) -> Result<T, ValueError>,
 ) -> Result<T, Error> {
     convert(s).map_err(|e| {
@@ -307,8 +328,12 @@ fn parse_with<T>(
         {
             msg = format!("{msg} (possible values: {})", values.join(", "));
         }
+        let arg = match env {
+            Some(var) => format!("{} (from ${var})", spec.args[i].display_name()),
+            None => spec.args[i].display_name(),
+        };
         ErrorKind::Value {
-            arg: spec.args[i].display_name(),
+            arg,
             value: e.value,
             msg,
         }
@@ -1166,6 +1191,32 @@ mod tests {
         assert_eq!(
             parse(&SPEC, &[]).unwrap_err(),
             ErrorKind::MissingRequired("--token".to_owned())
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "std")]
+    fn a_bad_env_value_names_its_variable() {
+        const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt)
+            .long("replicas")
+            .env("POUND_TEST_BAD_REPLICAS")];
+        const SPEC: CommandSpec = CommandSpec::new("e").args(ARGS);
+        // SAFETY: no other test reads this variable.
+        unsafe { std::env::set_var("POUND_TEST_BAD_REPLICAS", "99") };
+        let from_env = parse(&SPEC, &[])
+            .unwrap()
+            .required_map::<u8>(&SPEC, 0, |_| Err(ValueError::new("99", "too many")));
+        let from_cli = parse(&SPEC, &["--replicas", "99"])
+            .unwrap()
+            .required_map::<u8>(&SPEC, 0, |_| Err(ValueError::new("99", "too many")));
+        unsafe { std::env::remove_var("POUND_TEST_BAD_REPLICAS") };
+        assert_eq!(
+            from_env.unwrap_err().to_string(),
+            "invalid value '99' for --replicas (from $POUND_TEST_BAD_REPLICAS): too many"
+        );
+        assert_eq!(
+            from_cli.unwrap_err().to_string(),
+            "invalid value '99' for --replicas: too many"
         );
     }
 
