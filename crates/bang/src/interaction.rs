@@ -200,11 +200,12 @@ impl Interaction {
         let line = |value: &Value| {
             let label = label.as_deref()?;
             let answer = (summary.answer)(value)?;
-            Some(if answer.is_empty() {
+            let line = if answer.is_empty() {
                 label.to_owned()
             } else {
                 format!("{label} › {answer}")
-            })
+            };
+            Some(screw::single_line(&line).into_owned())
         };
         let enabled = summary.enabled.unwrap_or(self.summaries);
         self.run(widget, actions, enabled.then_some(&line as SummaryAnswer<'_>))
@@ -388,6 +389,29 @@ mod tests {
         fn drop(&mut self) {
             self.events.borrow_mut().push(self.label);
         }
+    }
+
+    #[test]
+    fn summary_lines_drop_escapes_and_collapse_line_breaks() {
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let sink_lines = lines.clone();
+        let interaction = Interaction::from_runner(|_widget| Ok(Value::from("done")))
+            .with_summary_sink(Rc::new(move |line| {
+                sink_lines.borrow_mut().push(line.to_owned());
+                Ok(())
+            }));
+        let answer = |_: &Value| Some("red\x1b[31m\nblue\r\ngreen".to_owned());
+
+        interaction
+            .interact_named(
+                Some("Pick\x1b]0;title\x07 one:"),
+                bang_core::widgets::TextInput::new("w"),
+                [],
+                Summary::new(None, &answer),
+            )
+            .unwrap();
+
+        assert_eq!(*lines.borrow(), ["Pick]0;title one › red[31m blue green"]);
     }
 
     #[test]
