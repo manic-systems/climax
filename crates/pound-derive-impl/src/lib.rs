@@ -601,7 +601,7 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
                 #spec_assert
                 match #root::Matches::sub(m) {
                     #(#arms)*
-                    _ => ::core::result::Result::Err(#root::ErrorKind::MissingSubcommand.into()),
+                    _ => ::core::result::Result::Err(#root::ErrorKind::MissingSubcommand { help: ::core::option::Option::None }.into()),
                 }
             }
         }

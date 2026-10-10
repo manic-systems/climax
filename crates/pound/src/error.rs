@@ -32,7 +32,11 @@ pub enum ErrorKind {
         closest: Option<String>,
     },
     /// a subcommand was required but none given
-    MissingSubcommand,
+    MissingSubcommand {
+        /// the command's help, which lists the subcommands to pick from, when
+        /// the parser raised it
+        help: Option<String>,
+    },
     /// a value failed to parse into its target type
     Value {
         /// the argument the value was given to, as usage spells it
@@ -111,7 +115,7 @@ impl fmt::Display for ErrorKind {
             Self::UnexpectedPositional(v) => write!(f, "unexpected argument '{v}'"),
             Self::UnexpectedValue(a) => write!(f, "'{a}' does not take a value"),
             Self::UnknownSubcommand { name, .. } => write!(f, "unknown subcommand '{name}'"),
-            Self::MissingSubcommand => write!(f, "a subcommand is required"),
+            Self::MissingSubcommand { .. } => write!(f, "a subcommand is required"),
             Self::Value { arg, value, msg } => {
                 write!(f, "invalid value '{value}' for {arg}: {msg}")
             },
@@ -183,6 +187,12 @@ impl Error {
         }
 
         let mut out = format!("error: {}", self.kind);
+        if let ErrorKind::MissingSubcommand { help: Some(help) } = &self.kind {
+            out.push_str("\n\n");
+            out.push_str(help);
+            return out;
+        }
+
         if let Some(closest) = self.kind.closest() {
             out.push_str("\n\n  tip: did you mean '");
             out.push_str(closest);
