@@ -196,6 +196,9 @@ where
         for floating in &self.floating {
             render_floating(&mut composed, ctx, canvas, floating);
         }
+        if !self.floating.is_empty() {
+            composed.harden_soft_breaks();
+        }
         append_surface(out, &composed, composed.height());
     }
 
@@ -370,6 +373,20 @@ mod tests {
         assert_eq!(surface.rows()[0].cells().len(), 3);
         assert_eq!(surface.rows()[0].cells()[2].text, "B");
         assert_eq!(surface.display_width(), 5);
+    }
+
+    #[test]
+    fn an_overlay_on_a_soft_wrapped_row_stays_on_its_row() {
+        let layers = Layers::new("abc界").float("X", Floating::new(Edge::BOTTOM | Edge::LEFT));
+        let mut surface = Surface::new();
+        let ctx = RenderCtx::new()
+            .with_constraints(Some(4), Some(2))
+            .with_layout_mode(LayoutMode::Wrap)
+            .with_theme(Theme::DEFAULT);
+        layers.render(&ctx, &mut surface);
+        let wrapped = crate::renderer::layout_surface(surface, Some(4), LayoutMode::Wrap);
+        assert_eq!(wrapped.rows()[0].cells().len(), 3);
+        assert_eq!(wrapped.rows()[1].cells()[0].text, "X");
     }
 
     struct LocalOverlay(Rc<RefCell<String>>);
