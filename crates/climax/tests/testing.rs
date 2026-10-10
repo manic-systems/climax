@@ -270,3 +270,24 @@ fn date_moves_backward_and_within_a_month() {
     let to = Date::new(2026, 3, 2).unwrap();
     assert_eq!(date_flow(from, to), to);
 }
+
+#[test]
+fn text_attempts_erase_a_rejected_input_before_retyping() {
+    let script = Script::new().text_attempts(["ab", "cdef", "ghi"]);
+    let outcome = testing::run_with(script, |cx| {
+        let value = cx
+            .text("Name")
+            .validator(|text| {
+                if text == "ghi" {
+                    Ok(())
+                } else {
+                    Err(format!("{text} is taken"))
+                }
+            })
+            .interact()?
+            .or_cancel()?;
+        cx.diagnostic().notice(value)
+    });
+    assert_eq!(outcome.exit_code, 0);
+    assert!(outcome.stderr.ends_with("ghi\n"), "got {:?}", outcome.stderr);
+}

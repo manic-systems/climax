@@ -245,6 +245,9 @@ impl Script {
     /// Answer one text prompt whose validator rejects the earlier attempts, by
     /// typing and submitting each attempt in turn.
     ///
+    /// The prompt keeps a rejected input, so the script erases what it typed
+    /// before the next attempt.
+    ///
     /// ```
     /// # use climax::testing::Script;
     /// let script = Script::new().text_attempts(["ab", "abc"]);
@@ -253,7 +256,13 @@ impl Script {
     #[must_use]
     pub fn text_attempts<'a>(self, attempts: impl IntoIterator<Item = &'a str>) -> Self {
         let mut keys = Vec::new();
+        let mut typed = 0;
         for attempt in attempts {
+            if typed > 0 {
+                keys.push(bang::advanced::Key::End);
+                keys.extend(vec![bang::advanced::Key::Backspace; typed]);
+            }
+            typed = attempt.chars().count();
             keys.extend(attempt.chars().map(bang::advanced::Key::Char));
             keys.push(bang::advanced::Key::Enter);
         }
