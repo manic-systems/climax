@@ -314,7 +314,7 @@ fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
     let groups = group_exprs(cx, plans, &item.required_groups);
     let conflicts = index_pairs(&conflicts);
     let (subs, sub_optional) = sub_parts(cx, sub.as_ref());
-    let name_expr = name_expr(&item);
+    let command_new = command_new(cx, &item);
     let version_expr = version_expr(&item);
     let hash_call = git_hash_call();
     let (about, long_about) = about_calls(cx, &attr::doc(&s.attributes));
@@ -365,7 +365,7 @@ fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
                 const #groups_id: &[#root::GroupSpec] = &[ #(#groups),* ];
                 const #conflicts_id: &[(usize, usize)] = #conflicts;
                 const #requires_id: &[(usize, usize)] = #requires;
-                const #cmd_id: #root::CommandSpec = #root::CommandSpec::new(#name_expr)
+                const #cmd_id: #root::CommandSpec = #command_new
                     .version(#version_expr)
                     #hash_call
                     #about
@@ -409,7 +409,7 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
         Err(e) => return err(&e),
     };
     let name = &e.name;
-    let name_expr = name_expr(&item);
+    let command_new = command_new(cx, &item);
     let version_expr = version_expr(&item);
     let hash_call = git_hash_call();
     let (about, long_about) = about_calls(cx, &attr::doc(&e.attributes));
@@ -588,7 +588,7 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
                     #root::checks::commands_unique(#subs_id),
                     #unique_message
                 );
-                const #root_id: #root::CommandSpec = #root::CommandSpec::new(#name_expr)
+                const #root_id: #root::CommandSpec = #command_new
                     .version(#version_expr)
                     #hash_call
                     #about
@@ -1502,11 +1502,14 @@ fn index_pairs(pairs: &[(usize, usize)]) -> TokenStream2 {
     quote! { &[ #(#items),* ] }
 }
 
-fn name_expr(item: &Pound) -> TokenStream2 {
-    item.name.as_ref().map_or_else(
-        || quote! { ::core::env!("CARGO_PKG_NAME") },
-        |n| quote! { #n },
-    )
+// without a `name`, a command shows the name the program runs as when it
+// parses argv, and the package name otherwise
+fn command_new(cx: &Ctx, item: &Pound) -> TokenStream2 {
+    let root = &cx.root;
+    if let Some(name) = &item.name {
+        return quote! { #root::CommandSpec::new(#name) };
+    }
+    quote! { #root::CommandSpec::new(::core::env!("CARGO_PKG_NAME")).invoked_name() }
 }
 
 fn version_expr(item: &Pound) -> TokenStream2 {
