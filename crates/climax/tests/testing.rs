@@ -209,3 +209,37 @@ fn a_missing_subcommand_exits_2_on_stderr_with_nothing_on_stdout() {
     assert!(outcome.stderr.contains("list"), "got {:?}", outcome.stderr);
     assert_eq!(outcome.error.unwrap().kind(), ErrorKind::Parse);
 }
+
+#[test]
+fn select_nth_is_absolute_over_a_preselection() {
+    let outcome = testing::run_with(Script::new().select_nth(0), |cx| {
+        let picked = cx
+            .select("Region")
+            .choice("eu", "eu")
+            .choice("us", "us")
+            .choice("ap", "ap")
+            .selected(2)
+            .interact()?
+            .or_cancel()?;
+        cx.diagnostic().notice(picked.to_string())
+    });
+    assert_eq!(outcome.exit_code, 0);
+    assert_eq!(outcome.stderr, "eu\n");
+}
+
+#[test]
+fn multi_select_nth_replaces_the_preselection() {
+    let outcome = testing::run_with(Script::new().multi_select_nth([2]), |cx| {
+        let picked = cx
+            .multi_select("Tools")
+            .choice("a", "a")
+            .choice("b", "b")
+            .choice("c", "c")
+            .checked(0)
+            .interact()?
+            .or_cancel()?;
+        cx.diagnostic().notice(format!("{picked:?}"))
+    });
+    assert_eq!(outcome.exit_code, 0);
+    assert_eq!(outcome.stderr, "[\"c\"]\n");
+}
