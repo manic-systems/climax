@@ -291,3 +291,15 @@ fn text_attempts_erase_a_rejected_input_before_retyping() {
     assert_eq!(outcome.exit_code, 0);
     assert!(outcome.stderr.ends_with("ghi\n"), "got {:?}", outcome.stderr);
 }
+
+#[test]
+#[should_panic(expected = "testing script was not fully consumed")]
+fn a_script_left_unused_by_help_fails_the_run() {
+    let _ = testing::run(["--help"], Script::new().confirm(true), ship);
+}
+
+#[test]
+#[should_panic(expected = "testing script was not fully consumed")]
+fn a_script_left_unused_by_a_parse_failure_fails_the_run() {
+    let _ = testing::run(["--wat"], Script::new().confirm(true), ship);
+}
