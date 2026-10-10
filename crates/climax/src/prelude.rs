@@ -54,6 +54,7 @@ pub use crate::{
 };
 #[cfg(feature = "parse")]
 pub use crate::{
+    main,
     try_run,
     try_run_from,
 };
