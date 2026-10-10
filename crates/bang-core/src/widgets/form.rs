@@ -41,9 +41,19 @@ impl Form {
     }
 
     /// Add a field called `name` that edits through `widget`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a field called `name` already exists, since the submitted
+    /// object holds one value per name and would drop the earlier answer.
     pub fn push_field(&mut self, name: impl Into<String>, widget: impl Widget + 'static) {
+        let name = name.into();
+        assert!(
+            self.fields.iter().all(|field| field.name != name),
+            "form field name '{name}' is already used"
+        );
         self.fields.push(FormField {
-            name:     name.into(),
+            name,
             widget:   Box::new(widget),
             accepted: None,
         });
@@ -316,6 +326,14 @@ mod tests {
 
     fn press(form: &mut Form, key: Key) -> Reaction {
         form.handle(Event::Key(KeyEvent::new(key)), &mut Context::new())
+    }
+
+    #[test]
+    #[should_panic(expected = "form field name 'who' is already used")]
+    fn a_repeated_field_name_is_refused() {
+        let _ = Form::new("form")
+            .with_field("who", TextInput::new("first"))
+            .with_field("who", TextInput::new("second"));
     }
 
     fn required(id: &'static str) -> TextInput {
