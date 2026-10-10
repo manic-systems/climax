@@ -133,7 +133,52 @@ impl TerminalPolicy {
         }
     }
 
+    pub(crate) const fn set_capabilities(&mut self, capabilities: TerminalCapabilities) {
+        self.capabilities = capabilities;
+    }
+
     pub(crate) const fn set_interaction_mode(&mut self, interaction: InteractionMode) {
         self.interaction = interaction;
+    }
+
+    pub(crate) const fn set_status_mode(&mut self, status: StatusMode) {
+        self.status = status;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_interaction_requires_input_transient_and_ansi_capabilities() {
+        for capabilities in [
+            TerminalCapabilities::new(false, true, true),
+            TerminalCapabilities::new(true, false, true),
+            TerminalCapabilities::new(true, true, false),
+        ] {
+            let mut policy = TerminalPolicy::process();
+            policy.set_capabilities(capabilities);
+            assert!(!policy.interaction_available());
+        }
+        let mut policy = TerminalPolicy::process();
+        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        assert!(policy.interaction_available());
+    }
+
+    #[test]
+    fn explicit_modes_override_detection() {
+        let mut policy = TerminalPolicy::process();
+        policy.set_capabilities(TerminalCapabilities::new(false, false, false));
+        policy.set_interaction_mode(InteractionMode::Force);
+        policy.set_status_mode(StatusMode::Live);
+        assert!(policy.interaction_available());
+        assert_eq!(policy.effective_status_mode(), StatusMode::Live);
+
+        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        policy.set_interaction_mode(InteractionMode::Disabled);
+        policy.set_status_mode(StatusMode::Silent);
+        assert!(!policy.interaction_available());
+        assert_eq!(policy.effective_status_mode(), StatusMode::Silent);
     }
 }
