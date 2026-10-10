@@ -347,7 +347,8 @@ Deserialize)]` derives serde's traits rooted at `::climax::serde` and adds
 `#[serde(crate = "::climax::serde")]`, keeping the item and its other
 attributes. It takes plain derive names, rejects an empty list, and must come
 before other derives that share serde's helper attributes. Without `derive`,
-serde's own derives need `#[serde(crate = "climax::serde")]` when serde is
+`#[climax::serde(..)]` does not exist and fails with `expected attribute, found
+module`, so serde's own derives need `#[serde(crate = "climax::serde")]` when serde is
 reached through `climax`.
 
 ## Ownership
