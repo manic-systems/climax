@@ -17,11 +17,10 @@ use climax::{
         Widget,
         widget,
     },
-    serde::Serialize,
 };
 
-#[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
-#[serde(crate = "climax::serde")]
+#[climax::serde(Serialize)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum Shell {
     Bash,
     Zsh,
@@ -90,7 +89,49 @@ mod tests {
         scripted_interaction,
     };
 
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+
+    #[climax::serde(Serialize, Deserialize)]
+    #[derive(Debug, PartialEq)]
+    #[serde(rename_all = "kebab-case")]
+    struct Report {
+        shell_name: String,
+        #[serde(rename = "lines")]
+        line_count: u32,
+    }
+
+    #[derive(Clone, Default)]
+    struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_serde_attribute_roots_derives_and_keeps_helpers() {
+        let report = Report { shell_name: "zsh".to_owned(), line_count: 3 };
+        let buffer = Buffer::default();
+        let context = Context::new()
+            .with_output_format(Format::Json)
+            .with_output_writer(buffer.clone());
+        context.output().stream(&report).text(|_| String::new()).emit().unwrap();
+        drop(context);
+        assert_eq!(
+            String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap(),
+            "{\"shell-name\":\"zsh\",\"lines\":3}\n",
+        );
+        fn deserializes<T: for<'de> climax::serde::Deserialize<'de>>() {}
+        deserializes::<Report>();
+    }
 
     #[test]
     fn a_scripted_prompt_drives_the_application() {
