@@ -35,12 +35,30 @@ pub struct Position {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cell {
-    pub text:  String,
-    pub width: usize,
-    pub style: Style,
+    pub(crate) text:  String,
+    pub(crate) width: usize,
+    pub(crate) style: Style,
 }
 
 impl Cell {
+    /// The grapheme text, including any combining marks written after it.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Columns the cell occupies.
+    #[must_use]
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    /// The style the cell was written with.
+    #[must_use]
+    pub const fn style(&self) -> Style {
+        self.style
+    }
+
     pub fn new(text: &str, style: Style) -> Option<Self> {
         let mut clusters = segments(text);
         let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
@@ -600,7 +618,7 @@ mod tests {
     #[test]
     fn a_cell_is_built_from_exactly_one_cluster() {
         let heart = Cell::new("\u{2764}\u{fe0f}", Style::PLAIN).unwrap();
-        assert_eq!((heart.text.as_str(), heart.width), ("\u{2764}\u{fe0f}", 2));
+        assert_eq!((heart.text(), heart.width()), ("\u{2764}\u{fe0f}", 2));
         assert!(Cell::new("ab", Style::PLAIN).is_none());
         assert!(Cell::new("\u{301}", Style::PLAIN).is_none());
         assert!(Cell::new("", Style::PLAIN).is_none());
