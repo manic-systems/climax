@@ -10,7 +10,7 @@ use bang_core::{
     },
 };
 
-use crate::{Error, Interaction, Result};
+use crate::{Error, Interaction, Result, interaction::Summary};
 
 const DEFAULT_PAGE_SIZE: usize = 9;
 
@@ -67,6 +67,7 @@ struct ListConfig {
     wrap: bool,
     page_size: usize,
     selected: Option<usize>,
+    summary: Option<bool>,
 }
 
 impl Default for ListConfig {
@@ -76,6 +77,7 @@ impl Default for ListConfig {
             wrap: true,
             page_size: DEFAULT_PAGE_SIZE,
             selected: None,
+            summary: None,
         }
     }
 }
@@ -125,6 +127,14 @@ macro_rules! list_options {
         #[must_use]
         pub const fn selected(mut self, selected: usize) -> Self {
             self.$($list).+.selected = Some(selected);
+            self
+        }
+
+        /// Choose whether submitting leaves a one-line summary in the
+        /// scrollback, overriding the interaction's setting.
+        #[must_use]
+        pub const fn summary(mut self, summary: bool) -> Self {
+            self.$($list).+.summary = Some(summary);
             self
         }
     };
@@ -204,9 +214,18 @@ pub struct TextConfig {
     value: Option<String>,
     placeholder: Option<String>,
     validator: Option<Rc<Validator>>,
+    pub(crate) summary: Option<bool>,
 }
 
 impl TextConfig {
+    /// Choose whether submitting leaves a one-line summary in the scrollback,
+    /// overriding the interaction's setting.
+    #[must_use]
+    pub const fn summary(mut self, summary: bool) -> Self {
+        self.summary = Some(summary);
+        self
+    }
+
     /// Set the widget id. Defaults to `text`.
     #[must_use]
     pub fn id(mut self, id: impl Into<String>) -> Self {
@@ -248,6 +267,7 @@ impl fmt::Debug for TextConfig {
             .field("value", &self.value)
             .field("placeholder", &self.placeholder)
             .field("validator", &self.validator.as_ref().map(|_| ".."))
+            .field("summary", &self.summary)
             .finish()
     }
 }
@@ -286,6 +306,67 @@ pub enum PromptOutcome<T> {
     Submit(T),
     /// The user left the prompt without submitting.
     Leave,
+}
+
+impl<T> PromptOutcome<T> {
+    /// Whether the user submitted a value.
+    #[must_use]
+    pub const fn is_submit(&self) -> bool {
+        matches!(self, Self::Submit(_))
+    }
+
+    /// Whether the user left without submitting.
+    #[must_use]
+    pub const fn is_leave(&self) -> bool {
+        matches!(self, Self::Leave)
+    }
+
+    /// The submitted value, or `None` when the user left.
+    ///
+    /// ```
+    /// use bang::PromptOutcome;
+    ///
+    /// assert_eq!(PromptOutcome::Submit(3).into_option(), Some(3));
+    /// assert_eq!(PromptOutcome::<u8>::Leave.into_option(), None);
+    /// ```
+    #[must_use]
+    pub fn into_option(self) -> Option<T> {
+        match self {
+            Self::Submit(value) => Some(value),
+            Self::Leave => None,
+        }
+    }
+
+    /// The submitted value, or `default` when the user left.
+    ///
+    /// ```
+    /// use bang::PromptOutcome;
+    ///
+    /// assert_eq!(PromptOutcome::Submit(3).unwrap_or(0), 3);
+    /// assert_eq!(PromptOutcome::Leave.unwrap_or(0), 0);
+    /// ```
+    #[must_use]
+    pub fn unwrap_or(self, default: T) -> T {
+        self.into_option().unwrap_or(default)
+    }
+
+    /// The submitted value, or an [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled)
+    /// error when the user left.
+    ///
+    /// This lets a command that cannot continue without an answer end through
+    /// `?`. Applications built on `climax` exit with status 130 on it, the
+    /// same as an unhandled Ctrl-C.
+    ///
+    /// ```
+    /// use bang::{ErrorKind, PromptOutcome};
+    ///
+    /// assert_eq!(PromptOutcome::Submit(3).or_cancel().unwrap(), 3);
+    /// let error = PromptOutcome::<u8>::Leave.or_cancel().unwrap_err();
+    /// assert_eq!(error.kind(), ErrorKind::Cancelled);
+    /// ```
+    pub fn or_cancel(self) -> Result<T> {
+        self.into_option().ok_or_else(Error::cancelled)
+    }
 }
 
 /// How a review interaction ended.
@@ -544,10 +625,16 @@ impl<T> ReviewPrompt<T> {
     pub fn interact(self) -> Result<PromptOutcome<Vec<Reviewed<T>>>> {
         let interaction = self.core.interaction.clone();
         let header = self.core.config.list.header.clone();
+        let summary = self.core.config.list.summary;
         let (widget, choices) = self
             .core
             .into_widget(&[] as &[ReviewPromptAction<std::convert::Infallible>])?;
-        let value = match interaction.interact_named(header.as_deref(), widget, []) {
+        let value = match interaction.interact_named(
+            header.as_deref(),
+            widget,
+            [],
+            Summary::new(summary, &review_summary),
+        ) {
             Ok(value) => value,
             Err(error) if error.kind() == crate::ErrorKind::Cancelled => {
                 return Ok(PromptOutcome::Leave);
@@ -614,8 +701,14 @@ impl<T, A> ReviewPromptWithActions<T, A> {
         validate_review_actions(&self.actions)?;
         let interaction = self.core.interaction.clone();
         let header = self.core.config.list.header.clone();
+        let summary = self.core.config.list.summary;
         let (widget, choices) = self.core.into_widget(&self.actions)?;
-        match interaction.interact_named(header.as_deref(), widget, []) {
+        match interaction.interact_named(
+            header.as_deref(),
+            widget,
+            [],
+            Summary::new(summary, &review_summary),
+        ) {
             Ok(value) => resolve_review(value, choices, self.actions),
             Err(error) if error.kind() == crate::ErrorKind::Cancelled => Ok(ReviewOutcome {
                 exit: ReviewExit::Leave,
@@ -711,9 +804,16 @@ impl<T> SelectPrompt<T> {
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
+        let summary = self.config.list.summary;
         let (widget, choices) = self.into_widget()?;
+        let labels = choice_labels(&choices);
         resolve_prompt(
-            interaction.interact_named(header.as_deref(), widget, []),
+            interaction.interact_named(
+                header.as_deref(),
+                widget,
+                [],
+                Summary::new(summary, &|value| one_label(value, &labels)),
+            ),
             |value| resolve_one(&value, choices),
         )
     }
@@ -804,9 +904,16 @@ impl<T> MultiSelectPrompt<T> {
     pub fn interact(self) -> Result<PromptOutcome<Vec<T>>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
+        let summary = self.config.list.summary;
         let (widget, choices) = self.into_widget()?;
+        let labels = choice_labels(&choices);
         resolve_prompt(
-            interaction.interact_named(header.as_deref(), widget, []),
+            interaction.interact_named(
+                header.as_deref(),
+                widget,
+                [],
+                Summary::new(summary, &|value| many_labels(value, &labels)),
+            ),
             |value| resolve_many(value, choices),
         )
     }
@@ -896,9 +1003,16 @@ impl<T> SearchPrompt<T> {
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
+        let summary = self.config.list.summary;
         let (widget, choices) = self.into_widget()?;
+        let labels = choice_labels(&choices);
         resolve_prompt(
-            interaction.interact_named(header.as_deref(), widget, []),
+            interaction.interact_named(
+                header.as_deref(),
+                widget,
+                [],
+                Summary::new(summary, &|value| one_label(value, &labels)),
+            ),
             |value| resolve_one(&value, choices),
         )
     }
@@ -988,6 +1102,14 @@ impl TextPrompt {
         self
     }
 
+    /// Choose whether submitting leaves a one-line summary in the scrollback,
+    /// overriding the interaction's setting.
+    #[must_use]
+    pub const fn summary(mut self, summary: bool) -> Self {
+        self.config.summary = Some(summary);
+        self
+    }
+
     /// Run the prompt on `interaction` instead of the live terminal.
     #[must_use]
     pub fn interaction(mut self, interaction: Interaction) -> Self {
@@ -1003,9 +1125,15 @@ impl TextPrompt {
     /// isn't interactive.
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
+        let summary = self.config.summary;
         let widget = text_widget(self.prompt, self.config, "text", None);
         resolve_prompt(
-            self.interaction.interact_named(Some(&prompt), widget, []),
+            self.interaction.interact_named(
+                Some(&prompt),
+                widget,
+                [],
+                Summary::new(summary, &|value| value.as_str().map(str::to_owned)),
+            ),
             resolve_text,
         )
     }
@@ -1073,6 +1201,46 @@ pub(crate) fn resolve_prompt<T>(
         Err(error) if error.kind() == crate::ErrorKind::Cancelled => Ok(PromptOutcome::Leave),
         Err(error) => Err(error),
     }
+}
+
+fn choice_labels<T>(choices: &[Choice<T>]) -> Vec<String> {
+    choices.iter().map(|choice| choice.label.clone()).collect()
+}
+
+fn one_label(value: &Value, labels: &[String]) -> Option<String> {
+    let index = value.as_str()?.parse::<usize>().ok()?;
+    labels.get(index).cloned()
+}
+
+fn many_labels(value: &Value, labels: &[String]) -> Option<String> {
+    let picked = value
+        .as_list()?
+        .iter()
+        .map(|value| one_label(value, labels))
+        .collect::<Option<Vec<_>>>()?;
+    Some(if picked.is_empty() {
+        "none".to_owned()
+    } else {
+        picked.join(", ")
+    })
+}
+
+fn review_summary(value: &Value) -> Option<String> {
+    let output = value.as_object()?;
+    if output.get("exit")?.as_str()? != "submit" {
+        return None;
+    }
+    let rows = output.get("rows")?.as_list()?;
+    let confirmed = rows
+        .iter()
+        .filter(|row| {
+            row.as_object()
+                .and_then(|row| row.get("state"))
+                .and_then(Value::as_str)
+                == Some("confirmed")
+        })
+        .count();
+    Some(format!("{confirmed} of {} confirmed", rows.len()))
 }
 
 fn resolve_one<T>(value: &Value, mut choices: Vec<Choice<T>>) -> Result<T> {

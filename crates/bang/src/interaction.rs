@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{any::Any, cell::RefCell, collections::VecDeque, fmt, os::fd::OwnedFd, rc::Rc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    collections::VecDeque,
+    fmt,
+    fs::File,
+    io::{self, IsTerminal as _},
+    os::fd::OwnedFd,
+    rc::Rc,
+};
+
 
 use bang_core::{
     ActionBinding, ActionLayer, Context, Event, Reaction, Value, Widget, WidgetId,
@@ -11,6 +21,40 @@ use crate::{Error, Result};
 
 type Runner = dyn Fn(Box<dyn Widget>) -> Result<Value>;
 type GuardFactory = dyn Fn() -> Result<Box<dyn Any>>;
+type SummarySink = dyn Fn(&str) -> io::Result<()>;
+type SummaryAnswer<'a> = &'a dyn Fn(&Value) -> Option<String>;
+
+const DIM: &str = "\x1b[2m";
+const RESET: &str = "\x1b[0m";
+
+fn write_summary_line(mut out: impl io::Write, line: &str) -> io::Result<()> {
+    if screw::colors_enabled() {
+        writeln!(out, "{DIM}{line}{RESET}")?;
+    } else {
+        writeln!(out, "{line}")?;
+    }
+    out.flush()
+}
+
+fn stderr_sink() -> Rc<SummarySink> {
+    Rc::new(|line| {
+        let stderr = io::stderr();
+        if !stderr.is_terminal() {
+            return Ok(());
+        }
+        write_summary_line(stderr.lock(), line)
+    })
+}
+
+fn handle_sink(handle: &OwnedFd) -> io::Result<Rc<SummarySink>> {
+    let file = File::from(handle.try_clone()?);
+    Ok(Rc::new(move |line| {
+        if !file.is_terminal() {
+            return Ok(());
+        }
+        write_summary_line(&file, line)
+    }))
+}
 
 struct GuardStack(Vec<Box<dyn Any>>);
 
@@ -29,6 +73,8 @@ impl Drop for GuardStack {
 pub struct Interaction {
     runner: Rc<Runner>,
     guards: Vec<Rc<GuardFactory>>,
+    summary_sink: Option<Rc<SummarySink>>,
+    summaries: bool,
 }
 
 impl Interaction {
@@ -41,6 +87,7 @@ impl Interaction {
         Self::from_runner(|widget| {
             crate::live::run_live_session(InteractionWidget::new(widget)).map_err(Error::from_live)
         })
+        .with_summary_sink(stderr_sink())
     }
 
     /// Attempt a live session regardless of terminal capability detection.
@@ -50,6 +97,7 @@ impl Interaction {
             crate::live::run_live_session_forced(InteractionWidget::new(widget))
                 .map_err(Error::from_live)
         })
+        .with_summary_sink(stderr_sink())
     }
 
     /// Use a caller-owned terminal handle, such as `/dev/tty`, when it
@@ -61,11 +109,13 @@ impl Interaction {
     #[must_use]
     pub fn live_on(handle: impl Into<OwnedFd>) -> Self {
         let handle = handle.into();
+        let sink = handle_sink(&handle);
         Self::from_runner(move |widget| {
             let handle = handle.try_clone().map_err(Error::terminal)?;
             crate::live::run_live_session_on(InteractionWidget::new(widget), handle)
                 .map_err(Error::from_live)
         })
+        .with_optional_summary_sink(sink.ok())
     }
 
     /// Attempt a live session on a caller-owned terminal handle regardless of
@@ -73,11 +123,13 @@ impl Interaction {
     #[must_use]
     pub fn forced_on(handle: impl Into<OwnedFd>) -> Self {
         let handle = handle.into();
+        let sink = handle_sink(&handle);
         Self::from_runner(move |widget| {
             let handle = handle.try_clone().map_err(Error::terminal)?;
             crate::live::run_live_session_forced_on(InteractionWidget::new(widget), handle)
                 .map_err(Error::from_live)
         })
+        .with_optional_summary_sink(sink.ok())
     }
 
     /// Reject prompt interaction without touching the terminal.
@@ -104,16 +156,58 @@ impl Interaction {
         self
     }
 
+    /// Choose whether a submitted prompt leaves a one-line summary in the
+    /// scrollback, such as `Deploy to prod? › no`. Defaults to `true`.
+    ///
+    /// Only live terminal drivers write summaries, and only to a terminal.
+    /// They are dimmed unless `NO_COLOR` is set. Leaving a prompt writes
+    /// nothing, and neither does a prompt without a header or prompt text,
+    /// which has nothing to label the answer with. A prompt's own `summary`
+    /// setting takes precedence over this.
+    ///
+    /// ```
+    /// use bang::Interaction;
+    ///
+    /// let quiet = Interaction::live().with_summaries(false);
+    /// # drop(quiet);
+    /// ```
+    #[must_use]
+    pub const fn with_summaries(mut self, summaries: bool) -> Self {
+        self.summaries = summaries;
+        self
+    }
+
+    fn with_summary_sink(self, sink: Rc<SummarySink>) -> Self {
+        self.with_optional_summary_sink(Some(sink))
+    }
+
+    fn with_optional_summary_sink(mut self, sink: Option<Rc<SummarySink>>) -> Self {
+        self.summary_sink = sink;
+        self
+    }
+
     pub(crate) fn interact_named<W>(
         &self,
         prompt: Option<&str>,
         widget: W,
         actions: impl IntoIterator<Item = ActionBinding>,
+        summary: Summary<'_>,
     ) -> Result<Value>
     where
         W: Widget + 'static,
     {
-        self.interact(widget, actions)
+        let label = prompt.map(summary_label).filter(|label| !label.is_empty());
+        let line = |value: &Value| {
+            let label = label.as_deref()?;
+            let answer = (summary.answer)(value)?;
+            Some(if answer.is_empty() {
+                label.to_owned()
+            } else {
+                format!("{label} › {answer}")
+            })
+        };
+        let enabled = summary.enabled.unwrap_or(self.summaries);
+        self.run(widget, actions, enabled.then_some(&line as SummaryAnswer<'_>))
             .map_err(|error| match prompt {
                 Some(prompt) => error.naming_prompt(prompt),
                 None => error,
@@ -124,6 +218,8 @@ impl Interaction {
         Self {
             runner: Rc::new(runner),
             guards: Vec::new(),
+            summary_sink: None,
+            summaries: true,
         }
     }
 
@@ -140,15 +236,49 @@ impl Interaction {
     where
         W: Widget + 'static,
     {
+        self.run(widget, actions, None)
+    }
+
+    fn run<W>(
+        &self,
+        widget: W,
+        actions: impl IntoIterator<Item = ActionBinding>,
+        summary: Option<SummaryAnswer<'_>>,
+    ) -> Result<Value>
+    where
+        W: Widget + 'static,
+    {
         let mut guards = GuardStack(Vec::with_capacity(self.guards.len()));
         for factory in &self.guards {
             guards.0.push(factory()?);
         }
         let widget = ActionLayer::new(widget).with_actions(actions);
         let result = (self.runner)(Box::new(widget));
+        if let (Ok(value), Some(answer), Some(sink)) = (&result, summary, &self.summary_sink)
+            && let Some(line) = answer(value)
+        {
+            let _ = sink(&line);
+        }
         drop(guards);
         result
     }
+}
+
+/// How a prompt describes its submitted answer, if at all.
+#[derive(Clone, Copy)]
+pub(crate) struct Summary<'a> {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) answer: SummaryAnswer<'a>,
+}
+
+impl<'a> Summary<'a> {
+    pub(crate) const fn new(enabled: Option<bool>, answer: SummaryAnswer<'a>) -> Self {
+        Self { enabled, answer }
+    }
+}
+
+fn summary_label(prompt: &str) -> String {
+    prompt.trim().trim_end_matches(':').trim_end().to_owned()
 }
 
 impl Default for Interaction {
