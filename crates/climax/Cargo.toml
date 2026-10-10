@@ -1,14 +1,15 @@
 [package]
-name                 = "climax"
-version              = "0.1.0"
-authors.workspace    = true
-categories           = [ "command-line-interface", "command-line-utilities" ]
-description          = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
-edition.workspace    = true
-keywords             = [ "cli", "terminal", "prompts", "args", "tui" ]
-license.workspace    = true
-readme               = "README.md"
-repository.workspace = true
+name                   = "climax"
+version                = "0.1.0"
+authors.workspace      = true
+categories             = [ "command-line-interface", "command-line-utilities" ]
+description            = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
+edition.workspace      = true
+keywords               = [ "cli", "terminal", "prompts", "args", "tui" ]
+license.workspace      = true
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
 
 [features]
 default     = [ "derive", "interactive", "parse", "render", "structured" ]
