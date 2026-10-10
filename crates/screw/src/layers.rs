@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
+    fmt,
     marker::PhantomData,
     ops::{BitOr, BitOrAssign},
 };
@@ -92,6 +93,15 @@ pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
     base: B,
     floating: Vec<FloatingChild<H>>,
     lifetime: PhantomData<&'a ()>,
+}
+
+impl<B, H> fmt::Debug for Layers<'_, B, H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Layers")
+            .field("floating", &self.floating.len())
+            .finish()
+    }
 }
 
 impl<'a, B> Layers<'a, B> {

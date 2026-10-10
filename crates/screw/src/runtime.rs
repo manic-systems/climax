@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    fmt,
     io::{self, IsTerminal as _, Write},
     panic::{self, AssertUnwindSafe},
     sync::mpsc::{
@@ -34,6 +35,19 @@ pub struct Runtime<W, H = WidgetRef, F = WidgetRef> {
     frame_interval: Duration,
     last_draw:      Option<Instant>,
     dirty:          bool,
+}
+
+impl<W: fmt::Debug, H, F> fmt::Debug for Runtime<W, H, F> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Runtime")
+            .field("renderer", &self.renderer)
+            .field("frame_interval", &self.frame_interval)
+            .field("last_draw", &self.last_draw)
+            .field("dirty", &self.dirty)
+            .field("final_widget", &self.final_widget.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<W, H> Runtime<W, H, WidgetRef>
@@ -228,6 +242,17 @@ pub struct LiveRuntime<W> {
     thread: Option<JoinHandle<Result<W, (W, io::Error)>>>,
 }
 
+impl<W> fmt::Debug for LiveRuntime<W> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LiveRuntime")
+            .field("handle", &self.handle)
+            .field("running", &self.thread.is_some())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub struct RuntimeHandle {
     tx: Sender<RuntimeCommand>,
 }
@@ -243,6 +268,21 @@ pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
     cursor_visibility: CursorVisibility,
     theme:        Theme,
     final_widget: Option<F>,
+}
+
+impl<W, H, F> fmt::Debug for AutoRuntimeBuilder<W, H, F> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AutoRuntimeBuilder")
+            .field("interactive", &self.interactive)
+            .field("fps", &self.fps)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("layout_mode", &self.layout_mode)
+            .field("cursor_visibility", &self.cursor_visibility)
+            .field("theme", &self.theme)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<W, H> AutoRuntimeBuilder<W, H, WidgetRef>
@@ -367,6 +407,15 @@ pub enum AutoRuntime<W, H = WidgetRef, F = WidgetRef> {
     Plain(PlainRuntime<W, H, F>),
 }
 
+impl<W, H, F> fmt::Debug for AutoRuntime<W, H, F> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Live(runtime) => formatter.debug_tuple("Live").field(runtime).finish(),
+            Self::Plain(runtime) => formatter.debug_tuple("Plain").field(runtime).finish(),
+        }
+    }
+}
+
 impl<W, H, F> AutoRuntime<W, H, F>
 where
     W: Write + Send + 'static,
@@ -427,6 +476,19 @@ pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
     layout_mode:  LayoutMode,
     theme:        Theme,
     final_widget: Option<F>,
+}
+
+impl<W, H, F> fmt::Debug for PlainRuntime<W, H, F> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PlainRuntime")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("layout_mode", &self.layout_mode)
+            .field("theme", &self.theme)
+            .field("final_widget", &self.final_widget.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<W, H, F> PlainRuntime<W, H, F>
