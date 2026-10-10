@@ -449,6 +449,15 @@ impl CommandSpec {
         self
     }
 
+    /// like [`Self::hash`], but a `None` or empty value leaves the hash unset
+    #[must_use]
+    pub const fn hash_opt(self, hash: Option<&'static str>) -> Self {
+        match hash {
+            Some(hash) if !hash.is_empty() => self.hash(hash),
+            _ => self,
+        }
+    }
+
     #[must_use]
     pub const fn has_version_info(&self) -> bool {
         !self.version.is_empty() || self.hash.is_some()

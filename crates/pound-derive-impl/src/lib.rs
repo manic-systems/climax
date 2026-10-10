@@ -11,7 +11,6 @@ mod attr;
 
 use std::{
     collections::HashMap,
-    process::Command,
     str::FromStr,
 };
 
@@ -1409,22 +1408,7 @@ fn version_expr(item: &Pound) -> TokenStream2 {
 }
 
 fn git_hash_call() -> TokenStream2 {
-    git_hash().map_or_else(TokenStream2::new, |hash| quote! { .hash(#hash) })
-}
-
-fn git_hash() -> Option<String> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
-    let output = Command::new("git")
-        .args(["-C", &manifest_dir, "rev-parse", "--short=12", "HEAD"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let hash = String::from_utf8(output.stdout).ok()?;
-    let hash = hash.trim();
-    (!hash.is_empty() && hash.chars().all(|ch| ch.is_ascii_hexdigit())).then(|| hash.to_owned())
+    quote! { .hash_opt(::core::option_env!("POUND_GIT_HASH")) }
 }
 
 // bake the help string only when the feature is on, otherwise emit "".
