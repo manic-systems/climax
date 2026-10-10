@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! climax: application facade over `pound`, `screw` and `bang`
+//! climax: application facade over `pound`, `screw` and `bang`.
 //!
-//! the crate root and [`prelude`] hold the ordinary application workflow. each
-//! component is also re-exported whole behind the feature that enables it, as
-//! `climax::pound` under `parse`, `climax::bang` under `interactive`,
-//! `climax::screw` under `render`, `climax::caress` under `complete` and
-//! `climax::serde` under `structured`. an application needs no direct
-//! dependency on any of them, and derives with `climax::Parse` and
-//! `climax::ValueEnum`, since the derives under `climax::pound` expand to
-//! `::pound` paths
+//! The crate root and [`prelude`] contain the ordinary application workflow.
+//! Each component is also re-exported whole behind the feature that enables
+//! it, as `climax::pound` under `parse`, `climax::bang` under `interactive`,
+//! `climax::screw` under `render`, and `climax::serde` under `structured`. An
+//! application needs no direct dependency on any of them, and the versions it
+//! sees are the ones `climax` was tested against.
 //!
-//! the prompt builders on [`Context`] return the prompt types, which are
+//! The prompt builders on [`Context`] return the prompt types, which are
 //! re-exported at the root next to their config types, `PromptOutcome` and
 //! the review types, so a signature such as `fn ask(cx: &Context) ->
-//! SelectPrompt<String>` needs no path through `climax::bang`
+//! SelectPrompt<String>` needs no path through `climax::bang`.
 //!
-//! the `derive` feature provides `#[derive(climax::Parse)]` and
+//! The `derive` feature provides `#[derive(climax::Parse)]` and
 //! `#[derive(climax::ValueEnum)]`, whose expansion refers to
-//! `::climax::pound`. serde's derives need `#[serde(crate = "climax::serde")]`
-//! for the same reason
+//! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
+//! for the same reason.
 
 #![cfg_attr(
     all(
@@ -30,7 +28,10 @@
     ),
     doc = include_str!("../README.md")
 )]
+#![cfg_attr(doc, doc = include_str!("../docs/facade.md"))]
 #![warn(missing_docs)]
+
+extern crate alloc;
 
 mod app;
 /// the application error type and its categories

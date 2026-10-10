@@ -27,7 +27,7 @@ pub enum InteractionMode {
 /// how transient status is presented
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum StatusMode {
-    /// animate on a suitable terminal and otherwise remain silent
+    /// Animate on a suitable terminal and otherwise remain silent.
     #[default]
     Auto,
     /// animate regardless of detection
@@ -221,8 +221,8 @@ impl TerminalPolicy {
     }
 
     #[must_use]
-    /// status mode after resolving `Auto` to `Live` on a capable terminal and
-    /// `Plain` otherwise
+    /// The status mode after resolving `Auto`, which is `Live` on a terminal
+    /// that supports it and `Silent` otherwise.
     pub const fn effective_status_mode(self) -> StatusMode {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
