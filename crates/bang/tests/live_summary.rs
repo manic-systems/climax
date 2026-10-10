@@ -4,8 +4,16 @@ mod summary_common;
 
 use std::sync::Once;
 
-use bang::{ConfirmPrompt, PromptOutcome};
-use summary_common::{DIM_SUMMARY, find, rfind, run_confirm};
+use bang::{
+    ConfirmPrompt,
+    PromptOutcome,
+};
+use summary_common::{
+    DIM_SUMMARY,
+    find,
+    rfind,
+    run_confirm,
+};
 
 fn colours_on() {
     static ONCE: Once = Once::new();

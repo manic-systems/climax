@@ -7,7 +7,10 @@
 //! returns a [`PromptOutcome`] carrying the typed answer.
 //!
 //! ```no_run
-//! use bang::{PromptOutcome, select};
+//! use bang::{
+//!     PromptOutcome,
+//!     select,
+//! };
 //!
 //! # fn main() -> bang::Result<()> {
 //! let outcome = select("Pick a shell")
@@ -33,7 +36,8 @@
 //!   answer.
 //! - A submitted prompt leaves a dimmed one-line summary in the scrollback,
 //!   such as `Shell › bash`, and leaving leaves nothing. Turn it off per prompt
-//!   with `summary(false)` or for a driver with [`Interaction::with_summaries`].
+//!   with `summary(false)` or for a driver with
+//!   [`Interaction::with_summaries`].
 //! - Ended input, a non-interactive terminal and terminal failures are errors,
 //!   see [`ErrorKind`].
 //! - The entry point takes the text the user sees. The widget id is optional
@@ -90,23 +94,57 @@ pub use screw;
 ///
 /// Raw mode ([`TerminalModeGuard`](bang_terminal::TerminalModeGuard)), screen
 /// entry ([`ScreenGuard`](bang_terminal::ScreenGuard)), signal handling, a
-/// pollable event source ([`TerminalEvents`](bang_terminal::TerminalEvents)) and
-/// the byte [`Decoder`](bang_terminal::Decoder). See the crate root of
+/// pollable event source ([`TerminalEvents`](bang_terminal::TerminalEvents))
+/// and the byte [`Decoder`](bang_terminal::Decoder). See the crate root of
 /// `bang-terminal` for how the pieces fit together.
 pub mod terminal {
-    #[doc(inline)]
-    pub use bang_terminal::*;
+    #[doc(inline)] pub use bang_terminal::*;
 }
 
-pub use bang_core::{Date, widgets::ReviewState};
-pub use error::{Error, ErrorKind, Result};
+pub use bang_core::{
+    Date,
+    widgets::ReviewState,
+};
+pub use error::{
+    Error,
+    ErrorKind,
+    Result,
+};
 pub use input::{
-    ConfirmConfig, ConfirmPrompt, DateConfig, DatePrompt, NumberConfig, NumberPrompt,
-    PasswordConfig, PasswordPrompt, confirm, date, number, password,
+    ConfirmConfig,
+    ConfirmPrompt,
+    DateConfig,
+    DatePrompt,
+    NumberConfig,
+    NumberPrompt,
+    PasswordConfig,
+    PasswordPrompt,
+    confirm,
+    date,
+    number,
+    password,
 };
 pub use interaction::Interaction;
 pub use prompt::{
-    Configurable, MultiSelectConfig, MultiSelectPrompt, PromptOutcome, ReviewConfig, ReviewExit,
-    ReviewOutcome, ReviewPrompt, ReviewPromptWithActions, Reviewed, SearchConfig, SearchPrompt,
-    SelectConfig, SelectPrompt, TextConfig, TextPrompt, multi_select, review, search, select, text,
+    Configurable,
+    MultiSelectConfig,
+    MultiSelectPrompt,
+    PromptOutcome,
+    ReviewConfig,
+    ReviewExit,
+    ReviewOutcome,
+    ReviewPrompt,
+    ReviewPromptWithActions,
+    Reviewed,
+    SearchConfig,
+    SearchPrompt,
+    SelectConfig,
+    SelectPrompt,
+    TextConfig,
+    TextPrompt,
+    multi_select,
+    review,
+    search,
+    select,
+    text,
 };

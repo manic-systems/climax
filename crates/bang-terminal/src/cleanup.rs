@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{error, fmt, io};
+use std::{
+    error,
+    fmt,
+    io,
+};
 
 /// The part of terminal teardown that failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,7 +23,7 @@ pub enum CleanupStage {
 /// One failed teardown step and the I/O error behind it.
 #[derive(Debug)]
 pub struct CleanupFailure {
-    stage: CleanupStage,
+    stage:  CleanupStage,
     source: io::Error,
 }
 
@@ -108,10 +112,7 @@ impl error::Error for CleanupFailures {
     }
 }
 
-pub(crate) fn staged(
-    stage: CleanupStage,
-    errors: Vec<io::Error>,
-) -> Result<(), CleanupFailures> {
+pub(crate) fn staged(stage: CleanupStage, errors: Vec<io::Error>) -> Result<(), CleanupFailures> {
     if errors.is_empty() {
         return Ok(());
     }
@@ -129,10 +130,10 @@ mod tests {
 
     #[test]
     fn staged_failures_keep_their_stage_and_order() {
-        let failures = staged(
-            CleanupStage::Signals,
-            vec![io::Error::other("first"), io::Error::other("second")],
-        )
+        let failures = staged(CleanupStage::Signals, vec![
+            io::Error::other("first"),
+            io::Error::other("second"),
+        ])
         .unwrap_err();
 
         assert_eq!(failures.failures().len(), 2);

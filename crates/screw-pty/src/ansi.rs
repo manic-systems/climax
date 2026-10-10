@@ -1,19 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+};
 
-use screw::{Position, Style};
+use screw::{
+    Position,
+    Style,
+};
 use unicode_segmentation::UnicodeSegmentation as _;
-use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
+use unicode_width::{
+    UnicodeWidthChar as _,
+    UnicodeWidthStr as _,
+};
 
 /// A physical cell in the focused screen model.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScreenCell {
-    text: String,
-    style: Style,
-    width: usize,
+    text:         String,
+    style:        Style,
+    width:        usize,
     continuation: bool,
-    written: bool,
+    written:      bool,
 }
 
 impl ScreenCell {
@@ -68,8 +77,10 @@ impl fmt::Display for ScreenError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidUtf8 => formatter.write_str("terminal output contains invalid UTF-8"),
-            Self::IncompleteSequence => formatter
-                .write_str("terminal output ends in an incomplete escape or UTF-8 sequence"),
+            Self::IncompleteSequence => {
+                formatter
+                    .write_str("terminal output ends in an incomplete escape or UTF-8 sequence")
+            },
             Self::UnsupportedSequence(sequence) => {
                 write!(formatter, "unsupported terminal sequence {sequence:?}")
             },
@@ -81,9 +92,9 @@ impl Error for ScreenError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ScreenBuffer {
-    cells: Vec<Vec<ScreenCell>>,
-    columns: usize,
-    cursor: Position,
+    cells:        Vec<Vec<ScreenCell>>,
+    columns:      usize,
+    cursor:       Position,
     wrap_pending: bool,
 }
 
@@ -116,7 +127,8 @@ impl ScreenBuffer {
             self.cursor.row += 1;
         } else {
             self.cells.remove(0);
-            self.cells.push(vec![ScreenCell::blank(style); self.columns]);
+            self.cells
+                .push(vec![ScreenCell::blank(style); self.columns]);
         }
     }
 
@@ -264,7 +276,12 @@ impl ScreenBuffer {
         Ok(())
     }
 
-    fn erase_below(&mut self, mode: usize, final_byte: u8, style: Style) -> Result<(), ScreenError> {
+    fn erase_below(
+        &mut self,
+        mode: usize,
+        final_byte: u8,
+        style: Style,
+    ) -> Result<(), ScreenError> {
         if mode != 0 {
             return Err(unsupported(csi_sequence(false, &[mode], final_byte)));
         }
@@ -302,16 +319,16 @@ enum ParserState {
 /// are made consciously.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EmittedScreen {
-    primary: ScreenBuffer,
-    alternate: ScreenBuffer,
+    primary:          ScreenBuffer,
+    alternate:        ScreenBuffer,
     alternate_active: bool,
-    cursor_visible: bool,
-    bracketed_paste: bool,
-    style: Style,
-    saved_style: Option<Style>,
-    parser: ParserState,
-    utf8: Vec<u8>,
-    error: Option<ScreenError>,
+    cursor_visible:   bool,
+    bracketed_paste:  bool,
+    style:            Style,
+    saved_style:      Option<Style>,
+    parser:           ParserState,
+    utf8:             Vec<u8>,
+    error:            Option<ScreenError>,
 }
 
 impl EmittedScreen {
@@ -321,16 +338,16 @@ impl EmittedScreen {
         let columns = columns.max(1);
         let rows = rows.max(1);
         Self {
-            primary: ScreenBuffer::new(columns, rows),
-            alternate: ScreenBuffer::new(columns, rows),
+            primary:          ScreenBuffer::new(columns, rows),
+            alternate:        ScreenBuffer::new(columns, rows),
             alternate_active: false,
-            cursor_visible: true,
-            bracketed_paste: false,
-            style: Style::PLAIN,
-            saved_style: None,
-            parser: ParserState::Ground,
-            utf8: Vec::new(),
-            error: None,
+            cursor_visible:   true,
+            bracketed_paste:  false,
+            style:            Style::PLAIN,
+            saved_style:      None,
+            parser:           ParserState::Ground,
+            utf8:             Vec::new(),
+            error:            None,
         }
     }
 
@@ -439,11 +456,11 @@ impl EmittedScreen {
                 }
             },
             ParserState::Csi(bytes) => {
-                if (0x40..=0x7e).contains(&byte) {
+                if (0x40..=0x7E).contains(&byte) {
                     let parameters = std::mem::take(bytes);
                     self.parser = ParserState::Ground;
                     self.apply_csi(&parameters, byte)
-                } else if (0x20..=0x3f).contains(&byte) {
+                } else if (0x20..=0x3F).contains(&byte) {
                     bytes.push(byte);
                     Ok(())
                 } else {
@@ -477,7 +494,7 @@ impl EmittedScreen {
         }
 
         match byte {
-            0x1b => {
+            0x1B => {
                 self.parser = ParserState::Escape;
                 Ok(())
             },
@@ -490,7 +507,7 @@ impl EmittedScreen {
                 self.active_mut().line_feed(style);
                 Ok(())
             },
-            0x20..=0x7e => {
+            0x20..=0x7E => {
                 let style = self.style;
                 self.active_mut().put_char(char::from(byte), style)
             },
@@ -674,7 +691,9 @@ fn single_parameter(parameters: &[usize], final_byte: u8) -> Result<Option<usize
 }
 
 fn distance(parameters: &[usize], final_byte: u8) -> Result<isize, ScreenError> {
-    let value = single_parameter(parameters, final_byte)?.unwrap_or(1).max(1);
+    let value = single_parameter(parameters, final_byte)?
+        .unwrap_or(1)
+        .max(1);
     isize::try_from(value).map_err(|_| unsupported(format!("cursor distance {value}")))
 }
 
@@ -723,7 +742,13 @@ fn is_c1_control(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use screw::{Color, CursorVisibility, Renderer, Style, Surface};
+    use screw::{
+        Color,
+        CursorVisibility,
+        Renderer,
+        Style,
+        Surface,
+    };
 
     use super::*;
 
@@ -857,12 +882,23 @@ mod tests {
             Style::new().underline(),
             Style::new().strikethrough(),
             Style::new().reverse(),
-            Style::new().bold().italic().underline().strikethrough().dim().reverse(),
+            Style::new()
+                .bold()
+                .italic()
+                .underline()
+                .strikethrough()
+                .dim()
+                .reverse(),
         ];
         for colour in colours {
             styles.push(Style::new().fg(colour));
             styles.push(Style::new().bg(colour));
-            styles.push(Style::new().fg(colour).bg(screw::Color::Rgb(9, 8, 7)).italic());
+            styles.push(
+                Style::new()
+                    .fg(colour)
+                    .bg(screw::Color::Rgb(9, 8, 7))
+                    .italic(),
+            );
         }
 
         let mut surface = Surface::new();
@@ -954,7 +990,7 @@ mod tests {
     fn c1_controls_and_unemitted_sgr_codes_are_unsupported() {
         let mut c1 = EmittedScreen::new(8, 2);
         assert!(matches!(
-            c1.feed(&[0xc2, 0x9b]),
+            c1.feed(&[0xC2, 0x9B]),
             Err(ScreenError::UnsupportedSequence(_)),
         ));
         let mut sgr = EmittedScreen::new(8, 2);
@@ -1077,7 +1113,9 @@ mod tests {
     #[test]
     fn erase_below_clears_from_the_cursor_to_the_end_of_screen() {
         let mut screen = EmittedScreen::new(4, 3);
-        screen.feed(b"abcd\r\nefgh\r\nijkl\r\x1b[1A\x1b[2C\x1b[J").unwrap();
+        screen
+            .feed(b"abcd\r\nefgh\r\nijkl\r\x1b[1A\x1b[2C\x1b[J")
+            .unwrap();
         assert_eq!(screen.trimmed_line(0).unwrap(), "abcd");
         assert_eq!(screen.trimmed_line(1).unwrap(), "ef");
         assert_eq!(screen.trimmed_line(2).unwrap(), "");

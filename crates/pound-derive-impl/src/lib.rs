@@ -31,7 +31,10 @@ use venial::{
     parse_item,
 };
 
-use crate::attr::{Pound, Text};
+use crate::attr::{
+    Pound,
+    Text,
+};
 
 const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group"];
 const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group"];
@@ -107,13 +110,18 @@ impl Ctx {
 /// generated code names that crate's path to the runtime.
 ///
 /// ```
-/// use pound_derive_impl::{derive_parse, Options};
+/// use pound_derive_impl::{
+///     Options,
+///     derive_parse,
+/// };
 ///
 /// // the body of `#[proc_macro_derive(Parse, attributes(pound))]` in a crate
 /// // that re-exports pound as `climax::pound`
 /// const OPTIONS: Options = Options::new("::climax::pound", true);
 ///
-/// let input = "struct Args { #[pound(long)] verbose: bool }".parse().unwrap();
+/// let input = "struct Args { #[pound(long)] verbose: bool }"
+///     .parse()
+///     .unwrap();
 /// let output = derive_parse(input, &OPTIONS).to_string();
 /// assert!(output.contains(":: climax :: pound :: Parse for Args"));
 /// ```
@@ -132,7 +140,10 @@ pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
 /// re-exporting crate wraps it.
 ///
 /// ```
-/// use pound_derive_impl::{derive_value_enum, Options};
+/// use pound_derive_impl::{
+///     Options,
+///     derive_value_enum,
+/// };
 ///
 /// let input = "enum Format { Json, PlainText }".parse().unwrap();
 /// let output = derive_value_enum(input, &Options::new("::pound", true)).to_string();
@@ -343,7 +354,10 @@ fn parse_struct(cx: &Ctx, s: &venial::Struct) -> TokenStream2 {
         generated("REQUIRES"),
         generated("CMD"),
     );
-    let readers = plans.iter().enumerate().map(|(i, p)| reader(cx, p, i, &m, &sp));
+    let readers = plans
+        .iter()
+        .enumerate()
+        .map(|(i, p)| reader(cx, p, i, &m, &sp));
     let flattened_readers = fields
         .flattened
         .iter()
@@ -660,7 +674,8 @@ fn value_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
         if let Some(first) = names.iter().position(|n| *n == label) {
             return err(&format!(
-                "pound: ValueEnum variants `{}` and `{vname}` both spell `{label}`, so `{vname}` could never be parsed",
+                "pound: ValueEnum variants `{}` and `{vname}` both spell `{label}`, so `{vname}` \
+                 could never be parsed",
                 variant_names[first]
             ));
         }
@@ -818,8 +833,7 @@ fn sub_reader(cx: &Ctx, sf: &SubField, m: &Ident) -> TokenStream2 {
     let root = &cx.root;
     let ident = &sf.ident;
     let ty = &sf.ty;
-    let build =
-        quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #m)? };
+    let build = quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #m)? };
     if sf.optional {
         quote! {
             #ident: if #root::Matches::sub(#m).is_some() {
@@ -848,7 +862,9 @@ fn negation(
         ));
     }
     let Some(name) = long else {
-        return Err(format!("pound: #[pound(negate)] needs a long name (`{ident}`)"));
+        return Err(format!(
+            "pound: #[pound(negate)] needs a long name (`{ident}`)"
+        ));
     };
     let spelling = spelling.clone().unwrap_or_else(|| format!("no-{name}"));
     if spelling == name || a.aliases.contains(&spelling) {
@@ -865,15 +881,20 @@ fn arity(
     multi: bool,
     ident: &proc_macro2::Ident,
 ) -> Result<(Option<usize>, Option<usize>), String> {
-    let read = |name: &str, raw: Option<&String>| match raw {
-        None => Ok(None),
-        Some(_) if !multi => Err(format!(
-            "pound: #[pound({name})] needs a `Vec` field (`{ident}`)"
-        )),
-        Some(text) => text
-            .parse::<usize>()
-            .map(Some)
-            .map_err(|_| format!("pound: #[pound({name} = {text})] is not a count (`{ident}`)")),
+    let read = |name: &str, raw: Option<&String>| {
+        match raw {
+            None => Ok(None),
+            Some(_) if !multi => {
+                Err(format!(
+                    "pound: #[pound({name})] needs a `Vec` field (`{ident}`)"
+                ))
+            },
+            Some(text) => {
+                text.parse::<usize>().map(Some).map_err(|_| {
+                    format!("pound: #[pound({name} = {text})] is not a count (`{ident}`)")
+                })
+            },
+        }
     };
 
     let min = read("min_values", a.min_values.as_ref())?;
@@ -994,7 +1015,10 @@ fn plan_field(field: &NamedField, a: Pound) -> Result<Plan, String> {
         }
     }
 
-    let doc = a.help.clone().unwrap_or_else(|| attr::doc(&field.attributes));
+    let doc = a
+        .help
+        .clone()
+        .unwrap_or_else(|| attr::doc(&field.attributes));
     let help = if a.help.is_some() {
         attr::summary(&doc)
     } else {
@@ -1086,16 +1110,22 @@ fn classify(ty: &TypeExpr) -> (bool, Card, TokenStream2) {
     (false, Card::One, toks.iter().cloned().collect())
 }
 
-// `Wrapper < Inner >` -> the `Inner` tokens, where `Wrapper` may also be written
-// `module::Wrapper` or `krate::module::Wrapper` with an optional leading `::`.
+// `Wrapper < Inner >` -> the `Inner` tokens, where `Wrapper` may also be
+// written `module::Wrapper` or `krate::module::Wrapper` with an optional
+// leading `::`.
 fn strip_wrapper(
     toks: &[TokenTree],
     wrapper: &str,
     module: &str,
     crates: &[&str],
 ) -> Option<TokenStream2> {
-    let is_colon = |tok: Option<&TokenTree>| matches!(tok, Some(TokenTree::Punct(p)) if p.as_char() == ':');
-    let mut at = if is_colon(toks.first()) && is_colon(toks.get(1)) { 2 } else { 0 };
+    let is_colon =
+        |tok: Option<&TokenTree>| matches!(tok, Some(TokenTree::Punct(p)) if p.as_char() == ':');
+    let mut at = if is_colon(toks.first()) && is_colon(toks.get(1)) {
+        2
+    } else {
+        0
+    };
     let mut path = Vec::new();
     while let Some(TokenTree::Ident(id)) = toks.get(at) {
         path.push(id.to_string());
@@ -1137,14 +1167,18 @@ fn default_assert(cx: &Ctx, p: &Plan) -> Option<TokenStream2> {
     }
     let inner = &p.inner_ty;
     let message = match default {
-        Text::Lit(text) => format!(
-            "pound: default \"{text}\" is not one of the possible values for `{}`",
-            p.ident
-        ),
-        Text::Expr(_) => format!(
-            "pound: the default is not one of the possible values for `{}`",
-            p.ident
-        ),
+        Text::Lit(text) => {
+            format!(
+                "pound: default \"{text}\" is not one of the possible values for `{}`",
+                p.ident
+            )
+        },
+        Text::Expr(_) => {
+            format!(
+                "pound: the default is not one of the possible values for `{}`",
+                p.ident
+            )
+        },
     };
     Some(quote! {
         const _: () = ::core::assert!(
@@ -1264,7 +1298,9 @@ fn conversion_closure(cx: &Ctx, conversion: &Conversion, inner: &TokenStream2) -
     let root = &cx.root;
     let parse = parse_value_expr(cx, conversion, inner);
     let max_len = match conversion {
-        Conversion::CheckedFromArg { max_len, .. } => max_len.as_deref().map(|value| max_len_check(cx, value)),
+        Conversion::CheckedFromArg { max_len, .. } => {
+            max_len.as_deref().map(|value| max_len_check(cx, value))
+        },
         Conversion::FromArg | Conversion::CustomParse { .. } => None,
     };
     let min = match conversion {
@@ -1424,7 +1460,9 @@ fn has_direct_member(plans: &[Plan], group: &str) -> bool {
 
 /// required groups whose members can only sit in flattened structs, checked
 /// once the whole spec exists
-fn group_asserts(cx: &Ctx, plans: &[Plan],
+fn group_asserts(
+    cx: &Ctx,
+    plans: &[Plan],
     required_groups: &[String],
     spec: &proc_macro2::Ident,
 ) -> TokenStream2 {
@@ -1539,7 +1577,11 @@ fn about_calls(cx: &Ctx, doc: &str) -> (TokenStream2, TokenStream2) {
 // bake the help string only when the wrapping crate asks for help text,
 // otherwise emit "".
 fn help_lit(cx: &Ctx, s: &str) -> TokenStream2 {
-    if cx.help { quote! { #s } } else { quote! { "" } }
+    if cx.help {
+        quote! { #s }
+    } else {
+        quote! { "" }
+    }
 }
 
 fn camel_to_kebab(name: &str) -> String {
@@ -1578,9 +1620,10 @@ mod tests {
     use super::*;
 
     fn expand(help: bool) -> String {
-        let input: TokenStream2 = r#"struct Args { #[pound(long, heading = "Output")] verbose: bool }"#
-            .parse()
-            .unwrap();
+        let input: TokenStream2 =
+            r#"struct Args { #[pound(long, heading = "Output")] verbose: bool }"#
+                .parse()
+                .unwrap();
         derive_parse(input, &Options::new("::pound", help)).to_string()
     }
 
@@ -1631,7 +1674,11 @@ mod tests {
 
     #[test]
     fn foreign_paths_named_option_or_vec_stay_scalar() {
-        for ty in ["my::Option<u8>", "other::option::Option<u8>", "core::vec::Vec<u8>"] {
+        for ty in [
+            "my::Option<u8>",
+            "other::option::Option<u8>",
+            "core::vec::Vec<u8>",
+        ] {
             assert!(expand_typed(ty).contains("required_map :: < "), "{ty}");
         }
     }
@@ -1682,7 +1729,10 @@ mod tests {
         .unwrap();
         let out = derive_parse(input, &Options::new("::pound", true)).to_string();
         assert!(out.contains(". about (\"runs the thing\")"), "{out}");
-        assert!(out.contains("runs the thing.\\n\\nmore detail here."), "{out}");
+        assert!(
+            out.contains("runs the thing.\\n\\nmore detail here."),
+            "{out}"
+        );
         assert!(out.contains(". long_help ("), "{out}");
         assert!(out.contains(". help (\"the target\")"), "{out}");
         assert!(out.contains(". help (\"waits...\")"), "{out}");
@@ -1702,9 +1752,15 @@ mod tests {
             "{renamed}"
         );
         let explicit = expand_enum(r#"#[pound(name = "x")] A, #[pound(name = "x")] B"#);
-        assert!(explicit.contains("`A` and `B` both spell `x`"), "{explicit}");
+        assert!(
+            explicit.contains("`A` and `B` both spell `x`"),
+            "{explicit}"
+        );
         let kebab = expand_enum(r#"#[pound(name = "my-mode")] Plain, MyMode"#);
-        assert!(kebab.contains("`Plain` and `MyMode` both spell `my-mode`"), "{kebab}");
+        assert!(
+            kebab.contains("`Plain` and `MyMode` both spell `my-mode`"),
+            "{kebab}"
+        );
     }
 
     #[test]

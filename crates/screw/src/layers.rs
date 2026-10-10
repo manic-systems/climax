@@ -3,18 +3,32 @@
 use std::{
     fmt,
     marker::PhantomData,
-    ops::{BitOr, BitOrAssign},
+    ops::{
+        BitOr,
+        BitOrAssign,
+    },
 };
 
 use crate::{
-    CursorMerge, Fill, Insets, Rect, RenderCtx, Size, Surface, TickInterest, VerticalSize, Widget,
-    renderer::layout_surface, surface::append_surface, widget::combine_tick_interest,
+    CursorMerge,
+    Fill,
+    Insets,
+    Rect,
+    RenderCtx,
+    Size,
+    Surface,
+    TickInterest,
+    VerticalSize,
+    Widget,
+    renderer::layout_surface,
+    surface::append_surface,
+    widget::combine_tick_interest,
 };
 
 /// A set of edges of a canvas, combined with `|`.
 ///
-/// In a [`Floating`] policy the edges say where the child sits. Naming opposite edges stretches the
-/// child across that axis, and naming none centres it.
+/// In a [`Floating`] policy the edges say where the child sits. Naming opposite
+/// edges stretches the child across that axis, and naming none centres it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Edge(u8);
 
@@ -51,16 +65,16 @@ impl BitOrAssign for Edge {
 /// Placement and compositing policy for one floating child of [`Layers`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Floating {
-    edges: Edge,
-    margin: Insets,
+    edges:    Edge,
+    margin:   Insets,
     max_size: Size,
-    fill: Fill,
-    cursor: CursorMerge,
+    fill:     Fill,
+    cursor:   CursorMerge,
 }
 
 impl Floating {
-    /// Creates a policy that anchors the child to `edges` with no margin, no size limit, a
-    /// transparent fill and the base cursor kept.
+    /// Creates a policy that anchors the child to `edges` with no margin, no
+    /// size limit, a transparent fill and the base cursor kept.
     pub const fn new(edges: Edge) -> Self {
         Self {
             edges,
@@ -107,11 +121,12 @@ struct FloatingChild<H> {
 
 /// A base widget with floating children composited over it.
 ///
-/// Each child is rendered with the size left after its margin, placed by its [`Edge`] set and
-/// overlaid on the base. Create one with [`Layers::new`] for thread-safe children or
-/// [`Layers::local`] for children that may borrow local data.
+/// Each child is rendered with the size left after its margin, placed by its
+/// [`Edge`] set and overlaid on the base. Create one with [`Layers::new`] for
+/// thread-safe children or [`Layers::local`] for children that may borrow local
+/// data.
 pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
-    base: B,
+    base:     B,
     floating: Vec<FloatingChild<H>>,
     lifetime: PhantomData<&'a ()>,
 }
@@ -230,7 +245,7 @@ fn render_floating(
     let stretch_x = floating.policy.edges.contains(Edge::LEFT | Edge::RIGHT);
     let stretch_y = floating.policy.edges.contains(Edge::TOP | Edge::BOTTOM);
     let constraint = Size {
-        width: if stretch_x {
+        width:  if stretch_x {
             available.size.width
         } else {
             available.size.width.min(floating.policy.max_size.width)
@@ -252,7 +267,7 @@ fn render_floating(
     child.fit_height(constraint.height);
 
     let measured = Size {
-        width: child.display_width().min(constraint.width),
+        width:  child.display_width().min(constraint.width),
         height: child.height().min(constraint.height),
     };
     let stretch_fill =
@@ -310,13 +325,22 @@ mod tests {
     use std::{
         cell::RefCell,
         rc::Rc,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc,
+            Mutex,
+        },
         time::Duration,
     };
 
-    use crate::{Color, LayoutMode, Position, Style, Theme, Viewport};
-
     use super::*;
+    use crate::{
+        Color,
+        LayoutMode,
+        Position,
+        Style,
+        Theme,
+        Viewport,
+    };
 
     #[derive(Clone)]
     struct Base;
@@ -532,22 +556,22 @@ mod tests {
             (Edge::BOTTOM | Edge::LEFT, Position { row: 4, col: 0 }),
             (Edge::LEFT | Edge::RIGHT, Position { row: 2, col: 0 }),
             (Edge::TOP | Edge::BOTTOM, Position { row: 0, col: 2 }),
-            (
-                Edge::TOP | Edge::LEFT | Edge::RIGHT,
-                Position { row: 0, col: 0 },
-            ),
-            (
-                Edge::BOTTOM | Edge::LEFT | Edge::RIGHT,
-                Position { row: 4, col: 0 },
-            ),
-            (
-                Edge::LEFT | Edge::TOP | Edge::BOTTOM,
-                Position { row: 0, col: 0 },
-            ),
-            (
-                Edge::RIGHT | Edge::TOP | Edge::BOTTOM,
-                Position { row: 0, col: 4 },
-            ),
+            (Edge::TOP | Edge::LEFT | Edge::RIGHT, Position {
+                row: 0,
+                col: 0,
+            }),
+            (Edge::BOTTOM | Edge::LEFT | Edge::RIGHT, Position {
+                row: 4,
+                col: 0,
+            }),
+            (Edge::LEFT | Edge::TOP | Edge::BOTTOM, Position {
+                row: 0,
+                col: 0,
+            }),
+            (Edge::RIGHT | Edge::TOP | Edge::BOTTOM, Position {
+                row: 0,
+                col: 4,
+            }),
             (
                 Edge::TOP | Edge::RIGHT | Edge::BOTTOM | Edge::LEFT,
                 Position { row: 0, col: 0 },

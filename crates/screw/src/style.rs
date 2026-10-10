@@ -63,13 +63,15 @@ impl Color {
             Self::BrightCyan => simple(66),
             Self::BrightWhite => simple(67),
             Self::Indexed(index) => vec![extended.to_string(), "5".to_owned(), index.to_string()],
-            Self::Rgb(r, g, b) => vec![
-                extended.to_string(),
-                "2".to_owned(),
-                r.to_string(),
-                g.to_string(),
-                b.to_string(),
-            ],
+            Self::Rgb(r, g, b) => {
+                vec![
+                    extended.to_string(),
+                    "2".to_owned(),
+                    r.to_string(),
+                    g.to_string(),
+                    b.to_string(),
+                ]
+            },
         };
         codes.extend(parts);
     }
@@ -312,10 +314,16 @@ mod tests {
     fn bright_indexed_and_rgb_colours_use_their_extended_codes() {
         assert_eq!(Style::new().fg(Color::BrightRed).sgr(), "\x1b[0;91m");
         assert_eq!(Style::new().bg(Color::BrightWhite).sgr(), "\x1b[0;107m");
-        assert_eq!(Style::new().fg(Color::Indexed(200)).sgr(), "\x1b[0;38;5;200m");
+        assert_eq!(
+            Style::new().fg(Color::Indexed(200)).sgr(),
+            "\x1b[0;38;5;200m"
+        );
         assert_eq!(Style::new().bg(Color::Indexed(7)).sgr(), "\x1b[0;48;5;7m");
         assert_eq!(
-            Style::new().fg(Color::Rgb(1, 2, 3)).bg(Color::Rgb(255, 0, 128)).sgr(),
+            Style::new()
+                .fg(Color::Rgb(1, 2, 3))
+                .bg(Color::Rgb(255, 0, 128))
+                .sgr(),
             "\x1b[0;38;2;1;2;3;48;2;255;0;128m"
         );
     }

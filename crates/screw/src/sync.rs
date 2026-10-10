@@ -2,7 +2,10 @@
 
 //! Shared lock policy.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{
+    Mutex,
+    MutexGuard,
+};
 
 /// Lock a mutex, recovering the guarded value if a holder panicked.
 ///

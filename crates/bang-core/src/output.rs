@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{Number, Value};
+use crate::{
+    Number,
+    Value,
+};
 
 /// How a submitted value is written out.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -34,9 +37,11 @@ pub fn format_text(value: &Value) -> String {
         Value::List(values) => {
             values
                 .iter()
-                .map(|value| match value {
-                    Value::String(value) => value.clone(),
-                    _ => format_json(value),
+                .map(|value| {
+                    match value {
+                        Value::String(value) => value.clone(),
+                        _ => format_json(value),
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -46,17 +51,20 @@ pub fn format_text(value: &Value) -> String {
     }
 }
 
-/// Render `value` as JSON. Non-finite floats become `null` and dates become strings.
+/// Render `value` as JSON. Non-finite floats become `null` and dates become
+/// strings.
 #[must_use]
 pub fn format_json(value: &Value) -> String {
     match value {
         Value::Bool(value) => value.to_string(),
         Value::String(value) => format!("\"{}\"", escape_json(value)),
-        Value::Number(number) => match number {
-            Number::Integer(value) => value.to_string(),
-            // JSON has no NaN/Infinity; emit null rather than invalid JSON.
-            Number::Float(value) if value.is_finite() => value.to_string(),
-            Number::Float(_) => "null".to_owned(),
+        Value::Number(number) => {
+            match number {
+                Number::Integer(value) => value.to_string(),
+                // JSON has no NaN/Infinity; emit null rather than invalid JSON.
+                Number::Float(value) if value.is_finite() => value.to_string(),
+                Number::Float(_) => "null".to_owned(),
+            }
         },
         Value::Date(date) => format!("\"{date}\""),
         Value::List(values) => {
@@ -84,16 +92,18 @@ pub fn format_json(value: &Value) -> String {
 pub fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| match value {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect(),
-            '\n' => "\\n".chars().collect(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            '\u{08}' => "\\b".chars().collect(),
-            '\u{0C}' => "\\f".chars().collect(),
-            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-            value => vec![value],
+        .flat_map(|value| {
+            match value {
+                '"' => "\\\"".chars().collect::<Vec<_>>(),
+                '\\' => "\\\\".chars().collect(),
+                '\n' => "\\n".chars().collect(),
+                '\r' => "\\r".chars().collect(),
+                '\t' => "\\t".chars().collect(),
+                '\u{08}' => "\\b".chars().collect(),
+                '\u{0C}' => "\\f".chars().collect(),
+                value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
+                value => vec![value],
+            }
         })
         .collect()
 }

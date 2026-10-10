@@ -2,13 +2,36 @@
 
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
-    panic, thread,
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        RawFd,
+    },
+    panic,
+    thread,
 };
 
-use bang::advanced::{Event, Key, KeyEvent, Reaction, Widget, WidgetContext, WidgetId};
-use bang::screw::{RenderCtx, Role, Surface};
+use bang::{
+    advanced::{
+        Event,
+        Key,
+        KeyEvent,
+        Reaction,
+        Widget,
+        WidgetContext,
+        WidgetId,
+    },
+    screw::{
+        RenderCtx,
+        Role,
+        Surface,
+    },
+};
 
 // The signal handlers are process-wide, so both cases run in turn in one test.
 #[test]
@@ -87,7 +110,9 @@ fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
     drain(&master, &mut output);
 
     let text = String::from_utf8_lossy(&output);
-    let message = text.find("PANIC-MESSAGE").expect("the panic message reached the terminal");
+    let message = text
+        .find("PANIC-MESSAGE")
+        .expect("the panic message reached the terminal");
     assert!(text[..message].contains("frame line 3"));
     assert!(
         !has_cursor_up(&text[message..]),
@@ -98,7 +123,8 @@ fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
 
 fn has_cursor_up(text: &str) -> bool {
     text.split("\x1b[").skip(1).any(|rest| {
-        rest.trim_start_matches(|c: char| c.is_ascii_digit()).starts_with('A')
+        rest.trim_start_matches(|c: char| c.is_ascii_digit())
+            .starts_with('A')
     })
 }
 
@@ -106,8 +132,8 @@ fn drain(master: &File, output: &mut Vec<u8>) {
     let mut buffer = [0_u8; 1024];
     loop {
         let mut poll = libc::pollfd {
-            fd: master.as_raw_fd(),
-            events: libc::POLLIN,
+            fd:      master.as_raw_fd(),
+            events:  libc::POLLIN,
             revents: 0,
         };
         // SAFETY: poll points at one valid pollfd.
@@ -125,7 +151,10 @@ fn local_modes(file: &File) -> libc::tcflag_t {
     // SAFETY: a zeroed termios is overwritten by tcgetattr.
     let mut state = unsafe { std::mem::zeroed::<libc::termios>() };
     // SAFETY: the descriptor is open and state is valid for the call.
-    assert_eq!(unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) }, 0);
+    assert_eq!(
+        unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) },
+        0
+    );
     state.c_lflag
 }
 

@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{self, Write};
+use std::io::{
+    self,
+    Write,
+};
 
-use crate::cleanup::{CleanupFailure, CleanupFailures, CleanupStage, staged};
+use crate::cleanup::{
+    CleanupFailure,
+    CleanupFailures,
+    CleanupStage,
+    staged,
+};
 
 const ENTER_ALTERNATE: &[u8] = b"\x1b[?1049h";
 const LEAVE_ALTERNATE: &[u8] = b"\x1b[?1049l";
@@ -42,9 +50,9 @@ pub enum CursorPolicy {
 /// [`ScreenOptions::full_screen`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScreenOptions {
-    kind: ScreenKind,
-    cursor: CursorPolicy,
-    bracketed_paste: bool,
+    kind:                  ScreenKind,
+    cursor:                CursorPolicy,
+    bracketed_paste:       bool,
     clear_inline_on_leave: bool,
 }
 
@@ -54,9 +62,9 @@ impl ScreenOptions {
     #[must_use]
     pub const fn inline() -> Self {
         Self {
-            kind: ScreenKind::Inline,
-            cursor: CursorPolicy::Hide,
-            bracketed_paste: true,
+            kind:                  ScreenKind::Inline,
+            cursor:                CursorPolicy::Hide,
+            bracketed_paste:       true,
             clear_inline_on_leave: true,
         }
     }
@@ -65,9 +73,9 @@ impl ScreenOptions {
     #[must_use]
     pub const fn full_screen() -> Self {
         Self {
-            kind: ScreenKind::Alternate,
-            cursor: CursorPolicy::Hide,
-            bracketed_paste: false,
+            kind:                  ScreenKind::Alternate,
+            cursor:                CursorPolicy::Hide,
+            bracketed_paste:       false,
             clear_inline_on_leave: false,
         }
     }
@@ -86,7 +94,8 @@ impl ScreenOptions {
         self
     }
 
-    /// Erase the inline line when the guard leaves. Alternate screens ignore it.
+    /// Erase the inline line when the guard leaves. Alternate screens ignore
+    /// it.
     #[must_use]
     pub const fn clear_inline_on_leave(mut self, clear: bool) -> Self {
         self.clear_inline_on_leave = clear;
@@ -105,9 +114,9 @@ pub struct ScreenGuard<'a, W>
 where
     W: Write + ?Sized,
 {
-    output: &'a mut W,
+    output:  &'a mut W,
     options: ScreenOptions,
-    state: u8,
+    state:   u8,
 }
 
 impl<'a, W> ScreenGuard<'a, W>
@@ -350,9 +359,9 @@ mod tests {
     }
 
     struct FailingWriter {
-        bytes: Vec<u8>,
+        bytes:    Vec<u8>,
         attempts: usize,
-        fail_at: usize,
+        fail_at:  usize,
     }
 
     impl FailingWriter {
@@ -388,7 +397,7 @@ mod tests {
 
     #[derive(Default)]
     struct PartialWriter {
-        bytes: Vec<u8>,
+        bytes:  Vec<u8>,
         writes: usize,
     }
 

@@ -4,7 +4,10 @@
 
 use std::{
     io,
-    os::fd::{FromRawFd as _, OwnedFd},
+    os::fd::{
+        FromRawFd as _,
+        OwnedFd,
+    },
     sync::Mutex,
 };
 
@@ -38,8 +41,8 @@ pub fn resize_pty(master: &OwnedFd, cols: u16, rows: u16) -> io::Result<()> {
     use std::os::fd::AsRawFd as _;
 
     let size = libc::winsize {
-        ws_row: rows,
-        ws_col: cols,
+        ws_row:    rows,
+        ws_col:    cols,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };

@@ -5,20 +5,23 @@
 //! [`run`] and [`run_with`] do what `climax::main` and `climax::main_with` do,
 //! except that nothing touches the process. Prompts read from a [`Script`],
 //! results and diagnostics land in [`Capture`] buffers, and the exit code and
-//! the error come back in an [`Outcome`]. Errors are reported and mapped to exit
-//! codes by the code `main` uses, so a test sees exactly what a user's shell
-//! would.
+//! the error come back in an [`Outcome`]. Errors are reported and mapped to
+//! exit codes by the code `main` uses, so a test sees exactly what a user's
+//! shell would.
 //!
-//! [`Capture`] needs no feature. [`Script`] and [`run_with`] need `interactive`,
-//! and [`run`] needs `interactive` and `parse`. Leftover script input fails the
-//! run, see [`Script`].
+//! [`Capture`] needs no feature. [`Script`] and [`run_with`] need
+//! `interactive`, and [`run`] needs `interactive` and `parse`. Leftover script
+//! input fails the run, see [`Script`].
 //!
 //! ```
 //! # #[cfg(feature = "interactive")]
 //! # {
 //! use climax::{
 //!     prelude::*,
-//!     testing::{self, Script},
+//!     testing::{
+//!         self,
+//!         Script,
+//!     },
 //! };
 //!
 //! let outcome = testing::run_with(Script::new().confirm(false), |cx| {
@@ -34,14 +37,22 @@
 
 use std::{
     io,
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc,
+        Mutex,
+        PoisonError,
+    },
 };
 
 #[cfg(feature = "interactive")]
 use crate::{
     Context,
     Result,
-    app::{CompletionStream, execute, finish},
+    app::{
+        CompletionStream,
+        execute,
+        finish,
+    },
 };
 
 /// A cloneable in-memory sink that implements `Write + Send + 'static`.
@@ -74,7 +85,10 @@ impl Capture {
     /// The raw bytes written so far.
     #[must_use]
     pub fn bytes(&self) -> Vec<u8> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -101,7 +115,10 @@ impl io::Write for Capture {
 /// ```
 /// # #[cfg(feature = "interactive")]
 /// # {
-/// use climax::testing::{self, Script};
+/// use climax::testing::{
+///     self,
+///     Script,
+/// };
 ///
 /// let outcome = testing::run_with(Script::new(), |_cx| Ok(()));
 /// assert_eq!(outcome.exit_code, 0);
@@ -167,9 +184,17 @@ impl Script {
     /// ```
     #[must_use]
     pub fn select_nth(self, n: usize) -> Self {
-        use bang::advanced::{Event, Key, KeyEvent, Modifiers};
+        use bang::advanced::{
+            Event,
+            Key,
+            KeyEvent,
+            Modifiers,
+        };
 
-        let mut events = vec![Event::Key(KeyEvent::with_modifiers(Key::Home, Modifiers::CONTROL))];
+        let mut events = vec![Event::Key(KeyEvent::with_modifiers(
+            Key::Home,
+            Modifiers::CONTROL,
+        ))];
         events.extend(vec![Event::Key(KeyEvent::new(Key::Down)); n]);
         events.push(Event::Key(KeyEvent::new(Key::Enter)));
         let mut script = self;
@@ -235,11 +260,22 @@ impl Script {
     /// ```
     #[must_use]
     pub fn date(self, from: bang::Date, to: bang::Date) -> Self {
-        use bang::advanced::{Event, Key, KeyEvent, Modifiers};
+        use bang::advanced::{
+            Event,
+            Key,
+            KeyEvent,
+            Modifiers,
+        };
 
         let months = (i64::from(to.year) - i64::from(from.year)) * 12 + i64::from(to.month)
             - i64::from(from.month);
-        let page = || if months < 0 { Key::PageUp } else { Key::PageDown };
+        let page = || {
+            if months < 0 {
+                Key::PageUp
+            } else {
+                Key::PageDown
+            }
+        };
         let years = (0..months.unsigned_abs() / 12)
             .map(|_| Event::Key(KeyEvent::with_modifiers(page(), Modifiers::SHIFT)));
         let rest = (0..months.unsigned_abs() % 12).map(|_| Event::Key(KeyEvent::new(page())));
@@ -340,7 +376,10 @@ impl Script {
     /// `Context::with_interaction`.
     ///
     /// ```
-    /// use climax::{Context, testing::Script};
+    /// use climax::{
+    ///     Context,
+    ///     testing::Script,
+    /// };
     ///
     /// let context = Context::new().with_interaction(Script::new().into_interaction());
     /// # drop(context);
@@ -355,7 +394,9 @@ impl Script {
 fn context(script: Script, stdout: &Capture, stderr: &Capture) -> Context {
     let context = Context::new()
         .with_interaction(script.into_interaction())
-        .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(false, false, false))
+        .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+            false, false, false,
+        ))
         .expect("capabilities apply to an idle context");
     #[cfg(feature = "render")]
     let context = context
@@ -416,7 +457,10 @@ fn guarded<T>(run: impl FnOnce() -> T) -> T {
 /// ```
 /// use climax::{
 ///     prelude::*,
-///     testing::{self, Script},
+///     testing::{
+///         self,
+///         Script,
+///     },
 /// };
 ///
 /// let outcome = testing::run_with(Script::new().text("eu"), |cx| {
@@ -451,7 +495,10 @@ where
 /// # {
 /// use climax::{
 ///     prelude::*,
-///     testing::{self, Script},
+///     testing::{
+///         self,
+///         Script,
+///     },
 /// };
 ///
 /// /// greet someone
@@ -483,17 +530,19 @@ where
     let args: Vec<A::Item> = args.into_iter().collect();
     let stdout = Capture::default();
     let stderr = Capture::default();
-    let (result, completion) = guarded(|| match C::try_parse_from(args.iter().map(AsRef::as_ref)) {
-        Ok(command) => {
-            let result = execute(context(script, &stdout, &stderr), command, f);
-            let completion = finish(&result);
-            (result, completion)
-        },
-        Err(error) => {
-            drop(script.into_interaction());
-            let completion = crate::app::parse_completion(&error);
-            (Err(crate::Error::from(error)), completion)
-        },
+    let (result, completion) = guarded(|| {
+        match C::try_parse_from(args.iter().map(AsRef::as_ref)) {
+            Ok(command) => {
+                let result = execute(context(script, &stdout, &stderr), command, f);
+                let completion = finish(&result);
+                (result, completion)
+            },
+            Err(error) => {
+                drop(script.into_interaction());
+                let completion = crate::app::parse_completion(&error);
+                (Err(crate::Error::from(error)), completion)
+            },
+        }
     });
     outcome(&stdout, &stderr, completion, result.err())
 }

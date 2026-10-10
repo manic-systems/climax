@@ -4,14 +4,29 @@
 
 use std::{
     fs::File,
-    io::{self, Read, Write},
-    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read,
+        Write,
+    },
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        RawFd,
+    },
     sync::Mutex,
     thread,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
-use bang::{ConfirmPrompt, Interaction, PromptOutcome};
+use bang::{
+    ConfirmPrompt,
+    Interaction,
+    PromptOutcome,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 pub const DIM_SUMMARY: &[u8] = b"\x1b[2mDeploy to prod? \xe2\x80\xba no\x1b[0m\r\n";
@@ -23,13 +38,18 @@ pub fn run_confirm(
     configure: impl FnOnce(ConfirmPrompt, Interaction) -> ConfirmPrompt + Send + 'static,
     keys: &'static [u8],
 ) -> (Vec<u8>, PromptOutcome<bool>) {
-    let _one_session_at_a_time = SESSIONS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _one_session_at_a_time = SESSIONS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut master, slave) = open_pty();
     set_nonblocking(&master);
     let prompt = thread::spawn(move || {
-        configure(bang::confirm("Deploy to prod?"), Interaction::live_on(slave))
-            .interact()
-            .expect("confirm succeeded")
+        configure(
+            bang::confirm("Deploy to prod?"),
+            Interaction::live_on(slave),
+        )
+        .interact()
+        .expect("confirm succeeded")
     });
 
     let mut output = Vec::new();
@@ -41,17 +61,24 @@ pub fn run_confirm(
 }
 
 pub fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|part| part == needle)
+    haystack
+        .windows(needle.len())
+        .position(|part| part == needle)
 }
 
 pub fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).rposition(|part| part == needle)
+    haystack
+        .windows(needle.len())
+        .rposition(|part| part == needle)
 }
 
 fn read_until(master: &mut File, output: &mut Vec<u8>, needle: &[u8]) {
     let started = Instant::now();
     while find(output, needle).is_none() {
-        assert!(started.elapsed() < TIMEOUT, "timed out waiting for {needle:?}");
+        assert!(
+            started.elapsed() < TIMEOUT,
+            "timed out waiting for {needle:?}"
+        );
         drain(master, output);
         thread::sleep(Duration::from_millis(5));
     }

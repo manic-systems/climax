@@ -2,7 +2,14 @@
 
 #![cfg_attr(not(test), no_std)]
 
-use pound::{ArgSpec, CommandSpec, Error, Kind, Matches, Parse};
+use pound::{
+    ArgSpec,
+    CommandSpec,
+    Error,
+    Kind,
+    Matches,
+    Parse,
+};
 
 pub struct Args {
     pub verbose: bool,
@@ -30,7 +37,11 @@ pub fn parse<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<Args, Error>
 mod tests {
     #[test]
     fn borrowed_arguments_parse_without_std() {
-        assert!(super::parse(["--verbose"]).expect("fixture arguments parse").verbose);
+        assert!(
+            super::parse(["--verbose"])
+                .expect("fixture arguments parse")
+                .verbose
+        );
         assert!(!super::parse([]).expect("no arguments parse").verbose);
     }
 }

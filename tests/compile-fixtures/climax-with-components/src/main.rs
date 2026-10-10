@@ -11,11 +11,7 @@ fn run(context: &climax::Context, command: &Args) -> climax::Result<()> {
     let _status = context
         .status("direct screw widget")
         .widget(screw::widget("component escape hatch"));
-    match context
-        .select("shell")
-        .choice("bash", "bash")
-        .interact()?
-    {
+    match context.select("shell").choice("bash", "bash").interact()? {
         climax::PromptOutcome::Submit(shell) => context.diagnostic().notice(shell),
         climax::PromptOutcome::Leave => Ok(()),
     }
@@ -24,7 +20,9 @@ fn run(context: &climax::Context, command: &Args) -> climax::Result<()> {
 fn main() -> climax::Result<()> {
     let _prompt = bang::text("name");
     let _rendered = screw::render_plain(&"component escape hatch");
-    climax::run_with(Args { name: None }, |context, command| run(&context, &command))
+    climax::run_with(Args { name: None }, |context, command| {
+        run(&context, &command)
+    })
 }
 
 #[cfg(test)]

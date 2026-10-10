@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-#![cfg(all(
-    feature = "derive",
-    feature = "interactive",
-    feature = "structured"
-))]
+#![cfg(all(feature = "derive", feature = "interactive", feature = "structured"))]
 
 use climax::{
     bang::Date,
     prelude::*,
-    testing::{self, Script},
+    testing::{
+        self,
+        Script,
+    },
 };
 
 /// ship a build
@@ -136,47 +135,48 @@ fn a_parse_failure_exits_2_and_help_exits_0() {
     let outcome = testing::run(["--wat"], Script::new(), ship);
     assert_eq!(outcome.exit_code, 2);
     assert_eq!(outcome.error.unwrap().kind(), ErrorKind::Parse);
-    assert!(outcome.stderr.starts_with("error"), "got {:?}", outcome.stderr);
+    assert!(
+        outcome.stderr.starts_with("error"),
+        "got {:?}",
+        outcome.stderr
+    );
 
     let outcome = testing::run(["--help"], Script::new(), ship);
     assert_eq!(outcome.exit_code, 0);
-    assert!(outcome.stdout.contains("ship a build"), "got {:?}", outcome.stdout);
+    assert!(
+        outcome.stdout.contains("ship a build"),
+        "got {:?}",
+        outcome.stdout
+    );
 }
 
 #[test]
 fn run_with_needs_no_arguments() {
-    let outcome = testing::run_with(Script::new().confirm(true), |cx| {
-        ask(&cx)
-    });
+    let outcome = testing::run_with(Script::new().confirm(true), |cx| ask(&cx));
     assert_eq!(outcome.exit_code, 0);
 }
 
 #[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn leftover_script_input_fails_the_run() {
-    let _ = testing::run(
-        Vec::<&str>::new(),
-        full_script().text("never asked"),
-        ship,
-    );
+    let _ = testing::run(Vec::<&str>::new(), full_script().text("never asked"), ship);
 }
 
 #[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn an_unread_tail_of_a_prompt_answer_fails_the_run() {
-    let _ = testing::run_with(Script::new().keys([
-        climax::bang::advanced::Key::Char('y'),
-        climax::bang::advanced::Key::Enter,
-    ]), |cx| {
-        ask(&cx)
-    });
+    let _ = testing::run_with(
+        Script::new().keys([
+            climax::bang::advanced::Key::Char('y'),
+            climax::bang::advanced::Key::Enter,
+        ]),
+        |cx| ask(&cx),
+    );
 }
 
 #[test]
 fn a_prompt_past_the_end_of_the_script_is_an_input_ended_error() {
-    let outcome = testing::run_with(Script::new(), |cx| {
-        ask(&cx)
-    });
+    let outcome = testing::run_with(Script::new(), |cx| ask(&cx));
     assert_eq!(outcome.exit_code, 1);
     assert_eq!(outcome.error.unwrap().kind(), ErrorKind::InputEnded);
 }
@@ -199,11 +199,15 @@ fn multi_select_nth_toggles_rows_in_any_order() {
 
 #[test]
 fn a_missing_subcommand_exits_2_on_stderr_with_nothing_on_stdout() {
-    let outcome = testing::run(Vec::<&str>::new(), Script::new(), |_cx, _tools: Tools| Ok(()));
+    let outcome = testing::run(Vec::<&str>::new(), Script::new(), |_cx, _tools: Tools| {
+        Ok(())
+    });
     assert_eq!(outcome.exit_code, 2);
     assert_eq!(outcome.stdout, "");
     assert!(
-        outcome.stderr.starts_with("error: a subcommand is required"),
+        outcome
+            .stderr
+            .starts_with("error: a subcommand is required"),
         "got {:?}",
         outcome.stderr
     );
@@ -289,7 +293,11 @@ fn text_attempts_erase_a_rejected_input_before_retyping() {
         cx.diagnostic().notice(value)
     });
     assert_eq!(outcome.exit_code, 0);
-    assert!(outcome.stderr.ends_with("ghi\n"), "got {:?}", outcome.stderr);
+    assert!(
+        outcome.stderr.ends_with("ghi\n"),
+        "got {:?}",
+        outcome.stderr
+    );
 }
 
 #[test]
@@ -344,5 +352,9 @@ fn text_attempts_keep_a_prefilled_value_when_erasing_a_combining_mark() {
         cx.diagnostic().notice(value)
     });
     assert_eq!(outcome.exit_code, 0);
-    assert!(outcome.stderr.ends_with("xok\n"), "got {:?}", outcome.stderr);
+    assert!(
+        outcome.stderr.ends_with("xok\n"),
+        "got {:?}",
+        outcome.stderr
+    );
 }

@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{self, Write as _};
+use std::io::{
+    self,
+    Write as _,
+};
 
 use bang::terminal::{
-    CursorPolicy, Decoder, RawModeOptions, ScreenGuard, ScreenKind, ScreenOptions, TerminalEvents,
+    CursorPolicy,
+    Decoder,
+    RawModeOptions,
+    ScreenGuard,
+    ScreenKind,
+    ScreenOptions,
+    TerminalEvents,
     TerminalPoll,
 };
 
@@ -16,7 +25,10 @@ fn the_terminal_toolkit_is_named_through_bang() {
     let TerminalPoll::Event(event) = events.next_event().expect("first event") else {
         panic!("expected a key event");
     };
-    assert_eq!(event, bang::advanced::Event::key(bang::advanced::Key::Char('a')));
+    assert_eq!(
+        event,
+        bang::advanced::Event::key(bang::advanced::Key::Char('a'))
+    );
     assert_eq!(events.next_event().expect("end"), TerminalPoll::End);
 
     let mut decoder = Decoder::new();

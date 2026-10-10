@@ -13,16 +13,35 @@
 //! [`crate::terminal`].
 
 pub use bang_core::{
-    ActionBinding, ActionLayer, Context as WidgetContext, Date, Event, FocusTarget, Key, KeyEvent,
-    Modifiers, Number, Reaction, Session, SessionReaction, SessionStatus, Value, Widget, widgets,
+    ActionBinding,
+    ActionLayer,
+    Context as WidgetContext,
+    Date,
+    Event,
+    FocusTarget,
+    Key,
+    KeyEvent,
+    Modifiers,
+    Number,
+    Reaction,
+    Session,
+    SessionReaction,
+    SessionStatus,
+    Value,
+    Widget,
+    WidgetId,
+    widgets,
 };
 
-pub use bang_core::WidgetId;
-
-pub use crate::live::LiveSessionError;
-
-pub use crate::interaction::InteractionWidget;
-use crate::{Error, Interaction, Result};
+use crate::{
+    Error,
+    Interaction,
+    Result,
+};
+pub use crate::{
+    interaction::InteractionWidget,
+    live::LiveSessionError,
+};
 
 /// Run a custom widget in the live terminal session.
 pub fn interact_widget(
@@ -108,7 +127,11 @@ fn is_control_char(event: &Event, value: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use bang_core::{ActionBinding, ActionLayer, widgets::TextInput};
+    use bang_core::{
+        ActionBinding,
+        ActionLayer,
+        widgets::TextInput,
+    };
 
     use super::*;
 

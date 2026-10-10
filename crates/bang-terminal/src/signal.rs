@@ -1,13 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{fmt, io, os::fd::OwnedFd, sync::OnceLock};
-
-use rustix::{
-    io::{Errno, read},
-    pipe::{PipeFlags, pipe_with},
+use std::{
+    fmt,
+    io,
+    os::fd::OwnedFd,
+    sync::OnceLock,
 };
 
-use crate::cleanup::{CleanupFailures, CleanupStage, staged};
+use rustix::{
+    io::{
+        Errno,
+        read,
+    },
+    pipe::{
+        PipeFlags,
+        pipe_with,
+    },
+};
+
+use crate::cleanup::{
+    CleanupFailures,
+    CleanupStage,
+    staged,
+};
 
 /// One of the terminal signals a [`SignalGuard`] catches.
 ///
@@ -63,7 +78,7 @@ static PIPE: OnceLock<Pipe> = OnceLock::new();
 
 #[derive(Debug)]
 struct Pipe {
-    read_fd: OwnedFd,
+    read_fd:   OwnedFd,
     _write_fd: OwnedFd,
 }
 
@@ -115,17 +130,18 @@ impl SignalPoller {
     }
 }
 
-/// Catches `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` and queues them for polling.
+/// Catches `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` and queues them for
+/// polling.
 ///
 /// A signal the process was ignoring when the guard was installed stays
 /// ignored and is never queued. Any other previous handler is replaced while
-/// the guard is installed and is never chained to. The previous handlers come back on
-/// [`SignalGuard::restore`] or on drop.
+/// the guard is installed and is never chained to. The previous handlers come
+/// back on [`SignalGuard::restore`] or on drop.
 #[derive(Debug)]
 pub struct SignalGuard {
-    poller: SignalPoller,
+    poller:   SignalPoller,
     previous: Vec<(Signal, handlers::Previous)>,
-    active: bool,
+    active:   bool,
 }
 
 impl SignalGuard {
@@ -220,8 +236,17 @@ fn install_terminal_handlers_exclusive() -> io::Result<SignalGuard> {
 mod handlers {
     use std::{
         io,
-        os::fd::{AsRawFd as _, BorrowedFd, OwnedFd},
-        sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
+        os::fd::{
+            AsRawFd as _,
+            BorrowedFd,
+            OwnedFd,
+        },
+        sync::atomic::{
+            AtomicBool,
+            AtomicI32,
+            AtomicU8,
+            Ordering,
+        },
     };
 
     use super::Signal;

@@ -1,20 +1,42 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::os::fd::{AsFd, OwnedFd};
 use std::{
     collections::VecDeque,
-    io::{self, Read},
-    time::{Duration, Instant},
+    io::{
+        self,
+        Read,
+    },
+    os::fd::{
+        AsFd,
+        OwnedFd,
+    },
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use bang_core::Event;
 use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    io::{Errno, read},
+    event::{
+        PollFd,
+        PollFlags,
+        Timespec,
+        poll,
+    },
+    io::{
+        Errno,
+        read,
+    },
 };
 use screw::Viewport;
 
-use crate::{Decoder, Signal, SignalPoller, decoder::EscapeState};
+use crate::{
+    Decoder,
+    Signal,
+    SignalPoller,
+    decoder::EscapeState,
+};
 
 const DEFAULT_ESCAPE_TIMEOUT: Duration = Duration::from_millis(35);
 const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -22,7 +44,8 @@ const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// One result of [`TerminalEvents::next_event`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TerminalPoll {
-    /// A decoded input event, including `Event::Resize` from the resize terminal.
+    /// A decoded input event, including `Event::Resize` from the resize
+    /// terminal.
     Event(Event),
     /// A signal caught by the signal guard.
     Signal(Signal),
@@ -52,18 +75,18 @@ enum InputReadiness {
 /// polled or [`TerminalEvents::blocking`] for a plain reader, then call
 /// [`TerminalEvents::next_event`] in a loop.
 pub struct TerminalEvents<R> {
-    input: R,
-    signals: Option<SignalPoller>,
-    resize: Option<OwnedFd>,
-    clock: fn() -> Instant,
-    wait: WaitMode,
-    decoder: Decoder,
-    pending: VecDeque<TerminalPoll>,
-    last_size: Option<Viewport>,
+    input:            R,
+    signals:          Option<SignalPoller>,
+    resize:           Option<OwnedFd>,
+    clock:            fn() -> Instant,
+    wait:             WaitMode,
+    decoder:          Decoder,
+    pending:          VecDeque<TerminalPoll>,
+    last_size:        Option<Viewport>,
     size_initialized: bool,
-    escape_timeout: Duration,
-    escape_since: Option<Instant>,
-    ended: bool,
+    escape_timeout:   Duration,
+    escape_since:     Option<Instant>,
+    ended:            bool,
 }
 
 impl<R> TerminalEvents<R> {
@@ -108,7 +131,8 @@ impl<R> TerminalEvents<R> {
         self
     }
 
-    /// Report `Event::Resize` whenever the terminal behind `terminal` changes size.
+    /// Report `Event::Resize` whenever the terminal behind `terminal` changes
+    /// size.
     #[must_use]
     pub fn resize_from(mut self, terminal: OwnedFd) -> Self {
         self.resize = Some(terminal);
@@ -148,8 +172,9 @@ impl<R> TerminalEvents<R>
 where
     R: Read,
 {
-    /// Read the terminal size once and treat it as already reported, so the first poll
-    /// does not repeat it as a resize. `None` without a [`Self::resize_from`] terminal.
+    /// Read the terminal size once and treat it as already reported, so the
+    /// first poll does not repeat it as a resize. `None` without a
+    /// [`Self::resize_from`] terminal.
     pub fn initial_terminal_size(&mut self) -> Option<Viewport> {
         let size = self.current_size();
         self.size_initialized = true;
@@ -178,7 +203,10 @@ where
     ///
     /// Only a [`Self::pollable`] source can time out. A [`Self::blocking`]
     /// source waits in `read` and ignores `limit`.
-    pub fn next_event_within(&mut self, limit: Option<Duration>) -> io::Result<Option<TerminalPoll>> {
+    pub fn next_event_within(
+        &mut self,
+        limit: Option<Duration>,
+    ) -> io::Result<Option<TerminalPoll>> {
         if let Some(item) = self.pending.pop_front() {
             return Ok(Some(item));
         }
@@ -310,9 +338,9 @@ pub fn resize_event(size: Viewport) -> Event {
 
 // Reads the fd `poll` just reported ready, bypassing any userspace buffer a
 // generic `R: Read` might hold bytes in that `poll` cannot see. It takes one
-// byte at a time, including inside a paste, so typeahead behind a key or a paste
-// end that finishes the session stays in the kernel queue for whoever reads the
-// terminal next.
+// byte at a time, including inside a paste, so typeahead behind a key or a
+// paste end that finishes the session stays in the kernel queue for whoever
+// reads the terminal next.
 fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness> {
     if !wait_for_fd(fd, timeout)? {
         return Ok(InputReadiness::Timeout);
@@ -329,7 +357,7 @@ fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness
 fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
     let mut descriptors = [PollFd::new(fd, PollFlags::IN)];
     let timeout = Timespec {
-        tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+        tv_sec:  i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
         tv_nsec: timeout.subsec_nanos().into(),
     };
     match poll(&mut descriptors, Some(&timeout)) {
@@ -349,8 +377,14 @@ fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::{io::Write as _, os::unix::net::UnixStream, thread};
+    use std::{
+        io::{
+            Cursor,
+            Write as _,
+        },
+        os::unix::net::UnixStream,
+        thread,
+    };
 
     use bang_core::Key;
 
@@ -383,7 +417,7 @@ mod tests {
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize {
                 cols: 100,
-                rows: 30
+                rows: 30,
             }),
         );
         assert_eq!(
@@ -551,7 +585,9 @@ mod tests {
     fn pollable_source_delivers_a_burst_larger_than_one_read_without_the_next_byte() {
         let (reader, mut writer) = UnixStream::pair().unwrap();
         let alphabet = b"abcdefghijklmnopqrstuvwxyz";
-        let burst: Vec<u8> = (0..300).map(|index| alphabet[index % alphabet.len()]).collect();
+        let burst: Vec<u8> = (0..300)
+            .map(|index| alphabet[index % alphabet.len()])
+            .collect();
         let burst_for_writer = burst.clone();
         let trailing_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let writer_sent = std::sync::Arc::clone(&trailing_sent);

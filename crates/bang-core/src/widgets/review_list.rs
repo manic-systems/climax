@@ -2,11 +2,34 @@
 
 use std::collections::BTreeMap;
 
-use screw::{RenderCtx, Role, Span, Surface, VerticalSize};
+use screw::{
+    RenderCtx,
+    Role,
+    Span,
+    Surface,
+    VerticalSize,
+};
 
-use super::navigation::{self, ListFrame, ListRow, PageLayout, move_index, no_modifiers};
-use super::SelectItem;
-use crate::{Context, Event, Key, Reaction, Value, Widget, WidgetId};
+use super::{
+    SelectItem,
+    navigation::{
+        self,
+        ListFrame,
+        ListRow,
+        PageLayout,
+        move_index,
+        no_modifiers,
+    },
+};
+use crate::{
+    Context,
+    Event,
+    Key,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
+};
 
 /// Where one row of a review stands.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -31,7 +54,8 @@ impl ReviewState {
         }
     }
 
-    /// The state a press of space moves to, from unconfirmed to confirmed to denied and back.
+    /// The state a press of space moves to, from unconfirmed to confirmed to
+    /// denied and back.
     #[must_use]
     pub const fn cycle(self) -> Self {
         match self {
@@ -137,7 +161,7 @@ pub struct ReviewList {
     layout:         PageLayout,
     wrap:           bool,
     show_removed:   bool,
-    output: ReviewOutput,
+    output:         ReviewOutput,
     custom_actions: Vec<ReviewActionBinding>,
 }
 
@@ -223,7 +247,8 @@ impl ReviewList {
         self
     }
 
-    /// Submit how the review ended and every row's state, rather than only the rows.
+    /// Submit how the review ended and every row's state, rather than only the
+    /// rows.
     #[must_use]
     pub const fn with_exit_output(mut self, exit_output: bool) -> Self {
         self.output = if exit_output {
@@ -269,7 +294,8 @@ impl ReviewList {
         self
     }
 
-    /// Start each row in the matching state from `states`, which also becomes its initial state.
+    /// Start each row in the matching state from `states`, which also becomes
+    /// its initial state.
     #[must_use]
     pub fn with_states(mut self, states: impl IntoIterator<Item = ReviewState>) -> Self {
         for (index, state) in states.into_iter().enumerate() {
@@ -624,7 +650,11 @@ impl Widget for ReviewList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Session, SessionReaction, SessionStatus};
+    use crate::{
+        Session,
+        SessionReaction,
+        SessionStatus,
+    };
 
     #[test]
     fn structured_review_distinguishes_submit_leave_and_action() {

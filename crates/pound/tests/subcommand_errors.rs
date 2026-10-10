@@ -71,7 +71,10 @@ fn bare_root_reports_help_as_an_error() {
     assert_eq!(err.kind, pound::ErrorKind::MissingSubcommand);
     assert!(!err.is_exit());
     let report = err.render();
-    assert!(report.starts_with("error: a subcommand is required"), "{report}");
+    assert!(
+        report.starts_with("error: a subcommand is required"),
+        "{report}"
+    );
     assert!(report.contains("Usage: prog"), "{report}");
     #[cfg(feature = "help")]
     assert!(report.contains("pkg"), "{report}");
@@ -98,7 +101,11 @@ fn missing_subcommand_exits_2_on_stderr() {
         Nested::try_parse_from(["pkg"]).unwrap_err().exit();
     }
     let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "missing_subcommand_exits_2_on_stderr", "--nocapture"])
+        .args([
+            "--exact",
+            "missing_subcommand_exits_2_on_stderr",
+            "--nocapture",
+        ])
         .env(CHILD, "1")
         .output()
         .unwrap();

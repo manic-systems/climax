@@ -1,43 +1,43 @@
 [workspace]
 members = [
-	"crates/bang",
-	"crates/bang-core",
-	"crates/bang-run",
-	"crates/bang-terminal",
-	"crates/climax",
-	"crates/climax-derive",
-	"crates/pound",
-	"crates/pound-derive",
-	"crates/pound-derive-impl",
-	"crates/screw",
-	"crates/screw-pty",
-	"tests/compile-fixtures/bang-only",
-	"tests/compile-fixtures/climax-derive-only",
-	"tests/compile-fixtures/climax-interactive-only",
-	"tests/compile-fixtures/climax-no-default-features",
-	"tests/compile-fixtures/climax-only",
-	"tests/compile-fixtures/climax-parse-only",
-	"tests/compile-fixtures/climax-render-only",
-	"tests/compile-fixtures/climax-structured-only",
-	"tests/compile-fixtures/climax-with-components",
-	"tests/compile-fixtures/pound-no-derive",
-	"tests/compile-fixtures/pound-no-help",
-	"tests/compile-fixtures/pound-no-std",
-	"tests/compile-fixtures/pound-only",
-	"tests/compile-fixtures/screw-only",
+  "crates/bang",
+  "crates/bang-core",
+  "crates/bang-run",
+  "crates/bang-terminal",
+  "crates/climax",
+  "crates/climax-derive",
+  "crates/pound",
+  "crates/pound-derive",
+  "crates/pound-derive-impl",
+  "crates/screw",
+  "crates/screw-pty",
+  "tests/compile-fixtures/bang-only",
+  "tests/compile-fixtures/climax-derive-only",
+  "tests/compile-fixtures/climax-interactive-only",
+  "tests/compile-fixtures/climax-no-default-features",
+  "tests/compile-fixtures/climax-only",
+  "tests/compile-fixtures/climax-parse-only",
+  "tests/compile-fixtures/climax-render-only",
+  "tests/compile-fixtures/climax-structured-only",
+  "tests/compile-fixtures/climax-with-components",
+  "tests/compile-fixtures/pound-no-derive",
+  "tests/compile-fixtures/pound-no-help",
+  "tests/compile-fixtures/pound-no-std",
+  "tests/compile-fixtures/pound-only",
+  "tests/compile-fixtures/screw-only",
 ]
 default-members = [
-	"crates/bang",
-	"crates/bang-core",
-	"crates/bang-run",
-	"crates/bang-terminal",
-	"crates/climax",
-	"crates/climax-derive",
-	"crates/pound",
-	"crates/pound-derive",
-	"crates/pound-derive-impl",
-	"crates/screw",
-	"crates/screw-pty",
+  "crates/bang",
+  "crates/bang-core",
+  "crates/bang-run",
+  "crates/bang-terminal",
+  "crates/climax",
+  "crates/climax-derive",
+  "crates/pound",
+  "crates/pound-derive",
+  "crates/pound-derive-impl",
+  "crates/screw",
+  "crates/screw-pty",
 ]
 resolver = "3"
 
@@ -49,21 +49,21 @@ repository   = "https://github.com/manic-systems/climax"
 rust-version = "1.88"
 
 [workspace.dependencies]
-anyhow            = "1"
-bang              = { path = "crates/bang", version = "=0.1.0" }
-bang-core         = { path = "crates/bang-core", version = "=0.1.0" }
-bang-terminal     = { path = "crates/bang-terminal", version = "=0.1.0" }
-climax            = { path = "crates/climax", version = "=0.1.0" }
-climax-derive     = { path = "crates/climax-derive", version = "=0.1.0" }
-libc              = "0.2"
-pound             = { path = "crates/pound", version = "=0.2.1", default-features = false }
-pound-derive      = { path = "crates/pound-derive", version = "=0.2.1" }
-pound-derive-impl = { path = "crates/pound-derive-impl", version = "=0.2.1" }
-rustix            = { version = "1.1", default-features = false }
-screw             = { path = "crates/screw", version = "=0.1.0" }
-serde             = "1"
-serde_json        = "1"
-toml              = "0.8"
+anyhow               = "1"
+bang                 = { path = "crates/bang", version = "=0.1.0" }
+bang-core            = { path = "crates/bang-core", version = "=0.1.0" }
+bang-terminal        = { path = "crates/bang-terminal", version = "=0.1.0" }
+climax               = { path = "crates/climax", version = "=0.1.0" }
+climax-derive        = { path = "crates/climax-derive", version = "=0.1.0" }
+libc                 = "0.2"
+pound                = { path = "crates/pound", version = "=0.2.1", default-features = false }
+pound-derive         = { path = "crates/pound-derive", version = "=0.2.1" }
+pound-derive-impl    = { path = "crates/pound-derive-impl", version = "=0.2.1" }
+rustix               = { version = "1.1", default-features = false }
+screw                = { path = "crates/screw", version = "=0.1.0" }
+serde                = "1"
+serde_json           = "1"
+toml                 = "0.8"
 unicode-segmentation = "1.13"
 unicode-width        = "0.2.2"
 

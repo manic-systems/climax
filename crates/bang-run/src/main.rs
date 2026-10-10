@@ -2,10 +2,16 @@
 
 use std::{
     fmt,
-    io::{self, Write as _},
+    io::{
+        self,
+        Write as _,
+    },
 };
 
-use bang_run::{Cli, CliError};
+use bang_run::{
+    Cli,
+    CliError,
+};
 use pound::Parse as _;
 
 fn main() {

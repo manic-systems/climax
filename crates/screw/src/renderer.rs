@@ -32,7 +32,8 @@ pub enum LayoutMode {
     /// Cut each row at the terminal width.
     #[default]
     Clip,
-    /// Continue overlong rows on the next line, preserving them as one logical line.
+    /// Continue overlong rows on the next line, preserving them as one logical
+    /// line.
     Wrap,
 }
 
@@ -47,33 +48,35 @@ pub enum CursorVisibility {
     FromSurface,
 }
 
-/// Draws widgets to a terminal stream, writing only the rows that changed since the last draw.
+/// Draws widgets to a terminal stream, writing only the rows that changed since
+/// the last draw.
 ///
-/// The renderer is synchronous and driven by the caller. Use a [`Runtime`](crate::Runtime) to get
-/// frame pacing and
-/// a background thread. The writer should be a terminal, because frames are updated in place with
-/// cursor movement.
+/// The renderer is synchronous and driven by the caller. Use a
+/// [`Runtime`](crate::Runtime) to get frame pacing and
+/// a background thread. The writer should be a terminal, because frames are
+/// updated in place with cursor movement.
 #[derive(Debug)]
 pub struct Renderer<W> {
-    writer:         W,
-    previous:       Option<Surface>,
-    frame:          u64,
-    width:          Option<usize>,
-    height: Option<usize>,
-    layout_mode:    LayoutMode,
-    theme:          Theme,
-    cursor_visibility: CursorVisibility,
-    cursor_visible: Option<bool>,
-    pending_cursor: Option<bool>,
-    force_full: bool,
+    writer:              W,
+    previous:            Option<Surface>,
+    frame:               u64,
+    width:               Option<usize>,
+    height:              Option<usize>,
+    layout_mode:         LayoutMode,
+    theme:               Theme,
+    cursor_visibility:   CursorVisibility,
+    cursor_visible:      Option<bool>,
+    pending_cursor:      Option<bool>,
+    force_full:          bool,
     rendition_uncertain: bool,
-    colors: bool,
+    colors:              bool,
 }
 
 /// Whether the environment permits colour output.
 ///
 /// This is false when `NO_COLOR` is set to a non-empty value, following <https://no-color.org>.
-/// The environment is read once, on first use, and every [`Renderer`] starts from the result.
+/// The environment is read once, on first use, and every [`Renderer`] starts
+/// from the result.
 pub fn colors_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty()))
@@ -83,8 +86,9 @@ impl<W> Renderer<W>
 where
     W: Write,
 {
-    /// Creates a renderer over `writer` with no width or height limit, clipping, the default theme
-    /// and untouched cursor visibility. Colours follow [`colors_enabled`].
+    /// Creates a renderer over `writer` with no width or height limit,
+    /// clipping, the default theme and untouched cursor visibility. Colours
+    /// follow [`colors_enabled`].
     pub fn new(writer: W) -> Self {
         Self {
             writer,
@@ -103,15 +107,17 @@ where
         }
     }
 
-    /// Chooses whether foreground and background colours are written. Other attributes such as
-    /// bold and reverse are kept either way. Overrides the `NO_COLOR` default of [`Renderer::new`].
+    /// Chooses whether foreground and background colours are written. Other
+    /// attributes such as bold and reverse are kept either way. Overrides
+    /// the `NO_COLOR` default of [`Renderer::new`].
     #[must_use]
     pub const fn colors(mut self, enabled: bool) -> Self {
         self.colors = enabled;
         self
     }
 
-    /// Sets the terminal width in columns, which rows are clipped or wrapped to.
+    /// Sets the terminal width in columns, which rows are clipped or wrapped
+    /// to.
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
@@ -139,8 +145,8 @@ where
         self
     }
 
-    /// Changes the width, and redraws the whole frame on the next draw because terminals reflow
-    /// earlier output unpredictably.
+    /// Changes the width, and redraws the whole frame on the next draw because
+    /// terminals reflow earlier output unpredictably.
     pub const fn resize(&mut self, width: usize) {
         if matches!(self.width, Some(current) if current == width) {
             return;
@@ -151,11 +157,16 @@ where
         self.force_full = true;
     }
 
-    /// Changes the width and the height. The next draw repaints the whole frame when the width
-    /// changed or the retained frame is taller than the new height, because a shorter terminal
-    /// scrolls the top of a tall frame into scrollback.
+    /// Changes the width and the height. The next draw repaints the whole frame
+    /// when the width changed or the retained frame is taller than the new
+    /// height, because a shorter terminal scrolls the top of a tall frame
+    /// into scrollback.
     pub fn resize_viewport(&mut self, width: usize, height: usize) {
-        if self.previous.as_ref().is_some_and(|previous| previous.height() > height) {
+        if self
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous.height() > height)
+        {
             self.force_full = true;
         }
         self.height = Some(height);
@@ -171,7 +182,8 @@ where
 
     /// Renders `widget` and writes the difference from the previous frame.
     ///
-    /// The frame counter seen by widgets through [`RenderCtx::frame`] advances on every call.
+    /// The frame counter seen by widgets through [`RenderCtx::frame`] advances
+    /// on every call.
     pub fn draw<T>(&mut self, widget: &T) -> io::Result<RenderStats>
     where
         T: Widget + ?Sized,
@@ -189,7 +201,8 @@ where
         self.draw_surface(next)
     }
 
-    /// Writes an already rendered surface after fitting it to the width and height.
+    /// Writes an already rendered surface after fitting it to the width and
+    /// height.
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
         let next_physical = self.layout_surface(next_logical);
 
@@ -214,8 +227,8 @@ where
         }
     }
 
-    /// After a failed write the terminal may still hold the style of a half written cell, so the
-    /// next write starts by resetting it.
+    /// After a failed write the terminal may still hold the style of a half
+    /// written cell, so the next write starts by resetting it.
     fn settle_rendition(&mut self) -> io::Result<()> {
         if self.rendition_uncertain {
             self.writer.write_all(Style::default().sgr().as_bytes())?;
@@ -230,7 +243,13 @@ where
 
         if self.force_full {
             if let Some(previous) = self.previous.as_ref() {
-                clear_reflowed(previous, self.width, &mut self.writer, &mut cursor, &mut stats)?;
+                clear_reflowed(
+                    previous,
+                    self.width,
+                    &mut self.writer,
+                    &mut cursor,
+                    &mut stats,
+                )?;
             }
             write_initial_surface(next_physical, &mut self.writer, &mut cursor, &mut stats)?;
             self.force_full = false;
@@ -273,7 +292,9 @@ where
     /// Erases the last frame from the terminal and forgets it.
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let reset_pending = self.rendition_uncertain;
-        let result = self.settle_rendition().and_then(|()| self.clear_frame(reset_pending));
+        let result = self
+            .settle_rendition()
+            .and_then(|()| self.clear_frame(reset_pending));
         if result.is_err() {
             self.rendition_uncertain = true;
         }
@@ -368,8 +389,8 @@ where
 }
 
 impl Renderer<io::Stderr> {
-    /// Creates a renderer on standard error sized to the terminal, or 80 columns when the size is
-    /// unknown.
+    /// Creates a renderer on standard error sized to the terminal, or 80
+    /// columns when the size is unknown.
     pub fn stderr() -> Self {
         let (width, height) = stderr_size();
         let mut renderer = Self::new(io::stderr()).width(width);
@@ -378,7 +399,11 @@ impl Renderer<io::Stderr> {
     }
 }
 
-pub(crate) fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMode) -> Surface {
+pub(crate) fn layout_surface(
+    mut surface: Surface,
+    width: Option<usize>,
+    mode: LayoutMode,
+) -> Surface {
     match (width, mode) {
         (Some(width), LayoutMode::Clip) => {
             surface.fit_width(width);
@@ -490,17 +515,14 @@ fn extend_for_growth(
     }
 
     *cursor = Cursor {
-        row: previous_final.row,
-        col: previous_final.col,
+        row:   previous_final.row,
+        col:   previous_final.col,
         style: Style::default(),
     };
-    cursor.move_to(
-        writer,
-        Position {
-            row: previous_bottom,
-            col: 0,
-        },
-    )?;
+    cursor.move_to(writer, Position {
+        row: previous_bottom,
+        col: 0,
+    })?;
     for _ in previous_bottom..next_bottom {
         writer.write_all(b"\r\n")?;
         cursor.row += 1;
@@ -536,18 +558,20 @@ fn clear_reflowed(
     stats: &mut RenderStats,
 ) -> io::Result<()> {
     let anchor = final_position(previous);
-    let row = width.filter(|&width| width > 0).map_or(anchor.row, |width| {
-        previous
-            .rows()
-            .iter()
-            .take(anchor.row)
-            .map(|row| wrapped_lines(row.cells(), width))
-            .sum::<usize>()
-            + previous
+    let row = width
+        .filter(|&width| width > 0)
+        .map_or(anchor.row, |width| {
+            previous
                 .rows()
-                .get(anchor.row)
-                .map_or(0, |row| wraps_before_column(row.cells(), width, anchor.col))
-    });
+                .iter()
+                .take(anchor.row)
+                .map(|row| wrapped_lines(row.cells(), width))
+                .sum::<usize>()
+                + previous
+                    .rows()
+                    .get(anchor.row)
+                    .map_or(0, |row| wraps_before_column(row.cells(), width, anchor.col))
+        });
     move_to_top(writer, Position { row, col: 0 }, cursor)?;
     writer.write_all(b"\x1b[J")?;
     stats.changed_rows += previous.height();
@@ -558,8 +582,9 @@ fn wrapped_lines(cells: &[Cell], width: usize) -> usize {
     1 + wraps_before_column(cells, width, usize::MAX)
 }
 
-/// Count the wraps of `cells` at `width` before `column`, so a wide cell that straddles a
-/// wrap boundary is not rounded away by dividing the column by `width`.
+/// Count the wraps of `cells` at `width` before `column`, so a wide cell that
+/// straddles a wrap boundary is not rounded away by dividing the column by
+/// `width`.
 fn wraps_before_column(cells: &[Cell], width: usize, column: usize) -> usize {
     let mut wraps = 0;
     let mut used = 0;
@@ -727,9 +752,11 @@ fn cells_width(cells: &[Cell]) -> usize {
 }
 
 fn final_position(surface: &Surface) -> Position {
-    surface.cursor().unwrap_or_else(|| Position {
-        row: surface.height().saturating_sub(1),
-        col: surface.row_width(surface.height().saturating_sub(1)),
+    surface.cursor().unwrap_or_else(|| {
+        Position {
+            row: surface.height().saturating_sub(1),
+            col: surface.row_width(surface.height().saturating_sub(1)),
+        }
     })
 }
 
@@ -777,8 +804,22 @@ mod tests {
     use std::io;
 
     use crate::{
-        Color, CursorMerge, CursorVisibility, Edge, Fill, Floating, Insets, Layers, LayoutMode, Position,
-        Renderer, Size, Style, Surface, Widget, renderer::layout_surface,
+        Color,
+        CursorMerge,
+        CursorVisibility,
+        Edge,
+        Fill,
+        Floating,
+        Insets,
+        Layers,
+        LayoutMode,
+        Position,
+        Renderer,
+        Size,
+        Style,
+        Surface,
+        Widget,
+        renderer::layout_surface,
     };
 
     fn surface(lines: &[&str], cursor: Option<Position>) -> Surface {
@@ -808,7 +849,8 @@ mod tests {
 
     #[test]
     fn clear_without_a_retained_frame_still_restores_the_cursor() {
-        let mut renderer = Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
         renderer.cursor_visible = Some(false);
         renderer.clear().unwrap();
         assert_eq!(renderer.into_inner(), b"\x1b[?25h");
@@ -1001,10 +1043,10 @@ mod tests {
         let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
         renderer.draw(&pane()).unwrap();
         assert_eq!(
-            text_at(
-                renderer.previous.as_ref().unwrap(),
-                Position { row: 5, col: 15 },
-            ),
+            text_at(renderer.previous.as_ref().unwrap(), Position {
+                row: 5,
+                col: 15,
+            },),
             Some("p"),
         );
 
@@ -1264,9 +1306,9 @@ mod tests {
 
     #[derive(Default)]
     struct FlakyWriter {
-        buffer: Vec<u8>,
+        buffer:               Vec<u8>,
         writes_until_failure: Option<usize>,
-        interrupted_flushes: usize,
+        interrupted_flushes:  usize,
     }
 
     impl io::Write for FlakyWriter {
@@ -1321,7 +1363,11 @@ mod tests {
         let mut surface = Surface::new();
         surface.write(
             "x",
-            Style::new().fg(Color::Red).bg(Color::Rgb(1, 2, 3)).bold().reverse(),
+            Style::new()
+                .fg(Color::Red)
+                .bg(Color::Rgb(1, 2, 3))
+                .bold()
+                .reverse(),
         );
         surface.write("y", Style::new().fg(Color::Indexed(9)));
 
@@ -1380,7 +1426,9 @@ mod tests {
     #[test]
     fn clear_flushes_the_erased_frame_when_the_cursor_is_preserved() {
         let mut renderer = Renderer::new(io::BufWriter::with_capacity(1 << 16, Vec::new()));
-        renderer.draw_surface(surface(&["one", "two"], None)).unwrap();
+        renderer
+            .draw_surface(surface(&["one", "two"], None))
+            .unwrap();
         let drawn = renderer.writer.get_ref().len();
         renderer.clear().unwrap();
         assert!(renderer.writer.get_ref().len() > drawn);
@@ -1388,7 +1436,7 @@ mod tests {
 
     #[derive(Default)]
     struct FlushOnceFailing {
-        buffer: Vec<u8>,
+        buffer:          Vec<u8>,
         failing_flushes: usize,
     }
 
@@ -1464,7 +1512,8 @@ mod tests {
         let update = &renderer.writer[before..];
         assert!(
             update.starts_with(b"\r\x1b[J"),
-            "the wide anchor cell fills the reflowed row exactly, so no climb is needed: {update:?}"
+            "the wide anchor cell fills the reflowed row exactly, so no climb is needed: \
+             {update:?}"
         );
     }
 

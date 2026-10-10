@@ -2,14 +2,25 @@
 
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
     time::Duration,
 };
 
-use bang::{ErrorKind, PromptOutcome, terminal::Signal};
+use bang::{
+    ErrorKind,
+    PromptOutcome,
+    terminal::Signal,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -137,7 +148,10 @@ fn termios(file: &File) -> Vec<u8> {
     // SAFETY: a zeroed termios is overwritten by tcgetattr.
     let mut state = unsafe { std::mem::zeroed::<libc::termios>() };
     // SAFETY: the descriptor is open and state is valid for the call.
-    assert_eq!(unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) }, 0);
+    assert_eq!(
+        unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) },
+        0
+    );
     let mut flags = Vec::new();
     for value in [state.c_iflag, state.c_oflag, state.c_cflag, state.c_lflag] {
         flags.extend(value.to_ne_bytes());

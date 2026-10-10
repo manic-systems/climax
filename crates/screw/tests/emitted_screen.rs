@@ -1,11 +1,25 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
-    io::{self, Write},
-    sync::{Arc, Mutex},
+    io::{
+        self,
+        Write,
+    },
+    sync::{
+        Arc,
+        Mutex,
+    },
 };
 
-use screw::{Align, Color, Renderer, Span, Spans, Style, Table};
+use screw::{
+    Align,
+    Color,
+    Renderer,
+    Span,
+    Spans,
+    Style,
+    Table,
+};
 use screw_pty::EmittedScreen;
 
 #[derive(Clone, Default)]
@@ -85,7 +99,9 @@ fn clusters_reach_the_screen_as_single_cells_and_survive_patching() {
     let mut screen = EmittedScreen::new(13, 5);
     for tail in ["x", "y", ""] {
         renderer.draw_surface(rows(tail)).unwrap();
-        screen.feed(&std::mem::take(&mut *shared.0.lock().unwrap())).unwrap();
+        screen
+            .feed(&std::mem::take(&mut *shared.0.lock().unwrap()))
+            .unwrap();
         screen.finish().unwrap();
 
         assert_eq!(screen.cell(0, 0).unwrap().text(), "\u{26a0}\u{fe0f}");
@@ -117,7 +133,9 @@ fn a_height_only_resize_repaints_the_frame() {
     renderer.draw(&frame.as_str()).unwrap();
     screen.feed(&shared.0.lock().unwrap()).unwrap();
 
-    let shown: Vec<String> = (0..3).map(|row| screen.trimmed_line(row).unwrap()).collect();
+    let shown: Vec<String> = (0..3)
+        .map(|row| screen.trimmed_line(row).unwrap())
+        .collect();
     assert_eq!(shown, ["r0", "r1", "r2"]);
 }
 
@@ -149,7 +167,10 @@ fn clusters_split_across_writes_patch_like_a_fresh_draw() {
     drawn.finish().unwrap();
 
     assert_eq!(patched.trimmed_line(0), drawn.trimmed_line(0));
-    assert_eq!(patched.trimmed_line(0).unwrap(), "\u{2764}\u{fe0f}🇯🇵👩\u{200d}💻cb");
+    assert_eq!(
+        patched.trimmed_line(0).unwrap(),
+        "\u{2764}\u{fe0f}🇯🇵👩\u{200d}💻cb"
+    );
     assert_eq!(patched.cell(0, 6).unwrap().text(), "c");
 }
 

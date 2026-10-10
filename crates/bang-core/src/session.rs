@@ -1,15 +1,27 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use screw::{RenderCtx, Surface, TickInterest, VerticalSize};
+use screw::{
+    RenderCtx,
+    Surface,
+    TickInterest,
+    VerticalSize,
+};
 
-use crate::{Context, Event, FocusTarget, Reaction, Value, Widget};
+use crate::{
+    Context,
+    Event,
+    FocusTarget,
+    Reaction,
+    Value,
+    Widget,
+};
 
 /// Runs one root widget and tracks whether it has finished and needs redrawing.
 pub struct Session {
-    root: Box<dyn Widget>,
-    focus: Option<FocusTarget>,
+    root:   Box<dyn Widget>,
+    focus:  Option<FocusTarget>,
     status: SessionStatus,
-    dirty: bool,
+    dirty:  bool,
 }
 
 impl Session {
@@ -17,10 +29,10 @@ impl Session {
     #[must_use]
     pub fn new(root: impl Widget + 'static) -> Self {
         Self {
-            root: Box::new(root),
-            focus: None,
+            root:   Box::new(root),
+            focus:  None,
             status: SessionStatus::Running,
-            dirty: true,
+            dirty:  true,
         }
     }
 
@@ -37,8 +49,9 @@ impl Session {
 
     /// Deliver `event` to the root and record the outcome.
     ///
-    /// A finished session ignores further events. A focus request made while handling the event
-    /// only takes effect when the widget did not also submit or cancel.
+    /// A finished session ignores further events. A focus request made while
+    /// handling the event only takes effect when the widget did not also
+    /// submit or cancel.
     pub fn handle(&mut self, event: Event) -> SessionReaction {
         if !matches!(self.status, SessionStatus::Running) {
             return SessionReaction::Ignored;
@@ -52,10 +65,9 @@ impl Session {
         let mut context = Context::new();
         let handled = self.root.handle(event, &mut context);
         let reaction = match (handled, context.take_focus()) {
-            (
-                terminal @ (Reaction::Submit(_) | Reaction::Action(_) | Reaction::Cancel),
-                _,
-            ) => terminal,
+            (terminal @ (Reaction::Submit(_) | Reaction::Action(_) | Reaction::Cancel), _) => {
+                terminal
+            },
             (_, Some(target)) => Reaction::Focus(target),
             (handled, None) => redraw_reaction(handled, redraws),
         };

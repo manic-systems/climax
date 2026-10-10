@@ -3,7 +3,10 @@
 #![cfg(feature = "derive")]
 #![allow(non_upper_case_globals, non_camel_case_types, dead_code)]
 
-use pound::{Parse, ValueEnum};
+use pound::{
+    Parse,
+    ValueEnum,
+};
 
 struct spec;
 struct m;
@@ -27,18 +30,22 @@ const CMD0: &str = "from-cmd0";
 const CMD1: &str = "from-cmd1";
 
 fn passthrough(raw: &str) -> Result<String, &'static str> {
-    if raw.is_empty() { Err("empty") } else { Ok(format!("{raw}{ARGS}")) }
+    if raw.is_empty() {
+        Err("empty")
+    } else {
+        Ok(format!("{raw}{ARGS}"))
+    }
 }
 
 #[derive(Debug, Parse)]
 #[pound(name = "probe", version = CMD)]
 struct Flat {
     #[pound(long, default = { ARGS })]
-    first:  String,
+    first:   String,
     #[pound(long, default = { GROUPS })]
-    second: String,
+    second:  String,
     #[pound(long, parse = passthrough, validate = |v: &String| if v.is_empty() { Err(CONFLICTS) } else { Ok(()) }, default = { REQUIRES })]
-    third:  String,
+    third:   String,
     #[pound(long, min = "1", max = "9", max_len = "3", default = "2")]
     bounded: u8,
 }

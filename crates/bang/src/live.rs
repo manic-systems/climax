@@ -3,15 +3,41 @@
 use std::{
     error,
     fmt,
-    io::{self, IsTerminal as _, Write},
-    os::fd::{AsFd, OwnedFd},
+    io::{
+        self,
+        IsTerminal as _,
+        Write,
+    },
+    os::fd::{
+        AsFd,
+        OwnedFd,
+    },
 };
 
-use bang_core::{Session, Value, Widget as BangWidget};
-use bang_terminal::{CleanupFailure, CleanupFailures, CleanupStage, Signal};
-use screw::{CursorVisibility, RenderStats, Renderer, Viewport};
+use bang_core::{
+    Session,
+    Value,
+    Widget as BangWidget,
+};
+use bang_terminal::{
+    CleanupFailure,
+    CleanupFailures,
+    CleanupStage,
+    Signal,
+};
+use screw::{
+    CursorVisibility,
+    RenderStats,
+    Renderer,
+    Viewport,
+};
 
-use crate::session::{RunOutcome, SessionOptions, SessionRenderer, drive_tty_session};
+use crate::session::{
+    RunOutcome,
+    SessionOptions,
+    SessionRenderer,
+    drive_tty_session,
+};
 
 /// A [`SessionRenderer`] backed by a `screw` renderer.
 ///
@@ -79,7 +105,7 @@ pub enum LiveSessionError {
     /// Restoring the terminal failed, possibly after another error.
     Cleanup {
         /// The error the session ended with before cleanup, if any.
-        primary: Option<Box<Self>>,
+        primary:  Option<Box<Self>>,
         /// Every cleanup step that failed.
         failures: CleanupFailures,
     },
@@ -140,13 +166,13 @@ impl fmt::Display for LiveSessionError {
 impl error::Error for LiveSessionError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
-            Self::RawMode(error)
-            | Self::Signals(error)
-            | Self::TerminalIo(error) => Some(error),
-            Self::Cleanup { primary, failures } => primary
-                .as_deref()
-                .map(|error| error as &(dyn error::Error + 'static))
-                .or(Some(failures)),
+            Self::RawMode(error) | Self::Signals(error) | Self::TerminalIo(error) => Some(error),
+            Self::Cleanup { primary, failures } => {
+                primary
+                    .as_deref()
+                    .map(|error| error as &(dyn error::Error + 'static))
+                    .or(Some(failures))
+            },
             Self::Unavailable | Self::Cancelled | Self::InputEnded | Self::Signalled(_) => None,
         }
     }
@@ -156,7 +182,9 @@ impl error::Error for LiveSessionError {
 ///
 /// Fails with [`LiveSessionError::Unavailable`] unless both are terminals and
 /// `TERM` is not `dumb`.
-pub(crate) fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, LiveSessionError> {
+pub(crate) fn run_live_session(
+    widget: impl BangWidget + 'static,
+) -> Result<Value, LiveSessionError> {
     if !io::stdin().is_terminal()
         || !io::stderr().is_terminal()
         || std::env::var_os("TERM").is_some_and(|term| term == "dumb")
@@ -235,18 +263,16 @@ where
             return Err(with_cleanup(LiveSessionError::RawMode(error), failures));
         },
     };
-    let mut screen = match bang_terminal::ScreenGuard::enter(
-        output,
-        bang_terminal::ScreenOptions::inline(),
-    ) {
-        Ok(screen) => screen,
-        Err(error) => {
-            let mut failures = Vec::new();
-            collect_cleanup(&mut failures, terminal.restore());
-            collect_cleanup(&mut failures, signals.restore());
-            return Err(with_cleanup(LiveSessionError::TerminalIo(error), failures));
-        },
-    };
+    let mut screen =
+        match bang_terminal::ScreenGuard::enter(output, bang_terminal::ScreenOptions::inline()) {
+            Ok(screen) => screen,
+            Err(error) => {
+                let mut failures = Vec::new();
+                collect_cleanup(&mut failures, terminal.restore());
+                collect_cleanup(&mut failures, signals.restore());
+                return Err(with_cleanup(LiveSessionError::TerminalIo(error), failures));
+            },
+        };
     let initial_size = Viewport::of(&resize).ok();
     let mut renderer = ScrewSessionRenderer::with_initial_size(screen.writer(), initial_size);
     let outcome = drive_tty_session(
@@ -287,7 +313,7 @@ where
         primary
     } else {
         Err(LiveSessionError::Cleanup {
-            primary: primary.err().map(Box::new),
+            primary:  primary.err().map(Box::new),
             failures: CleanupFailures::new(failures),
         })
     }
@@ -304,7 +330,7 @@ fn with_cleanup(primary: LiveSessionError, failures: Vec<CleanupFailure>) -> Liv
         primary
     } else {
         LiveSessionError::Cleanup {
-            primary: Some(Box::new(primary)),
+            primary:  Some(Box::new(primary)),
             failures: CleanupFailures::new(failures),
         }
     }
@@ -312,8 +338,14 @@ fn with_cleanup(primary: LiveSessionError, failures: Vec<CleanupFailure>) -> Liv
 
 #[cfg(test)]
 mod tests {
-    use bang_core::widgets::{Select, TextInput};
-    use screw::{CursorVisibility, Renderer};
+    use bang_core::widgets::{
+        Select,
+        TextInput,
+    };
+    use screw::{
+        CursorVisibility,
+        Renderer,
+    };
 
     #[test]
     fn the_terminal_cursor_follows_the_widget_that_places_one() {
@@ -321,7 +353,8 @@ mod tests {
             .with_prompt("search: ")
             .with_placeholder("type to filter");
         let list = Select::new("results", Vec::<String>::new());
-        let mut renderer = Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
 
         renderer.draw(&input).unwrap();
         renderer.draw(&list).unwrap();

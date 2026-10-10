@@ -22,7 +22,8 @@ where
     render_plain_with_frame(widget, 0)
 }
 
-/// Like [`render_plain`] at a chosen frame, which animated widgets use to pick what to show.
+/// Like [`render_plain`] at a chosen frame, which animated widgets use to pick
+/// what to show.
 pub fn render_plain_with_frame<T>(widget: &T, frame: u64) -> String
 where
     T: Widget + ?Sized,
@@ -36,7 +37,10 @@ where
     T: Widget + ?Sized,
 {
     let mut surface = Surface::new();
-    widget.render(&RenderCtx::new().with_frame(frame).with_theme(theme), &mut surface);
+    widget.render(
+        &RenderCtx::new().with_frame(frame).with_theme(theme),
+        &mut surface,
+    );
     surface.plain_text()
 }
 

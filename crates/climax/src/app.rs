@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{io, process::ExitCode};
 #[cfg(all(feature = "render", feature = "structured"))]
 use std::io::IsTerminal as _;
-use std::marker::PhantomData;
 #[cfg(any(feature = "render", feature = "interactive"))]
 use std::os::fd::OwnedFd;
+use std::{
+    io,
+    marker::PhantomData,
+    process::ExitCode,
+};
 
 use crate::Result;
 
@@ -83,10 +86,10 @@ where
 /// Run an application from an already built command and report its result.
 ///
 /// The handler gets a fresh `Context` and the command. When it succeeds the
-/// registered results are written and transient output is flushed. When it fails
-/// they are discarded and its error is returned, with any cleanup failure attached
-/// as a related error. Nothing is parsed and no process exit status is chosen,
-/// which `main` does for a parsed command.
+/// registered results are written and transient output is flushed. When it
+/// fails they are discarded and its error is returned, with any cleanup failure
+/// attached as a related error. Nothing is parsed and no process exit status is
+/// chosen, which `main` does for a parsed command.
 pub fn run_with<C, F>(command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
@@ -142,8 +145,8 @@ pub(crate) fn parse_completion(error: &pound::Error) -> Completion {
         Completion::output(error.render())
     } else {
         Completion {
-            code: 2,
-            stream: Some(CompletionStream::Stderr),
+            code:    2,
+            stream:  Some(CompletionStream::Stderr),
             message: Some(error.render()),
         }
     }
@@ -166,8 +169,8 @@ pub(crate) fn finish(result: &Result<()>) -> Completion {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Completion {
-    code: u8,
-    stream: Option<CompletionStream>,
+    code:    u8,
+    stream:  Option<CompletionStream>,
     message: Option<String>,
 }
 
@@ -181,8 +184,8 @@ pub(crate) enum CompletionStream {
 impl Completion {
     const fn success() -> Self {
         Self {
-            code: 0,
-            stream: None,
+            code:    0,
+            stream:  None,
             message: None,
         }
     }
@@ -198,8 +201,8 @@ impl Completion {
     #[cfg(feature = "parse")]
     const fn output(message: String) -> Self {
         Self {
-            code: 0,
-            stream: Some(CompletionStream::Stdout),
+            code:    0,
+            stream:  Some(CompletionStream::Stdout),
             message: Some(message),
         }
     }
@@ -269,20 +272,20 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 /// ```
 #[derive(Debug)]
 pub struct Context {
-    output: crate::output::Output,
-    diagnostic: crate::output::Output,
-    terminal: crate::terminal::TerminalPolicy,
+    output:             crate::output::Output,
+    diagnostic:         crate::output::Output,
+    terminal:           crate::terminal::TerminalPolicy,
     #[cfg(feature = "interactive")]
-    interaction: bang::Interaction,
+    interaction:        bang::Interaction,
     #[cfg(feature = "interactive")]
     custom_interaction: bool,
     #[cfg(feature = "interactive")]
-    prompt_summaries: Option<bool>,
+    prompt_summaries:   Option<bool>,
     #[cfg(feature = "render")]
     transient:          crate::status::StatusCoordinator,
     #[cfg(any(feature = "render", feature = "interactive"))]
-    terminal_handle: Option<OwnedFd>,
-    _not_send: PhantomData<std::rc::Rc<()>>,
+    terminal_handle:    Option<OwnedFd>,
+    _not_send:          PhantomData<std::rc::Rc<()>>,
 }
 
 impl Default for Context {
@@ -295,7 +298,8 @@ impl Context {
     #[must_use]
     /// A context for the current process, using stdin, stdout and stderr.
     ///
-    /// Terminal capabilities are detected once here, and output starts in text mode.
+    /// Terminal capabilities are detected once here, and output starts in text
+    /// mode.
     pub fn new() -> Self {
         let terminal = crate::terminal::TerminalPolicy::process();
         #[cfg(feature = "render")]
@@ -306,18 +310,21 @@ impl Context {
         #[cfg(feature = "interactive")]
         let interaction = interaction_for(terminal);
         #[cfg(all(feature = "render", feature = "structured"))]
-        let output_route = if std::io::stdout().is_terminal() && terminal.capabilities().transient_terminal() {
-            crate::output::PresentationRoute::Around(transient.clone())
-        } else {
-            crate::output::PresentationRoute::Direct
-        };
+        let output_route =
+            if std::io::stdout().is_terminal() && terminal.capabilities().transient_terminal() {
+                crate::output::PresentationRoute::Around(transient.clone())
+            } else {
+                crate::output::PresentationRoute::Direct
+            };
         let diagnostic = crate::output::Output::new(crate::output::Format::Text)
             .with_shared_writer(crate::output::SharedWriter::stderr());
         #[cfg(all(feature = "render", feature = "structured"))]
-        let diagnostic = diagnostic.with_route(crate::output::PresentationRoute::Queued(transient.clone()));
+        let diagnostic =
+            diagnostic.with_route(crate::output::PresentationRoute::Queued(transient.clone()));
         #[cfg(feature = "render")]
-        let output = crate::output::Output::new(crate::output::Format::Text)
-            .with_transient(crate::status::TransientNotice::coordinator(transient.clone()));
+        let output = crate::output::Output::new(crate::output::Format::Text).with_transient(
+            crate::status::TransientNotice::coordinator(transient.clone()),
+        );
         #[cfg(all(feature = "render", feature = "structured"))]
         let output = output.with_route(output_route);
         #[cfg(not(feature = "render"))]
@@ -341,72 +348,72 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
         bang::select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
         bang::multi_select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
         bang::search(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
         bang::review(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
         bang::text(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
         bang::password(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
         bang::confirm(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
         bang::date(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// The builder keeps the interaction driver the context holds now, so a later
-    /// `set_interaction_mode` or terminal change does not affect it.
+    /// The builder keeps the interaction driver the context holds now, so a
+    /// later `set_interaction_mode` or terminal change does not affect it.
     #[must_use]
     pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
     where
@@ -420,16 +427,17 @@ impl Context {
     #[must_use]
     /// Start building a transient status line for a long operation.
     ///
-    /// Statuses share one renderer on the transient channel, and prompts suspend them
-    /// while they hold the terminal. Call `start`, `finish` or `during` on the result
-    /// to show it. Off a terminal `StatusMode::Auto` prints the final message on
-    /// success and the failure message on failure, one plain line each, and
-    /// `StatusMode::Silent` prints nothing.
+    /// Statuses share one renderer on the transient channel, and prompts
+    /// suspend them while they hold the terminal. Call `start`, `finish` or
+    /// `during` on the result to show it. Off a terminal `StatusMode::Auto`
+    /// prints the final message on success and the failure message on
+    /// failure, one plain line each, and `StatusMode::Silent` prints
+    /// nothing.
     ///
     /// Ctrl-C during a live status with no prompt open uses the default signal
-    /// disposition, so the process dies and the spinner line is left on the screen.
-    /// Only a prompt installs the handlers that restore the terminal and turn the
-    /// signal into an error.
+    /// disposition, so the process dies and the spinner line is left on the
+    /// screen. Only a prompt installs the handlers that restore the
+    /// terminal and turn the signal into an error.
     pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
         crate::status::Status::new(message, self.transient.clone())
     }
@@ -437,8 +445,9 @@ impl Context {
     #[must_use]
     /// The output handle for results, streams and notices.
     ///
-    /// Every handle shares one lifecycle, so a second finite result through any of them
-    /// is an error. Take it after choosing a format with `Self::set_output_format`.
+    /// Every handle shares one lifecycle, so a second finite result through any
+    /// of them is an error. Take it after choosing a format with
+    /// `Self::set_output_format`.
     pub fn output(&self) -> crate::output::Output {
         self.output.clone()
     }
@@ -471,9 +480,9 @@ impl Context {
 
     /// Sideband output for human-facing context (stderr in text mode).
     ///
-    /// Has its own result slot, separate from [`Self::output`], and writes to the
-    /// diagnostic stream. Both slots are committed together when the application
-    /// handler returns.
+    /// Has its own result slot, separate from [`Self::output`], and writes to
+    /// the diagnostic stream. Both slots are committed together when the
+    /// application handler returns.
     ///
     /// Notice routing and suppression always match [`Self::output`], since a
     /// separately tracked diagnostic notice policy could drift from it.
@@ -483,8 +492,8 @@ impl Context {
     }
 
     #[must_use]
-    /// The terminal policy this context applies, with its capabilities and any mode
-    /// overrides.
+    /// The terminal policy this context applies, with its capabilities and any
+    /// mode overrides.
     pub const fn terminal(&self) -> crate::terminal::TerminalPolicy {
         self.terminal
     }
@@ -492,8 +501,9 @@ impl Context {
     #[must_use]
     /// Whether prompts can run under the current policy.
     ///
-    /// Forced interaction reports `true` and disabled interaction `false`. Otherwise
-    /// it needs a terminal stdin, a terminal transient stream and ANSI support.
+    /// Forced interaction reports `true` and disabled interaction `false`.
+    /// Otherwise it needs a terminal stdin, a terminal transient stream and
+    /// ANSI support.
     pub const fn interaction_available(&self) -> bool {
         self.terminal.interaction_available()
     }
@@ -558,7 +568,8 @@ impl Context {
 
         #[cfg(feature = "render")]
         {
-            let coordinator_writer = crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?));
+            let coordinator_writer =
+                crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?));
             let mode = self.terminal.effective_status_mode();
             let width = crate::status::WidthSource::Terminal(handle.try_clone()?);
             let previous = std::mem::replace(
@@ -566,9 +577,11 @@ impl Context {
                 crate::status::StatusCoordinator::with_width(coordinator_writer, mode, width),
             );
             previous.supersede(&self.transient);
-            self.output = self.output.with_transient(crate::status::TransientNotice::coordinator(
-                self.transient.clone(),
-            ));
+            self.output = self
+                .output
+                .with_transient(crate::status::TransientNotice::coordinator(
+                    self.transient.clone(),
+                ));
             #[cfg(feature = "structured")]
             {
                 let around = |stream_is_terminal: bool| {
@@ -588,7 +601,9 @@ impl Context {
         {
             self.output = self
                 .output
-                .with_notice_writer(crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?)));
+                .with_notice_writer(crate::output::SharedWriter::new(std::fs::File::from(
+                    handle.try_clone()?,
+                )));
         }
 
         #[cfg(feature = "interactive")]
@@ -635,11 +650,12 @@ impl Context {
         not(any(feature = "interactive", feature = "render")),
         allow(clippy::missing_const_for_fn)
     )]
-    /// Replace the detected terminal capabilities, for tests or for a host that knows
-    /// better.
+    /// Replace the detected terminal capabilities, for tests or for a host that
+    /// knows better.
     ///
-    /// The interaction driver is rederived unless one was injected, and the status mode
-    /// is reapplied, which fails when the status coordinator cannot switch.
+    /// The interaction driver is rederived unless one was injected, and the
+    /// status mode is reapplied, which fails when the status coordinator
+    /// cannot switch.
     pub fn set_terminal_capabilities(
         &mut self,
         capabilities: crate::terminal::TerminalCapabilities,
@@ -657,8 +673,8 @@ impl Context {
         Ok(())
     }
 
-    /// Prompt builders made earlier keep the driver they captured, so only builders
-    /// made after this call see the new mode.
+    /// Prompt builders made earlier keep the driver they captured, so only
+    /// builders made after this call see the new mode.
     #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
     pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
         self.terminal.set_interaction_mode(mode);
@@ -681,7 +697,8 @@ impl Context {
     }
 
     #[cfg_attr(not(feature = "render"), allow(clippy::missing_const_for_fn))]
-    /// Override how statuses present, see [`StatusMode`](crate::terminal::StatusMode).
+    /// Override how statuses present, see
+    /// [`StatusMode`](crate::terminal::StatusMode).
     ///
     /// Fails when the status coordinator cannot apply the resulting mode.
     pub fn set_status_mode(&mut self, mode: crate::terminal::StatusMode) -> Result<()> {
@@ -693,11 +710,11 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
-    /// Use `interaction` for every prompt made afterwards and force interaction on,
-    /// since the caller supplied the driver.
+    /// Use `interaction` for every prompt made afterwards and force interaction
+    /// on, since the caller supplied the driver.
     ///
-    /// Later capability changes no longer replace it. Prompts made earlier keep the
-    /// driver they captured.
+    /// Later capability changes no longer replace it. Prompts made earlier keep
+    /// the driver they captured.
     pub fn set_interaction(&mut self, interaction: bang::Interaction) {
         self.terminal
             .set_interaction_mode(crate::terminal::InteractionMode::Force);
@@ -748,8 +765,8 @@ impl Context {
     }
 
     #[must_use]
-    /// Write finite results and streams to `writer` instead of stdout, directly and not
-    /// around a live status. Notices keep their own destination.
+    /// Write finite results and streams to `writer` instead of stdout, directly
+    /// and not around a live status. Notices keep their own destination.
     pub fn with_output_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
         self.output = self.output.with_writer(writer);
         self
@@ -807,12 +824,16 @@ impl Context {
             ),
         );
         previous.supersede(&self.transient);
-        self.output = self.output.with_transient(crate::status::TransientNotice::coordinator(
-            self.transient.clone(),
-        ));
+        self.output = self
+            .output
+            .with_transient(crate::status::TransientNotice::coordinator(
+                self.transient.clone(),
+            ));
         #[cfg(feature = "structured")]
         {
-            self.output = self.output.with_route(crate::output::PresentationRoute::Direct);
+            self.output = self
+                .output
+                .with_route(crate::output::PresentationRoute::Direct);
             self.diagnostic = self
                 .diagnostic
                 .with_route(crate::output::PresentationRoute::Direct);
@@ -855,7 +876,6 @@ impl Context {
         #[cfg(not(feature = "render"))]
         interaction
     }
-
 }
 
 fn collect_related(failure: &mut Option<crate::Error>, result: Result<()>) {
@@ -955,7 +975,9 @@ mod tests {
     #[cfg(feature = "render")]
     #[test]
     fn transient_writer_cannot_change_under_a_live_status() {
-        let context = Context::new().with_transient_writer(Sink::default()).unwrap();
+        let context = Context::new()
+            .with_transient_writer(Sink::default())
+            .unwrap();
         let status = context.status("working").start();
         let error = context.with_transient_writer(Sink::default()).unwrap_err();
         assert_eq!(error.kind(), crate::error::ErrorKind::Output);
@@ -989,7 +1011,9 @@ mod tests {
         }
 
         let context = Context::new()
-            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(false, false, false))
+            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                false, false, false,
+            ))
             .unwrap()
             .with_interaction_mode(crate::terminal::InteractionMode::Force);
         let result = execute(context, (), |context, ()| {
@@ -1077,7 +1101,13 @@ mod tests {
                 .status("working")
                 .final_message("done")
                 .failure_message("failed")
-                .during(|| if fail { Err(crate::Error::message("x")) } else { Ok(()) });
+                .during(|| {
+                    if fail {
+                        Err(crate::Error::message("x"))
+                    } else {
+                        Ok(())
+                    }
+                });
             capture.text()
         };
         assert_eq!(run(None, false), "done\n");
@@ -1103,7 +1133,10 @@ mod tests {
     #[cfg(all(feature = "interactive", feature = "render"))]
     #[test]
     fn terminal_application_accepts_caller_supplied_handles() {
-        use std::{io::Write as _, os::unix::net::UnixStream};
+        use std::{
+            io::Write as _,
+            os::unix::net::UnixStream,
+        };
 
         let (input, _peer) = UnixStream::pair().unwrap();
         let mut output = Vec::new();
@@ -1168,11 +1201,23 @@ mod tests {
     #[test]
     fn a_closed_stdout_pipe_exits_141_and_other_write_failures_exit_1() {
         let broken = Err(io::Error::from(io::ErrorKind::BrokenPipe));
-        assert_eq!(Completion::code_after_write(0, CompletionStream::Stdout, &Ok(())), 0);
-        assert_eq!(Completion::code_after_write(0, CompletionStream::Stdout, &broken), 141);
+        assert_eq!(
+            Completion::code_after_write(0, CompletionStream::Stdout, &Ok(())),
+            0
+        );
+        assert_eq!(
+            Completion::code_after_write(0, CompletionStream::Stdout, &broken),
+            141
+        );
         let full = Err(io::Error::from(io::ErrorKind::StorageFull));
-        assert_eq!(Completion::code_after_write(0, CompletionStream::Stdout, &full), 1);
-        assert_eq!(Completion::code_after_write(0, CompletionStream::Stderr, &broken), 1);
+        assert_eq!(
+            Completion::code_after_write(0, CompletionStream::Stdout, &full),
+            1
+        );
+        assert_eq!(
+            Completion::code_after_write(0, CompletionStream::Stderr, &broken),
+            1
+        );
     }
 
     #[test]
@@ -1183,14 +1228,22 @@ mod tests {
         let silent = finish(&Err(crate::Error::cancelled().with_exit_code(7)));
         assert_eq!((silent.code, silent.stream), (7, None));
 
-        let reported = finish(&Err(crate::Error::message("nothing to do").with_exit_code(3)));
+        let reported = finish(&Err(
+            crate::Error::message("nothing to do").with_exit_code(3)
+        ));
         assert_eq!(reported.code, 3);
         assert_eq!(reported.stream, Some(CompletionStream::Stderr));
         assert_eq!(reported.message.as_deref(), Some("error: nothing to do"));
 
         assert_eq!(finish(&Err(crate::Error::message("boom"))).code, 1);
-        assert_eq!(finish(&Err(crate::Error::message("x").with_exit_code(0))).code, 1);
-        assert_eq!(finish(&Err(crate::Error::cancelled().with_exit_code(0))).code, 1);
+        assert_eq!(
+            finish(&Err(crate::Error::message("x").with_exit_code(0))).code,
+            1
+        );
+        assert_eq!(
+            finish(&Err(crate::Error::cancelled().with_exit_code(0))).code,
+            1
+        );
         assert_eq!(finish(&Ok(())).code, 0);
     }
 
@@ -1207,11 +1260,11 @@ mod tests {
 
         let parse = complete::<(), _>(
             Err(pound::Error {
-                kind: pound::ErrorKind::Unknown {
-                    arg: "--wat".to_owned(),
+                kind:      pound::ErrorKind::Unknown {
+                    arg:     "--wat".to_owned(),
                     closest: Some("--watch".to_owned()),
                 },
-                usage: Some("Usage: demo [OPTION]...".to_owned()),
+                usage:     Some("Usage: demo [OPTION]...".to_owned()),
                 help_flag: None,
             }),
             |_, ()| unreachable!(),
@@ -1220,13 +1273,16 @@ mod tests {
         assert_eq!(parse.stream, Some(CompletionStream::Stderr));
         assert_eq!(
             parse.message.as_deref(),
-            Some("error: unrecognized argument '--wat'\n\n  tip: did you mean '--watch'\n\nUsage: demo [OPTION]...")
+            Some(
+                "error: unrecognized argument '--wat'\n\n  tip: did you mean '--watch'\n\nUsage: \
+                 demo [OPTION]..."
+            )
         );
 
         let missing = complete::<(), _>(
             Err(pound::Error {
-                kind: pound::ErrorKind::MissingSubcommand,
-                usage: Some("Usage: demo <COMMAND>".to_owned()),
+                kind:      pound::ErrorKind::MissingSubcommand,
+                usage:     Some("Usage: demo <COMMAND>".to_owned()),
                 help_flag: None,
             }),
             |_, ()| unreachable!(),
@@ -1234,7 +1290,10 @@ mod tests {
         assert_eq!(missing.code, 2);
         assert_eq!(missing.stream, Some(CompletionStream::Stderr));
         assert!(
-            missing.message.as_deref().is_some_and(|text| text.starts_with("error: a subcommand is required")),
+            missing
+                .message
+                .as_deref()
+                .is_some_and(|text| text.starts_with("error: a subcommand is required")),
             "got {:?}",
             missing.message
         );
@@ -1260,7 +1319,10 @@ mod tests {
         let interrupted = complete(Ok(()), |_, ()| {
             let mut error = crate::Error::with_source(
                 crate::error::ErrorKind::Cancelled,
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "interrupted by signal SIGTERM"),
+                std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "interrupted by signal SIGTERM",
+                ),
             );
             error.signal = Some(15);
             Err(error)
@@ -1276,20 +1338,41 @@ mod tests {
             .with_related(crate::Error::message("cleanup failed")))
         });
         assert_eq!(cancelled_with_related.code, 130);
-        assert_eq!(cancelled_with_related.stream, Some(CompletionStream::Stderr));
-        assert!(cancelled_with_related.message.unwrap().contains("cleanup failed"));
+        assert_eq!(
+            cancelled_with_related.stream,
+            Some(CompletionStream::Stderr)
+        );
+        assert!(
+            cancelled_with_related
+                .message
+                .unwrap()
+                .contains("cleanup failed")
+        );
 
         let interrupted_with_cleanup = complete(Ok(()), |_, ()| {
             let mut error = crate::Error::with_source(
                 crate::error::ErrorKind::Cancelled,
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "interrupted by signal SIGTERM"),
+                std::io::Error::new(
+                    std::io::ErrorKind::Interrupted,
+                    "interrupted by signal SIGTERM",
+                ),
             );
             error.signal = Some(15);
-            Err(error.with_related(crate::Error::message("terminal cleanup failed, RawMode: EIO")))
+            Err(error.with_related(crate::Error::message(
+                "terminal cleanup failed, RawMode: EIO",
+            )))
         });
         assert_eq!(interrupted_with_cleanup.code, 143);
-        assert_eq!(interrupted_with_cleanup.stream, Some(CompletionStream::Stderr));
-        assert!(interrupted_with_cleanup.message.unwrap().contains("RawMode: EIO"));
+        assert_eq!(
+            interrupted_with_cleanup.stream,
+            Some(CompletionStream::Stderr)
+        );
+        assert!(
+            interrupted_with_cleanup
+                .message
+                .unwrap()
+                .contains("RawMode: EIO")
+        );
     }
 
     #[cfg(feature = "interactive")]

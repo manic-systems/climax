@@ -4,8 +4,7 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// what a parse attempt ran into, or which early exit it was asked for
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,7 +12,7 @@ pub enum ErrorKind {
     /// unrecognized `--flag` or `-x`
     Unknown {
         /// the spelling that was not recognized
-        arg: String,
+        arg:     String,
         /// the known spelling it was probably meant to be, when one is close
         closest: Option<String>,
     },
@@ -28,7 +27,7 @@ pub enum ErrorKind {
     /// first positional named a subcommand that does not exist
     UnknownSubcommand {
         /// the word that named no subcommand
-        name: String,
+        name:    String,
         /// the known subcommand it was probably meant to be, when one is close
         closest: Option<String>,
     },
@@ -39,18 +38,18 @@ pub enum ErrorKind {
     /// a value failed to parse into its target type
     Value {
         /// the argument the value was given to, as usage spells it
-        arg: String,
+        arg:   String,
         /// the text that failed to parse
         value: String,
         /// why it failed, with the possible values appended for a choice type
-        msg: String,
+        msg:   String,
     },
     /// two members of a mutually-exclusive group were both set
     Conflict {
         /// the group both were members of, empty for a `conflicts_with` pair
-        group: String,
+        group:  String,
         /// the first of the two arguments
-        first: String,
+        first:  String,
         /// the second of the two arguments
         second: String,
     },
@@ -151,8 +150,8 @@ pub struct Error {
     /// what happened
     pub kind:      ErrorKind,
     /// the usage line of the command that raised it, when it came from a parse.
-    /// for [`ErrorKind::MissingSubcommand`] raised by the parser it is the whole
-    /// help text, so the report lists the subcommands to pick from
+    /// for [`ErrorKind::MissingSubcommand`] raised by the parser it is the
+    /// whole help text, so the report lists the subcommands to pick from
     pub usage:     Option<String>,
     /// the spelling that still reaches the generated help, if any does
     pub help_flag: Option<&'static str>,

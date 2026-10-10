@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::process::{Command, Output};
+use std::process::{
+    Command,
+    Output,
+};
 
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bang"))
@@ -29,7 +32,10 @@ fn select_ctrl_d_ends_input() {
     let output = run(&["select", "-o", "a", "-o", "b", "--input-bytes", "\\x04"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("input ended before the prompt was submitted"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("input ended before the prompt was submitted")
+    );
 }
 
 #[test]

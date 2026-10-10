@@ -4,14 +4,24 @@
 
 use std::{
     fmt,
-    io::{self, Write},
-    sync::{Arc, Mutex},
+    io::{
+        self,
+        Write,
+    },
+    sync::{
+        Arc,
+        Mutex,
+    },
 };
 
-#[cfg(feature = "structured")]
-use serde::Serialize;
+#[cfg(feature = "structured")] use serde::Serialize;
 
-use crate::{Error, Result, error::ErrorKind, sync::lock};
+use crate::{
+    Error,
+    Result,
+    error::ErrorKind,
+    sync::lock,
+};
 
 /// How an application writes its output, chosen with
 /// [`Context::set_output_format`](crate::Context::set_output_format).
@@ -29,23 +39,23 @@ pub enum Format {
 
 /// A configured destination-independent application output writer.
 ///
-/// Handles come from [`crate::Context::output`] and [`crate::Context::diagnostic`].
-/// A standalone handle would never commit its registered result, since
-/// nothing owns it to close its lifecycle.
+/// Handles come from [`crate::Context::output`] and
+/// [`crate::Context::diagnostic`]. A standalone handle would never commit its
+/// registered result, since nothing owns it to close its lifecycle.
 ///
 /// ```compile_fail
 /// climax::output::Output::new(climax::output::Format::Text);
 /// ```
 #[derive(Clone)]
 pub struct Output {
-    format: Format,
-    writer: SharedWriter,
-    notices: SharedWriter,
+    format:        Format,
+    writer:        SharedWriter,
+    notices:       SharedWriter,
     notice_format: Format,
     #[cfg(feature = "structured")]
-    state: Arc<Emission>,
+    state:         Arc<Emission>,
     #[cfg(all(feature = "render", feature = "structured"))]
-    route: PresentationRoute,
+    route:         PresentationRoute,
 }
 
 /// Where an immediate write to `Output`'s own writer goes when a live status
@@ -91,9 +101,9 @@ impl Output {
     }
 
     #[must_use]
-    /// Switch this handle's format, which also decides whether notices are suppressed.
-    /// Prefer [`crate::Context::set_output_format`], which keeps the context's own
-    /// handle in step.
+    /// Switch this handle's format, which also decides whether notices are
+    /// suppressed. Prefer [`crate::Context::set_output_format`], which
+    /// keeps the context's own handle in step.
     pub const fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self.notice_format = format;
@@ -101,8 +111,8 @@ impl Output {
     }
 
     #[must_use]
-    /// Write finite results and streams to `writer` instead of stdout. Notices keep
-    /// their own destination.
+    /// Write finite results and streams to `writer` instead of stdout. Notices
+    /// keep their own destination.
     pub fn with_writer(mut self, writer: impl Write + Send + 'static) -> Self {
         self.writer = SharedWriter::new(writer);
         #[cfg(all(feature = "render", feature = "structured"))]
@@ -189,13 +199,13 @@ impl Output {
     /// The selected projection is buffered until the application handler
     /// succeeds. Use [`ResultBuilder::text`] to supply its human view.
     ///
-    /// Derive serde's traits with `#[climax::serde(Serialize)]`, which roots the
-    /// derive at `climax::serde` so an application depending on climax alone needs
-    /// no `serde` dependency. List `Serialize`, `Deserialize` or both. The
-    /// attribute must come before any other derive that shares serde's helper
-    /// attributes, and the item keeps its other attributes, so `#[serde(rename_all
-    /// = "kebab-case")]` works as usual. It needs the `derive` and `structured`
-    /// features.
+    /// Derive serde's traits with `#[climax::serde(Serialize)]`, which roots
+    /// the derive at `climax::serde` so an application depending on climax
+    /// alone needs no `serde` dependency. List `Serialize`, `Deserialize`
+    /// or both. The attribute must come before any other derive that shares
+    /// serde's helper attributes, and the item keeps its other attributes,
+    /// so `#[serde(rename_all = "kebab-case")]` works as usual. It needs
+    /// the `derive` and `structured` features.
     ///
     /// ```
     /// use climax::prelude::*;
@@ -208,9 +218,10 @@ impl Output {
     /// }
     /// ```
     ///
-    /// Without the `derive` feature, write `#[derive(climax::serde::Serialize)]`
-    /// with `#[serde(crate = "climax::serde")]`. Forgetting that attribute gives
-    /// an error that points at the compiler and not at the missing attribute.
+    /// Without the `derive` feature, write
+    /// `#[derive(climax::serde::Serialize)]` with `#[serde(crate =
+    /// "climax::serde")]`. Forgetting that attribute gives an error that
+    /// points at the compiler and not at the missing attribute.
     ///
     /// ```text
     /// error[E0658]: use of unstable library feature `rustc_private`: this crate is being loaded from the sysroot, an unstable location; did you mean to load this crate from crates.io via `Cargo.toml` instead?
@@ -220,8 +231,9 @@ impl Output {
     ///   |                              ^^^^^^^^^
     /// ```
     ///
-    /// It is followed by an unsatisfied `serde::Serialize` bound on your type and a
-    /// note that there are multiple different versions of crate `serde_core`.
+    /// It is followed by an unsatisfied `serde::Serialize` bound on your type
+    /// and a note that there are multiple different versions of crate
+    /// `serde_core`.
     ///
     /// ```
     /// use climax::prelude::*;
@@ -250,17 +262,19 @@ impl Output {
     /// JSON mode writes one JSON value per line. Streams cannot be combined
     /// with a finite result in the same invocation.
     ///
-    /// Derive serde's traits with `#[climax::serde(Serialize)]`, placed before any
-    /// other derive, as [`Self::result`] shows. Without the `derive` feature use
-    /// `#[serde(crate = "climax::serde")]`, since otherwise rustc reports `E0658`
-    /// about the unstable `rustc_private` feature on the derive.
+    /// Derive serde's traits with `#[climax::serde(Serialize)]`, placed before
+    /// any other derive, as [`Self::result`] shows. Without the `derive`
+    /// feature use `#[serde(crate = "climax::serde")]`, since otherwise
+    /// rustc reports `E0658` about the unstable `rustc_private` feature on
+    /// the derive.
     ///
     /// The call returns once the value is written, routed around a live
-    /// status when one shares the terminal. A write on a [`crate::Context::diagnostic`]
-    /// handle behaves like a notice, so while a prompt or terminal application
-    /// holds the terminal the line is queued and the call returns at once.
-    /// Any other write that must wait for that thread's prompt gives up with an
-    /// error after ten seconds and is dropped, so a thread holding the terminal
+    /// status when one shares the terminal. A write on a
+    /// [`crate::Context::diagnostic`] handle behaves like a notice, so
+    /// while a prompt or terminal application holds the terminal the line
+    /// is queued and the call returns at once. Any other write that must
+    /// wait for that thread's prompt gives up with an error after ten
+    /// seconds and is dropped, so a thread holding the terminal
     /// must not join a worker that is streaming.
     pub const fn stream<'a, T>(&'a self, value: &'a T) -> ResultBuilder<'a, T, MissingText>
     where
@@ -326,11 +340,16 @@ impl Output {
     #[cfg(feature = "structured")]
     pub(crate) fn commit(&self) -> Result<()> {
         let pending = {
-            let state = std::mem::replace(&mut lock(&self.state.lifecycle).state, EmissionState::Closed);
+            let state = std::mem::replace(
+                &mut lock(&self.state.lifecycle).state,
+                EmissionState::Closed,
+            );
             drop(
                 self.state
                     .drained
-                    .wait_while(lock(&self.state.lifecycle), |lifecycle| lifecycle.in_flight > 0)
+                    .wait_while(lock(&self.state.lifecycle), |lifecycle| {
+                        lifecycle.in_flight > 0
+                    })
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             );
             match state {
@@ -348,7 +367,11 @@ impl Output {
     }
 
     #[cfg(not(feature = "structured"))]
-    #[expect(clippy::unused_self, clippy::unnecessary_wraps, reason = "without `structured` nothing is registered to commit")]
+    #[expect(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        reason = "without `structured` nothing is registered to commit"
+    )]
     pub(crate) const fn commit(&self) -> Result<()> {
         Ok(())
     }
@@ -359,7 +382,10 @@ impl Output {
     }
 
     #[cfg(not(feature = "structured"))]
-    #[expect(clippy::unused_self, reason = "without `structured` nothing is registered to discard")]
+    #[expect(
+        clippy::unused_self,
+        reason = "without `structured` nothing is registered to discard"
+    )]
     pub(crate) const fn discard(&self) {}
 
     /// Write bytes to `writer` using the presentation route in effect, so a
@@ -394,13 +420,13 @@ impl Output {
 #[derive(Default)]
 struct Emission {
     lifecycle: Mutex<Lifecycle>,
-    drained: std::sync::Condvar,
+    drained:   std::sync::Condvar,
 }
 
 #[cfg(feature = "structured")]
 #[derive(Default)]
 struct Lifecycle {
-    state: EmissionState,
+    state:     EmissionState,
     in_flight: usize,
 }
 
@@ -427,7 +453,7 @@ enum EmissionState {
 
 #[cfg(feature = "structured")]
 struct PendingResult {
-    bytes: Vec<u8>,
+    bytes:  Vec<u8>,
     writer: SharedWriter,
 }
 
@@ -450,9 +476,9 @@ pub struct MissingText;
 #[must_use]
 pub struct ResultBuilder<'a, T: ?Sized, F> {
     output: &'a Output,
-    value: &'a T,
-    text: F,
-    mode: EmissionMode,
+    value:  &'a T,
+    text:   F,
+    mode:   EmissionMode,
 }
 
 #[cfg(feature = "structured")]
@@ -575,14 +601,16 @@ impl Write for SharedWriter {
 fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| match value {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect(),
-            '\n' => "\\n".chars().collect(),
-            '\r' => "\\r".chars().collect(),
-            '\t' => "\\t".chars().collect(),
-            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-            value => vec![value],
+        .flat_map(|value| {
+            match value {
+                '"' => "\\\"".chars().collect::<Vec<_>>(),
+                '\\' => "\\\\".chars().collect(),
+                '\n' => "\\n".chars().collect(),
+                '\r' => "\\r".chars().collect(),
+                '\t' => "\\t".chars().collect(),
+                value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
+                value => vec![value],
+            }
         })
         .collect()
 }
@@ -605,7 +633,11 @@ fn output_policy(message: &'static str) -> Error {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "structured")]
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{
+        AtomicUsize,
+        Ordering,
+    };
+
     use super::*;
 
     #[derive(Clone, Default)]
@@ -631,7 +663,7 @@ mod tests {
     #[cfg(feature = "structured")]
     #[derive(Clone, Default)]
     struct FlushCapture {
-        bytes: Arc<Mutex<Vec<u8>>>,
+        bytes:   Arc<Mutex<Vec<u8>>>,
         flushes: Arc<AtomicUsize>,
     }
 
@@ -685,7 +717,11 @@ mod tests {
                 let output = output.clone();
                 std::thread::spawn(move || {
                     for _ in 0..50 {
-                        output.stream(&letter.repeat(20)).text(|value| value).emit().unwrap();
+                        output
+                            .stream(&letter.repeat(20))
+                            .text(|value| value)
+                            .emit()
+                            .unwrap();
                     }
                 })
             })
@@ -831,7 +867,7 @@ mod tests {
         use std::sync::mpsc;
 
         struct Gated {
-            bytes: Capture,
+            bytes:   Capture,
             entered: mpsc::Sender<()>,
             release: Arc<Mutex<mpsc::Receiver<()>>>,
         }
@@ -866,7 +902,10 @@ mod tests {
             capture.text()
         });
         std::thread::sleep(std::time::Duration::from_millis(100));
-        assert!(!commit.is_finished(), "commit must wait for the write in flight");
+        assert!(
+            !commit.is_finished(),
+            "commit must wait for the write in flight"
+        );
 
         release_tx.send(()).unwrap();
         stream.join().unwrap().unwrap();
@@ -883,7 +922,9 @@ mod tests {
         );
         let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator));
         for index in 0..20 {
-            output.write_bytes(format!("line {index}\n").as_bytes()).unwrap();
+            output
+                .write_bytes(format!("line {index}\n").as_bytes())
+                .unwrap();
             assert!(capture.text().ends_with(&format!("line {index}\n")));
         }
     }
@@ -914,7 +955,8 @@ mod tests {
             SharedWriter::new(capture.clone()),
             crate::terminal::StatusMode::Silent,
         );
-        let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator.clone()));
+        let output =
+            Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator.clone()));
 
         let guard = coordinator.application_guard().unwrap();
         output.write_bytes(b"heads up\n").unwrap();

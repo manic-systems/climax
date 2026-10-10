@@ -106,7 +106,9 @@ fn a_group_spans_every_flattened_struct_at_its_level() {
         ErrorKind::MissingGroup { .. }
     ));
     assert!(matches!(
-        Grouped::try_parse_from(["--safe", "--fast"]).unwrap_err().kind,
+        Grouped::try_parse_from(["--safe", "--fast"])
+            .unwrap_err()
+            .kind,
         ErrorKind::Conflict { .. }
     ));
 }

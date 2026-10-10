@@ -3,17 +3,38 @@
 use std::ops::Range;
 
 use screw::{
-    LocalWidgetRef, RenderCtx, Role, Span, Spans, Stack, Surface, VerticalSize, local_widget,
+    LocalWidgetRef,
+    RenderCtx,
+    Role,
+    Span,
+    Spans,
+    Stack,
+    Surface,
+    VerticalSize,
+    local_widget,
 };
 
-use super::navigation::{
-    self, ListFrame, ListRow, PageLayout, move_index, only_control, page_move,
-};
 use super::{
     SelectItem,
     TextInput,
+    navigation::{
+        self,
+        ListFrame,
+        ListRow,
+        PageLayout,
+        move_index,
+        only_control,
+        page_move,
+    },
 };
-use crate::{Context, Event, Key, Reaction, Widget, WidgetId};
+use crate::{
+    Context,
+    Event,
+    Key,
+    Reaction,
+    Widget,
+    WidgetId,
+};
 
 /// A single-choice list filtered by a query typed above it.
 ///
@@ -132,7 +153,8 @@ impl SearchSelect {
         &self.matches
     }
 
-    /// The position of the selected item among the matches, or `None` when nothing matches.
+    /// The position of the selected item among the matches, or `None` when
+    /// nothing matches.
     #[must_use]
     pub const fn selected_match_index(&self) -> Option<usize> {
         if self.matches.is_empty() {
@@ -188,11 +210,22 @@ impl SearchSelect {
     }
 
     fn move_to(&mut self, selected: usize) -> Reaction {
-        navigation::move_to(&mut self.selected, &mut self.top, selected, self.matches.len(), self.page_size)
+        navigation::move_to(
+            &mut self.selected,
+            &mut self.top,
+            selected,
+            self.matches.len(),
+            self.page_size,
+        )
     }
 
     fn move_page(&mut self, target: usize) -> Reaction {
-        page_move(&mut self.top, &mut self.selected, target, self.matches.len())
+        page_move(
+            &mut self.top,
+            &mut self.selected,
+            target,
+            self.matches.len(),
+        )
     }
 
     fn submit(&self) -> Reaction {
@@ -202,7 +235,12 @@ impl SearchSelect {
     }
 
     fn ensure_visible(&mut self) {
-        navigation::ensure_visible(&mut self.selected, &mut self.top, self.matches.len(), self.page_size);
+        navigation::ensure_visible(
+            &mut self.selected,
+            &mut self.top,
+            self.matches.len(),
+            self.page_size,
+        );
     }
 
     fn visible_len(&self) -> usize {
@@ -280,28 +318,40 @@ impl Widget for SearchSelect {
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
         match &event {
-            Event::Key(key) => match key.key {
-                Key::Up => self.move_by(-1, self.wrap),
-                Key::Down => self.move_by(1, self.wrap),
-                Key::Char('p') if only_control(key) => self.move_by(-1, self.wrap),
-                Key::Char('n') if only_control(key) => self.move_by(1, self.wrap),
-                Key::PageUp => {
-                    match navigation::page_action(self.layout.target(false), self.visible_len(), false) {
-                        navigation::PageAction::JumpTo(target) => self.move_page(target),
-                        navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
-                    }
-                },
-                Key::PageDown => {
-                    match navigation::page_action(self.layout.target(true), self.visible_len(), true) {
-                        navigation::PageAction::JumpTo(target) => self.move_page(target),
-                        navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
-                    }
-                },
-                Key::Home if only_control(key) => self.move_to(0),
-                Key::End if only_control(key) => self.move_to(self.matches.len().saturating_sub(1)),
-                Key::Enter => self.submit(),
-                Key::Esc => Reaction::Cancel,
-                _ => self.handle_input(event, cx),
+            Event::Key(key) => {
+                match key.key {
+                    Key::Up => self.move_by(-1, self.wrap),
+                    Key::Down => self.move_by(1, self.wrap),
+                    Key::Char('p') if only_control(key) => self.move_by(-1, self.wrap),
+                    Key::Char('n') if only_control(key) => self.move_by(1, self.wrap),
+                    Key::PageUp => {
+                        match navigation::page_action(
+                            self.layout.target(false),
+                            self.visible_len(),
+                            false,
+                        ) {
+                            navigation::PageAction::JumpTo(target) => self.move_page(target),
+                            navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
+                        }
+                    },
+                    Key::PageDown => {
+                        match navigation::page_action(
+                            self.layout.target(true),
+                            self.visible_len(),
+                            true,
+                        ) {
+                            navigation::PageAction::JumpTo(target) => self.move_page(target),
+                            navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
+                        }
+                    },
+                    Key::Home if only_control(key) => self.move_to(0),
+                    Key::End if only_control(key) => {
+                        self.move_to(self.matches.len().saturating_sub(1))
+                    },
+                    Key::Enter => self.submit(),
+                    Key::Esc => Reaction::Cancel,
+                    _ => self.handle_input(event, cx),
+                }
             },
             Event::Paste(_) => self.handle_input(event, cx),
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
@@ -366,7 +416,10 @@ fn highlight_match(label: &str, query: &str, selected: bool) -> Vec<(String, Rol
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KeyEvent, Modifiers};
+    use crate::{
+        KeyEvent,
+        Modifiers,
+    };
 
     fn ctrl(c: char) -> Event {
         Event::Key(KeyEvent::with_modifiers(Key::Char(c), Modifiers::CONTROL))
@@ -398,13 +451,20 @@ mod tests {
 
     #[test]
     fn ctrl_home_and_ctrl_end_jump_while_plain_home_moves_the_query_cursor() {
-        let mut select = SearchSelect::new("s", ["alpha", "beta", "gamma"]).with_selected_match_index(1);
+        let mut select =
+            SearchSelect::new("s", ["alpha", "beta", "gamma"]).with_selected_match_index(1);
         let mut cx = Context::new();
 
         select.handle(Event::char('a'), &mut cx);
-        assert_eq!(select.handle(ctrl_key(Key::End), &mut cx), Reaction::Changed);
+        assert_eq!(
+            select.handle(ctrl_key(Key::End), &mut cx),
+            Reaction::Changed
+        );
         assert_eq!(select.selected_match_index(), Some(2));
-        assert_eq!(select.handle(ctrl_key(Key::Home), &mut cx), Reaction::Changed);
+        assert_eq!(
+            select.handle(ctrl_key(Key::Home), &mut cx),
+            Reaction::Changed
+        );
         assert_eq!(select.selected_match_index(), Some(0));
 
         select.handle(Event::Key(KeyEvent::new(Key::Home)), &mut cx);

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
-    io::{self, IsTerminal as _},
+    io::{
+        self,
+        IsTerminal as _,
+    },
     sync::{
         Arc,
         Mutex,

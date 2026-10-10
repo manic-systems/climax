@@ -10,7 +10,11 @@ const SYSTEM_PROFILE: &str = "system";
 
 fn even(raw: &str) -> Result<u32, &'static str> {
     let n: u32 = raw.parse().map_err(|_| "not a number")?;
-    if n.is_multiple_of(2) { Ok(n) } else { Err("odd") }
+    if n.is_multiple_of(2) {
+        Ok(n)
+    } else {
+        Err("odd")
+    }
 }
 
 #[derive(Debug, Parse)]

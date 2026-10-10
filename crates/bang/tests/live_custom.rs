@@ -2,8 +2,14 @@
 
 use std::{
     fs::File,
-    io::{self, Write},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Write,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
     time::Duration,
@@ -13,7 +19,10 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[test]
 fn a_custom_widget_runs_on_a_caller_owned_handle() {
-    use bang::advanced::{Value, widgets::TextInput};
+    use bang::advanced::{
+        Value,
+        widgets::TextInput,
+    };
 
     let (mut master, slave) = open_pty();
     let (results_tx, results_rx) = mpsc::channel();

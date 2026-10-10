@@ -1,9 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use bang::advanced::{
-    Event, Key, KeyEvent, Reaction, Value, Widget, WidgetContext, WidgetId, replay_events,
+use bang::{
+    advanced::{
+        Event,
+        Key,
+        KeyEvent,
+        Reaction,
+        Value,
+        Widget,
+        WidgetContext,
+        WidgetId,
+        replay_events,
+    },
+    screw::{
+        RenderCtx,
+        Role,
+        Surface,
+    },
 };
-use bang::screw::{RenderCtx, Role, Surface};
 
 struct Echo {
     typed: String,

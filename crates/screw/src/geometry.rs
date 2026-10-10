@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{io, os::fd::AsFd};
+use std::{
+    io,
+    os::fd::AsFd,
+};
 
 use rustix::termios::tcgetwinsize;
 
@@ -8,13 +11,14 @@ use crate::Position;
 
 /// A width and height in terminal cells.
 ///
-/// This is the extent of any rectangle, such as a [`Rect`] or a floating layer. It holds the same
-/// two numbers as a [`Viewport`], which names them columns and rows and describes the visible
-/// terminal area rather than an arbitrary rectangle.
+/// This is the extent of any rectangle, such as a [`Rect`] or a floating layer.
+/// It holds the same two numbers as a [`Viewport`], which names them columns
+/// and rows and describes the visible terminal area rather than an arbitrary
+/// rectangle.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Size {
     /// Columns.
-    pub width: usize,
+    pub width:  usize,
     /// Rows.
     pub height: usize,
 }
@@ -37,17 +41,17 @@ pub struct Rect {
     /// Top-left cell.
     pub origin: Position,
     /// Extent in columns and rows.
-    pub size: Size,
+    pub size:   Size,
 }
 
 impl Rect {
-    /// Creates a rectangle from its origin row and column, then its width and height.
-    /// The argument order is row first, unlike `Size::new` and `Viewport::new` which put columns
-    /// first.
+    /// Creates a rectangle from its origin row and column, then its width and
+    /// height. The argument order is row first, unlike `Size::new` and
+    /// `Viewport::new` which put columns first.
     pub const fn new(row: usize, col: usize, width: usize, height: usize) -> Self {
         Self {
             origin: Position { row, col },
-            size: Size { width, height },
+            size:   Size { width, height },
         }
     }
 
@@ -114,7 +118,7 @@ impl Rect {
                 row: self.origin.row.saturating_add(rows),
                 col: self.origin.col.saturating_add(columns),
             },
-            size: self.size,
+            size:   self.size,
         }
     }
 
@@ -128,8 +132,8 @@ impl Rect {
                 row: self.origin.row.saturating_add(insets.top),
                 col: self.origin.col.saturating_add(insets.left),
             },
-            size: Size {
-                width: self.size.width.saturating_sub(columns),
+            size:   Size {
+                width:  self.size.width.saturating_sub(columns),
                 height: self.size.height.saturating_sub(rows),
             },
         }
@@ -140,13 +144,13 @@ impl Rect {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Insets {
     /// Rows above.
-    pub top: usize,
+    pub top:    usize,
     /// Columns to the right.
-    pub right: usize,
+    pub right:  usize,
     /// Rows below.
     pub bottom: usize,
     /// Columns to the left.
-    pub left: usize,
+    pub left:   usize,
 }
 
 impl Insets {
@@ -178,19 +182,20 @@ impl Insets {
 
 /// The size of the visible terminal area.
 ///
-/// [`RenderCtx::viewport`](crate::RenderCtx::viewport) reports it. It holds the same two numbers as
-/// a [`Size`] but names them columns and rows, as terminal APIs do. Use [`Viewport::size`] or
-/// [`Viewport::rect`] to lay out inside it.
+/// [`RenderCtx::viewport`](crate::RenderCtx::viewport) reports it. It holds the
+/// same two numbers as a [`Size`] but names them columns and rows, as terminal
+/// APIs do. Use [`Viewport::size`] or [`Viewport::rect`] to lay out inside it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Viewport {
     /// Visible columns.
     pub columns: usize,
     /// Visible rows.
-    pub rows: usize,
+    pub rows:    usize,
 }
 
 impl Viewport {
-    /// The size assumed when a terminal cannot be measured, 80 columns by 24 rows.
+    /// The size assumed when a terminal cannot be measured, 80 columns by 24
+    /// rows.
     pub const FALLBACK: Self = Self::new(80, 24);
 
     /// Creates a viewport from columns then rows.
@@ -200,7 +205,8 @@ impl Viewport {
 
     /// Measures the terminal behind `terminal`.
     ///
-    /// Fails when the descriptor is not a terminal or reports a zero-sized viewport.
+    /// Fails when the descriptor is not a terminal or reports a zero-sized
+    /// viewport.
     pub fn of(terminal: &impl AsFd) -> io::Result<Self> {
         let size = tcgetwinsize(terminal)?;
         if size.ws_col == 0 || size.ws_row == 0 {
@@ -209,7 +215,10 @@ impl Viewport {
                 "terminal reported a zero-sized viewport",
             ));
         }
-        Ok(Self::new(usize::from(size.ws_col), usize::from(size.ws_row)))
+        Ok(Self::new(
+            usize::from(size.ws_col),
+            usize::from(size.ws_row),
+        ))
     }
 
     /// The viewport as a [`Size`].
@@ -245,12 +254,9 @@ mod tests {
         let rect = Rect::new(usize::MAX - 1, usize::MAX - 1, 8, 8);
         assert_eq!(rect.right(), usize::MAX);
         assert_eq!(rect.bottom(), usize::MAX);
-        assert_eq!(
-            rect.translate(9, 9).origin,
-            Position {
-                row: usize::MAX,
-                col: usize::MAX,
-            }
-        );
+        assert_eq!(rect.translate(9, 9).origin, Position {
+            row: usize::MAX,
+            col: usize::MAX,
+        });
     }
 }

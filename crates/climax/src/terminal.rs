@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{self, IsTerminal as _};
+use std::io::{
+    self,
+    IsTerminal as _,
+};
 #[cfg(all(feature = "interactive", feature = "render"))]
-use std::io::{Read, Write};
+use std::io::{
+    Read,
+    Write,
+};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::os::fd::AsFd;
 
@@ -40,9 +46,9 @@ fn ansi_available() -> bool {
 /// Terminal facts observed by the application facade.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalCapabilities {
-    input_terminal: bool,
+    input_terminal:     bool,
     transient_terminal: bool,
-    ansi: bool,
+    ansi:               bool,
 }
 
 /// Readable terminal input accepted by a [`TerminalApplication`].
@@ -58,8 +64,8 @@ impl<T> TerminalInput for T where T: Read + AsFd + ?Sized {}
 /// Requires both the `interactive` and `render` features.
 #[cfg(all(feature = "interactive", feature = "render"))]
 pub struct TerminalApplication<'a> {
-    input: Box<dyn TerminalInput + 'a>,
-    output: Box<dyn Write + 'a>,
+    input:        Box<dyn TerminalInput + 'a>,
+    output:       Box<dyn Write + 'a>,
     capabilities: TerminalCapabilities,
 }
 
@@ -93,8 +99,8 @@ impl<'a> TerminalApplication<'a> {
         &mut *self.output
     }
 
-    /// Borrow input and output together, which separate calls to `input` and `output`
-    /// cannot.
+    /// Borrow input and output together, which separate calls to `input` and
+    /// `output` cannot.
     pub fn split(&mut self) -> (&mut (dyn TerminalInput + 'a), &mut (dyn Write + 'a)) {
         (&mut *self.input, &mut *self.output)
     }
@@ -113,8 +119,8 @@ impl Write for TerminalApplication<'_> {
 
 impl TerminalCapabilities {
     #[must_use]
-    /// Capabilities from explicit facts, for tests and for hosts that detect terminals
-    /// themselves.
+    /// Capabilities from explicit facts, for tests and for hosts that detect
+    /// terminals themselves.
     pub const fn new(input_terminal: bool, transient_terminal: bool, ansi: bool) -> Self {
         Self {
             input_terminal,
@@ -126,7 +132,11 @@ impl TerminalCapabilities {
     #[must_use]
     /// Detect from process stdin, process stderr and the `TERM` variable.
     pub fn detect() -> Self {
-        Self::new(io::stdin().is_terminal(), io::stderr().is_terminal(), ansi_available())
+        Self::new(
+            io::stdin().is_terminal(),
+            io::stderr().is_terminal(),
+            ansi_available(),
+        )
     }
 
     /// Detect capabilities against a single caller-owned handle used for both
@@ -150,22 +160,22 @@ impl TerminalCapabilities {
     }
 
     #[must_use]
-    /// Whether ANSI escape sequences are expected to work, which holds unless `TERM`
-    /// is `dumb`.
+    /// Whether ANSI escape sequences are expected to work, which holds unless
+    /// `TERM` is `dumb`.
     pub const fn ansi(self) -> bool {
         self.ansi
     }
 
     #[must_use]
-    /// Whether prompts can run, which needs a terminal input, a terminal transient
-    /// stream and ANSI support.
+    /// Whether prompts can run, which needs a terminal input, a terminal
+    /// transient stream and ANSI support.
     pub const fn interaction_available(self) -> bool {
         self.input_terminal && self.transient_terminal && self.ansi
     }
 
     #[must_use]
-    /// Whether a live status can animate, which needs a terminal transient stream and
-    /// ANSI support.
+    /// Whether a live status can animate, which needs a terminal transient
+    /// stream and ANSI support.
     pub const fn live_status_available(self) -> bool {
         self.transient_terminal && self.ansi
     }
@@ -175,8 +185,8 @@ impl TerminalCapabilities {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalPolicy {
     capabilities: TerminalCapabilities,
-    interaction: InteractionMode,
-    status: StatusMode,
+    interaction:  InteractionMode,
+    status:       StatusMode,
 }
 
 impl TerminalPolicy {
@@ -184,8 +194,8 @@ impl TerminalPolicy {
     pub(crate) fn process() -> Self {
         Self {
             capabilities: TerminalCapabilities::detect(),
-            interaction: InteractionMode::Auto,
-            status: StatusMode::Auto,
+            interaction:  InteractionMode::Auto,
+            status:       StatusMode::Auto,
         }
     }
 
@@ -219,8 +229,9 @@ impl TerminalPolicy {
     }
 
     #[must_use]
-    /// The status mode after resolving `Auto`, which is `Live` on a terminal that
-    /// supports it and `Plain` otherwise. `Silent` is only ever chosen explicitly.
+    /// The status mode after resolving `Auto`, which is `Live` on a terminal
+    /// that supports it and `Plain` otherwise. `Silent` is only ever chosen
+    /// explicitly.
     pub const fn effective_status_mode(self) -> StatusMode {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,

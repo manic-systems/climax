@@ -20,12 +20,23 @@ use std::{
 };
 
 use crate::{
-    Align, LayoutMode, Role, Style, Surface, Theme, Viewport,
-    measure::{expand_tabs, first_segment_end, split_padding},
+    Align,
+    LayoutMode,
+    Role,
+    Style,
+    Surface,
+    Theme,
+    Viewport,
+    measure::{
+        expand_tabs,
+        first_segment_end,
+        split_padding,
+    },
     renderer::layout_surface,
     surface::append_surface,
     sync::lock,
-    truncate, width,
+    truncate,
+    width,
 };
 
 /// A widget's vertical allocation behavior inside a [`Stack`].
@@ -40,13 +51,14 @@ pub enum VerticalSize {
 
 /// How often a widget needs to be redrawn without being marked dirty.
 ///
-/// A runtime combines the interests of the whole widget tree and never redraws faster than its
-/// frame rate.
+/// A runtime combines the interests of the whole widget tree and never redraws
+/// faster than its frame rate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
     /// The widget only changes when the application marks the runtime dirty.
     Never,
-    /// Redraw on every frame, as an animation does. [`RenderCtx::frame`] advances each time.
+    /// Redraw on every frame, as an animation does. [`RenderCtx::frame`]
+    /// advances each time.
     EveryFrame,
     /// Redraw at most this often, for content such as a clock.
     Every(Duration),
@@ -54,25 +66,27 @@ pub enum TickInterest {
 
 /// Per-draw information passed to [`Widget::render`].
 ///
-/// Widgets read it and never build one. Runtimes and tests build one with the `with_` methods.
+/// Widgets read it and never build one. Runtimes and tests build one with the
+/// `with_` methods.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
-    frame: u64,
-    columns: Option<usize>,
-    rows: Option<usize>,
+    frame:       u64,
+    columns:     Option<usize>,
+    rows:        Option<usize>,
     layout_mode: LayoutMode,
-    theme: Theme,
+    theme:       Theme,
 }
 
 impl RenderCtx {
-    /// Creates a context at frame zero with no size constraints, clipping and the default theme.
+    /// Creates a context at frame zero with no size constraints, clipping and
+    /// the default theme.
     pub const fn new() -> Self {
         Self {
-            frame: 0,
-            columns: None,
-            rows: None,
+            frame:       0,
+            columns:     None,
+            rows:        None,
             layout_mode: LayoutMode::Clip,
-            theme: Theme::DEFAULT,
+            theme:       Theme::DEFAULT,
         }
     }
 
@@ -83,7 +97,8 @@ impl RenderCtx {
         self
     }
 
-    /// Sets the columns and rows available to the widget, where `None` means unconstrained.
+    /// Sets the columns and rows available to the widget, where `None` means
+    /// unconstrained.
     #[must_use]
     pub const fn with_constraints(mut self, columns: Option<usize>, rows: Option<usize>) -> Self {
         self.columns = columns;
@@ -154,19 +169,21 @@ impl Default for RenderCtx {
 
 /// Something that can draw itself into a [`Surface`].
 ///
-/// Implement this for your own types and pass them to a [`Runtime`](crate::Runtime) or a
-/// [`Renderer`](crate::Renderer). See the
+/// Implement this for your own types and pass them to a
+/// [`Runtime`](crate::Runtime) or a [`Renderer`](crate::Renderer). See the
 /// crate documentation for a complete example.
 pub trait Widget {
     /// Writes the widget into `out`.
     ///
-    /// Call [`Surface::write`] once or many times to add text in different styles. A newline in the
-    /// text or a call to [`Surface::newline`] starts a new row, and a widget that is not the first
-    /// on its row continues from the current column. Rendering must not block, and the widget is
-    /// rendered again for every frame.
+    /// Call [`Surface::write`] once or many times to add text in different
+    /// styles. A newline in the text or a call to [`Surface::newline`]
+    /// starts a new row, and a widget that is not the first on its row
+    /// continues from the current column. Rendering must not block, and the
+    /// widget is rendered again for every frame.
     fn render(&self, ctx: &RenderCtx, out: &mut Surface);
 
-    /// Whether the widget changes on its own, which defaults to [`TickInterest::Never`].
+    /// Whether the widget changes on its own, which defaults to
+    /// [`TickInterest::Never`].
     fn tick_interest(&self) -> TickInterest {
         TickInterest::Never
     }
@@ -359,7 +376,10 @@ impl Looping {
     /// A loop with no frames renders nothing.
     pub fn new(frames: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Self {
-            frames: frames.into_iter().map(|frame| frame.as_ref().to_owned()).collect(),
+            frames: frames
+                .into_iter()
+                .map(|frame| frame.as_ref().to_owned())
+                .collect(),
             style:  Style::default(),
         }
     }
@@ -389,8 +409,9 @@ impl Widget for Looping {
 
 /// The most recent lines pushed to it, such as the tail of a log.
 ///
-/// Clones share the same lines, so one clone can be pushed to from another thread while a clone is
-/// drawn. The runtime must be marked dirty after a push.
+/// Clones share the same lines, so one clone can be pushed to from another
+/// thread while a clone is drawn. The runtime must be marked dirty after a
+/// push.
 #[derive(Clone, Debug)]
 pub struct WindowedLines {
     capacity: usize,
@@ -529,21 +550,23 @@ impl Widget for List {
 /// Each column is as wide as its widest cell, measured with [`width`], and
 /// cells are aligned within it. A cell containing newlines spans several rows.
 /// When the columns do not fit the available width, the flexible columns
-/// shrink, widest first, and their cells overflow as [`CellOverflow`] says. A column never
-/// shrinks below one column, so a table with more columns than the width allows is clipped by the
-/// renderer, and a cluster wider than its column becomes an ellipsis. The final cell of a row is
-/// never padded on its trailing side. A table that follows other content on a row fits itself to
-/// the columns left and indents its continuation rows to where it started. No cluster joins across
-/// a cell boundary, so zero-width content at the start of a cell is dropped.
+/// shrink, widest first, and their cells overflow as [`CellOverflow`] says. A
+/// column never shrinks below one column, so a table with more columns than the
+/// width allows is clipped by the renderer, and a cluster wider than its column
+/// becomes an ellipsis. The final cell of a row is never padded on its trailing
+/// side. A table that follows other content on a row fits itself to the columns
+/// left and indents its continuation rows to where it started. No cluster joins
+/// across a cell boundary, so zero-width content at the start of a cell is
+/// dropped.
 #[derive(Clone, Debug)]
 pub struct Table {
-    header: Option<Vec<String>>,
+    header:       Option<Vec<String>>,
     header_style: Style,
-    rows: Vec<Vec<Span>>,
-    aligns: Vec<Align>,
-    gap: usize,
-    flexible: Option<Vec<usize>>,
-    overflow: CellOverflow,
+    rows:         Vec<Vec<Span>>,
+    aligns:       Vec<Align>,
+    gap:          usize,
+    flexible:     Option<Vec<usize>>,
+    overflow:     CellOverflow,
 }
 
 /// What a [`Table`] does with a cell wider than its shrunk column.
@@ -566,16 +589,16 @@ impl Table {
         C: Into<Span>,
     {
         Self {
-            header: None,
+            header:       None,
             header_style: Style::new().bold(),
-            rows: rows
+            rows:         rows
                 .into_iter()
                 .map(|row| row.into_iter().map(Into::into).collect())
                 .collect(),
-            aligns: Vec::new(),
-            gap: 1,
-            flexible: None,
-            overflow: CellOverflow::Truncate,
+            aligns:       Vec::new(),
+            gap:          1,
+            flexible:     None,
+            overflow:     CellOverflow::Truncate,
         }
     }
 
@@ -632,7 +655,11 @@ impl Table {
         let mut excess = (widths.iter().sum::<usize>() + gaps).saturating_sub(available);
         while excess > 0 {
             let widest = (0..widths.len())
-                .filter(|column| self.flexible.as_ref().is_none_or(|flexible| flexible.contains(column)))
+                .filter(|column| {
+                    self.flexible
+                        .as_ref()
+                        .is_none_or(|flexible| flexible.contains(column))
+                })
                 .filter(|&column| widths[column] > 1)
                 .max_by_key(|&column| widths[column]);
             let Some(column) = widest else {
@@ -683,11 +710,7 @@ impl Widget for Table {
                 .map(|cell| Span::new(cell.as_str()).style(self.header_style))
                 .collect()
         });
-        let lines: Vec<&[Span]> = header
-            .iter()
-            .chain(&self.rows)
-            .map(Vec::as_slice)
-            .collect();
+        let lines: Vec<&[Span]> = header.iter().chain(&self.rows).map(Vec::as_slice).collect();
 
         let columns = lines
             .iter()
@@ -759,8 +782,9 @@ impl Widget for Table {
 
 /// A bar of a fixed number of cells filled in proportion to a fraction.
 ///
-/// Clones share the fraction, so one clone can be updated from another thread while a clone is
-/// drawn. The runtime must be marked dirty after the fraction changes.
+/// Clones share the fraction, so one clone can be updated from another thread
+/// while a clone is drawn. The runtime must be marked dirty after the fraction
+/// changes.
 #[derive(Clone, Debug)]
 pub struct ProgressBar {
     fraction: Arc<AtomicU32>,
@@ -819,7 +843,8 @@ impl Widget for ProgressBar {
     }
 }
 
-/// A prompt that places the terminal cursor after it, for input handled outside the renderer.
+/// A prompt that places the terminal cursor after it, for input handled outside
+/// the renderer.
 #[derive(Clone, Debug)]
 pub struct InputAnchor {
     prompt: String,
@@ -850,7 +875,8 @@ impl Widget for InputAnchor {
     }
 }
 
-/// A prompt followed by editable text with the terminal cursor placed inside it.
+/// A prompt followed by editable text with the terminal cursor placed inside
+/// it.
 #[derive(Clone, Debug)]
 pub struct TextInput {
     prompt:      String,
@@ -861,7 +887,8 @@ pub struct TextInput {
 }
 
 impl TextInput {
-    /// Creates an input showing `prompt` and `value` with the cursor at the start.
+    /// Creates an input showing `prompt` and `value` with the cursor at the
+    /// start.
     pub fn new(prompt: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             prompt:      prompt.into(),
@@ -872,8 +899,9 @@ impl TextInput {
         }
     }
 
-    /// Places the cursor before the character at index `cursor`, counted in characters and clamped
-    /// to the end. An index inside a grapheme cluster moves to the end of that cluster.
+    /// Places the cursor before the character at index `cursor`, counted in
+    /// characters and clamped to the end. An index inside a grapheme
+    /// cluster moves to the end of that cluster.
     #[must_use]
     pub const fn cursor(mut self, cursor: usize) -> Self {
         self.cursor = cursor;
@@ -957,10 +985,11 @@ where
     }
 }
 
-/// Children placed one below another, with flexible children sharing the height left over.
+/// Children placed one below another, with flexible children sharing the height
+/// left over.
 ///
-/// A child that is [`VerticalSize::Flexible`] receives the rows that content-sized siblings do not
-/// use.
+/// A child that is [`VerticalSize::Flexible`] receives the rows that
+/// content-sized siblings do not use.
 #[derive(Clone)]
 pub struct Stack<H = WidgetRef> {
     children: Box<[H]>,
@@ -1065,7 +1094,8 @@ where
     }
 }
 
-/// Shows one of several widgets depending on a state that can change while it is drawn.
+/// Shows one of several widgets depending on a state that can change while it
+/// is drawn.
 ///
 /// A state with no widget draws nothing.
 pub struct Stateful<S, H = WidgetRef> {
@@ -1309,7 +1339,9 @@ mod tests {
 
     #[test]
     fn table_styles_the_header_and_leaves_no_trailing_padding() {
-        let table = Table::new([["a", "bb"]]).header(["xxx", "y"]).header_style(Style::new().underline());
+        let table = Table::new([["a", "bb"]])
+            .header(["xxx", "y"])
+            .header_style(Style::new().underline());
         let mut surface = Surface::new();
         table.render(&RenderCtx::new(), &mut surface);
         assert_eq!(surface.plain_text(), "xxx y\na   bb");
@@ -1326,7 +1358,10 @@ mod tests {
 
     fn render_within(table: &Table, columns: usize) -> String {
         let mut surface = Surface::new();
-        table.render(&RenderCtx::new().with_constraints(Some(columns), None), &mut surface);
+        table.render(
+            &RenderCtx::new().with_constraints(Some(columns), None),
+            &mut surface,
+        );
         surface.plain_text()
     }
 
@@ -1353,7 +1388,9 @@ mod tests {
     }
 
     fn row_widths(surface: &Surface) -> Vec<usize> {
-        (0..surface.height()).map(|row| surface.row_width(row)).collect()
+        (0..surface.height())
+            .map(|row| surface.row_width(row))
+            .collect()
     }
 
     #[test]
@@ -1362,7 +1399,10 @@ mod tests {
             .overflow(CellOverflow::Wrap)
             .flexible([0]);
         let mut surface = Surface::new();
-        table.render(&RenderCtx::new().with_constraints(Some(3), None), &mut surface);
+        table.render(
+            &RenderCtx::new().with_constraints(Some(3), None),
+            &mut surface,
+        );
         assert_eq!(surface.plain_text(), "… x\n…\n…\n…\na y\nb");
         assert!(row_widths(&surface).iter().all(|&columns| columns <= 3));
     }
@@ -1371,7 +1411,10 @@ mod tests {
     fn table_cell_starting_with_zero_width_content_does_not_widen_the_previous_cell() {
         let table = Table::new([["❤", "\u{fe0f}", "B"]]).gap(0);
         let mut surface = Surface::new();
-        table.render(&RenderCtx::new().with_constraints(Some(2), None), &mut surface);
+        table.render(
+            &RenderCtx::new().with_constraints(Some(2), None),
+            &mut surface,
+        );
         assert_eq!(surface.plain_text(), "❤B");
         assert_eq!(surface.display_width(), 2);
     }
@@ -1380,7 +1423,10 @@ mod tests {
     fn table_cell_ending_in_a_joiner_does_not_join_the_next_cell() {
         let table = Table::new([["👩\u{200d}", "💻", "B"], ["AA", "bb", "C"]]).gap(0);
         let mut surface = Surface::new();
-        table.render(&RenderCtx::new().with_constraints(Some(5), None), &mut surface);
+        table.render(
+            &RenderCtx::new().with_constraints(Some(5), None),
+            &mut surface,
+        );
         assert_eq!(surface.plain_text(), "👩\u{200d}💻B\nAAbbC");
         assert_eq!(surface.rows()[0].cells().len(), 3);
         assert_eq!(surface.display_width(), 5);
@@ -1392,14 +1438,19 @@ mod tests {
             .overflow(CellOverflow::Wrap)
             .flexible([0]);
         let mut surface = Surface::new();
-        table.render(&RenderCtx::new().with_constraints(Some(3), None), &mut surface);
+        table.render(
+            &RenderCtx::new().with_constraints(Some(3), None),
+            &mut surface,
+        );
         assert_eq!(surface.plain_text(), "… x\n…");
     }
 
     #[test]
     fn text_input_cursor_follows_tab_stops_from_the_prompt() {
         let mut surface = Surface::new();
-        TextInput::new("> ", "a\tb").cursor(2).render(&RenderCtx::new(), &mut surface);
+        TextInput::new("> ", "a\tb")
+            .cursor(2)
+            .render(&RenderCtx::new(), &mut surface);
         assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 8 }));
     }
 
@@ -1417,15 +1468,24 @@ mod tests {
     fn table_keeps_emitted_rows_within_the_fitted_widths_for_clusters() {
         for overflow in [CellOverflow::Truncate, CellOverflow::Wrap] {
             let table = Table::new([
-                ["\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}", "👩\u{200d}💻👩\u{200d}💻"],
+                [
+                    "\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}",
+                    "👩\u{200d}💻👩\u{200d}💻",
+                ],
                 ["a\tb", "🇯🇵🇺🇸"],
             ])
             .overflow(overflow);
             for available in 2..14 {
                 let mut surface = Surface::new();
-                table.render(&RenderCtx::new().with_constraints(Some(available), None), &mut surface);
+                table.render(
+                    &RenderCtx::new().with_constraints(Some(available), None),
+                    &mut surface,
+                );
                 let widest = row_widths(&surface).into_iter().max().unwrap_or(0);
-                assert!(widest <= available.max(3), "{overflow:?} {available} {widest}");
+                assert!(
+                    widest <= available.max(3),
+                    "{overflow:?} {available} {widest}"
+                );
             }
         }
     }
@@ -1445,7 +1505,10 @@ mod tests {
         let mut surface = Surface::new();
         let wide = Table::new([["abcdefgh", "xy"]]);
         surface.write("pre: ", Style::new());
-        wide.render(&RenderCtx::new().with_constraints(Some(13), None), &mut surface);
+        wide.render(
+            &RenderCtx::new().with_constraints(Some(13), None),
+            &mut surface,
+        );
         assert_eq!(surface.plain_text(), "pre: abcd… xy");
     }
 
@@ -1501,7 +1564,9 @@ mod tests {
 
     #[test]
     fn text_and_strings_convert_into_spans() {
-        let spans = Spans::new(["a"]).push(String::from("b")).push(Text::new("c").role(Role::Dim));
+        let spans = Spans::new(["a"])
+            .push(String::from("b"))
+            .push(Text::new("c").role(Role::Dim));
         assert_eq!(render_plain(&spans), "abc");
         assert_eq!(render_plain(&Spans::empty()), "");
         let from_text: Spans = [Text::new("x"), Text::new("y")].into_iter().collect();
@@ -1510,7 +1575,10 @@ mod tests {
 
     #[test]
     fn spans_wrap_and_clip_like_the_equivalent_text() {
-        let spans = Spans::new([Span::new("ab").style(Style::new().bold()), Span::new("世界cd")]);
+        let spans = Spans::new([
+            Span::new("ab").style(Style::new().bold()),
+            Span::new("世界cd"),
+        ]);
         let text = Text::new("ab世界cd");
 
         let laid_out = |widget: &dyn Widget, width, mode| {

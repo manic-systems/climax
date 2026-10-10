@@ -10,8 +10,7 @@
 
 use core::fmt;
 
-#[cfg(not(feature = "std"))]
-use crate::alloc_prelude::*;
+#[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// a value that would not parse, plus context for the message. the parser wraps
 /// it into [`crate::ErrorKind::Value`] once it knows which arg it came from.
@@ -20,7 +19,7 @@ pub struct ValueError {
     /// the text that failed to parse
     pub value: String,
     /// why it failed
-    pub msg: String,
+    pub msg:   String,
 }
 
 impl ValueError {
@@ -28,7 +27,7 @@ impl ValueError {
     pub fn new(value: &str, msg: impl fmt::Display) -> Self {
         Self {
             value: value.to_owned(),
-            msg: msg.to_string(),
+            msg:   msg.to_string(),
         }
     }
 }
@@ -88,7 +87,11 @@ pub trait FromArg: Sized {
 /// # {
 /// use std::fmt;
 ///
-/// use pound::{ArgValue, FromArg, ValueEnum};
+/// use pound::{
+///     ArgValue,
+///     FromArg,
+///     ValueEnum,
+/// };
 ///
 /// #[derive(ValueEnum, Debug, PartialEq)]
 /// enum Format {

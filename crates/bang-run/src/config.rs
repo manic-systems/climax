@@ -136,7 +136,10 @@ impl RawConfig {
             .map(RawFieldConfig::finish)
             .collect::<Result<Vec<_>, _>>()?;
         for (index, field) in fields.iter().enumerate() {
-            if fields[..index].iter().any(|earlier| earlier.name == field.name) {
+            if fields[..index]
+                .iter()
+                .any(|earlier| earlier.name == field.name)
+            {
                 return Err(format!("duplicate form field name '{}'", field.name));
             }
         }
@@ -418,7 +421,10 @@ fn finish_review_actions(actions: Vec<RawAction>) -> Result<Vec<ReviewActionBind
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        finished.push(push_unique_review_action(&mut seen, action.finish_review()?)?);
+        finished.push(push_unique_review_action(
+            &mut seen,
+            action.finish_review()?,
+        )?);
     }
     Ok(finished)
 }
@@ -462,7 +468,10 @@ pub(crate) fn push_unique_review_action(
         ));
     }
     let key = action.key().to_ascii_lowercase();
-    if seen.iter().any(|seen: &char| seen.eq_ignore_ascii_case(&key)) {
+    if seen
+        .iter()
+        .any(|seen: &char| seen.eq_ignore_ascii_case(&key))
+    {
         return Err(format!("duplicate review action key '{key}'"));
     }
     seen.push(key);

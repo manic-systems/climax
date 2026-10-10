@@ -1,10 +1,32 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use bang_core::{
-    Context, Date, Event, Key, KeyEvent, Modifiers, Session, Widget as _,
-    widgets::{DatePicker, Form, MultiSelect, ReviewList, SearchSelect, Select, TextInput},
+    Context,
+    Date,
+    Event,
+    Key,
+    KeyEvent,
+    Modifiers,
+    Session,
+    Widget as _,
+    widgets::{
+        DatePicker,
+        Form,
+        MultiSelect,
+        ReviewList,
+        SearchSelect,
+        Select,
+        TextInput,
+    },
 };
-use screw::{Position, RenderCtx, Role, Surface, Theme, Widget};
+use screw::{
+    Position,
+    RenderCtx,
+    Role,
+    Surface,
+    Theme,
+    Widget,
+};
 
 fn draw(widget: &impl Widget, rows: Option<usize>) -> Surface {
     let mut surface = Surface::new();
@@ -49,8 +71,14 @@ fn a_list_keeps_plain_content_and_semantic_styles() {
     );
 
     let theme = Theme::default();
-    assert_eq!(surface.rows()[0].cells()[0].style(), theme.style(Role::Prompt));
-    assert_eq!(surface.rows()[1].cells()[0].style(), theme.style(Role::Selected));
+    assert_eq!(
+        surface.rows()[0].cells()[0].style(),
+        theme.style(Role::Prompt)
+    );
+    assert_eq!(
+        surface.rows()[1].cells()[0].style(),
+        theme.style(Role::Selected)
+    );
     assert_eq!(surface.rows()[2].cells()[0].style(), theme.style(Role::Dim));
     assert_eq!(surface.rows()[3].cells()[0].style(), theme.style(Role::Dim));
 }
@@ -65,10 +93,7 @@ fn a_search_match_is_styled_with_the_match_role() {
 
     let surface = draw(&search, None);
 
-    assert_eq!(
-        surface.plain_text().lines().nth(1),
-        Some("> Beta")
-    );
+    assert_eq!(surface.plain_text().lines().nth(1), Some("> Beta"));
     let theme = Theme::default();
     let cells = surface.rows()[1].cells();
     assert_eq!(cells[2].style(), theme.style(Role::Selected));
@@ -82,7 +107,11 @@ fn explicit_continuation_lines_are_indented_under_the_marker() {
     let multi = MultiSelect::new("choices", ["first\n↳ second"]);
 
     assert_eq!(
-        draw(&multi, None).plain_text().lines().take(2).collect::<Vec<_>>(),
+        draw(&multi, None)
+            .plain_text()
+            .lines()
+            .take(2)
+            .collect::<Vec<_>>(),
         ["> [ ] first", "      ↳ second"]
     );
 }
@@ -92,11 +121,15 @@ fn form_cursor_follows_the_active_field() {
     let mut form = Form::new("form")
         .with_field(
             "name",
-            TextInput::new("name").with_prompt("Name: ").with_value("Ada"),
+            TextInput::new("name")
+                .with_prompt("Name: ")
+                .with_value("Ada"),
         )
         .with_field(
             "note",
-            TextInput::new("note").with_prompt("Note: ").with_value("hi"),
+            TextInput::new("note")
+                .with_prompt("Note: ")
+                .with_value("hi"),
         );
 
     assert_eq!(
@@ -131,34 +164,34 @@ fn a_date_picker_marks_selected_today_and_outside_month_days() {
 
 #[test]
 fn physical_rows_drive_page_navigation() {
-    let select = Select::new("choices", ["one", "two\ncontinued", "three", "four", "five"])
-        .with_header("choose");
+    let select = Select::new("choices", [
+        "one",
+        "two\ncontinued",
+        "three",
+        "four",
+        "five",
+    ])
+    .with_header("choose");
     let mut session = Session::new(select);
     session.handle(Event::Resize { cols: 40, rows: 5 });
 
-    assert_eq!(
-        lines(&session, 5),
-        [
-            "choose",
-            "> one",
-            "  two",
-            "  continued",
-            "enter submit | esc cancel"
-        ]
-    );
+    assert_eq!(lines(&session, 5), [
+        "choose",
+        "> one",
+        "  two",
+        "  continued",
+        "enter submit | esc cancel"
+    ]);
 
     assert!(session.handle(page_key(Key::PageDown)).changed());
 
-    assert_eq!(
-        lines(&session, 5),
-        [
-            "choose",
-            "> three",
-            "  four",
-            "  five",
-            "enter submit | esc cancel"
-        ]
-    );
+    assert_eq!(lines(&session, 5), [
+        "choose",
+        "> three",
+        "  four",
+        "  five",
+        "enter submit | esc cancel"
+    ]);
 }
 
 #[test]
@@ -240,7 +273,10 @@ fn page_keys_clamp_at_both_ends_of_a_list() {
         select.handle(page_key(Key::PageDown), &mut cx);
         let _ = lines(&select, 10);
         let selected = select.selected_index().expect("a selection");
-        assert!(selected >= last, "page down moved back to {selected} from {last}");
+        assert!(
+            selected >= last,
+            "page down moved back to {selected} from {last}"
+        );
         last = selected;
     }
     assert_eq!(last, 49);
@@ -250,7 +286,10 @@ fn page_keys_clamp_at_both_ends_of_a_list() {
         select.handle(page_key(Key::PageUp), &mut cx);
         let _ = lines(&select, 10);
         let selected = select.selected_index().expect("a selection");
-        assert!(selected <= last, "page up moved forward to {selected} from {last}");
+        assert!(
+            selected <= last,
+            "page up moved forward to {selected} from {last}"
+        );
         last = selected;
     }
     assert_eq!(last, 0);
@@ -281,7 +320,13 @@ fn a_list_fills_a_terminal_that_grows_in_one_frame() {
 
 #[test]
 fn a_focus_request_does_not_swallow_a_submit() {
-    use bang_core::{FocusTarget, Reaction, SessionReaction, SessionStatus, WidgetId};
+    use bang_core::{
+        FocusTarget,
+        Reaction,
+        SessionReaction,
+        SessionStatus,
+        WidgetId,
+    };
     use screw::Widget as ScrewWidget;
 
     struct FocusThenSubmit;

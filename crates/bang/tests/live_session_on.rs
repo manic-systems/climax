@@ -2,8 +2,15 @@
 
 use std::{
     fs::File,
-    io::{self, Read, Write},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read,
+        Write,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
     time::Duration,
@@ -64,7 +71,7 @@ fn open_pty() -> (File, File) {
 /// that some operation never writes to it can be checked rather than assumed.
 struct StderrCapture {
     saved: RawFd,
-    read: File,
+    read:  File,
 }
 
 impl StderrCapture {
@@ -79,7 +86,12 @@ impl StderrCapture {
         let [read_fd, write_fd] = pipe;
         // SAFETY: write_fd is a valid, open fd; STDERR names the fd being replaced.
         let result = unsafe { libc::dup2(write_fd, STDERR) };
-        assert_eq!(result, STDERR, "redirect stderr: {}", io::Error::last_os_error());
+        assert_eq!(
+            result,
+            STDERR,
+            "redirect stderr: {}",
+            io::Error::last_os_error()
+        );
         // SAFETY: write_fd was just duplicated onto STDERR and its own copy is unused.
         unsafe { libc::close(write_fd) };
         // SAFETY: read_fd was just returned by pipe above as a live, owned descriptor.
@@ -91,7 +103,8 @@ impl StderrCapture {
     /// while captured.
     fn restore(mut self) -> Vec<u8> {
         // SAFETY: self.saved is a live descriptor duplicated from stderr in `install`;
-        // dup2 closes whatever was on STDERR (the pipe's write end) before replacing it.
+        // dup2 closes whatever was on STDERR (the pipe's write end) before replacing
+        // it.
         unsafe { libc::dup2(self.saved, STDERR) };
         // SAFETY: self.saved is no longer needed once restored.
         unsafe { libc::close(self.saved) };

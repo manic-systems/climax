@@ -25,17 +25,22 @@
 //!
 //! #[derive(Parse)]
 //! struct Common {
-//!     #[pound(long)] verbose: bool,
+//!     #[pound(long)]
+//!     verbose: bool,
 //! }
 //!
 //! #[derive(Parse)]
 //! struct Add {
-//!     #[pound(flatten)] common: Common,
-//!     name: String,                          // required positional
-//!     url:  String,                          // required positional
-//!     #[pound(long)] unpack:  Option<String>,
-//!     #[pound(long)] follows: Vec<String>,   // repeatable --follows
-//!     #[pound(short, long)] force: bool,     // -f / --force
+//!     #[pound(flatten)]
+//!     common:  Common,
+//!     name:    String, // required positional
+//!     url:     String, // required positional
+//!     #[pound(long)]
+//!     unpack:  Option<String>,
+//!     #[pound(long)]
+//!     follows: Vec<String>, // repeatable --follows
+//!     #[pound(short, long)]
+//!     force:   bool, // -f / --force
 //! }
 //!
 //! // `Add::parse()` reads argv and exits on -h/--help or a parse error
@@ -53,6 +58,7 @@
 //! # #[cfg(feature = "derive")]
 //! # {
 //! use std::num::NonZeroUsize;
+//!
 //! use pound::Parse;
 //!
 //! const SYSTEM_PROFILE: &str = "system";
@@ -63,9 +69,12 @@
 //!
 //! #[derive(Parse)]
 //! struct Run {
-//!     #[pound(long, parse = str::parse::<NonZeroUsize>)] jobs: NonZeroUsize,
-//!     #[pound(long, parse = level, validate = |n: &u8| if *n > 0 { Ok(()) } else { Err("zero") })] level: u8,
-//!     #[pound(long, default = { SYSTEM_PROFILE })] profile: String,
+//!     #[pound(long, parse = str::parse::<NonZeroUsize>)]
+//!     jobs:    NonZeroUsize,
+//!     #[pound(long, parse = level, validate = |n: &u8| if *n > 0 { Ok(()) } else { Err("zero") })]
+//!     level:   u8,
+//!     #[pound(long, default = { SYSTEM_PROFILE })]
+//!     profile: String,
 //! }
 //!
 //! let run = Run::try_parse_from(["--jobs", "4", "--level", "2"]).unwrap();

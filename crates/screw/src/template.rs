@@ -5,7 +5,15 @@ use std::{
     fmt,
 };
 
-use crate::{Line, LocalWidgetRef, Stack, Text, WidgetRef, local_widget, widget};
+use crate::{
+    Line,
+    LocalWidgetRef,
+    Stack,
+    Text,
+    WidgetRef,
+    local_widget,
+    widget,
+};
 
 /// Why a template failed to parse.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,9 +47,9 @@ impl Error for TemplateError {}
 
 /// Parses a template into a [`Stack`] of lines.
 ///
-/// Each newline starts a row. `{name}` is replaced by the widget bound to `name` in `slots`, and a
-/// later binding of the same name wins. `{{` and `}}` write a literal brace. All other text becomes
-/// plain [`Text`](crate::Text).
+/// Each newline starts a row. `{name}` is replaced by the widget bound to
+/// `name` in `slots`, and a later binding of the same name wins. `{{` and `}}`
+/// write a literal brace. All other text becomes plain [`Text`](crate::Text).
 pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, TemplateError> {
     template_with(source, slots, widget, widget)
 }
@@ -140,9 +148,15 @@ const fn current_row_mut<H>(rows: &mut [Vec<H>]) -> &mut Vec<H> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{RenderCtx, Style, Surface, Widget, local_widget, render_plain};
-
     use super::local_template;
+    use crate::{
+        RenderCtx,
+        Style,
+        Surface,
+        Widget,
+        local_widget,
+        render_plain,
+    };
 
     struct BorrowedText<'a>(&'a str);
 

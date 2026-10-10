@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use bang::advanced::widgets::TextInput;
-use screw::{Position, RenderCtx, Role, Style, Surface, Theme, Widget as _};
+use screw::{
+    Position,
+    RenderCtx,
+    Role,
+    Style,
+    Surface,
+    Theme,
+    Widget as _,
+};
 
 #[test]
 fn a_widget_renders_into_a_screw_surface() {
@@ -33,5 +41,8 @@ fn roles_resolve_through_the_theme_of_the_render_context() {
 
     widget.render(&RenderCtx::new().with_theme(theme), &mut surface);
 
-    assert_eq!(surface.rows()[0].cells()[0].style(), theme.style(Role::Prompt));
+    assert_eq!(
+        surface.rows()[0].cells()[0].style(),
+        theme.style(Role::Prompt)
+    );
 }

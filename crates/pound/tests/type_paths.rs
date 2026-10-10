@@ -33,9 +33,12 @@ fn qualified_wrappers_keep_their_cardinality() {
     assert_eq!((none.a, none.b, none.c, none.d), (None, None, None, None));
     assert!(none.e.is_empty() && none.f.is_empty() && none.g.is_empty() && none.h.is_empty());
 
-    let some = Args::try_parse_from(["--a", "1", "--d", "4", "--e", "5", "--e", "6", "--h", "8"])
-        .unwrap();
-    assert_eq!((some.a, some.b, some.c, some.d), (Some(1), None, None, Some(4)));
+    let some =
+        Args::try_parse_from(["--a", "1", "--d", "4", "--e", "5", "--e", "6", "--h", "8"]).unwrap();
+    assert_eq!(
+        (some.a, some.b, some.c, some.d),
+        (Some(1), None, None, Some(4))
+    );
     assert_eq!(some.e, [5, 6]);
     assert_eq!(some.h, [8]);
 }

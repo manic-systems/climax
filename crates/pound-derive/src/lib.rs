@@ -48,17 +48,32 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// #[derive(Parse)]
 /// struct Add {
-///     name: String,                          // required positional
-///     url: Option<String>,                   // optional positional
-///     #[pound(long)] unpack: Option<String>,
-///     #[pound(long)] follows: Vec<String>,
-///     #[pound(short, long)] force: bool,
-///     #[pound(short, count)] verbose: u8,    // -v, -vv, -vvv
-///     #[pound(trailing)] rest: Vec<String>,  // everything after `--`
+///     name:    String,         // required positional
+///     url:     Option<String>, // optional positional
+///     #[pound(long)]
+///     unpack:  Option<String>,
+///     #[pound(long)]
+///     follows: Vec<String>,
+///     #[pound(short, long)]
+///     force:   bool,
+///     #[pound(short, count)]
+///     verbose: u8, // -v, -vv, -vvv
+///     #[pound(trailing)]
+///     rest:    Vec<String>, // everything after `--`
 /// }
 ///
 /// let add = Add::try_parse_from([
-///     "-f", "-vv", "tool", "u", "--follows", "a", "--follows", "b", "--", "x", "y",
+///     "-f",
+///     "-vv",
+///     "tool",
+///     "u",
+///     "--follows",
+///     "a",
+///     "--follows",
+///     "b",
+///     "--",
+///     "x",
+///     "y",
 /// ])
 /// .unwrap();
 /// assert_eq!(add.name, "tool");
@@ -92,8 +107,10 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// #[derive(Parse)]
 /// #[pound(name = "shipit", version = BUILD, required_group = "target")]
 /// struct Ship {
-///     #[pound(long, group = "target")] staging: bool,
-///     #[pound(long, group = "target")] production: bool,
+///     #[pound(long, group = "target")]
+///     staging:    bool,
+///     #[pound(long, group = "target")]
+///     production: bool,
 /// }
 ///
 /// assert!(Ship::try_parse_from(["--staging"]).is_ok());
@@ -129,8 +146,14 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///     Debug,
 /// }
 ///
-/// assert!(matches!(Cmd::try_parse_from(["add", "x"]), Ok(Cmd::Add { .. })));
-/// assert!(matches!(Cmd::try_parse_from(["del", "x"]), Ok(Cmd::RemoveRemote { .. })));
+/// assert!(matches!(
+///     Cmd::try_parse_from(["add", "x"]),
+///     Ok(Cmd::Add { .. })
+/// ));
+/// assert!(matches!(
+///     Cmd::try_parse_from(["del", "x"]),
+///     Ok(Cmd::RemoveRemote { .. })
+/// ));
 /// assert!(matches!(Cmd::try_parse_from(["debug"]), Ok(Cmd::Debug)));
 /// ```
 ///
@@ -159,13 +182,16 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// #[derive(Parse)]
 /// struct Common {
-///     #[pound(short, long)] verbose: bool,
+///     #[pound(short, long)]
+///     verbose: bool,
 /// }
 ///
 /// #[derive(Parse)]
 /// struct Run {
-///     #[pound(flatten)] common: Common,
-///     #[pound(long = "jobs", short = 'j', alias = "threads")] workers: Option<u32>,
+///     #[pound(flatten)]
+///     common:  Common,
+///     #[pound(long = "jobs", short = 'j', alias = "threads")]
+///     workers: Option<u32>,
 /// }
 ///
 /// let run = Run::try_parse_from(["-v", "--threads", "4"]).unwrap();
@@ -207,12 +233,18 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// #[derive(Parse)]
 /// struct Run {
-///     #[pound(long, default = "auto")] mode: String,
-///     #[pound(long, default = fast)] speed: String,
-///     #[pound(long, default = { SYSTEM_PROFILE })] profile: String,
-///     #[pound(long, env = "SHIPIT_POUND_DOC_REGION")] region: Option<String>,
-///     #[pound(long, default_missing = "always")] color: Option<String>,
-///     #[pound(long, negate, default = "true")] cache: bool,
+///     #[pound(long, default = "auto")]
+///     mode:    String,
+///     #[pound(long, default = fast)]
+///     speed:   String,
+///     #[pound(long, default = { SYSTEM_PROFILE })]
+///     profile: String,
+///     #[pound(long, env = "SHIPIT_POUND_DOC_REGION")]
+///     region:  Option<String>,
+///     #[pound(long, default_missing = "always")]
+///     color:   Option<String>,
+///     #[pound(long, negate, default = "true")]
+///     cache:   bool,
 /// }
 ///
 /// let run = Run::try_parse_from(["--color", "--no-cache"]).unwrap();
@@ -246,6 +278,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// ```
 /// use std::num::NonZeroUsize;
+///
 /// use pound::Parse;
 ///
 /// fn hex(s: &str) -> Result<u32, std::num::ParseIntError> {
@@ -254,12 +287,16 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// #[derive(Parse)]
 /// struct Run {
-///     #[pound(long, parse = str::parse::<NonZeroUsize>)] jobs: NonZeroUsize,
+///     #[pound(long, parse = str::parse::<NonZeroUsize>)]
+///     jobs:  NonZeroUsize,
 ///     #[pound(long, parse = hex, validate = |n: &u32| if *n > 0 { Ok(()) } else { Err("zero") })]
-///     mask: u32,
-///     #[pound(long, min = "1", max = "10")] level: u8,
-///     #[pound(long, max_len = "8")] tag: Option<String>,
-///     #[pound(positional, min_values = "1", max_values = "3")] paths: Vec<String>,
+///     mask:  u32,
+///     #[pound(long, min = "1", max = "10")]
+///     level: u8,
+///     #[pound(long, max_len = "8")]
+///     tag:   Option<String>,
+///     #[pound(positional, min_values = "1", max_values = "3")]
+///     paths: Vec<String>,
 /// }
 ///
 /// let run = Run::try_parse_from(["--jobs", "4", "--mask", "ff", "--level", "3", "a"]).unwrap();
@@ -294,12 +331,18 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// #[derive(Parse)]
 /// #[pound(required_group = "mode")]
 /// struct Run {
-///     #[pound(long, group = "mode")] fetch: bool,
-///     #[pound(long, group = "mode")] build: bool,
-///     #[pound(long, conflicts_with = "quiet")] verbose: bool,
-///     #[pound(long)] quiet: bool,
-///     #[pound(long, requires = "user")] password: Option<String>,
-///     #[pound(long)] user: Option<String>,
+///     #[pound(long, group = "mode")]
+///     fetch:    bool,
+///     #[pound(long, group = "mode")]
+///     build:    bool,
+///     #[pound(long, conflicts_with = "quiet")]
+///     verbose:  bool,
+///     #[pound(long)]
+///     quiet:    bool,
+///     #[pound(long, requires = "user")]
+///     password: Option<String>,
+///     #[pound(long)]
+///     user:     Option<String>,
 /// }
 ///
 /// assert!(Run::try_parse_from(["--fetch"]).is_ok());
@@ -335,7 +378,8 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///     /// one of the formats the exporter knows about.
 ///     #[pound(long, value_name = "FMT", heading = "Output")]
 ///     format: Option<String>,
-///     #[pound(long, help = "keep the cache", hidden)] keep: bool,
+///     #[pound(long, help = "keep the cache", hidden)]
+///     keep:   bool,
 /// }
 ///
 /// assert!(Run::try_parse_from(["--keep"]).is_ok());
@@ -353,8 +397,10 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// #[derive(Parse)]
 /// struct Tool {
-///     #[pound(long, global)] verbose: bool,
-///     #[pound(subcommand)] cmd: Cmd,
+///     #[pound(long, global)]
+///     verbose: bool,
+///     #[pound(subcommand)]
+///     cmd:     Cmd,
 /// }
 ///
 /// #[derive(Parse)]
@@ -362,7 +408,11 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///     Build,
 /// }
 ///
-/// assert!(Tool::try_parse_from(["build", "--verbose"]).unwrap().verbose);
+/// assert!(
+///     Tool::try_parse_from(["build", "--verbose"])
+///         .unwrap()
+///         .verbose
+/// );
 /// ```
 ///
 /// # subcommands
@@ -401,7 +451,10 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// non-`bool`, `default_missing` on a flag, `min_values` on a scalar, a
 /// `conflicts_with` naming no field, two args that answer to the same
 /// spelling, and an unknown attribute.
-#[allow(clippy::needless_doctest_main, reason = "the example is a build script")]
+#[allow(
+    clippy::needless_doctest_main,
+    reason = "the example is a build script"
+)]
 #[proc_macro_derive(Parse, attributes(pound))]
 pub fn derive_parse(input: TokenStream) -> TokenStream {
     pound_derive_impl::derive_parse(input.into(), &OPTIONS).into()
@@ -414,12 +467,15 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 /// `plain-text`. `#[pound(name = "yml")]` on a variant picks its spelling.
 /// that is the only attribute accepted, and the enum itself takes none.
 /// it also implements `pound::ArgValue`, which gives each value's spelling back
-/// through `as_str` and lists them all in `ALL`, so `Display` can forward to it.
-/// an unrecognized word fails with the full list of possible values, help lists
-/// them, and a `default` naming something else fails the build.
+/// through `as_str` and lists them all in `ALL`, so `Display` can forward to
+/// it. an unrecognized word fails with the full list of possible values, help
+/// lists them, and a `default` naming something else fails the build.
 ///
 /// ```
-/// use pound::{Parse, ValueEnum};
+/// use pound::{
+///     Parse,
+///     ValueEnum,
+/// };
 ///
 /// #[derive(ValueEnum, Debug, PartialEq)]
 /// enum Format {
@@ -431,15 +487,21 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 ///
 /// #[derive(Parse)]
 /// struct Export {
-///     #[pound(long, default = "json")] format: Format,
+///     #[pound(long, default = "json")]
+///     format: Format,
 /// }
 ///
 /// assert_eq!(Export::try_parse_from([]).unwrap().format, Format::Json);
 /// assert_eq!(
-///     Export::try_parse_from(["--format", "plain-text"]).unwrap().format,
+///     Export::try_parse_from(["--format", "plain-text"])
+///         .unwrap()
+///         .format,
 ///     Format::PlainText,
 /// );
-/// assert_eq!(Export::try_parse_from(["--format=yml"]).unwrap().format, Format::Yaml);
+/// assert_eq!(
+///     Export::try_parse_from(["--format=yml"]).unwrap().format,
+///     Format::Yaml
+/// );
 /// assert!(Export::try_parse_from(["--format", "xml"]).is_err());
 /// ```
 #[proc_macro_derive(ValueEnum, attributes(pound))]

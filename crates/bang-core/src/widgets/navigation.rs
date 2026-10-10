@@ -1,13 +1,29 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{cell::RefCell, ops::Range};
-
-use screw::{
-    LocalWidgetRef, RenderCtx, Role, Span, Spans, Surface, Text, VerticalViewport, ViewportReport,
-    Widget as ScrewWidget, local_widget,
+use std::{
+    cell::RefCell,
+    ops::Range,
 };
 
-use crate::{KeyEvent, Modifiers, Reaction};
+use screw::{
+    LocalWidgetRef,
+    RenderCtx,
+    Role,
+    Span,
+    Spans,
+    Surface,
+    Text,
+    VerticalViewport,
+    ViewportReport,
+    Widget as ScrewWidget,
+    local_widget,
+};
+
+use crate::{
+    KeyEvent,
+    Modifiers,
+    Reaction,
+};
 
 pub(super) const DEFAULT_PAGE_SIZE: usize = 9;
 
@@ -42,7 +58,12 @@ pub(super) const fn only_control(key: &KeyEvent) -> bool {
 
 /// Land a page key on `target`, moving both the scroll offset and the
 /// selection there instead of the single row `ensure_visible` would scroll.
-pub(super) fn page_move(top: &mut usize, selected: &mut usize, target: usize, len: usize) -> Reaction {
+pub(super) fn page_move(
+    top: &mut usize,
+    selected: &mut usize,
+    target: usize,
+    len: usize,
+) -> Reaction {
     if len == 0 {
         return Reaction::Ignored;
     }
@@ -60,7 +81,8 @@ pub(super) fn page_move(top: &mut usize, selected: &mut usize, target: usize, le
 /// One `window_size` margin is kept on each side of the current page so a
 /// `PageUp` or `PageDown` lands on an exact target instead of an estimate,
 /// without laying out candidates far from the viewport. Callers pass the page
-/// size, which bounds how many rows can be visible however far the terminal grows.
+/// size, which bounds how many rows can be visible however far the terminal
+/// grows.
 pub(super) fn window_range(top: usize, window_size: usize, len: usize) -> Range<usize> {
     if len == 0 {
         return 0..0;
@@ -84,8 +106,8 @@ pub(super) struct PageLayout {
 #[derive(Clone, Debug)]
 struct Page {
     visible: Range<usize>,
-    up: Option<usize>,
-    down: Option<usize>,
+    up:      Option<usize>,
+    down:    Option<usize>,
 }
 
 impl PageLayout {
@@ -113,9 +135,9 @@ impl PageLayout {
 
 /// One logical row of a list, before it is clipped or wrapped.
 pub(super) struct ListRow {
-    pub spans: Vec<(String, Role)>,
+    pub spans:    Vec<(String, Role)>,
     pub selected: bool,
-    pub checked: Option<bool>,
+    pub checked:  Option<bool>,
 }
 
 impl ScrewWidget for ListRow {
@@ -153,16 +175,16 @@ impl ScrewWidget for ListRow {
 
 /// Everything needed to draw one window of a list.
 pub(super) struct ListFrame<'a> {
-    pub header: &'a [Span],
-    pub rows: Vec<ListRow>,
+    pub header:        &'a [Span],
+    pub rows:          Vec<ListRow>,
     /// Where `rows` begins in the full logical list.
     pub window_offset: usize,
     /// Selected row, indexed in the full logical list.
-    pub selected: Option<usize>,
+    pub selected:      Option<usize>,
     /// Scroll position, indexed in the full logical list.
-    pub top: usize,
-    pub max_visible: usize,
-    pub help: &'a str,
+    pub top:           usize,
+    pub max_visible:   usize,
+    pub help:          &'a str,
 }
 
 /// Draw `frame` and record in `layout` which rows physically fit.
@@ -180,7 +202,11 @@ pub(super) fn render_list(
     let rows: Vec<LocalWidgetRef<'static>> = frame.rows.into_iter().map(local_widget).collect();
     let viewport = VerticalViewport::new(rows)
         .requested_start(frame.top.saturating_sub(offset))
-        .anchor(frame.selected.map(|selected| selected.saturating_sub(offset)))
+        .anchor(
+            frame
+                .selected
+                .map(|selected| selected.saturating_sub(offset)),
+        )
         .max_children(Some(frame.max_visible))
         .trailing(local_widget(Text::new(frame.help).role(Role::Dim)));
     let report = viewport.report_handle();

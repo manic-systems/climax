@@ -49,47 +49,47 @@ pub enum Kind {
 #[non_exhaustive]
 pub struct ArgSpec {
     /// the `--name` spelling, without the dashes
-    pub long: Option<&'static str>,
+    pub long:            Option<&'static str>,
     /// extra long names that also match this arg, kept out of help
-    pub aliases: &'static [&'static str],
+    pub aliases:         &'static [&'static str],
     /// the `-n` spelling
-    pub short: Option<char>,
+    pub short:           Option<char>,
     /// the shape of the argument
-    pub kind: Kind,
+    pub kind:            Kind,
     /// parsing fails when it is absent and no fallback fills it
-    pub required: bool,
+    pub required:        bool,
     /// `Vec<T>` field, accept the option/positional more than once
-    pub multi: bool,
+    pub multi:           bool,
     /// fewest values a `multi` arg accepts, waived when a fallback fills it
-    pub min_values: Option<usize>,
+    pub min_values:      Option<usize>,
     /// most values a `multi` arg accepts
-    pub max_values: Option<usize>,
+    pub max_values:      Option<usize>,
     /// the mutual-exclusion group this arg belongs to, see [`GroupSpec`]
-    pub group: Option<&'static str>,
+    pub group:           Option<&'static str>,
     /// the value used when the arg is not given and no env var supplies one
-    pub default: Option<&'static str>,
+    pub default:         Option<&'static str>,
     /// value a [`Kind::Opt`] takes when given with no `=value`, which also
     /// stops it consuming the following token
     pub default_missing: Option<&'static str>,
     /// name of an environment variable to fall back to when the arg is not
     /// given on the command line. disabled in nostd.
-    pub env: Option<&'static str>,
+    pub env:             Option<&'static str>,
     /// long name that switches a [`Kind::Flag`] back off, without the `--`
-    pub negate: Option<&'static str>,
+    pub negate:          Option<&'static str>,
     /// the placeholder shown for the value, see [`Self::metavar`]
-    pub value_name: &'static str,
+    pub value_name:      &'static str,
     /// the short description help shows
-    pub help: &'static str,
+    pub help:            &'static str,
     /// fuller help shown by `--help`, `None` when it adds nothing
-    pub long_help: Option<&'static str>,
+    pub long_help:       Option<&'static str>,
     /// section this arg is listed under in help, `Options` when unset
-    pub heading: Option<&'static str>,
+    pub heading:         Option<&'static str>,
     /// the values a choice type accepts, `None` for free text
-    pub possible: Option<&'static [&'static str]>,
+    pub possible:        Option<&'static [&'static str]>,
     /// kept out of help output, but accepted by parser
-    pub hidden: bool,
+    pub hidden:          bool,
     /// also accepted by every subcommand below this command
-    pub global: bool,
+    pub global:          bool,
 }
 
 impl ArgSpec {
@@ -314,7 +314,8 @@ impl ArgSpec {
         name.to_uppercase()
     }
 
-    /// how errors and usage name this arg, its `--long`, else its `-s`, else its placeholder
+    /// how errors and usage name this arg, its `--long`, else its `-s`, else
+    /// its placeholder
     #[must_use]
     pub fn display_name(&self) -> String {
         if let Some(long) = self.long {
@@ -332,7 +333,7 @@ impl ArgSpec {
 #[non_exhaustive]
 pub struct GroupSpec {
     /// the name args use to join the group
-    pub name: &'static str,
+    pub name:     &'static str,
     /// exactly one member must be set
     pub required: bool,
 }

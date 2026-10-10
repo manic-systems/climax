@@ -2,17 +2,34 @@
 
 use std::{
     fs::File,
-    io::{self, Read as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
     time::Duration,
 };
 
-use bang::advanced::{
-    Event, Reaction, Value, Widget, WidgetContext, WidgetId,
+use bang::{
+    advanced::{
+        Event,
+        Reaction,
+        Value,
+        Widget,
+        WidgetContext,
+        WidgetId,
+    },
+    screw::{
+        RenderCtx,
+        Surface,
+        TickInterest,
+    },
 };
-use bang::screw::{RenderCtx, Surface, TickInterest};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 

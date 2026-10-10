@@ -3,8 +3,15 @@
 use std::{
     any::Any,
     fmt,
-    io::{self, IsTerminal as _, Write},
-    panic::{self, AssertUnwindSafe},
+    io::{
+        self,
+        IsTerminal as _,
+        Write,
+    },
+    panic::{
+        self,
+        AssertUnwindSafe,
+    },
     sync::mpsc::{
         self,
         Receiver,
@@ -22,9 +29,19 @@ use std::{
 };
 
 use crate::{
-    CursorVisibility, LayoutMode, RenderCtx, RenderStats, Renderer, Surface, Theme, TickInterest,
+    CursorVisibility,
+    LayoutMode,
+    RenderCtx,
+    RenderStats,
+    Renderer,
+    Surface,
+    Theme,
+    TickInterest,
     WidgetRef,
-    renderer::{layout_surface, usable_columns},
+    renderer::{
+        layout_surface,
+        usable_columns,
+    },
     terminal::stderr_size,
 };
 
@@ -32,13 +49,13 @@ const DEFAULT_FPS: u16 = 15;
 
 /// Owns a [`Renderer`] and a root widget and decides when to redraw.
 ///
-/// A runtime redraws when it was marked dirty or when the widget asks for ticks through
-/// [`TickInterest`], and never faster than its frame rate. Drive it yourself with
-/// [`Runtime::tick`], or call [`Runtime::start`] to move it onto its own thread and control it
-/// through a [`LiveRuntime`].
+/// A runtime redraws when it was marked dirty or when the widget asks for ticks
+/// through [`TickInterest`], and never faster than its frame rate. Drive it
+/// yourself with [`Runtime::tick`], or call [`Runtime::start`] to move it onto
+/// its own thread and control it through a [`LiveRuntime`].
 pub struct Runtime<W, H = WidgetRef, F = WidgetRef> {
-    root: H,
-    final_widget: Option<F>,
+    root:           H,
+    final_widget:   Option<F>,
     renderer:       Renderer<W>,
     frame_interval: Duration,
     last_draw:      Option<Instant>,
@@ -129,7 +146,8 @@ where
         self
     }
 
-    /// Sets the widget drawn as the last frame when the runtime finishes, replacing the root.
+    /// Sets the widget drawn as the last frame when the runtime finishes,
+    /// replacing the root.
     #[must_use]
     pub fn final_widget<G>(self, final_widget: G) -> Runtime<W, H, G>
     where
@@ -166,7 +184,8 @@ where
         self.dirty = true;
     }
 
-    /// Draws immediately, ignoring the frame rate, and records `now` as the time of the draw.
+    /// Draws immediately, ignoring the frame rate, and records `now` as the
+    /// time of the draw.
     pub fn draw_now(&mut self, now: Instant) -> io::Result<RenderStats> {
         let stats = self.renderer.draw(&self.root)?;
         self.dirty = false;
@@ -174,7 +193,8 @@ where
         Ok(stats)
     }
 
-    /// Draws if a frame is due at `now`, returning the stats or `None` when nothing was drawn.
+    /// Draws if a frame is due at `now`, returning the stats or `None` when
+    /// nothing was drawn.
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<RenderStats>> {
         if !self.should_draw(now) {
             return Ok(None);
@@ -223,15 +243,16 @@ where
 }
 
 impl Runtime<io::Stderr, WidgetRef> {
-    /// Creates a runtime on standard error sized to the terminal, or 80 columns when the size is
-    /// unknown.
+    /// Creates a runtime on standard error sized to the terminal, or 80 columns
+    /// when the size is unknown.
     pub fn stderr(root: WidgetRef) -> Self {
         let mut runtime = Self::new(io::stderr(), root);
         runtime.renderer = Renderer::stderr();
         runtime
     }
 
-    /// Like [`Runtime::auto`] on standard error, choosing live output only when it is a terminal.
+    /// Like [`Runtime::auto`] on standard error, choosing live output only when
+    /// it is a terminal.
     pub fn stderr_auto(root: WidgetRef) -> AutoRuntimeBuilder<io::Stderr> {
         let (width, height) = stderr_size();
         let mut builder = Self::auto(io::stderr(), root, io::stderr().is_terminal()).width(width);
@@ -245,8 +266,8 @@ where
     W: Write + Send + 'static,
     H: crate::Widget + Send + 'static,
 {
-    /// Starts building a runtime that is live when `interactive` is true and prints plain text once
-    /// otherwise.
+    /// Starts building a runtime that is live when `interactive` is true and
+    /// prints plain text once otherwise.
     pub fn auto(writer: W, root: H, interactive: bool) -> AutoRuntimeBuilder<W, H> {
         AutoRuntimeBuilder::new(writer, root, interactive)
     }
@@ -267,8 +288,9 @@ enum ThreadFinishMode {
 
 /// A [`Runtime`] running on its own thread.
 ///
-/// Dropping it finishes the runtime with a final frame, or clears the frame if the dropping thread
-/// is panicking. Call one of the `finish` methods to get the writer back and see errors.
+/// Dropping it finishes the runtime with a final frame, or clears the frame if
+/// the dropping thread is panicking. Call one of the `finish` methods to get
+/// the writer back and see errors.
 pub struct LiveRuntime<W> {
     handle: RuntimeHandle,
     thread: Option<JoinHandle<Result<W, (W, io::Error)>>>,
@@ -294,16 +316,16 @@ pub struct RuntimeHandle {
 
 /// Builds an [`AutoRuntime`] with the same options as a [`Runtime`].
 pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
-    writer:       W,
-    root: H,
-    interactive:  bool,
-    fps:          u16,
-    width:        Option<usize>,
-    height: Option<usize>,
-    layout_mode: LayoutMode,
+    writer:            W,
+    root:              H,
+    interactive:       bool,
+    fps:               u16,
+    width:             Option<usize>,
+    height:            Option<usize>,
+    layout_mode:       LayoutMode,
     cursor_visibility: CursorVisibility,
-    theme:        Theme,
-    final_widget: Option<F>,
+    theme:             Theme,
+    final_widget:      Option<F>,
 }
 
 impl<W, H, F> fmt::Debug for AutoRuntimeBuilder<W, H, F> {
@@ -405,16 +427,16 @@ where
         G: crate::Widget + Send + 'static,
     {
         AutoRuntimeBuilder {
-            writer: self.writer,
-            root: self.root,
-            interactive: self.interactive,
-            fps: self.fps,
-            width: self.width,
-            height: self.height,
-            layout_mode: self.layout_mode,
+            writer:            self.writer,
+            root:              self.root,
+            interactive:       self.interactive,
+            fps:               self.fps,
+            width:             self.width,
+            height:            self.height,
+            layout_mode:       self.layout_mode,
             cursor_visibility: self.cursor_visibility,
-            theme: self.theme,
-            final_widget: Some(final_widget),
+            theme:             self.theme,
+            final_widget:      Some(final_widget),
         }
     }
 
@@ -438,7 +460,7 @@ where
                 writer:       self.writer,
                 root:         self.root,
                 width:        self.width,
-                height: self.height,
+                height:       self.height,
                 layout_mode:  self.layout_mode,
                 theme:        self.theme,
                 final_widget: self.final_widget,
@@ -496,8 +518,8 @@ where
 
     /// Ends the runtime with its final frame and returns the writer.
     ///
-    /// No newline follows the frame and the cursor rests at the end of its last row, so write one
-    /// before printing anything else.
+    /// No newline follows the frame and the cursor rests at the end of its last
+    /// row, so write one before printing anything else.
     pub fn finish(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish(),
@@ -505,7 +527,8 @@ where
         }
     }
 
-    /// Ends the runtime with `final_widget` as the last frame and returns the writer.
+    /// Ends the runtime with `final_widget` as the last frame and returns the
+    /// writer.
     pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
     where
         G: crate::Widget + Send + 'static,
@@ -527,12 +550,13 @@ where
 
 /// The non-interactive half of [`AutoRuntime`].
 ///
-/// It draws nothing while running and writes the final widget as unstyled text when it finishes.
+/// It draws nothing while running and writes the final widget as unstyled text
+/// when it finishes.
 pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
     writer:       W,
-    root: H,
-    width: Option<usize>,
-    height: Option<usize>,
+    root:         H,
+    width:        Option<usize>,
+    height:       Option<usize>,
     layout_mode:  LayoutMode,
     theme:        Theme,
     final_widget: Option<F>,
@@ -559,8 +583,8 @@ where
 {
     /// Changes the width used for the final text.
     ///
-    /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch to either runtime
-    /// with `?`.
+    /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch
+    /// to either runtime with `?`.
     pub const fn resize(&mut self, width: usize) -> io::Result<()> {
         self.width = Some(width);
         Ok(())
@@ -568,17 +592,19 @@ where
 
     /// Changes the width and the height used for the final text.
     ///
-    /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch to either runtime
-    /// with `?`.
+    /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch
+    /// to either runtime with `?`.
     pub const fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         self.width = Some(width);
         self.height = Some(height);
         Ok(())
     }
 
-    /// Writes the final widget, or the root when none was set, and returns the writer.
+    /// Writes the final widget, or the root when none was set, and returns the
+    /// writer.
     ///
-    /// No trailing newline is written, so write one before printing anything else.
+    /// No trailing newline is written, so write one before printing anything
+    /// else.
     pub fn finish(self) -> io::Result<W> {
         let Self {
             writer,
@@ -704,23 +730,27 @@ where
 
     /// Stops the thread after drawing its final frame and returns the writer.
     ///
-    /// No newline follows the frame and the cursor rests at the end of its last row, so write one
-    /// before printing anything else. When drawing fails or a widget panics on the thread, the
-    /// writer is dropped after a best effort to show a hidden cursor again, and the error carries
-    /// the panic message. Use [`LiveRuntime::finish_recovering`] to keep the writer in that case.
+    /// No newline follows the frame and the cursor rests at the end of its last
+    /// row, so write one before printing anything else. When drawing fails
+    /// or a widget panics on the thread, the writer is dropped after a best
+    /// effort to show a hidden cursor again, and the error carries
+    /// the panic message. Use [`LiveRuntime::finish_recovering`] to keep the
+    /// writer in that case.
     pub fn finish(self) -> io::Result<W> {
         self.finish_via(ThreadFinishMode::Current)
     }
 
-    /// Like [`LiveRuntime::finish`], but hands the writer back alongside the error.
+    /// Like [`LiveRuntime::finish`], but hands the writer back alongside the
+    /// error.
     ///
-    /// The writer is `None` only when the thread died without returning it, which a failed draw or
-    /// a panicking widget does not cause.
+    /// The writer is `None` only when the thread died without returning it,
+    /// which a failed draw or a panicking widget does not cause.
     pub fn finish_recovering(self) -> Result<W, (Option<W>, io::Error)> {
         self.finish_via_recovering(ThreadFinishMode::Current)
     }
 
-    /// Stops the thread after drawing `final_widget` as the last frame and returns the writer.
+    /// Stops the thread after drawing `final_widget` as the last frame and
+    /// returns the writer.
     ///
     /// The cursor is left as [`LiveRuntime::finish`] leaves it.
     pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
@@ -890,7 +920,10 @@ where
 }
 
 fn panic_error(payload: &(dyn Any + Send)) -> io::Error {
-    io::Error::other(format!("runtime thread panicked: {}", panic_message(payload)))
+    io::Error::other(format!(
+        "runtime thread panicked: {}",
+        panic_message(payload)
+    ))
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> &str {
@@ -917,14 +950,25 @@ fn fps_interval(fps: u16) -> Duration {
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::{Cell, RefCell},
+        cell::{
+            Cell,
+            RefCell,
+        },
         rc::Rc,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc,
+            Mutex,
+        },
     };
 
-    use crate::{Position, Stack, Style, Widget, local_widget};
-
     use super::*;
+    use crate::{
+        Position,
+        Stack,
+        Style,
+        Widget,
+        local_widget,
+    };
 
     type RecordedFrame = (u64, Option<usize>, Option<usize>);
     type RecordedFrames = Arc<Mutex<Vec<RecordedFrame>>>;
@@ -1149,13 +1193,19 @@ mod tests {
     #[test]
     fn finish_cleared_reports_the_render_threads_error_after_it_has_already_exited() {
         let err = dead_render_thread().finish_cleared().unwrap_err();
-        assert!(err.to_string().contains("distinctive failing writer message"));
+        assert!(
+            err.to_string()
+                .contains("distinctive failing writer message")
+        );
     }
 
     #[test]
     fn finish_reports_the_render_threads_error_after_it_has_already_exited() {
         let err = dead_render_thread().finish().unwrap_err();
-        assert!(err.to_string().contains("distinctive failing writer message"));
+        assert!(
+            err.to_string()
+                .contains("distinctive failing writer message")
+        );
     }
 
     #[test]
@@ -1224,10 +1274,10 @@ mod tests {
         synchronous.draw_now(Instant::now()).unwrap();
         synchronous.resize_viewport(5, 2);
         synchronous.draw_now(Instant::now()).unwrap();
-        assert_eq!(
-            synchronous_seen.lock().unwrap().as_slice(),
-            [(0, Some(7), Some(3)), (1, Some(4), Some(2)),],
-        );
+        assert_eq!(synchronous_seen.lock().unwrap().as_slice(), [
+            (0, Some(7), Some(3)),
+            (1, Some(4), Some(2)),
+        ],);
 
         let (live_root, live_seen) = recording_widget();
         let live = Runtime::new(Vec::new(), live_root).viewport(8, 3).start();
@@ -1252,10 +1302,11 @@ mod tests {
             .start();
         plain.resize_viewport(5, 2).unwrap();
         plain.finish().unwrap();
-        assert_eq!(
-            plain_seen.lock().unwrap().as_slice(),
-            [(0, Some(4), Some(2))],
-        );
+        assert_eq!(plain_seen.lock().unwrap().as_slice(), [(
+            0,
+            Some(4),
+            Some(2)
+        )],);
     }
 
     #[test]
@@ -1265,7 +1316,9 @@ mod tests {
         runtime.draw_now(Instant::now()).unwrap();
         assert_eq!(
             seen.lock().unwrap().last().unwrap().2,
-            crate::Viewport::of(&io::stderr()).ok().map(|size| size.rows),
+            crate::Viewport::of(&io::stderr())
+                .ok()
+                .map(|size| size.rows),
         );
     }
 

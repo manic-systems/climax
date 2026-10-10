@@ -2,8 +2,7 @@
 
 //! help and version rendering.
 
-#[cfg(feature = "help")]
-use core::fmt::Write as _;
+#[cfg(feature = "help")] use core::fmt::Write as _;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::spec::{
@@ -302,13 +301,7 @@ pub(crate) fn render(
         builtins.push(row);
     }
     if spec.has_version_info()
-        && let Some(row) = builtin_row(
-            &own,
-            globals,
-            'V',
-            "version",
-            "Print version",
-        )
+        && let Some(row) = builtin_row(&own, globals, 'V', "version", "Print version")
     {
         builtins.push(row);
     }
@@ -392,8 +385,13 @@ mod tests {
             .possible(&["fast", "slow"])
             .default("fast")
             .env("RUN_MODE"),
-        ArgSpec::new(Kind::Flag).long("loud").default("x").env("LOUD"),
-        ArgSpec::new(Kind::Positional).value_name("path").default("."),
+        ArgSpec::new(Kind::Flag)
+            .long("loud")
+            .default("x")
+            .env("LOUD"),
+        ArgSpec::new(Kind::Positional)
+            .value_name("path")
+            .default("."),
     ];
     const SPEC: CommandSpec = CommandSpec::new("run").args(ARGS);
 
@@ -415,7 +413,10 @@ mod tests {
     fn builtin_rows_use_the_clap_wording() {
         const VERSIONED: CommandSpec = CommandSpec::new("run").version("1.0");
         let text = render(&VERSIONED, &[], &[], false);
-        assert!(text.contains("-h, --help") && text.contains("  Print help"), "{text}");
+        assert!(
+            text.contains("-h, --help") && text.contains("  Print help"),
+            "{text}"
+        );
         assert!(text.contains("  Print version"), "{text}");
     }
 

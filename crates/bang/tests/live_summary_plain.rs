@@ -3,7 +3,12 @@
 mod summary_common;
 
 use bang::ConfirmPrompt;
-use summary_common::{DIM_SUMMARY, PLAIN_SUMMARY, find, run_confirm};
+use summary_common::{
+    DIM_SUMMARY,
+    PLAIN_SUMMARY,
+    find,
+    run_confirm,
+};
 
 #[test]
 fn no_color_keeps_the_summary_but_drops_the_dimming() {

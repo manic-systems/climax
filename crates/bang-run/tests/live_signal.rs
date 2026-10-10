@@ -2,14 +2,26 @@
 
 use std::{
     fs::File,
-    io::{self, Read as _},
+    io::{
+        self,
+        Read as _,
+    },
     os::{
-        fd::{FromRawFd as _, RawFd},
+        fd::{
+            FromRawFd as _,
+            RawFd,
+        },
         unix::process::CommandExt as _,
     },
-    process::{Command, Stdio},
+    process::{
+        Command,
+        Stdio,
+    },
     thread,
-    time::{Duration, Instant},
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -27,8 +39,12 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
     command
         .args(["select", "--option", "alpha", "--option", "bravo"])
         .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(slave.try_clone().expect("clone slave for stdin")))
-        .stdout(Stdio::from(slave.try_clone().expect("clone slave for stdout")))
+        .stdin(Stdio::from(
+            slave.try_clone().expect("clone slave for stdin"),
+        ))
+        .stdout(Stdio::from(
+            slave.try_clone().expect("clone slave for stdout"),
+        ))
         .stderr(Stdio::from(slave));
     // SAFETY: the hook only calls async-signal-safe libc functions.
     unsafe {
@@ -47,7 +63,10 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
     let mut child = command.spawn().expect("spawn bang under a pty");
 
     let mut first_frame = [0_u8; 256];
-    assert_ne!(master.read(&mut first_frame).expect("read the first frame"), 0);
+    assert_ne!(
+        master.read(&mut first_frame).expect("read the first frame"),
+        0
+    );
     let pid = libc::pid_t::try_from(child.id()).expect("pid fits");
     // SAFETY: signalling the child this test spawned.
     assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
@@ -55,7 +74,9 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait().expect("poll the child") {
-            return status.code().expect("the child exited instead of dying by the signal");
+            return status
+                .code()
+                .expect("the child exited instead of dying by the signal");
         }
         if started.elapsed() > TIMEOUT {
             let _result = child.kill();

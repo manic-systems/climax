@@ -12,7 +12,7 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
-rustix               = { workspace = true, features = [ "std", "termios" ] }
+rustix                         = { workspace = true, features = [ "std", "termios" ] }
 unicode-segmentation.workspace = true
 unicode-width.workspace        = true
 

@@ -1,9 +1,24 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use screw::{RenderCtx, Role, Style, Surface};
+use screw::{
+    RenderCtx,
+    Role,
+    Style,
+    Surface,
+};
 
 use super::navigation::no_modifiers;
-use crate::{Context, Date, Event, Key, Reaction, Value, Widget, WidgetId, value::days_in_month};
+use crate::{
+    Context,
+    Date,
+    Event,
+    Key,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
+    value::days_in_month,
+};
 
 const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 const MONTHS: [&str; 12] = [
@@ -30,7 +45,8 @@ pub struct DatePicker {
 }
 
 impl DatePicker {
-    /// A picker with `selected` highlighted. Out of range months and days are clamped.
+    /// A picker with `selected` highlighted. Out of range months and days are
+    /// clamped.
     #[must_use]
     pub fn new(id: impl Into<WidgetId>, selected: Date) -> Self {
         Self {
@@ -223,4 +239,3 @@ fn add_days(date: Date, days: i32) -> Date {
 fn weekday_monday0(date: Date) -> u8 {
     u8::try_from((date.unix_days() + 3).rem_euclid(7)).unwrap_or(0)
 }
-

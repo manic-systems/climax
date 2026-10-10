@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use pound::{ArgSpec, CommandSpec, Error, Kind, Matches, Parse};
+use pound::{
+    ArgSpec,
+    CommandSpec,
+    Error,
+    Kind,
+    Matches,
+    Parse,
+};
 
 struct Args {
     verbose: bool,

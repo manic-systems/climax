@@ -2,12 +2,21 @@
 
 //! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
-use std::fmt::Display;
-use std::str::FromStr;
+use std::{
+    fmt::Display,
+    str::FromStr,
+};
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use proc_macro2::{
+    Delimiter,
+    TokenStream,
+    TokenTree,
+};
 use quote::quote;
-use venial::{Attribute, AttributeValue};
+use venial::{
+    Attribute,
+    AttributeValue,
+};
 
 /// a `&'static str` attribute value, written as a literal or as a constant
 /// expression
@@ -31,61 +40,61 @@ impl Text {
 #[allow(clippy::option_option, clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct Pound {
-    keys: Vec<String>,
+    keys:                Vec<String>,
     /// `None` absent, `Some(None)` bare `short`, `Some(Some(c))` `short = 'c'`
-    pub short: Option<Option<char>>,
+    pub short:           Option<Option<char>>,
     /// `None` absent, `Some(None)` bare `long`, `Some(Some(s))` `long = "s"`
-    pub long: Option<Option<String>>,
-    pub positional: bool,
-    pub trailing: bool,
-    pub count: bool,
+    pub long:            Option<Option<String>>,
+    pub positional:      bool,
+    pub trailing:        bool,
+    pub count:           bool,
     /// field delegates to its type's subcommand tree
-    pub subcommand: bool,
+    pub subcommand:      bool,
     /// field embeds another `Parse` type's args at this command level
-    pub flatten: bool,
+    pub flatten:         bool,
     /// keep this arg/variant out of help output
-    pub hidden: bool,
+    pub hidden:          bool,
     /// named flag/option that descendant subcommands also accept
-    pub global: bool,
-    pub group: Option<String>,
-    pub default: Option<Text>,
+    pub global:          bool,
+    pub group:           Option<String>,
+    pub default:         Option<Text>,
     /// value an option takes when written with no `=value`
     pub default_missing: Option<String>,
-    pub env: Option<String>,
+    pub env:             Option<String>,
     /// `None` absent, `Some(None)` bare `negate`, which infers `no-<long>`
-    pub negate: Option<Option<String>>,
-    pub value_name: Option<String>,
-    pub help: Option<String>,
+    pub negate:          Option<Option<String>>,
+    pub value_name:      Option<String>,
+    pub help:            Option<String>,
     /// help text `--help` shows in place of the short form
-    pub long_help: Option<String>,
+    pub long_help:       Option<String>,
     /// help section this arg is listed under
-    pub heading: Option<String>,
-    pub name: Option<String>,
+    pub heading:         Option<String>,
+    pub name:            Option<String>,
     /// any expression, not just a literal
-    pub version: Option<Vec<TokenTree>>,
+    pub version:         Option<Vec<TokenTree>>,
     /// field-level: minimum accepted parsed value
-    pub min: Option<String>,
+    pub min:             Option<String>,
     /// field-level: maximum accepted parsed value
-    pub max: Option<String>,
+    pub max:             Option<String>,
     /// field-level: maximum accepted raw character count
-    pub max_len: Option<String>,
+    pub max_len:         Option<String>,
     /// field-level: fewest values a `Vec` field accepts
-    pub min_values: Option<String>,
+    pub min_values:      Option<String>,
     /// field-level: most values a `Vec` field accepts
-    pub max_values: Option<String>,
+    pub max_values:      Option<String>,
     /// field-level: custom raw-value parser, a path or any callable expression
-    pub parse: Option<TokenStream>,
+    pub parse:           Option<TokenStream>,
     /// field-level: custom parsed-value validation, a path or any callable
     /// expression
-    pub validate: Option<TokenStream>,
+    pub validate:        Option<TokenStream>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
-    pub conflicts_with: Vec<String>,
+    pub conflicts_with:  Vec<String>,
     /// field-level: names of fields this one obliges when set
-    pub requires: Vec<String>,
+    pub requires:        Vec<String>,
     /// extra long names (fields) or command names (variants) that also match
-    pub aliases: Vec<String>,
+    pub aliases:         Vec<String>,
 }
 
 impl Pound {
@@ -271,8 +280,10 @@ fn braces_hint(key: &str) -> String {
 fn callable(key: &str, seg: &[TokenTree]) -> Result<TokenStream, String> {
     let tokens = expr(seg).ok_or_else(|| format!("pound: `{key}` needs a value"))?;
     let stream = match tokens.as_slice() {
-        [tok] if is_quoted(tok) => TokenStream::from_str(&unquote(tok))
-            .map_err(|_| format!("pound: `{key}` is not a valid path"))?,
+        [tok] if is_quoted(tok) => {
+            TokenStream::from_str(&unquote(tok))
+                .map_err(|_| format!("pound: `{key}` is not a valid path"))?
+        },
         _ => tokens.into_iter().collect(),
     };
     if stream.is_empty() {

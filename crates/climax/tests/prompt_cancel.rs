@@ -2,7 +2,10 @@
 
 #![cfg(feature = "interactive")]
 
-use climax::{Context, ErrorKind};
+use climax::{
+    Context,
+    ErrorKind,
+};
 
 fn ask(context: &Context) -> climax::Result<&'static str> {
     Ok(context
@@ -15,9 +18,10 @@ fn ask(context: &Context) -> climax::Result<&'static str> {
 
 #[test]
 fn leaving_a_prompt_with_or_cancel_ends_the_handler_as_a_cancellation() {
-    let leave = climax::bang::advanced::scripted_interaction([[climax::bang::advanced::Event::key(
-        climax::bang::advanced::Key::Esc,
-    )]]);
+    let leave =
+        climax::bang::advanced::scripted_interaction([[climax::bang::advanced::Event::key(
+            climax::bang::advanced::Key::Esc,
+        )]]);
     let context = Context::new().with_interaction(leave);
 
     let error = ask(&context).unwrap_err();
@@ -27,9 +31,10 @@ fn leaving_a_prompt_with_or_cancel_ends_the_handler_as_a_cancellation() {
 
 #[test]
 fn submitting_passes_through_or_cancel() {
-    let submit = climax::bang::advanced::scripted_interaction([[climax::bang::advanced::Event::key(
-        climax::bang::advanced::Key::Enter,
-    )]]);
+    let submit =
+        climax::bang::advanced::scripted_interaction([[climax::bang::advanced::Event::key(
+            climax::bang::advanced::Key::Enter,
+        )]]);
     let context = Context::new().with_interaction(submit);
 
     assert_eq!(ask(&context).unwrap(), "bash");

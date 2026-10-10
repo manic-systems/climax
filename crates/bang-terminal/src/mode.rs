@@ -1,19 +1,38 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io;
-use std::os::fd::{AsFd, OwnedFd};
-
-use rustix::{
-    io::{Errno, fcntl_dupfd_cloexec},
-    termios::{OptionalActions, OutputModes, SpecialCodeIndex, Termios, tcgetattr, tcsetattr},
+use std::{
+    io,
+    os::fd::{
+        AsFd,
+        OwnedFd,
+    },
 };
 
-use crate::cleanup::{CleanupFailures, CleanupStage, staged};
+use rustix::{
+    io::{
+        Errno,
+        fcntl_dupfd_cloexec,
+    },
+    termios::{
+        OptionalActions,
+        OutputModes,
+        SpecialCodeIndex,
+        Termios,
+        tcgetattr,
+        tcsetattr,
+    },
+};
+
+use crate::cleanup::{
+    CleanupFailures,
+    CleanupStage,
+    staged,
+};
 
 /// Read behavior installed alongside the usual raw terminal flags.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RawModeOptions {
-    minimum_bytes: u8,
+    minimum_bytes:       u8,
     timeout_deciseconds: u8,
 }
 
@@ -23,7 +42,7 @@ impl RawModeOptions {
     #[must_use]
     pub const fn blocking() -> Self {
         Self {
-            minimum_bytes: 1,
+            minimum_bytes:       1,
             timeout_deciseconds: 0,
         }
     }
@@ -53,18 +72,20 @@ impl Default for RawModeOptions {
 /// is held, such as a panic message, still returns the carriage.
 #[derive(Debug)]
 pub struct TerminalModeGuard {
-    fd: OwnedFd,
-    saved: Termios,
+    fd:     OwnedFd,
+    saved:  Termios,
     active: bool,
 }
 
 impl TerminalModeGuard {
-    /// Switch the terminal behind `input` to raw mode, remembering its settings.
+    /// Switch the terminal behind `input` to raw mode, remembering its
+    /// settings.
     pub fn activate(input: &(impl AsFd + ?Sized), options: RawModeOptions) -> io::Result<Self> {
         activate_fd(input, options)
     }
 
-    /// Restore the saved settings now and report any failure, which drop cannot.
+    /// Restore the saved settings now and report any failure, which drop
+    /// cannot.
     pub fn restore(mut self) -> Result<(), CleanupFailures> {
         self.restore_active()
     }
@@ -130,7 +151,10 @@ mod tests {
         let guard = TerminalModeGuard::activate(&slave, RawModeOptions::blocking()).unwrap();
 
         let raw = tcgetattr(&slave).unwrap();
-        assert!(raw.output_modes.contains(OutputModes::OPOST | OutputModes::ONLCR));
+        assert!(
+            raw.output_modes
+                .contains(OutputModes::OPOST | OutputModes::ONLCR)
+        );
         assert!(!raw.local_modes.contains(rustix::termios::LocalModes::ECHO));
         guard.restore().unwrap();
     }

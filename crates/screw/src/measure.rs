@@ -30,9 +30,9 @@ pub(crate) fn is_dropped_control(ch: char) -> bool {
 pub(crate) enum Segment<'a> {
     Newline,
     Tab,
-    /// An extended grapheme cluster. A zero width means it attaches to the prior cell, and `grow`
-    /// is how many columns that attachment adds to the cluster it joined, even across dropped
-    /// controls.
+    /// An extended grapheme cluster. A zero width means it attaches to the
+    /// prior cell, and `grow` is how many columns that attachment adds to
+    /// the cluster it joined, even across dropped controls.
     Cluster {
         text:  &'a str,
         width: usize,
@@ -51,46 +51,53 @@ impl Segment<'_> {
     }
 }
 
-/// Splits `text` into the segments [`Surface::write`](crate::Surface::write) lays out, each with
-/// its byte offset. Dropped controls produce nothing, and a zero-width cluster joins the last
-/// cluster before any dropped controls just as it would if they were absent.
+/// Splits `text` into the segments [`Surface::write`](crate::Surface::write)
+/// lays out, each with its byte offset. Dropped controls produce nothing, and a
+/// zero-width cluster joins the last cluster before any dropped controls just
+/// as it would if they were absent.
 pub(crate) fn segments(text: &str) -> impl Iterator<Item = (usize, Segment<'_>)> {
     let mut base: Option<(&str, usize)> = None;
     let mut joined = String::new();
-    text.grapheme_indices(true).filter_map(move |(index, cluster)| {
-        let segment = match cluster {
-            "\n" | "\r\n" => {
-                base = None;
-                Segment::Newline
-            },
-            "\t" => {
-                base = None;
-                Segment::Tab
-            },
-            _ if cluster.chars().next().is_some_and(is_dropped_control) => return None,
-            _ => {
-                let width = cluster.width();
-                let mut grow = 0;
-                if width > 0 {
-                    base = Some((cluster, width));
-                    joined.clear();
-                } else if let Some((head, head_width)) = base {
-                    if joined.is_empty() {
-                        joined.push_str(head);
+    text.grapheme_indices(true)
+        .filter_map(move |(index, cluster)| {
+            let segment = match cluster {
+                "\n" | "\r\n" => {
+                    base = None;
+                    Segment::Newline
+                },
+                "\t" => {
+                    base = None;
+                    Segment::Tab
+                },
+                _ if cluster.chars().next().is_some_and(is_dropped_control) => return None,
+                _ => {
+                    let width = cluster.width();
+                    let mut grow = 0;
+                    if width > 0 {
+                        base = Some((cluster, width));
+                        joined.clear();
+                    } else if let Some((head, head_width)) = base {
+                        if joined.is_empty() {
+                            joined.push_str(head);
+                        }
+                        joined.push_str(cluster);
+                        grow = joined.width().saturating_sub(head_width);
+                        base = Some((head, head_width + grow));
                     }
-                    joined.push_str(cluster);
-                    grow = joined.width().saturating_sub(head_width);
-                    base = Some((head, head_width + grow));
-                }
-                Segment::Cluster { text: cluster, width, grow }
-            },
-        };
-        Some((index, segment))
-    })
+                    Segment::Cluster {
+                        text: cluster,
+                        width,
+                        grow,
+                    }
+                },
+            };
+            Some((index, segment))
+        })
 }
 
-/// Replaces each tab in a single row of text with the spaces it expands to when the row starts at
-/// column zero, and drops the controls that [`Surface::write`](crate::Surface::write) would drop.
+/// Replaces each tab in a single row of text with the spaces it expands to when
+/// the row starts at column zero, and drops the controls that
+/// [`Surface::write`](crate::Surface::write) would drop.
 pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
     if !text.contains('\t') && !text.chars().any(is_dropped_control) {
         return Cow::Borrowed(text);
@@ -108,7 +115,8 @@ pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
     Cow::Owned(expanded)
 }
 
-/// Byte offset just past the first visible segment of `text`, or its length when it has none.
+/// Byte offset just past the first visible segment of `text`, or its length
+/// when it has none.
 pub(crate) fn first_segment_end(text: &str) -> usize {
     let mut visible = segments(text);
     visible.next();
@@ -119,10 +127,11 @@ pub(crate) fn first_segment_end(text: &str) -> usize {
 
 /// Display width of `text` in terminal columns.
 ///
-/// Measures exactly what [`Surface::write`](crate::Surface::write) would lay out. Each extended
-/// grapheme cluster is measured whole with `unicode-width`, so an emoji with a variation selector
-/// or a joined sequence takes the columns that crate reports and combining marks add nothing.
-/// Terminals that do not shape such sequences draw them at another width, so the result follows a
+/// Measures exactly what [`Surface::write`](crate::Surface::write) would lay
+/// out. Each extended grapheme cluster is measured whole with `unicode-width`,
+/// so an emoji with a variation selector or a joined sequence takes the columns
+/// that crate reports and combining marks add nothing. Terminals that do not
+/// shape such sequences draw them at another width, so the result follows a
 /// policy that depends on the terminal. Tabs advance to the next multiple of
 /// eight columns, other control characters are ignored, and a newline starts a
 /// new row. The width of the widest row is returned.
@@ -150,7 +159,11 @@ pub fn truncate(text: &str, columns: usize) -> &str {
             return &text[..index];
         }
         let next = segment.advance(used);
-        let widens = matches!(segment, Segment::Cluster { width: 0, grow: 1.., .. });
+        let widens = matches!(segment, Segment::Cluster {
+            width: 0,
+            grow: 1..,
+            ..
+        });
         if next > columns {
             return &text[..if widens { start } else { index }];
         }
@@ -164,8 +177,8 @@ pub fn truncate(text: &str, columns: usize) -> &str {
 
 /// Reduces `text` to a single line that is safe to print to a terminal.
 ///
-/// Escapes and other controls that [`Surface::write`](crate::Surface::write) drops are removed, and
-/// every line break or tab becomes one space.
+/// Escapes and other controls that [`Surface::write`](crate::Surface::write)
+/// drops are removed, and every line break or tab becomes one space.
 ///
 /// ```
 /// assert_eq!(screw::single_line("a\x1b[0m\nb\tc"), "a[0m b c");
@@ -198,11 +211,14 @@ pub(crate) const fn split_padding(missing: usize, align: Align) -> (usize, usize
 /// Pads each row of `text` with spaces to `columns` according to `align`.
 ///
 /// Text whose rows are all `columns` wide or wider is returned unchanged. Use
-/// [`truncate`] first to enforce a maximum. Padding placed before text expands its tabs first,
-/// because tab stops would otherwise move with the padding.
+/// [`truncate`] first to enforce a maximum. Padding placed before text expands
+/// its tabs first, because tab stops would otherwise move with the padding.
 #[must_use]
 pub fn pad(text: &str, columns: usize, align: Align) -> Cow<'_, str> {
-    let rows: Vec<Cow<'_, str>> = text.split('\n').map(|row| pad_row(row, columns, align)).collect();
+    let rows: Vec<Cow<'_, str>> = text
+        .split('\n')
+        .map(|row| pad_row(row, columns, align))
+        .collect();
     if rows.iter().all(|row| matches!(row, Cow::Borrowed(_))) {
         return Cow::Borrowed(text);
     }
@@ -226,7 +242,10 @@ fn pad_row(row: &str, columns: usize, align: Align) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Style, Surface};
+    use crate::{
+        Style,
+        Surface,
+    };
 
     const SAMPLES: [&str; 16] = [
         "plain",
@@ -371,6 +390,9 @@ mod tests {
     #[test]
     fn pad_borrows_text_that_already_fits() {
         assert!(matches!(pad("abcd", 4, Align::Left), Cow::Borrowed("abcd")));
-        assert!(matches!(pad("abcdef", 4, Align::Right), Cow::Borrowed("abcdef")));
+        assert!(matches!(
+            pad("abcdef", 4, Align::Right),
+            Cow::Borrowed("abcdef")
+        ));
     }
 }

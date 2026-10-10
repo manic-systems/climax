@@ -245,7 +245,10 @@ mod tests {
             .with_actions([ActionBinding::control_char('s', "save")]),
         );
 
-        assert_eq!(session.handle(Event::key(Key::Down)), SessionReaction::Changed);
+        assert_eq!(
+            session.handle(Event::key(Key::Down)),
+            SessionReaction::Changed
+        );
         assert!(matches!(
             session.handle(Event::key(Key::Enter)),
             SessionReaction::Submit(_)

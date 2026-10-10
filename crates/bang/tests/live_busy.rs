@@ -2,14 +2,24 @@
 
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
     time::Duration,
 };
 
-use bang::{ErrorKind, PromptOutcome};
+use bang::{
+    ErrorKind,
+    PromptOutcome,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 

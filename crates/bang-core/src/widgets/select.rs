@@ -1,9 +1,31 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use screw::{RenderCtx, Role, Span, Surface, VerticalSize};
+use screw::{
+    RenderCtx,
+    Role,
+    Span,
+    Surface,
+    VerticalSize,
+};
 
-use super::navigation::{self, ListFrame, ListRow, PageLayout, move_index, no_modifiers, page_move};
-use crate::{Context, Event, Key, Reaction, Value, Widget, WidgetId};
+use super::navigation::{
+    self,
+    ListFrame,
+    ListRow,
+    PageLayout,
+    move_index,
+    no_modifiers,
+    page_move,
+};
+use crate::{
+    Context,
+    Event,
+    Key,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
+};
 
 /// One choice, shown as `label` and submitted as `value`.
 #[derive(Clone, Debug, PartialEq)]
@@ -167,7 +189,12 @@ impl Select {
     }
 
     fn ensure_visible(&mut self) {
-        navigation::ensure_visible(&mut self.selected, &mut self.top, self.items.len(), self.page_size);
+        navigation::ensure_visible(
+            &mut self.selected,
+            &mut self.top,
+            self.items.len(),
+            self.page_size,
+        );
     }
 
     fn visible_len(&self) -> usize {
@@ -248,7 +275,8 @@ impl Widget for Select {
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.items.len().saturating_sub(1)),
             Key::PageUp => {
-                match navigation::page_action(self.layout.target(false), self.visible_len(), false) {
+                match navigation::page_action(self.layout.target(false), self.visible_len(), false)
+                {
                     navigation::PageAction::JumpTo(target) => self.move_page(target),
                     navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                 }
@@ -326,7 +354,8 @@ impl MultiSelect {
         self
     }
 
-    /// Start with the choices at `indices` checked. Indices past the end are ignored.
+    /// Start with the choices at `indices` checked. Indices past the end are
+    /// ignored.
     #[must_use]
     pub fn with_checked_indices(mut self, indices: impl IntoIterator<Item = usize>) -> Self {
         for index in indices {
@@ -353,7 +382,8 @@ impl MultiSelect {
         self.select.selected_index()
     }
 
-    /// Check or uncheck the choice at `index`. An index past the end is ignored.
+    /// Check or uncheck the choice at `index`. An index past the end is
+    /// ignored.
     pub fn set_checked(&mut self, index: usize, checked: bool) {
         if let Some(slot) = self.checked.get_mut(index) {
             *slot = checked;

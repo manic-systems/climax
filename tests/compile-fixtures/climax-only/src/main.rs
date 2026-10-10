@@ -38,7 +38,10 @@ struct Progress(Arc<AtomicUsize>);
 
 impl Widget for Progress {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-        out.write(format!("{} of 3", self.0.load(Ordering::Relaxed)), Style::PLAIN);
+        out.write(
+            format!("{} of 3", self.0.load(Ordering::Relaxed)),
+            Style::PLAIN,
+        );
     }
 }
 
@@ -83,13 +86,16 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        Mutex,
+    };
+
     use climax::bang::advanced::{
         Event,
         Key,
         scripted_interaction,
     };
-
-    use std::sync::{Arc, Mutex};
 
     use super::*;
 
@@ -118,12 +124,20 @@ mod tests {
 
     #[test]
     fn the_serde_attribute_roots_derives_and_keeps_helpers() {
-        let report = Report { shell_name: "zsh".to_owned(), line_count: 3 };
+        let report = Report {
+            shell_name: "zsh".to_owned(),
+            line_count: 3,
+        };
         let buffer = Buffer::default();
         let context = Context::new()
             .with_output_format(Format::Json)
             .with_output_writer(buffer.clone());
-        context.output().stream(&report).text(|_| String::new()).emit().unwrap();
+        context
+            .output()
+            .stream(&report)
+            .text(|_| String::new())
+            .emit()
+            .unwrap();
         drop(context);
         assert_eq!(
             String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap(),

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::PathBuf,
+    process::Command,
+};
 
 const FIXTURES: &[&str] = &[
     "fixture-bang-only",
@@ -27,8 +30,8 @@ const DOCTEST_FIXTURES: &[&str] = &["fixture-climax-only"];
 /// Each fixture is built and tested in its own `cargo test -p`, not
 /// `--workspace`, so Cargo resolves its features from only that fixture's
 /// dependency graph. A combined `--workspace` run would unify features across
-/// every fixture and hide a fixture that only compiles because a sibling enabled
-/// a feature it needs.
+/// every fixture and hide a fixture that only compiles because a sibling
+/// enabled a feature it needs.
 #[test]
 fn documented_dependency_stories_compile_in_isolation() {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

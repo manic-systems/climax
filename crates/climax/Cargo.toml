@@ -29,16 +29,13 @@ name              = "status"
 required-features = [ "render" ]
 
 [dependencies]
-anyhow = { workspace = true, optional = true }
-bang = { workspace = true, optional = true }
-climax-derive = { workspace = true, optional = true }
-pound = { workspace = true, optional = true, features = [
-	"std",
-	"help",
-] }
-screw = { workspace = true, optional = true }
-serde = { workspace = true, optional = true, features = [ "derive" ] }
-serde_json = { workspace = true, optional = true }
+anyhow               = { workspace = true, optional = true }
+bang                 = { workspace = true, optional = true }
+climax-derive        = { workspace = true, optional = true }
+pound                = { workspace = true, optional = true, features = [ "std", "help" ] }
+screw                = { workspace = true, optional = true }
+serde                = { workspace = true, optional = true, features = [ "derive" ] }
+serde_json           = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 
 [dev-dependencies]
