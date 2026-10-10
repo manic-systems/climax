@@ -31,17 +31,15 @@ fn main() -> std::process::ExitCode {
 
 ### Exit codes
 
-`main` and `main_with` map outcomes to exit codes in one place.
-
-- 0 for success, and for help and version output on stdout.
-- 1 for an application error, printed to stderr as `error: ...`.
-- 2 for a parse failure printed to stderr (`main` only).
-- 130 for a cancellation, including `Error::cancelled()`, or 128 plus the signal
-  number when a signal interrupted a live prompt. Either exit is silent unless
-  related errors are attached, in which case those print instead.
-- The code given to `Error::with_exit_code` (0 becomes 1), for an error of any kind. A
-  cancellation with an explicit code stays silent and any other error is still
-  printed.
+| code        | meaning                                                                    |
+|-------------|----------------------------------------------------------------------------|
+| 0           | success, help and version                                                  |
+| 1           | application error, printed to stderr as `error: ...`                       |
+| 2           | parse failure (`main` only)                                                |
+| 141         | help or version hit a closed stdout pipe (`main` only), other write failures exit 1 |
+| 130         | cancellation, silent unless related errors are attached                    |
+| 128 + n     | prompt interrupted by signal `n`, silent like 130                          |
+| `with_exit_code` | the given code for an error of any kind, 0 becomes 1                  |
 
 `Error::cancelled()` is a cancellation of your own, and an explicit code keeps it silent
 
