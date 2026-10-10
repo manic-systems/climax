@@ -107,13 +107,11 @@ Three categories decide visibility.
 For Bang, the typed builders are the product interface.
 
 ```rust
-let outcome = bang::select("Shell")
+let shell = bang::select("Shell")
     .choice("bash", Shell::Bash)
     .choice("zsh", Shell::Zsh)
-    .interact()?;
-let bang::PromptOutcome::Submit(shell) = outcome else {
-    return Ok(());
-};
+    .interact()?
+    .or_cancel()?;
 ```
 
 `bang::advanced` groups custom widgets, actions, raw `Value`, sessions, and

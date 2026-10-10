@@ -31,13 +31,11 @@ enum Shell {
     Zsh,
 }
 
-let outcome = climax::bang::select("Shell")
+let shell = climax::bang::select("Shell")
     .choice("bash", Shell::Bash)
     .choice("zsh", Shell::Zsh)
-    .interact()?;
-let climax::PromptOutcome::Submit(shell) = outcome else {
-    return Ok(());
-};
+    .interact()?
+    .or_cancel()?;
 # Ok::<(), climax::bang::Error>(())
 ```
 
@@ -66,38 +64,60 @@ transitions to `ReviewPromptWithActions<T, A>` and returns `ReviewOutcome<T, A>`
 ```rust,no_run
 use climax::prelude::*;
 
-climax::run_with((), |cx, ()| {
-    let outcome = cx
-        .select("Shell")
-        .choice("bash", "bash")
-        .choice("zsh", "zsh")
-        .interact()?;
-    let PromptOutcome::Submit(shell) = outcome else {
-        return Ok(());
-    };
+fn main() -> std::process::ExitCode {
+    climax::main_with(|cx| {
+        let shell = cx
+            .select("Shell")
+            .choice("bash", "bash")
+            .choice("zsh", "zsh")
+            .interact()?
+            .or_cancel()?;
 
-    cx.output()
-        .result(&shell)
-        .text(|shell| *shell)
-        .emit()
-})?;
-# Ok::<(), climax::Error>(())
+        cx.output()
+            .result(&shell)
+            .text(|shell| *shell)
+            .emit()
+    })
+}
 ```
+
+`main_with` runs a handler that takes no arguments, reports its error the way
+`climax::main` does and returns the `ExitCode`.
 
 ```rust,no_run
 use climax::prelude::*;
 
-climax::run_with((), |cx, ()| {
-    let PromptOutcome::Submit(proceed) = cx.confirm("Deploy now?").interact()? else {
-        return Ok(());
-    };
-    cx.output().result(&proceed).text(|proceed| proceed.to_string()).emit()
-})?;
-# Ok::<(), climax::Error>(())
+fn main() -> std::process::ExitCode {
+    climax::main_with(|cx| {
+        let proceed = cx.confirm("Deploy now?").interact()?.or_cancel()?;
+        cx.output().result(&proceed).text(|proceed| proceed.to_string()).emit()
+    })
+}
 ```
 
 `Context` also hands out `password`, `date` and `number::<T>`. A cancelled
-prompt resolves to `PromptOutcome::Leave`. A signal during a prompt restores the
+prompt resolves to `PromptOutcome::Leave`, and `or_cancel` turns that into a
+`Cancelled` error that ends the handler with exit 130. `into_option` and
+`unwrap_or` cover the cases where leaving has a sensible fallback, and a handler
+that wants to act on leaving matches on the outcome.
+
+```rust,no_run
+use climax::prelude::*;
+
+fn main() -> std::process::ExitCode {
+    climax::main_with(|cx| match cx.text("Name").interact()? {
+        PromptOutcome::Submit(name) => cx.output().result(&name).text(|name| name.clone()).emit(),
+        PromptOutcome::Leave => cx.output().result(&"anonymous").text(|name| *name).emit(),
+    })
+}
+```
+
+`confirm` accepts `y` and `n` as immediate answers and highlights No unless
+`default(true)` says otherwise. A submitted prompt leaves a dimmed one-line
+summary in the scrollback, such as `Deploy now? › no`, and leaving leaves
+nothing. A prompt's `summary(false)` turns it off for that prompt, and
+`bang::Interaction::with_summaries(false)` turns it off for every prompt on that
+driver. `NO_COLOR` removes the dimming. A signal during a prompt restores the
 terminal and surfaces as a `Cancelled` error whose `Error::signal()` holds the
 signal number, and `climax::main` exits with 128 plus that number. The process
 is never killed by the signal itself, and a signal the host ignored before the
@@ -110,14 +130,16 @@ themselves are reachable as `climax::pound` under `parse`, `climax::bang` under
 `structured`, so an application needs no direct dependency on any of them.
 
 The `derive` feature, on by default, provides `#[derive(climax::Parse)]` and
-`#[derive(climax::ValueEnum)]` with expansion rooted at `::climax::pound`. Serde
-derives reached through climax need `#[serde(crate = "climax::serde")]`.
+`#[derive(climax::ValueEnum)]` with expansion rooted at `::climax::pound`. With
+`structured` it also provides `#[climax::serde(Serialize, Deserialize)]`, which
+derives serde's traits rooted at `climax::serde` and keeps the item and its
+other attributes. Put it above any other derive.
 
 ```rust
 use climax::prelude::*;
 
-#[derive(Clone, Copy, Debug, climax::serde::Serialize, ValueEnum)]
-#[serde(crate = "climax::serde")]
+#[climax::serde(Serialize)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum Shell {
     Bash,
     Zsh,
@@ -174,8 +196,7 @@ output is suppressed so stdout and stderr stay machine readable.
 ```rust,no_run
 use climax::prelude::*;
 
-#[derive(climax::serde::Serialize)]
-#[serde(crate = "climax::serde")]
+#[climax::serde(Serialize)]
 struct Report {
     files: usize,
 }
@@ -224,9 +245,9 @@ struct Args {
 fn main() -> std::process::ExitCode {
     climax::main(|cx, args: Args| {
         if !args.yes {
-            let PromptOutcome::Submit(true) = cx.confirm("Deploy now?").interact()? else {
+            if !cx.confirm("Deploy now?").interact()?.unwrap_or(false) {
                 return Ok(());
-            };
+            }
         }
         cx.output().result(&"deployed").text(|state| *state).emit()
     })
@@ -235,9 +256,44 @@ fn main() -> std::process::ExitCode {
 
 ### Exit codes
 
-`climax::main` exits 0 on success, 1 for an application error, 2 for a parse
-failure and 130, or 128 plus the signal number, for a cancellation. An
-application that wants its own mapping calls `try_run` and converts the
+`climax::main` and `climax::main_with` exit with
+
+| Code | Meaning |
+|---|---|
+| 0 | success, and help or version output |
+| 1 | an application error, printed to stderr as `error: ...` |
+| 2 | a parse failure (`main` only) |
+| 130 | a cancellation, silent unless related errors are attached |
+| 128 plus N | a prompt interrupted by signal N, silent like 130 |
+| any `u8` | the code set with `Error::with_exit_code`, for an error of any kind |
+
+`Error::cancelled()` reports a cancellation of your own, and `with_exit_code`
+picks the code for any error. A cancellation with an explicit code stays silent
+and any other error is still printed.
+
+```rust,no_run
+use climax::prelude::*;
+
+fn main() -> std::process::ExitCode {
+    climax::main_with(|cx| {
+        let count = "7".parse::<u32>().context("reading the count")?;
+        if count > 5 {
+            return Err(Error::message("too many").with_exit_code(3));
+        }
+        let PromptOutcome::Submit(true) = cx.confirm("Continue?").interact()? else {
+            return Err(Error::cancelled());
+        };
+        Ok(())
+    })
+}
+```
+
+`ResultExt::context` turns any `Send + Sync` error into an application error
+that reads `message: source` and keeps the source, and `app_err` keeps the
+source's own text. A `Box<dyn std::error::Error + Send + Sync>` converts with
+`?`.
+
+An application that wants a mapping beyond that calls `try_run` and converts the
 `climax::Error` itself. Help and version arrive as a parse error that asks to
 exit, which this recipe prints and treats as success.
 
@@ -274,5 +330,74 @@ fn main() -> ExitCode {
     })
 }
 ```
+
+### A `--quiet` flag
+
+`StatusMode::Auto` animates on a terminal and prints one plain line per
+finished status elsewhere. A `--quiet` flag selects `StatusMode::Silent`, which
+prints no status or final-message text at all.
+
+```rust,no_run
+use climax::prelude::*;
+
+/// build the project
+#[derive(Parse)]
+struct Args {
+    /// print no status lines
+    #[pound(long)]
+    quiet: bool,
+}
+
+fn main() -> std::process::ExitCode {
+    climax::main(|mut cx, args: Args| {
+        if args.quiet {
+            cx.set_status_mode(StatusMode::Silent)?;
+        }
+        cx.status("building").spinner().final_message("built").during(|| Ok(()))
+    })
+}
+```
+
+### Testing
+
+`climax::testing` runs an application in-process the way `main` does. A
+`Script` answers prompts, one method per prompt, `Capture` buffers collect
+output, and the `Outcome` carries the exit code that `main` would return, the
+text of both streams and the error. Leftover script input fails the run with a
+panic that names how much was unused, so a test cannot script more than the flow
+asks for.
+
+```rust
+use climax::{prelude::*, testing::{self, Script}};
+
+/// deploy a build
+#[derive(Parse)]
+struct Args {
+    /// the environment to deploy to
+    env: String,
+}
+
+fn deploy(cx: Context, args: Args) -> climax::Result<()> {
+    if !cx.confirm(format!("Deploy to {}?", args.env)).interact()?.or_cancel()? {
+        return Err(Error::message("declined").with_exit_code(3));
+    }
+    cx.output().result(&args.env).text(|env| format!("deployed to {env}")).emit()
+}
+
+let yes = testing::run(["dev"], Script::new().confirm(true), deploy);
+assert_eq!(yes.exit_code, 0);
+assert_eq!(yes.stdout, "deployed to dev\n");
+
+let no = testing::run(["dev"], Script::new().confirm(false), deploy);
+assert_eq!((no.exit_code, no.stderr.as_str()), (3, "error: declined\n"));
+
+let esc = testing::run(["dev"], Script::new().esc(), deploy);
+assert_eq!(esc.exit_code, 130);
+```
+
+`Script` also has `select_nth`, `multi_select_nth`, `text`, `text_attempts`,
+`enter` and `keys` for anything else. `testing::run_with` is the form for an
+application without arguments, and `Capture` can be handed to
+`Context::with_output_writer` when a test builds its own `Context`.
 
 The suite is at an early stage and its APIs are not yet stable.
