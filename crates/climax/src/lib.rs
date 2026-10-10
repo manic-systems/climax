@@ -18,6 +18,9 @@
 //! `#[derive(climax::ValueEnum)]`, whose expansion refers to
 //! `::climax::pound`. With `structured` as well, `#[climax::serde(Serialize)]`
 //! derives serde's traits rooted at `::climax::serde` for the same reason.
+//! The attribute needs both features. With `structured` alone, `climax::serde`
+//! is only the crate, and the attribute fails with `expected attribute, found
+//! module`.
 //!
 //! `main` and [`main_with`] report errors and choose the process exit code,
 //! and [`ResultExt`], imported by name, adds `.context("reading the count")` to
@@ -52,7 +55,12 @@ pub mod testing;
 #[cfg(feature = "render")]
 pub mod status;
 
-#[cfg(feature = "structured")] pub use ::serde;
+/// the `serde` crate, for applications that depend on `climax` alone
+///
+/// `#[climax::serde(..)]` also needs `derive`, otherwise this path is only the
+/// crate
+#[cfg(feature = "structured")]
+pub use ::serde;
 pub use app::{
     Context,
     main_with,
