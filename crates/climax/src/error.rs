@@ -2,6 +2,7 @@
 
 use std::{error, fmt, io};
 
+/// The result type used across `climax`, with [`Error`] as the error.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A stable, high-level category for an application error.
@@ -50,6 +51,7 @@ pub struct Error {
 
 impl Error {
     #[must_use]
+    /// An error carrying only a message, of kind [`ErrorKind::Message`].
     pub fn message(message: impl Into<String>) -> Self {
         Self {
             kind: ErrorKind::Message,
@@ -61,11 +63,15 @@ impl Error {
     }
 
     #[must_use]
+    /// Wrap an application error as the source, of kind [`ErrorKind::Application`].
+    /// The message is the source's own text.
     pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
         Self::with_source(ErrorKind::Application, source)
     }
 
     #[must_use]
+    /// Wrap an application error under a leading message, so the text reads
+    /// `message: source`. The kind is [`ErrorKind::Application`].
     pub fn application_context(
         message: impl Into<String>,
         source: impl error::Error + Send + Sync + 'static,
@@ -81,11 +87,14 @@ impl Error {
     }
 
     #[must_use]
+    /// The category of this error.
     pub const fn kind(&self) -> ErrorKind {
         self.kind
     }
 
     #[must_use]
+    /// The retained source with its `Send` and `Sync` bounds, which
+    /// `std::error::Error::source` erases.
     pub fn source_error(&self) -> Option<&(dyn error::Error + Send + Sync + 'static)> {
         self.source.as_deref()
     }

@@ -47,6 +47,10 @@ pub fn message(message: impl Into<String>) -> Status {
     Status::new(message, coordinator.clone())
 }
 
+/// A transient status line, configured with builders and then started.
+///
+/// Made by `Context::status`. Call `start` to get a handle, `finish` to show and
+/// remove it at once, or `during` to scope it to an operation.
 pub struct Status {
     message:         String,
     widget:          Option<WidgetRef>,
@@ -92,6 +96,7 @@ impl Status {
     }
 
     #[must_use]
+    /// Draw a spinner before the message or widget.
     pub const fn spinner(mut self) -> Self {
         self.spinner = true;
         self
@@ -109,6 +114,8 @@ impl Status {
     }
 
     #[must_use]
+    /// Message printed when the status finishes successfully, in place of the live
+    /// line.
     pub fn final_message(mut self, message: impl Into<String>) -> Self {
         self.final_message = Some(message.into());
         self
@@ -145,10 +152,17 @@ impl Status {
         }
     }
 
+    /// Start the status and finish it at once as a success, which prints the final
+    /// message when one is set.
     pub fn finish(self) -> Result<()> {
         self.start().finish()
     }
 
+    /// Show the status while `operation` runs.
+    ///
+    /// Success removes it as finished and prints [`Self::final_message`]. An error
+    /// removes it as failed and prints [`Self::failure_message`], and that error wins
+    /// over a cleanup failure, which is attached to it as a related error.
     pub fn during<T>(self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         let mut status = self.start();
         match operation() {
@@ -181,16 +195,24 @@ impl Status {
     }
 }
 
+/// A started status, removed when finished or dropped.
+///
+/// Dropping the handle without calling `finish` counts as a failure.
 pub struct StatusRuntime {
     coordinator: StatusCoordinator,
     id: Option<u64>,
 }
 
 impl StatusRuntime {
+    /// Ask for a redraw after state shared with the status widget changed.
     pub fn mark_dirty(&self) -> Result<()> {
         self.coordinator.mark_dirty()
     }
 
+    /// Remove the status as a success.
+    ///
+    /// Reports a failure retained for this status, such as a widget that panicked or a
+    /// first frame that could not be drawn.
     pub fn finish(mut self) -> Result<()> {
         self.remove(true)
     }
