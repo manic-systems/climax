@@ -200,6 +200,10 @@ where
 
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let Some(previous_physical) = self.previous.take() else {
+            if self.cursor_visible == Some(false) {
+                self.restore_cursor()?;
+                self.writer.flush()?;
+            }
             return Ok(RenderStats::default());
         };
         let mut cursor = Cursor::default();
@@ -227,12 +231,7 @@ where
             )?;
             cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
         }
-        // restore visibility only if this renderer hid the cursor
-        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
-            && self.cursor_visible == Some(false)
-        {
-            self.update_cursor_visibility(true)?;
-        }
+        self.restore_cursor()?;
         self.writer.flush()?;
         self.force_full = false;
         Ok(stats)
@@ -248,6 +247,17 @@ where
             surface.fit_height(height);
         }
         surface
+    }
+
+    /// Show the cursor again if this renderer hid it under `FromSurface`.
+    pub fn restore_cursor(&mut self) -> io::Result<()> {
+        if matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            && self.cursor_visible == Some(false)
+        {
+            self.update_cursor_visibility(true)?;
+            self.writer.flush()?;
+        }
+        Ok(())
     }
 
     fn update_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
@@ -695,6 +705,14 @@ mod tests {
         logical.write("c", Style::default());
         let laid_out = layout_surface(logical, Some(20), LayoutMode::Wrap);
         assert_eq!(laid_out.plain_text(), "ab\nc");
+    }
+
+    #[test]
+    fn clear_without_a_retained_frame_still_restores_the_cursor() {
+        let mut renderer = Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.cursor_visible = Some(false);
+        renderer.clear().unwrap();
+        assert_eq!(renderer.into_inner(), b"\x1b[?25h");
     }
 
     #[test]
