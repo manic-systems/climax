@@ -16,8 +16,12 @@
 //!
 //! The `derive` feature provides `#[derive(climax::Parse)]` and
 //! `#[derive(climax::ValueEnum)]`, whose expansion refers to
-//! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
-//! for the same reason.
+//! `::climax::pound`. With `structured` as well, `#[climax::serde(Serialize)]`
+//! derives serde's traits rooted at `::climax::serde` for the same reason.
+//!
+//! `main` and [`main_with`] report errors and choose the process exit code,
+//! and [`ResultExt`] adds `.context("reading the count")` to foreign
+//! `Result`s. The exit-code mapping is listed below.
 
 #![cfg_attr(
     all(
@@ -47,8 +51,10 @@ pub mod terminal;
 #[cfg(feature = "render")]
 pub mod status;
 
+#[cfg(feature = "structured")] pub use ::serde;
 pub use app::{
     Context,
+    main_with,
     run_with,
 };
 #[cfg(feature = "parse")]
@@ -89,7 +95,8 @@ pub use bang::{
     TextConfig,
     TextPrompt,
 };
-#[cfg(feature = "complete")] pub use caress;
+#[cfg(all(feature = "derive", feature = "structured"))]
+pub use climax_derive::serde;
 #[cfg(feature = "derive")]
 pub use climax_derive::{
     Parse,
@@ -99,7 +106,7 @@ pub use error::{
     Error,
     ErrorKind,
     Result,
+    ResultExt,
 };
 #[cfg(feature = "parse")] pub use pound;
 #[cfg(feature = "render")] pub use screw;
-#[cfg(feature = "structured")] pub use serde;

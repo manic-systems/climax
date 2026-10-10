@@ -174,23 +174,23 @@ impl Output {
     ///
     /// the projection is buffered until the handler succeeds
     ///
-    /// Serde derives reached through climax need `#[serde(crate =
-    /// "climax::serde")]`, because the derive otherwise expands to a path
-    /// in the `serde` crate, which an application depending on climax alone
-    /// does not have. Forgetting it gives an error that points at the
-    /// compiler and not at the missing attribute.
+    /// derive with `#[climax::serde(Serialize)]`, which must come before any
+    /// other derive sharing serde's helper attributes
     ///
-    /// ```text
-    /// error[E0658]: use of unstable library feature `rustc_private`: this crate is being loaded from the sysroot, an unstable location; did you mean to load this crate from crates.io via `Cargo.toml` instead?
-    ///  --> src/main.rs:23:30
-    ///   |
-    /// 23 | #[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
-    ///   |                              ^^^^^^^^^
+    /// ```
+    /// use climax::prelude::*;
+    ///
+    /// # #[cfg(feature = "derive")]
+    /// #[climax::serde(Serialize)]
+    /// #[serde(rename_all = "kebab-case")]
+    /// struct Report {
+    ///     file_count: usize,
+    /// }
     /// ```
     ///
-    /// It is followed by an unsatisfied `serde::Serialize` bound on your type
-    /// and a note that there are multiple different versions of crate
-    /// `serde_core`.
+    /// without `derive`, write `#[derive(climax::serde::Serialize)]` with
+    /// `#[serde(crate = "climax::serde")]`, or rustc reports `E0658` about
+    /// `rustc_private`
     ///
     /// ```
     /// use climax::prelude::*;
@@ -216,11 +216,8 @@ impl Output {
     #[cfg(feature = "structured")]
     /// begin an immediate result stream
     ///
-    /// Serde derives reached through climax need `#[serde(crate =
-    /// "climax::serde")]`, because the derive otherwise expands to a path
-    /// in the `serde` crate. Without it rustc reports `E0658` about the
-    /// unstable `rustc_private` feature on the derive, and [`Self::result`]
-    /// shows the full error.
+    /// JSON mode writes one value per line. a stream cannot mix with a finite
+    /// result in the same invocation, and derives follow [`Self::result`]
     ///
     /// a write on a [`crate::Context::diagnostic`] handle behaves like a
     /// notice. any other write that must wait for a prompt on the calling
