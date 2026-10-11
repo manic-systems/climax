@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! shell completions for [`pound`] commands
+//! shell completions and man pages for [`pound`] commands
+//!
+//! # completions
 //!
 //! call [`handle`] first thing in `main`. a shell's completion script runs the
 //! program with `COMPLETE` set, and [`handle`] answers and exits before the
@@ -48,8 +50,13 @@
 //! - link the binary statically when completion latency matters, with
 //!   `RUSTFLAGS='-C target-feature=+crt-static'` or a musl target, or
 //!   `pkgsStatic` in nix. that took a full bash TAB from 0.9 ms to 0.55 ms.
+//!
+//! # man pages
+//!
+//! [`man::pages`] renders an mdoc page for the command and each subcommand.
 
 mod engine;
+pub mod man;
 mod shell;
 
 use std::{
