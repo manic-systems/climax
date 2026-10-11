@@ -29,7 +29,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `Option<T>` with `short` or `long`     | optional option                                          |
 /// | `Vec<T>` with `short` or `long`        | option that repeats, `--name a --name b`                 |
 /// | integer with `count`                   | `-vvv` or `--verbose --verbose` counted                  |
-/// | `Vec<T>` with `trailing`               | everything after `--`                                    |
+/// | `Vec<T>` with `trailing`               | everything after `--` or after its first value           |
 /// | `T` or `Option<T>` with `subcommand`   | the subcommand tree held by a [`Parse`] enum             |
 /// | `T` with `flatten`                     | another [`Parse`] struct's args, embedded at this level  |
 ///
@@ -162,7 +162,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `long`               | `--name`, taken from the field name with `_` as `-`. `long = "other"` picks the spelling       |
 /// | `short`              | `-n`, the field name's first letter. `short = 'x'` picks the letter                            |
 /// | `positional`         | a positional, which is already what a field with neither `short` nor `long` is                 |
-/// | `trailing`           | collect everything after `--` into a `Vec`. it must be the last positional                     |
+/// | `trailing`           | collect the rest of the line, flags too, from `--` or its first value. must be last positional |
 /// | `count`              | count repeats of a flag into an integer. it takes no `default` or `env`                        |
 /// | `alias = "a, b"`     | extra long names for a flag or option, comma separated                                         |
 /// | `subcommand`         | the field holds the command's subcommand tree. use `Option<T>` when one is not required        |

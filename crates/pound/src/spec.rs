@@ -39,7 +39,7 @@ pub enum Kind {
     Opt,
     /// bare value matched by position
     Positional,
-    /// everything after `--`, or the trailing variadic
+    /// the rest of the line, from `--` or its own first value on
     Trailing,
 }
 
