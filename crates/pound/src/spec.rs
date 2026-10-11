@@ -799,6 +799,16 @@ impl<'s> Command<'s> {
             .find(|a| a.answers_long(name))
     }
 
+    /// the arg `-c` reaches here, by the same precedence as [`Self::long`]
+    #[must_use]
+    pub fn short(&self, c: char) -> Option<&'static ArgSpec> {
+        let globals = self.globals.iter().rev().copied();
+        self.spec
+            .arguments()
+            .chain(globals)
+            .find(|a| a.answers_short(c))
+    }
+
     /// the visible positionals, in the order they fill
     pub fn positionals(&self) -> impl Iterator<Item = &'static ArgSpec> {
         self.spec
