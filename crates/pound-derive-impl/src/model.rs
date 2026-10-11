@@ -17,6 +17,7 @@ use quote::quote;
 use venial::{
     Attribute,
     EnumVariant,
+    Error,
     Fields,
     Item,
     NamedField,
@@ -79,12 +80,13 @@ pub enum Derive {
 }
 
 impl Derive {
-    pub fn new(item: &Item) -> Result<Self, String> {
+    pub fn new(item: &Item) -> Result<Self, Error> {
         match item {
             Item::Struct(s) => {
-                let fields = CommandFields::new(&s.fields)?;
-                let header = Header::new(&s.attributes, &s.name)?;
-                let command = Command::new(s.name.to_string(), fields, &header.required_groups)?;
+                let fields = CommandFields::new(&s.fields, &s.name)?;
+                let header = Header::new(&s.attributes)?;
+                let command =
+                    Command::new(&s.name, s.name.to_string(), fields, &header.required_groups)?;
 
                 Ok(Self::Struct {
                     ident: s.name.clone(),
@@ -94,9 +96,12 @@ impl Derive {
             },
             Item::Enum(e) => {
                 if e.variants.is_empty() {
-                    return Err("pound: a command enum needs at least one variant".into());
+                    return Err(Error::new_at_span(
+                        e.name.span(),
+                        "pound: a command enum needs at least one variant",
+                    ));
                 }
-                let header = Header::new(&e.attributes, &e.name)?;
+                let header = Header::new(&e.attributes)?;
                 let variants = e
                     .variants
                     .items()
@@ -108,7 +113,11 @@ impl Derive {
                     variants,
                 })
             },
-            _ => Err("pound: Parse can only derive on a struct or enum".into()),
+            _ => {
+                Err(Error::new(
+                    "pound: Parse can only derive on a struct or enum",
+                ))
+            },
         }
     }
 }
@@ -124,9 +133,9 @@ pub struct Header {
 }
 
 impl Header {
-    fn new(attributes: &[Attribute], owner: &Ident) -> Result<Self, String> {
+    fn new(attributes: &[Attribute]) -> Result<Self, Error> {
         let item = pound(attributes)?;
-        item.allow_only(ITEM_ATTRIBUTES, owner)?;
+        item.allow_only(ITEM_ATTRIBUTES)?;
 
         Ok(Self {
             name:            item.name,
@@ -155,12 +164,12 @@ pub enum VariantKind {
 }
 
 impl Variant {
-    fn new(owner: &Ident, variant: &EnumVariant) -> Result<Self, String> {
+    fn new(owner: &Ident, variant: &EnumVariant) -> Result<Self, Error> {
         let vattr = pound(&variant.attributes)?;
         let ident = variant.name.clone();
 
         if vattr.flatten {
-            vattr.allow_only(&["flatten"], &ident)?;
+            vattr.allow_only(&["flatten"])?;
             let ty = Self::flattened_ty(variant)?;
 
             return Ok(Self {
@@ -169,9 +178,16 @@ impl Variant {
             });
         }
 
-        let fields = CommandFields::new(&variant.fields)?;
-        vattr.allow_only(VARIANT_ATTRIBUTES, &ident)?;
-        let command = Command::new(format!("{owner}::{ident}"), fields, &vattr.required_groups)?;
+        let fields = CommandFields::new(&variant.fields, &ident)?;
+        vattr.allow_only(VARIANT_ATTRIBUTES)?;
+
+        let command = Command::new(
+            &ident,
+            format!("{owner}::{ident}"),
+            fields,
+            &vattr.required_groups,
+        )?;
+
         Ok(Self {
             kind: VariantKind::Command {
                 name:    vattr
@@ -187,14 +203,11 @@ impl Variant {
     }
 
     // the one tuple field of a `#[pound(flatten)]` enum variant
-    fn flattened_ty(variant: &EnumVariant) -> Result<TokenStream, String> {
-        let message = format!(
-            "pound: #[pound(flatten)] needs exactly one unattributed tuple field (`{}`)",
-            variant.name
-        );
+    fn flattened_ty(variant: &EnumVariant) -> Result<TokenStream, Error> {
+        let message = "pound: #[pound(flatten)] needs exactly one unattributed tuple field";
 
         let Fields::Tuple(tuple) = &variant.fields else {
-            return Err(message);
+            return Err(Error::new_at_span(variant.name.span(), message));
         };
 
         let mut fields = tuple.fields.items();
@@ -203,7 +216,7 @@ impl Variant {
             (Some(field), None) if field.attributes.is_empty() => {
                 Ok(field.ty.tokens.iter().cloned().collect())
             },
-            _ => Err(message),
+            _ => Err(Error::new_at_span(variant.name.span(), message)),
         }
     }
 }
@@ -231,17 +244,17 @@ pub struct Group {
 
 impl Command {
     fn new(
+        name: &Ident,
         owner: String,
         fields: CommandFields,
         required_groups: &[String],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, Error> {
         let args = &fields.args;
 
         if let Some(arg) = args.iter().find(|arg| arg.global && !arg.kind.is_named()) {
-            return Err(format!(
-                "pound: #[pound(global)] needs a flag or option (short/long), not a positional \
-                 (`{}`)",
-                arg.ident
+            return Err(Error::new_at_span(
+                arg.ident.span(),
+                "pound: #[pound(global)] needs a flag or option (short/long), not a positional",
             ));
         }
 
@@ -261,9 +274,9 @@ impl Command {
         if fields.flattened.is_empty()
             && let Some(group) = groups.iter().find(|group| group.required && !group.direct)
         {
-            return Err(format!(
-                "pound: required group `{}` has no members",
-                group.name
+            return Err(Error::new_at_span(
+                name.span(),
+                format!("pound: required group `{}` has no members", group.name),
             ));
         }
 
@@ -272,18 +285,21 @@ impl Command {
             .enumerate()
             .map(|(i, arg)| (arg.ident.to_string(), i))
             .collect::<HashMap<_, _>>();
-        let lookup = |key: &str, name: &String| {
-            index
-                .get(name)
-                .copied()
-                .ok_or_else(|| format!("pound: {key}: no field named `{name}`"))
+
+        let lookup = |key: &str, field: &str, by: &Arg| {
+            index.get(field).copied().ok_or_else(|| {
+                Error::new_at_span(
+                    by.ident.span(),
+                    format!("pound: {key}: no field named `{field}`"),
+                )
+            })
         };
 
         let mut conflicts = Vec::new();
 
         for (i, arg) in args.iter().enumerate() {
-            for name in &arg.conflicts_with {
-                let j = lookup("conflicts_with", name)?;
+            for field in &arg.conflicts_with {
+                let j = lookup("conflicts_with", field, arg)?;
                 let pair = (i.min(j), i.max(j));
 
                 if i != j && !conflicts.contains(&pair) {
@@ -297,8 +313,9 @@ impl Command {
         let mut requires = Vec::new();
 
         for (i, arg) in args.iter().enumerate() {
-            for name in &arg.requires {
-                let j = lookup("requires", name)?;
+            for field in &arg.requires {
+                let j = lookup("requires", field, arg)?;
+
                 if i != j && !requires.contains(&(i, j)) {
                     requires.push((i, j));
                 }
@@ -343,7 +360,7 @@ pub struct Sub {
 }
 
 impl CommandFields {
-    fn new(fields: &Fields) -> Result<Self, String> {
+    fn new(fields: &Fields, owner: &Ident) -> Result<Self, Error> {
         let mut out = Self {
             args:      Vec::new(),
             flattened: Vec::new(),
@@ -354,7 +371,10 @@ impl CommandFields {
         let named = match fields {
             Fields::Unit => return Ok(out),
             Fields::Tuple(_) => {
-                return Err("pound: tuple fields are not supported, use named fields".into());
+                return Err(Error::new_at_span(
+                    owner.span(),
+                    "pound: tuple fields are not supported, use named fields",
+                ));
             },
             Fields::Named(named) => named,
         };
@@ -364,17 +384,23 @@ impl CommandFields {
             let ty = FieldType::new(&field.ty);
 
             if attributes.subcommand {
-                attributes.allow_only(&["subcommand"], &field.name)?;
+                attributes.allow_only(&["subcommand"])?;
 
                 if out.sub.is_some() {
-                    return Err("pound: only one #[pound(subcommand)] field is allowed".into());
+                    return Err(Error::new_at_span(
+                        field.name.span(),
+                        "pound: only one #[pound(subcommand)] field is allowed",
+                    ));
                 }
 
                 let optional = match ty.shape {
                     Shape::One => false,
                     Shape::Opt => true,
                     Shape::Bool | Shape::Many => {
-                        return Err("pound: #[pound(subcommand)] must be `T` or `Option<T>`".into());
+                        return Err(Error::new_at_span(
+                            field.name.span(),
+                            "pound: #[pound(subcommand)] must be `T` or `Option<T>`",
+                        ));
                     },
                 };
 
@@ -384,12 +410,12 @@ impl CommandFields {
                     optional,
                 });
             } else if attributes.flatten {
-                attributes.allow_only(&["flatten"], &field.name)?;
+                attributes.allow_only(&["flatten"])?;
 
                 if ty.shape != Shape::One {
-                    return Err(format!(
-                        "pound: #[pound(flatten)] needs a plain `Parse` type (`{}`)",
-                        field.name
+                    return Err(Error::new_at_span(
+                        field.name.span(),
+                        "pound: #[pound(flatten)] needs a plain `Parse` type",
                     ));
                 }
 
@@ -400,7 +426,7 @@ impl CommandFields {
                     ty:    ty.inner,
                 });
             } else {
-                attributes.allow_only(FIELD_ATTRIBUTES, &field.name)?;
+                attributes.allow_only(FIELD_ATTRIBUTES)?;
                 out.order.push(Slot::Direct(out.args.len()));
                 out.args.push(Arg::new(field, ty, attributes)?);
             }
@@ -503,37 +529,42 @@ pub enum ArgKind {
 }
 
 impl ArgKind {
-    fn new(a: &Pound, shape: Shape, ident: &Ident) -> Result<Self, String> {
+    fn new(a: &Pound, shape: Shape, ident: &Ident) -> Result<Self, Error> {
         let shape_count =
             usize::from(a.positional) + usize::from(a.trailing) + usize::from(a.count);
 
         if shape_count > 1 {
-            return Err(format!(
-                "pound: positional, trailing, and count are mutually exclusive (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: positional, trailing, and count are mutually exclusive",
             ));
         }
 
         if shape == Shape::Bool && shape_count > 0 {
-            return Err(format!(
-                "pound: bool fields cannot be positional, trailing, or counted (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: bool fields cannot be positional, trailing, or counted",
             ));
         }
 
         if (a.positional || a.trailing) && a.is_named() {
-            return Err(format!(
-                "pound: positional fields cannot have short or long names (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: positional fields cannot have short or long names",
             ));
         }
 
         if a.trailing && shape != Shape::Many {
-            return Err(format!(
-                "pound: #[pound(trailing)] needs a `Vec` field (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(trailing)] needs a `Vec` field",
             ));
         }
 
         if a.count && shape != Shape::One {
-            return Err(format!(
-                "pound: #[pound(count)] needs a scalar field (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(count)] needs a scalar field",
             ));
         }
 
@@ -550,29 +581,35 @@ impl ArgKind {
         };
 
         if !kind.is_named() && !a.aliases.is_empty() {
-            return Err(format!("pound: aliases need a flag or option (`{ident}`)"));
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: aliases need a flag or option",
+            ));
         }
 
         if kind == Self::Count && (a.default.is_some() || a.env.is_some()) {
-            return Err(format!(
-                "pound: counted fields cannot use a fallback (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: counted fields cannot use a fallback",
             ));
         }
 
         Ok(kind)
     }
 
-    fn check(self, a: &Pound, ident: &Ident) -> Result<(), String> {
+    fn check(self, a: &Pound, ident: &Ident) -> Result<(), Error> {
         if a.heading.is_some() && !self.is_named() {
-            return Err(format!(
+            return Err(Error::new_at_span(
+                ident.span(),
                 "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
-                 Arguments (`{ident}`)"
+                 Arguments",
             ));
         }
 
         if a.default_missing.is_some() && self != Self::Opt {
-            return Err(format!(
-                "pound: #[pound(default_missing)] needs a value option (short/long) (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(default_missing)] needs a value option (short/long)",
             ));
         }
 
@@ -587,8 +624,9 @@ impl ArgKind {
             .into_iter()
             .find_map(|(name, present)| present.then_some(name))
         {
-            return Err(format!(
-                "pound: #[pound({name})] needs a value field (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                format!("pound: #[pound({name})] needs a value field"),
             ));
         }
 
@@ -620,12 +658,13 @@ pub enum Conversion {
 }
 
 impl Conversion {
-    fn new(a: &Pound, ident: &Ident) -> Result<Self, String> {
+    fn new(a: &Pound, ident: &Ident) -> Result<Self, Error> {
         if let Some(parse) = &a.parse {
             if a.min.is_some() || a.max.is_some() || a.max_len.is_some() {
-                return Err(format!(
+                return Err(Error::new_at_span(
+                    ident.span(),
                     "pound: #[pound(parse = \"...\")] cannot be combined with min, max, or \
-                     max_len (`{ident}`); use validate instead"
+                     max_len, use validate instead",
                 ));
             }
 
@@ -643,8 +682,9 @@ impl Conversion {
                     .max_len
                     .as_deref()
                     .map(|text| {
-                        TokenStream::from_str(text)
-                            .map_err(|_| "pound: invalid max_len bound".to_owned())
+                        TokenStream::from_str(text).map_err(|_| {
+                            Error::new_at_span(ident.span(), "pound: invalid max_len bound")
+                        })
                     })
                     .transpose()?,
                 validate: a.validate.clone(),
@@ -692,7 +732,7 @@ pub struct Arg {
 }
 
 impl Arg {
-    fn new(field: &NamedField, ty: FieldType, a: Pound) -> Result<Self, String> {
+    fn new(field: &NamedField, ty: FieldType, a: Pound) -> Result<Self, Error> {
         let ident = &field.name;
         let fname = ident.to_string();
         let kind = ArgKind::new(&a, ty.shape, ident)?;
@@ -773,18 +813,22 @@ impl Arg {
         a: &Pound,
         multi: bool,
         ident: &Ident,
-    ) -> Result<(Option<usize>, Option<usize>), String> {
+    ) -> Result<(Option<usize>, Option<usize>), Error> {
         let read = |name: &str, raw: Option<&String>| {
             match raw {
                 None => Ok(None),
                 Some(_) if !multi => {
-                    Err(format!(
-                        "pound: #[pound({name})] needs a `Vec` field (`{ident}`)"
+                    Err(Error::new_at_span(
+                        ident.span(),
+                        format!("pound: #[pound({name})] needs a `Vec` field"),
                     ))
                 },
                 Some(text) => {
                     text.parse::<usize>().map(Some).map_err(|_| {
-                        format!("pound: #[pound({name} = {text})] is not a count (`{ident}`)")
+                        Error::new_at_span(
+                            ident.span(),
+                            format!("pound: #[pound({name} = {text})] is not a count"),
+                        )
                     })
                 },
             }
@@ -796,8 +840,9 @@ impl Arg {
         if let (Some(min), Some(max)) = (min, max)
             && min > max
         {
-            return Err(format!(
-                "pound: min_values {min} exceeds max_values {max} (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                format!("pound: min_values {min} exceeds max_values {max}"),
             ));
         }
 
@@ -809,28 +854,31 @@ impl Arg {
         kind: ArgKind,
         long: Option<&str>,
         ident: &Ident,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, Error> {
         let Some(spelling) = &a.negate else {
             return Ok(None);
         };
 
         if kind != ArgKind::Flag {
-            return Err(format!(
-                "pound: #[pound(negate)] needs a bool field (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(negate)] needs a bool field",
             ));
         }
 
         let Some(name) = long else {
-            return Err(format!(
-                "pound: #[pound(negate)] needs a long name (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(negate)] needs a long name",
             ));
         };
 
         let spelling = spelling.clone().unwrap_or_else(|| format!("no-{name}"));
 
         if spelling == name || a.aliases.contains(&spelling) {
-            return Err(format!(
-                "pound: negation `{spelling}` is also a positive spelling (`{ident}`)"
+            return Err(Error::new_at_span(
+                ident.span(),
+                format!("pound: negation `{spelling}` is also a positive spelling"),
             ));
         }
 
@@ -845,31 +893,37 @@ pub struct ValueEnum {
 }
 
 impl ValueEnum {
-    pub fn new(item: &Item) -> Result<Self, String> {
+    pub fn new(item: &Item) -> Result<Self, Error> {
         let Item::Enum(e) = item else {
-            return Err("pound: ValueEnum can only derive on an enum".into());
+            return Err(Error::new("pound: ValueEnum can only derive on an enum"));
         };
 
-        pound(&e.attributes)?.allow_only(&[], &e.name)?;
+        pound(&e.attributes)?.allow_only(&[])?;
         let mut variants = Vec::<(Ident, String)>::new();
 
         for variant in e.variants.items() {
             if !matches!(variant.fields, Fields::Unit) {
-                return Err("pound: ValueEnum needs unit variants only".into());
+                return Err(Error::new_at_span(
+                    variant.name.span(),
+                    "pound: ValueEnum needs unit variants only",
+                ));
             }
 
             let vname = &variant.name;
             let vattr = pound(&variant.attributes)?;
-            vattr.allow_only(VALUE_VARIANT_ATTRIBUTES, vname)?;
+            vattr.allow_only(VALUE_VARIANT_ATTRIBUTES)?;
 
             let label = vattr
                 .name
                 .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
 
             if let Some((first, _)) = variants.iter().find(|(_, other)| *other == label) {
-                return Err(format!(
-                    "pound: ValueEnum variants `{first}` and `{vname}` both spell `{label}`, so \
-                     `{vname}` could never be parsed"
+                return Err(Error::new_at_span(
+                    vname.span(),
+                    format!(
+                        "pound: ValueEnum variants `{first}` and `{vname}` both spell `{label}`, \
+                         so `{vname}` could never be parsed"
+                    ),
                 ));
             }
 

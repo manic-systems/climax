@@ -2,13 +2,12 @@
 
 //! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
-use std::{
-    fmt::Display,
-    str::FromStr,
-};
+use std::str::FromStr;
 
 use proc_macro2::{
     Delimiter,
+    Ident,
+    Span,
     TokenStream,
     TokenTree,
 };
@@ -16,6 +15,7 @@ use quote::quote;
 use venial::{
     Attribute,
     AttributeValue,
+    Error,
 };
 
 /// a `&'static str` attribute value, written as a literal or as a constant
@@ -40,7 +40,7 @@ impl Text {
 #[allow(clippy::option_option, clippy::struct_excessive_bools)]
 #[derive(Default)]
 pub struct Pound {
-    keys:                Vec<String>,
+    keys:                Vec<Ident>,
     /// `None` absent, `Some(None)` bare `short`, `Some(Some(c))` `short = 'c'`
     pub short:           Option<Option<char>>,
     /// `None` absent, `Some(None)` bare `long`, `Some(Some(s))` `long = "s"`
@@ -103,13 +103,16 @@ impl Pound {
         self.short.is_some() || self.long.is_some()
     }
 
-    pub fn allow_only(&self, allowed: &[&str], owner: &impl Display) -> Result<(), String> {
+    pub fn allow_only(&self, allowed: &[&str]) -> Result<(), Error> {
         if let Some(key) = self
             .keys
             .iter()
-            .find(|key| !allowed.contains(&key.as_str()))
+            .find(|key| !allowed.contains(&key.to_string().as_str()))
         {
-            return Err(format!("pound: `{key}` is not valid here (`{owner}`)"));
+            return Err(Error::new_at_span(
+                key.span(),
+                format!("pound: `{key}` is not valid here"),
+            ));
         }
 
         Ok(())
@@ -117,42 +120,47 @@ impl Pound {
 
     /// apply one `key` or `key = value` meta
     #[rustfmt::skip]
-    fn set(&mut self, key: &str, value: Option<String>, seg: &[TokenTree]) -> Result<(), String> {
+    fn set(&mut self, ident: &Ident, value: Option<String>, seg: &[TokenTree]) -> Result<(), Error> {
+        let (name, span) = (ident.to_string(), ident.span());
+        let key = name.as_str();
+
         match key {
-            "short" => self.short = Some(value.as_deref().map(single_char).transpose()?),
+            "short" => self.short = Some(value.as_deref().map(|v| single_char(v, span)).transpose()?),
             "negate" => {
                 self.negate = Some(value.map(|v| v.trim_start_matches('-').to_owned()));
             },
             "long"            => self.long            = Some(value),
             "version"         => self.version         = expr(seg),
-            "positional"      => self.positional      = bare(key, value.is_some())?,
-            "trailing"        => self.trailing        = bare(key, value.is_some())?,
-            "count"           => self.count           = bare(key, value.is_some())?,
-            "subcommand"      => self.subcommand      = bare(key, value.is_some())?,
-            "flatten"         => self.flatten         = bare(key, value.is_some())?,
-            "hidden"          => self.hidden          = bare(key, value.is_some())?,
-            "global"          => self.global          = bare(key, value.is_some())?,
-            "group"           => self.group           = Some(needed(key, value)?),
-            "default"         => self.default         = Some(text(key, seg)?),
-            "default_missing" => self.default_missing = Some(needed(key, value)?),
-            "env"             => self.env             = Some(needed(key, value)?),
-            "value_name"      => self.value_name      = Some(needed(key, value)?),
-            "help"            => self.help            = Some(needed(key, value)?),
-            "long_help"       => self.long_help       = Some(needed(key, value)?),
-            "heading"         => self.heading         = Some(needed(key, value)?),
-            "name"            => self.name            = Some(needed(key, value)?),
-            "min"             => self.min             = Some(needed(key, value)?),
-            "max"             => self.max             = Some(needed(key, value)?),
-            "max_len"         => self.max_len         = Some(needed(key, value)?),
-            "min_values"      => self.min_values      = Some(needed(key, value)?),
-            "max_values"      => self.max_values      = Some(needed(key, value)?),
-            "parse"           => self.parse           = Some(callable(key, seg)?),
-            "validate"        => self.validate        = Some(callable(key, seg)?),
-            "required_group"  => self.required_groups.push(needed(key, value)?),
-            "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, value)?)),
-            "requires"        => self.requires.extend(csv(&needed(key, value)?)),
-            "alias"           => self.aliases.extend(csv(&needed(key, value)?)),
-            _                 => return Err(format!("pound: unknown attribute `{key}`")),
+            "positional"      => self.positional      = bare(key, span, value.is_some())?,
+            "trailing"        => self.trailing        = bare(key, span, value.is_some())?,
+            "count"           => self.count           = bare(key, span, value.is_some())?,
+            "subcommand"      => self.subcommand      = bare(key, span, value.is_some())?,
+            "flatten"         => self.flatten         = bare(key, span, value.is_some())?,
+            "hidden"          => self.hidden          = bare(key, span, value.is_some())?,
+            "global"          => self.global          = bare(key, span, value.is_some())?,
+            "group"           => self.group           = Some(needed(key, span, value)?),
+            "default"         => self.default         = Some(text(key, span, seg)?),
+            "default_missing" => self.default_missing = Some(needed(key, span, value)?),
+            "env"             => self.env             = Some(needed(key, span, value)?),
+            "value_name"      => self.value_name      = Some(needed(key, span, value)?),
+            "help"            => self.help            = Some(needed(key, span, value)?),
+            "long_help"       => self.long_help       = Some(needed(key, span, value)?),
+            "heading"         => self.heading         = Some(needed(key, span, value)?),
+            "name"            => self.name            = Some(needed(key, span, value)?),
+            "min"             => self.min             = Some(needed(key, span, value)?),
+            "max"             => self.max             = Some(needed(key, span, value)?),
+            "max_len"         => self.max_len         = Some(needed(key, span, value)?),
+            "min_values"      => self.min_values      = Some(needed(key, span, value)?),
+            "max_values"      => self.max_values      = Some(needed(key, span, value)?),
+            "parse"           => self.parse           = Some(callable(key, span, seg)?),
+            "validate"        => self.validate        = Some(callable(key, span, seg)?),
+            "required_group"  => self.required_groups.push(needed(key, span, value)?),
+            "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, span, value)?)),
+            "requires"        => self.requires.extend(csv(&needed(key, span, value)?)),
+            "alias"           => self.aliases.extend(csv(&needed(key, span, value)?)),
+            _                 => {
+                return Err(Error::new_at_span(span, format!("pound: unknown attribute `{key}`")));
+            },
         }
 
         Ok(())
@@ -160,7 +168,7 @@ impl Pound {
 }
 
 /// collect `#[pound(...)]` options from a set of attributes
-pub fn pound(attrs: &[Attribute]) -> Result<Pound, String> {
+pub fn pound(attrs: &[Attribute]) -> Result<Pound, Error> {
     let mut out = Pound::default();
 
     for attr in attrs {
@@ -169,7 +177,10 @@ pub fn pound(attrs: &[Attribute]) -> Result<Pound, String> {
         }
 
         let AttributeValue::Group(_, tokens) = &attr.value else {
-            return Err("pound: attributes must use #[pound(...)]".to_owned());
+            return Err(Error::new_at_span(
+                attr.path[0].span(),
+                "pound: attributes must use #[pound(...)]",
+            ));
         };
 
         apply_metas(&mut out, tokens)?;
@@ -240,10 +251,13 @@ fn path_is(attr: &Attribute, name: &str) -> bool {
 }
 
 /// split the comma-separated metas inside `pound(...)` and apply each
-fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
+fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
     for seg in split_commas(tokens) {
         let Some(TokenTree::Ident(ident)) = seg.first() else {
-            return Err("pound: expected `key` or `key = value`".to_owned());
+            return Err(Error::new_at_span(
+                seg[0].span(),
+                "pound: expected `key` or `key = value`",
+            ));
         };
 
         let key = ident.to_string();
@@ -252,10 +266,16 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), String> {
             [_] => None,
             [_, TokenTree::Punct(p), value] if p.as_char() == '=' => Some(unquote(value)),
             _ if EXPR_KEYS.contains(&key.as_str()) && expr(&seg).is_some() => None,
-            _ => return Err(format!("pound: malformed `{key}` attribute")),
+            _ => {
+                return Err(Error::new_at_span(
+                    ident.span(),
+                    format!("pound: malformed `{key}` attribute"),
+                ));
+            },
         };
-        out.set(&key, value, &seg)?;
-        out.keys.push(key);
+
+        out.set(ident, value, &seg)?;
+        out.keys.push(ident.clone());
     }
 
     Ok(())
@@ -267,10 +287,12 @@ const EXPR_KEYS: &[&str] = &["version", "default", "parse", "validate"];
 /// a `default` is a literal, a bare word, or a braced constant expression of
 /// type `&str`. a lone `{ CONST }` loses its braces, which would trip
 /// `unused_braces` in the deriving crate
-fn text(key: &str, seg: &[TokenTree]) -> Result<Text, String> {
-    let tokens = expr(seg).ok_or_else(|| format!("pound: `{key}` needs a value"))?;
+fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
+    let tokens = expr(seg)
+        .ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))?;
+
     let [tok] = tokens.as_slice() else {
-        return Err(braces_hint(key));
+        return Err(Error::new_at_span(span, braces_hint(key)));
     };
 
     let tok = match tok {
@@ -278,7 +300,7 @@ fn text(key: &str, seg: &[TokenTree]) -> Result<Text, String> {
             let mut inner = g.stream().into_iter();
             match (inner.next(), inner.next()) {
                 (Some(only), None) => only,
-                _ => return Err(braces_hint(key)),
+                _ => return Err(Error::new_at_span(span, braces_hint(key))),
             }
         },
         other => other.clone(),
@@ -286,9 +308,12 @@ fn text(key: &str, seg: &[TokenTree]) -> Result<Text, String> {
 
     match &tok {
         TokenTree::Ident(word) if is_constant_name(&word.to_string()) => {
-            Err(format!(
-                "pound: `{key} = {word}` would be the text \"{word}\", write `{key} = {{ {word} \
-                 }}` for the constant or quote it for the text"
+            Err(Error::new_at_span(
+                span,
+                format!(
+                    "pound: `{key} = {word}` would be the text \"{word}\", write `{key} = {{ \
+                     {word} }}` for the constant or quote it for the text"
+                ),
             ))
         },
         TokenTree::Literal(_) | TokenTree::Ident(_) => Ok(Text::Lit(unquote(&tok))),
@@ -299,7 +324,7 @@ fn text(key: &str, seg: &[TokenTree]) -> Result<Text, String> {
                 .any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';'));
             Ok(Text::Expr(if has_statements { vec![tok] } else { inner }))
         },
-        _ => Err(braces_hint(key)),
+        _ => Err(Error::new_at_span(span, braces_hint(key))),
     }
 }
 
@@ -315,18 +340,24 @@ fn braces_hint(key: &str) -> String {
 }
 
 /// a string literal names a path, anything else is already the callable
-fn callable(key: &str, seg: &[TokenTree]) -> Result<TokenStream, String> {
-    let tokens = expr(seg).ok_or_else(|| format!("pound: `{key}` needs a value"))?;
+fn callable(key: &str, span: Span, seg: &[TokenTree]) -> Result<TokenStream, Error> {
+    let tokens = expr(seg)
+        .ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))?;
+
     let stream = match tokens.as_slice() {
         [tok] if is_quoted(tok) => {
-            TokenStream::from_str(&unquote(tok))
-                .map_err(|_| format!("pound: `{key}` is not a valid path"))?
+            TokenStream::from_str(&unquote(tok)).map_err(|_| {
+                Error::new_at_span(span, format!("pound: `{key}` is not a valid path"))
+            })?
         },
         _ => tokens.into_iter().collect(),
     };
 
     if stream.is_empty() {
-        return Err(format!("pound: `{key}` needs a value"));
+        return Err(Error::new_at_span(
+            span,
+            format!("pound: `{key}` needs a value"),
+        ));
     }
 
     Ok(stream)
@@ -345,24 +376,32 @@ fn is_quoted(tok: &TokenTree) -> bool {
     }
 }
 
-fn bare(key: &str, has_value: bool) -> Result<bool, String> {
+fn bare(key: &str, span: Span, has_value: bool) -> Result<bool, Error> {
     if has_value {
-        return Err(format!("pound: `{key}` does not take a value"));
+        return Err(Error::new_at_span(
+            span,
+            format!("pound: `{key}` does not take a value"),
+        ));
     }
 
     Ok(true)
 }
 
-fn needed(key: &str, value: Option<String>) -> Result<String, String> {
-    value.ok_or_else(|| format!("pound: `{key}` needs a value"))
+fn needed(key: &str, span: Span, value: Option<String>) -> Result<String, Error> {
+    value.ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))
 }
 
-fn single_char(value: &str) -> Result<char, String> {
+fn single_char(value: &str, span: Span) -> Result<char, Error> {
     let mut chars = value.chars();
 
     match (chars.next(), chars.next()) {
         (Some(short), None) => Ok(short),
-        _ => Err("pound: `short` needs one character".to_owned()),
+        _ => {
+            Err(Error::new_at_span(
+                span,
+                "pound: `short` needs one character",
+            ))
+        },
     }
 }
 
