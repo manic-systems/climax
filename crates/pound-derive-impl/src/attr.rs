@@ -87,6 +87,11 @@ pub struct Pound {
     /// field-level: custom parsed-value validation, a path or any callable
     /// expression
     pub validate:        Option<TokenStream>,
+    /// field-level: shell completion candidates, a path or any callable
+    /// expression coercing to `pound::complete::Completer`
+    pub complete:        Option<TokenStream>,
+    /// field-level: what the value names, overriding its type's hint
+    pub hint:            Option<ValueHint>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
     /// field-level: names of fields this one cannot be combined with
@@ -154,6 +159,8 @@ impl Pound {
             "max_values"      => self.max_values      = Some(needed(key, span, value)?),
             "parse"           => self.parse           = Some(callable(key, span, seg)?),
             "validate"        => self.validate        = Some(callable(key, span, seg)?),
+            "complete"        => self.complete        = Some(callable(key, span, seg)?),
+            "hint"            => self.hint            = Some(ValueHint::new(&needed(key, span, value)?, span)?),
             "required_group"  => self.required_groups.push(needed(key, span, value)?),
             "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, span, value)?)),
             "requires"        => self.requires.extend(csv(&needed(key, span, value)?)),
@@ -282,7 +289,7 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
 }
 
 /// keys whose value is read as tokens rather than as a single literal
-const EXPR_KEYS: &[&str] = &["version", "default", "parse", "validate"];
+const EXPR_KEYS: &[&str] = &["version", "default", "parse", "validate", "complete"];
 
 /// a `default` is a literal, a bare word, or a braced constant expression of
 /// type `&str`. a lone `{ CONST }` loses its braces, which would trip
@@ -385,6 +392,21 @@ fn bare(key: &str, span: Span, has_value: bool) -> Result<bool, Error> {
     }
 
     Ok(true)
+}
+
+/// a `hint`, what a value names for shell completion
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueHint {
+    Path,
+}
+
+impl ValueHint {
+    fn new(word: &str, span: Span) -> Result<Self, Error> {
+        match word {
+            "path" => Ok(Self::Path),
+            _ => Err(Error::new_at_span(span, "pound: `hint` takes `path`")),
+        }
+    }
 }
 
 fn needed(key: &str, span: Span, value: Option<String>) -> Result<String, Error> {

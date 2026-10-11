@@ -11,6 +11,7 @@
 use core::fmt;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+use crate::spec::Hint;
 
 /// a value that would not parse, plus context for the message. the parser wraps
 /// it into [`crate::ErrorKind::Value`] once it knows which arg it came from.
@@ -60,6 +61,10 @@ pub trait FromArg: Sized {
     /// being a const lets the `Parse` derive wire it into a spec at compile
     /// time.
     const POSSIBLE: Option<&'static [&'static str]> = None;
+
+    /// what the value names, so a shell completing it knows what to list.
+    /// being a const lets the `Parse` derive wire it into a spec.
+    const HINT: Hint = Hint::Unknown;
 
     /// attempt the conversion.
     fn from_arg(s: &str) -> Result<Self, ValueError>;
@@ -177,6 +182,10 @@ from_str! {
 // `PathBuf` lives in `std` (it wraps `OsString`), so its value impl is the one
 // scalar that cannot ride along in a `no_std` build.
 #[cfg(feature = "std")]
-from_str! {
-    std::path::PathBuf,
+impl FromArg for std::path::PathBuf {
+    const HINT: Hint = Hint::Path;
+
+    fn from_arg(s: &str) -> Result<Self, ValueError> {
+        Ok(Self::from(s))
+    }
 }

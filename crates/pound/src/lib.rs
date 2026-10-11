@@ -106,6 +106,7 @@ mod alloc_prelude {
 }
 
 #[doc(hidden)] pub mod checks;
+pub mod complete;
 mod error;
 mod help;
 mod parse;
@@ -128,6 +129,7 @@ pub use spec::{
     Command,
     CommandSpec,
     GroupSpec,
+    Hint,
     Kind,
     SubSpec,
 };

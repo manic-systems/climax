@@ -28,6 +28,7 @@ use alloc::vec::IntoIter;
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
     Error,
+    complete::Completer,
     help,
     value::const_eq,
 };
@@ -46,6 +47,17 @@ pub enum Kind {
     Positional,
     /// the rest of the line, from `--` or its own first value on
     Trailing,
+}
+
+/// what an arg's value names, so a shell completing it knows what to list
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Hint {
+    /// nothing a shell can list
+    #[default]
+    Unknown,
+    /// a file system path
+    Path,
 }
 
 /// one argument's full description
@@ -95,6 +107,10 @@ pub struct ArgSpec {
     pub hidden:          bool,
     /// also accepted by every subcommand below this command
     pub global:          bool,
+    /// lists candidate values for shell completion
+    pub complete:        Option<Completer>,
+    /// what the value names, for a shell with no candidates to offer
+    pub hint:            Hint,
 }
 
 impl ArgSpec {
@@ -122,6 +138,8 @@ impl ArgSpec {
             possible: None,
             hidden: false,
             global: false,
+            complete: None,
+            hint: Hint::Unknown,
         }
     }
 
@@ -243,6 +261,18 @@ impl ArgSpec {
     #[must_use]
     pub const fn global(mut self) -> Self {
         self.global = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn complete(mut self, complete: Completer) -> Self {
+        self.complete = Some(complete);
+        self
+    }
+
+    #[must_use]
+    pub const fn hint(mut self, hint: Hint) -> Self {
+        self.hint = hint;
         self
     }
 
