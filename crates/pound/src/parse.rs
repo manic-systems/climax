@@ -44,6 +44,16 @@ pub struct Matches<'a> {
     slots:     Vec<Slot<'a>>,
     flattened: Vec<Self>,
     sub:       Option<(usize, Box<Self>)>,
+    /// the deepest command this parse selected, for errors raised afterwards
+    selected:  Option<Invocation>,
+}
+
+/// where a selected command sits, enough to render its usage line on demand
+#[derive(Debug)]
+struct Invocation {
+    spec:    &'static CommandSpec,
+    path:    Vec<&'static str>,
+    globals: Vec<&'static ArgSpec>,
 }
 
 /// an arg this command parses, and where its slot lives
@@ -141,7 +151,24 @@ impl<'a> Matches<'a> {
                 .map(|inner| Self::new(inner))
                 .collect(),
             sub:       None,
+            selected:  None,
         }
+    }
+
+    /// tag `err` with the usage line and help spelling of the deepest command
+    /// selected, or of `root` when none was
+    pub(crate) fn locate(&self, root: &CommandSpec, err: Error) -> Error {
+        err.or_usage(|| {
+            match &self.selected {
+                Some(inv) => {
+                    (
+                        help::usage_line(inv.spec, &inv.path, &inv.globals),
+                        help_flag(inv.spec, &inv.globals),
+                    )
+                },
+                None => (help::usage_line(root, &[], &[]), help_flag(root, &[])),
+            }
+        })
     }
 
     /// matches for the flattened struct at `index`
@@ -421,7 +448,12 @@ fn walk_cmd<'a>(
             let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
             child_globals.extend(targets.iter().map(|t| t.arg).filter(|a| a.global));
             let child_path: Vec<&'static str> = path.iter().copied().chain([spec.name]).collect();
-            let sub_m = parse_cmd(target.command.spec, &child_path, it, &child_globals, hits)?;
+            let mut sub_m = parse_cmd(target.command.spec, &child_path, it, &child_globals, hits)?;
+            m.selected = sub_m.selected.take().or(Some(Invocation {
+                spec:    target.command.spec,
+                path:    child_path,
+                globals: child_globals,
+            }));
             target.store(&mut m, sub_m);
             break; // subcommand owns the rest
         } else {

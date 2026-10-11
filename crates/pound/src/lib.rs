@@ -113,10 +113,7 @@ pub trait Parse: Sized {
         I: IntoIterator<Item = &'a str>,
     {
         let matches = parse::parse_spec(Self::SPEC, args)?;
-        Self::from_matches(Self::SPEC, &matches).map_err(|mut e| {
-            e.help_flag = parse::help_flag(Self::SPEC, &[]);
-            e
-        })
+        Self::from_matches(Self::SPEC, &matches).map_err(|e| matches.locate(Self::SPEC, e))
     }
 
     /// parse `std::env::args()` minus the program name.
