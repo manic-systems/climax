@@ -215,7 +215,8 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// when the field is a `ValueEnum`, a `default` that is not one of its values
 /// fails the build. an `env` or `default` value on a `bool` turns the flag on
-/// for `1`, `true` or `yes`. `default_missing` needs an option and `negate`
+/// for `1`, `true` or `yes` and off for `0`, `false`, `no` or nothing, and any
+/// other word is an error. `default_missing` needs an option and `negate`
 /// needs a `bool` with a long name, and the negation may not equal the
 /// positive spelling or one of its aliases.
 ///

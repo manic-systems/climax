@@ -1235,7 +1235,7 @@ fn arg_expr(cx: &Ctx, p: &Plan) -> TokenStream2 {
 fn reader(cx: &Ctx, p: &Plan, i: usize, m: &Ident, spec: &Ident) -> TokenStream2 {
     let fname = &p.ident;
     let body = match p.kind {
-        ArgKind::Flag => quote! { #m.switch(#spec, #i) },
+        ArgKind::Flag => quote! { #m.switch(#spec, #i)? },
         ArgKind::Count => {
             let ty = &p.full_ty;
             quote! { #m.count(#i) as #ty }
