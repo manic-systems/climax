@@ -16,6 +16,7 @@ use crate::{
     Options,
     attr::{
         Text,
+        ValueHint,
         short_help,
         summary,
     },
@@ -614,7 +615,10 @@ impl Emitter {
             .is_some_and(Conversion::reads_from_arg)
         {
             let inner = &arg.ty.inner;
-            e = quote! { #e.possible_opt(<#inner as #root::FromArg>::POSSIBLE) };
+            e = quote! {
+                #e.possible_opt(<#inner as #root::FromArg>::POSSIBLE)
+                    .hint(<#inner as #root::FromArg>::HINT)
+            };
         }
 
         if arg.hidden {
@@ -623,6 +627,17 @@ impl Emitter {
 
         if arg.global {
             e = quote! { #e.global() };
+        }
+
+        if let Some(complete) = &arg.complete {
+            e = quote! { #e.complete(#complete) };
+        }
+
+        if let Some(hint) = arg.hint {
+            let hint = match hint {
+                ValueHint::Path => quote! { #root::Hint::Path },
+            };
+            e = quote! { #e.hint(#hint) };
         }
 
         if let Some(lh) = &arg.long_help {

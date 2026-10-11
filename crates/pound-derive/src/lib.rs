@@ -264,6 +264,8 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `max_len = "n"`         | the raw text may have at most `n` characters                                    |
 /// | `min_values = "n"`      | a `Vec` must receive at least `n` values, waived when a `default` or `env` fills it |
 /// | `max_values = "n"`      | a `Vec` may receive at most `n` values                                          |
+/// | `complete = F`          | list shell completion candidates with `F`, a `pound::complete::Completer`       |
+/// | `hint = path`           | complete the value as a file path, when its type does not say so itself         |
 ///
 /// `parse` and `validate` take a path or any callable expression, such as a
 /// closure or `str::parse::<NonZeroUsize>`. a string literal names a path.

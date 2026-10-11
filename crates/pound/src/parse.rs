@@ -6,9 +6,11 @@ use alloc::{
     borrow::Cow,
     vec::IntoIter,
 };
+use core::convert::Infallible;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
+    complete::Next,
     error::{
         Error,
         ErrorKind,
@@ -125,6 +127,27 @@ impl SubTarget {
     }
 }
 
+enum Halt {
+    Error(Error),
+    /// the words ran out where this arg wanted its value
+    NeedsValue(&'static ArgSpec),
+}
+
+impl Halt {
+    fn into_error(self) -> Error {
+        match self {
+            Self::Error(err) => err,
+            Self::NeedsValue(a) => ErrorKind::MissingValue(a.display_name()).into(),
+        }
+    }
+}
+
+impl From<ErrorKind> for Halt {
+    fn from(kind: ErrorKind) -> Self {
+        Self::Error(kind.into())
+    }
+}
+
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
     /// position in the descendant's inherited globals, which every ancestor's
@@ -155,6 +178,39 @@ impl<'a> Matches<'a> {
             Some(cmd) => cmd.locate(err),
             None => Command::root(root).locate(err),
         }
+    }
+
+    pub(crate) const fn selected(&self) -> Option<&Command<'static>> {
+        self.selected.as_ref()
+    }
+
+    /// searches the deepest selected command first
+    pub(crate) fn find_deepest(
+        &self,
+        spec: &CommandSpec,
+        reaches: &impl Fn(&ArgSpec) -> bool,
+    ) -> Option<(&'static ArgSpec, &Self, usize)> {
+        if let Some((i, sub_m)) = &self.sub
+            && let Some(found) = sub_m.find_deepest(spec.subs[*i].spec, reaches)
+        {
+            return Some(found);
+        }
+        let (selecting, idle) = spec
+            .flattened
+            .iter()
+            .zip(&self.flattened)
+            .partition::<Vec<_>, _>(|(_, inner_m)| selected_command(inner_m));
+        if let Some(found) = selecting
+            .into_iter()
+            .chain(idle)
+            .find_map(|(inner, inner_m)| inner_m.find_deepest(inner, reaches))
+        {
+            return Some(found);
+        }
+
+        let args: &'static [ArgSpec] = spec.args;
+        let index = args.iter().position(reaches)?;
+        Some((&args[index], self, index))
     }
 
     /// matches for the flattened struct at `index`
@@ -193,6 +249,10 @@ impl<'a> Matches<'a> {
     #[must_use]
     pub fn count(&self, i: usize) -> u32 {
         self.slots[i].count
+    }
+
+    pub(crate) fn negated(&self, i: usize) -> bool {
+        self.slots[i].negated
     }
 
     /// first raw command-line value, if any
@@ -346,111 +406,264 @@ pub(crate) fn parse_spec<'a>(
 ) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     let mut hits = Vec::new();
-    parse_cmd(&Command::root(spec), &mut it, &mut hits)
+    parse_cmd::<Strict>(&Command::root(spec), &mut it, &mut hits).map(|(matches, _)| matches)
+}
+
+/// parse `args` as the start of a command line, skipping whatever does not
+/// apply and checking no requirements, and say what the next word would be
+pub(crate) fn probe_spec<'a>(
+    spec: &CommandSpec,
+    args: impl IntoIterator<Item = &'a str>,
+) -> (Matches<'a>, Next) {
+    let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
+    let mut hits = Vec::new();
+    let Ok(walked) = parse_cmd::<Lenient>(&Command::root(spec), &mut it, &mut hits);
+    walked
+}
+
+/// how a walk treats what it cannot apply
+trait Mode {
+    type Error;
+
+    /// a token that could not be applied. an option still waiting on its value
+    /// when the words ran out goes in `awaiting`.
+    fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Self::Error>;
+
+    fn finish(cmd: &Command<'_>, m: &Matches<'_>) -> Result<(), Self::Error>;
+
+    fn locate(cmd: &Command<'_>, err: Self::Error) -> Self::Error;
+}
+
+enum Strict {}
+
+impl Mode for Strict {
+    type Error = Error;
+
+    fn halt(halt: Halt, _: &mut Option<&'static ArgSpec>) -> Result<(), Error> {
+        Err(halt.into_error())
+    }
+
+    fn finish(cmd: &Command<'_>, m: &Matches<'_>) -> Result<(), Error> {
+        Ok(finalise(cmd, m)?)
+    }
+
+    fn locate(cmd: &Command<'_>, err: Error) -> Error {
+        cmd.locate(err)
+    }
+}
+
+/// an unfinished line being completed, which skips what it cannot apply and
+/// so cannot fail
+enum Lenient {}
+
+impl Mode for Lenient {
+    type Error = Infallible;
+
+    fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Infallible> {
+        if let Halt::NeedsValue(arg) = halt {
+            *awaiting = Some(arg);
+        }
+        Ok(())
+    }
+
+    fn finish(_: &Command<'_>, _: &Matches<'_>) -> Result<(), Infallible> {
+        Ok(())
+    }
+
+    fn locate(_: &Command<'_>, err: Infallible) -> Infallible {
+        err
+    }
 }
 
 /// parse one command, tagging whatever went wrong with this command's usage
-/// line unless a nested command already claimed it
-fn parse_cmd<'a>(
+/// line unless a nested command already claimed it. also says what the word
+/// after the last one would be.
+fn parse_cmd<'a, M: Mode>(
     cmd: &Command<'_>,
     it: &mut IntoIter<&'a str>,
     hits: &mut Vec<GlobalHit<'a>>,
-) -> Result<Matches<'a>, Error> {
-    walk_cmd(cmd, it, hits).map_err(|e| cmd.locate(e))
+) -> Result<(Matches<'a>, Next), M::Error> {
+    walk_cmd::<M>(cmd, it, hits).map_err(|e| M::locate(cmd, e))
 }
 
-fn walk_cmd<'a>(
+enum Step {
+    Continue,
+    Dispatch(SubTarget),
+}
+
+struct Walk<'w, 'a> {
+    cmd:             &'w Command<'w>,
+    targets:         &'w [ArgTarget],
+    positionals:     Vec<&'w ArgTarget>,
+    cursor:          usize,
+    only_positional: bool,
+    m:               Matches<'a>,
+}
+
+fn walk_cmd<'a, M: Mode>(
     cmd: &Command<'_>,
     it: &mut IntoIter<&'a str>,
     hits: &mut Vec<GlobalHit<'a>>,
-) -> Result<Matches<'a>, Error> {
-    let (spec, globals) = (cmd.spec(), cmd.globals());
+) -> Result<(Matches<'a>, Next), M::Error> {
     let mut targets = Vec::new();
-    spec.visit(&mut Vec::new(), &mut |path, index, arg| {
+    cmd.spec().visit(&mut Vec::new(), &mut |path, index, arg| {
         targets.push(ArgTarget {
             path: path.to_vec(),
             index,
             arg,
         });
     });
-    let mut m = Matches::new(spec);
 
-    let positionals: Vec<&ArgTarget> = targets.iter().filter(|t| t.arg.is_positional()).collect();
-    let mut pos_cursor = 0_usize;
-    let mut only_positional = false;
+    let mut walk = Walk {
+        cmd,
+        targets: &targets,
+        positionals: targets.iter().filter(|t| t.arg.is_positional()).collect(),
+        cursor: 0,
+        only_positional: false,
+        m: Matches::new(cmd.spec()),
+    };
+    let mut awaiting = None;
 
-    let builtin = |ch| builtin_short(cmd, ch);
+    let next = loop {
+        let Some(tok) = it.next() else {
+            break walk.next(awaiting);
+        };
+        match walk.step(tok, it, hits) {
+            Ok(Step::Continue) => {},
+            Ok(Step::Dispatch(target)) => break walk.dispatch::<M>(target, it, hits)?,
+            Err(halt) => M::halt(halt, &mut awaiting)?,
+        }
+    };
 
-    while let Some(tok) = it.next() {
-        if only_positional {
-            positional(&mut m, &positionals, &mut pos_cursor, tok)?;
-            continue;
+    // must run before finalise so owned globals count toward required/group checks
+    apply_global_hits(&targets, cmd.globals().len(), &mut walk.m, hits);
+    M::finish(cmd, &walk.m)?;
+    Ok((walk.m, next))
+}
+
+impl<'a> Walk<'_, 'a> {
+    fn step(
+        &mut self,
+        tok: &'a str,
+        it: &mut IntoIter<&'a str>,
+        hits: &mut Vec<GlobalHit<'a>>,
+    ) -> Result<Step, Halt> {
+        if self.only_positional {
+            self.positional(tok)?;
+        } else if tok == "--" {
+            self.only_positional = true;
+        } else if let Some(long) = tok.strip_prefix("--") {
+            self.long(long, it, hits)?;
+        } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
+            self.short(tok, rest, it, hits)?;
+        } else if let Some(target) =
+            sub_dispatch(self.cmd.spec(), &self.positionals, self.cursor, tok)?
+        {
+            return Ok(Step::Dispatch(target));
+        } else {
+            self.positional(tok)?;
+        }
+        Ok(Step::Continue)
+    }
+
+    fn long(
+        &mut self,
+        long: &'a str,
+        it: &mut IntoIter<&'a str>,
+        hits: &mut Vec<GlobalHit<'a>>,
+    ) -> Result<(), Halt> {
+        let (name, inline) = match long.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (long, None),
+        };
+        if let Some(sig) = builtin_long(self.cmd, name) {
+            return Err(sig.into());
         }
 
-        if tok == "--" {
-            only_positional = true;
-        } else if let Some(long) = tok.strip_prefix("--") {
-            let (name, inline) = match long.split_once('=') {
-                Some((n, v)) => (n, Some(v)),
-                None => (long, None),
-            };
-            if let Some(sig) = builtin_long(cmd, name) {
-                return Err(sig.into());
-            }
-            if let Some(target) = targets
-                .iter()
-                .find(|t| t.arg.answers_long(name) && t.arg.negate != Some(name))
-            {
-                apply_named(&mut m, target, inline, it)?;
-            } else if let Some(target) = targets.iter().find(|t| t.arg.negate == Some(name)) {
-                apply_negation(target_slot_mut(&mut m, target), name, inline)?;
-            } else if let Some((index, g)) = find_global_long(globals, name) {
-                if g.negate != Some(name) {
-                    record_global(index, g, inline, it, hits)?;
-                } else if inline.is_some() {
-                    return Err(ErrorKind::UnexpectedValue(format!("--{name}")).into());
-                } else {
-                    hits.push(GlobalHit {
-                        index,
-                        value: None,
-                        negated: true,
-                    });
-                }
+        if let Some(target) = self
+            .targets
+            .iter()
+            .find(|t| t.arg.answers_long(name) && t.arg.negate != Some(name))
+        {
+            apply_named(&mut self.m, target, inline, it)?;
+        } else if let Some(target) = self.targets.iter().find(|t| t.arg.negate == Some(name)) {
+            apply_negation(target_slot_mut(&mut self.m, target), name, inline)?;
+        } else if let Some((index, g)) = find_global_long(self.cmd.globals(), name) {
+            if g.negate != Some(name) {
+                record_global(index, g, inline, it, hits)?;
+            } else if inline.is_some() {
+                return Err(ErrorKind::UnexpectedValue(format!("--{name}")).into());
             } else {
-                return Err(ErrorKind::Unknown {
-                    arg:     format!("--{name}"),
-                    closest: closest_long(cmd, name),
-                }
-                .into());
+                hits.push(GlobalHit {
+                    index,
+                    value: None,
+                    negated: true,
+                });
             }
-        } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
-            let first = rest.chars().next().unwrap_or('-');
-            let known = targets.iter().any(|t| t.arg.answers_short(first))
-                || builtin(first).is_some()
-                || find_global_short(globals, first).is_some();
-            if known {
-                shorts(&targets, &mut m, rest, it, globals, hits, builtin)?;
-            } else if first.is_ascii_digit() || first == '.' {
-                // a negative number is a value, not a flag
-                only_positional = positional(&mut m, &positionals, &mut pos_cursor, tok)?;
-            } else {
-                return Err(unknown(format!("-{first}")).into());
-            }
-        } else if let Some(target) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
-            let child = cmd.child(target.command);
-            let mut sub_m = parse_cmd(&child, it, hits)?;
-            m.selected = sub_m.selected.take().or(Some(child));
-            target.store(&mut m, sub_m);
-            break; // subcommand owns the rest
         } else {
-            only_positional = positional(&mut m, &positionals, &mut pos_cursor, tok)?;
+            return Err(ErrorKind::Unknown {
+                arg:     format!("--{name}"),
+                closest: closest_long(self.cmd, name),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    fn short(
+        &mut self,
+        tok: &'a str,
+        rest: &'a str,
+        it: &mut IntoIter<&'a str>,
+        hits: &mut Vec<GlobalHit<'a>>,
+    ) -> Result<(), Halt> {
+        let (cmd, targets) = (self.cmd, self.targets);
+        let builtin = |ch| builtin_short(cmd, ch);
+        let first = rest.chars().next().unwrap_or('-');
+        let known = targets.iter().any(|t| t.arg.answers_short(first))
+            || builtin(first).is_some()
+            || find_global_short(cmd.globals(), first).is_some();
+        if known {
+            shorts(targets, &mut self.m, rest, it, cmd.globals(), hits, builtin)
+        } else if first.is_ascii_digit() || first == '.' {
+            // a negative number is a value, not a flag
+            Ok(self.positional(tok)?)
+        } else {
+            Err(unknown(format!("-{first}")).into())
         }
     }
 
-    // must run before finalise so owned globals count toward required/group checks
-    apply_global_hits(&targets, globals.len(), &mut m, hits);
-    finalise(cmd, &m)?;
-    Ok(m)
+    fn dispatch<M: Mode>(
+        &mut self,
+        target: SubTarget,
+        it: &mut IntoIter<&'a str>,
+        hits: &mut Vec<GlobalHit<'a>>,
+    ) -> Result<Next, M::Error> {
+        let child = self.cmd.child(target.command);
+        let (mut sub_m, next) = parse_cmd::<M>(&child, it, hits)?;
+        self.m.selected = sub_m.selected.take().or(Some(child));
+        target.store(&mut self.m, sub_m);
+        Ok(next)
+    }
+
+    fn positional(&mut self, tok: &'a str) -> Result<(), ErrorKind> {
+        if positional(&mut self.m, &self.positionals, &mut self.cursor, tok)? {
+            self.only_positional = true;
+        }
+        Ok(())
+    }
+
+    fn next(&self, awaiting: Option<&'static ArgSpec>) -> Next {
+        if let Some(arg) = awaiting {
+            return Next::Value(arg);
+        }
+        Next::Word {
+            positional:  next_positional(&self.positionals, self.cursor).map(|t| t.arg),
+            subcommands: !self.only_positional
+                && sub_open(self.cmd.spec(), &self.positionals, self.cursor),
+            options:     !self.only_positional,
+        }
+    }
 }
 
 /// a bare token names a subcommand only once every required positional is
@@ -461,20 +674,13 @@ fn sub_dispatch(
     positionals: &[&ArgTarget],
     cursor: usize,
     tok: &str,
-) -> Result<Option<SubTarget>, Error> {
-    if !spec.has_subs() {
-        return Ok(None);
-    }
-    let next = positionals.get(cursor).map(|t| t.arg);
-    if next.is_some_and(|a| a.multi || a.kind == Kind::Trailing) {
-        return Ok(None);
-    }
-    if positionals.iter().skip(cursor).any(|t| t.arg.required) {
+) -> Result<Option<SubTarget>, ErrorKind> {
+    if !sub_open(spec, positionals, cursor) {
         return Ok(None);
     }
     match SubTarget::find(spec, tok) {
         Some(target) => Ok(Some(target)),
-        None if next.is_some() => Ok(None), // an open optional slot can still take it
+        None if cursor < positionals.len() => Ok(None), // an open optional slot can still take it
         None => {
             Err(ErrorKind::UnknownSubcommand {
                 name:    tok.to_owned(),
@@ -482,8 +688,28 @@ fn sub_dispatch(
                     spec.subcommands().filter(|s| !s.hidden).flat_map(sub_names),
                     tok,
                 ),
-            }
-            .into())
+            })
+        },
+    }
+}
+
+fn sub_open(spec: &CommandSpec, positionals: &[&ArgTarget], cursor: usize) -> bool {
+    let next = positionals.get(cursor).map(|t| t.arg);
+    spec.has_subs()
+        && !next.is_some_and(|a| a.multi || a.kind == Kind::Trailing)
+        && !positionals.iter().skip(cursor).any(|t| t.arg.required)
+}
+
+/// the positional a bare word at `cursor` fills, which past the last one is
+/// the variadic tail, if there is one
+fn next_positional<'t>(positionals: &[&'t ArgTarget], cursor: usize) -> Option<&'t ArgTarget> {
+    match positionals.get(cursor) {
+        Some(&target) => Some(target),
+        None => {
+            positionals
+                .last()
+                .copied()
+                .filter(|t| t.arg.multi || t.arg.kind == Kind::Trailing)
         },
     }
 }
@@ -494,20 +720,20 @@ fn apply_named<'a>(
     target: &ArgTarget,
     inline: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
-) -> Result<(), ErrorKind> {
+) -> Result<(), Halt> {
     let a = target.arg;
     let slot = target_slot_mut(m, target);
     match a.kind {
         Kind::Flag => {
             if inline.is_some() {
-                return Err(ErrorKind::UnexpectedValue(a.display_name()));
+                return Err(ErrorKind::UnexpectedValue(a.display_name()).into());
             }
             slot.count = 1;
             slot.negated = false;
         },
         Kind::Count => {
             if inline.is_some() {
-                return Err(ErrorKind::UnexpectedValue(a.display_name()));
+                return Err(ErrorKind::UnexpectedValue(a.display_name()).into());
             }
             slot.count += 1;
         },
@@ -518,7 +744,7 @@ fn apply_named<'a>(
             };
             push_value(a, slot, value);
         },
-        Kind::Positional | Kind::Trailing => return Err(unknown(a.display_name())),
+        Kind::Positional | Kind::Trailing => return Err(unknown(a.display_name()).into()),
     }
     Ok(())
 }
@@ -532,10 +758,10 @@ fn shorts<'a>(
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
     builtin: impl Fn(char) -> Option<ErrorKind>,
-) -> Result<(), ErrorKind> {
+) -> Result<(), Halt> {
     for (off, ch) in cluster.char_indices() {
         if let Some(sig) = builtin(ch) {
-            return Err(sig);
+            return Err(sig.into());
         }
         if let Some(target) = targets.iter().find(|t| t.arg.answers_short(ch)) {
             let a = target.arg;
@@ -552,7 +778,7 @@ fn shorts<'a>(
                     return Ok(()); // option swallowed the cluster tail
                 },
                 Kind::Positional | Kind::Trailing => {
-                    return Err(unknown(format!("-{ch}")));
+                    return Err(unknown(format!("-{ch}")).into());
                 },
             }
         } else if let Some((index, g)) = find_global_short(globals, ch) {
@@ -574,11 +800,11 @@ fn shorts<'a>(
                     return Ok(());
                 },
                 Kind::Positional | Kind::Trailing => {
-                    return Err(unknown(format!("-{ch}")));
+                    return Err(unknown(format!("-{ch}")).into());
                 },
             }
         } else {
-            return Err(unknown(format!("-{ch}")));
+            return Err(unknown(format!("-{ch}")).into());
         }
     }
     Ok(())
@@ -590,8 +816,8 @@ fn cluster_value<'a>(
     off: usize,
     ch: char,
     it: &mut IntoIter<&'a str>,
-    a: &ArgSpec,
-) -> Result<&'a str, ErrorKind> {
+    a: &'static ArgSpec,
+) -> Result<&'a str, Halt> {
     let rest = &cluster[off + ch.len_utf8()..];
     if rest.is_empty() {
         detached_value(a, it)
@@ -602,12 +828,11 @@ fn cluster_value<'a>(
 
 /// the value for an option written without an attached one. an option that
 /// declares `default_missing` takes that instead of eating the next token.
-fn detached_value<'a>(a: &ArgSpec, it: &mut IntoIter<&'a str>) -> Result<&'a str, ErrorKind> {
+fn detached_value<'a>(a: &'static ArgSpec, it: &mut IntoIter<&'a str>) -> Result<&'a str, Halt> {
     if let Some(missing) = a.default_missing {
         return Ok(missing);
     }
-    it.next()
-        .ok_or_else(|| ErrorKind::MissingValue(a.display_name()))
+    it.next().ok_or(Halt::NeedsValue(a))
 }
 
 fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
@@ -653,11 +878,11 @@ fn record_global<'a>(
     inline: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
     hits: &mut Vec<GlobalHit<'a>>,
-) -> Result<(), ErrorKind> {
+) -> Result<(), Halt> {
     match g.kind {
         Kind::Flag | Kind::Count => {
             if inline.is_some() {
-                return Err(ErrorKind::UnexpectedValue(g.display_name()));
+                return Err(ErrorKind::UnexpectedValue(g.display_name()).into());
             }
             hits.push(GlobalHit {
                 index,
@@ -676,7 +901,7 @@ fn record_global<'a>(
                 negated: false,
             });
         },
-        Kind::Positional | Kind::Trailing => return Err(unknown(g.display_name())),
+        Kind::Positional | Kind::Trailing => return Err(unknown(g.display_name()).into()),
     }
     Ok(())
 }
@@ -724,16 +949,7 @@ fn positional<'a>(
     cursor: &mut usize,
     tok: &'a str,
 ) -> Result<bool, ErrorKind> {
-    let target = if *cursor < positionals.len() {
-        positionals[*cursor]
-    } else if let Some(&last) = positionals.last() {
-        let a = last.arg;
-        if a.multi || a.kind == Kind::Trailing {
-            last // overflow lands in the variadic tail
-        } else {
-            return Err(ErrorKind::UnexpectedPositional(tok.to_owned()));
-        }
-    } else {
+    let Some(target) = next_positional(positionals, *cursor) else {
         return Err(ErrorKind::UnexpectedPositional(tok.to_owned()));
     };
 

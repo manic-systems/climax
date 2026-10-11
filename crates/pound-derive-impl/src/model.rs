@@ -27,6 +27,7 @@ use venial::{
 use crate::attr::{
     Pound,
     Text,
+    ValueHint,
     doc,
     pound,
     short_help,
@@ -60,6 +61,8 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "max_values",
     "parse",
     "validate",
+    "complete",
+    "hint",
     "conflicts_with",
     "requires",
     "alias",
@@ -620,6 +623,8 @@ impl ArgKind {
                 ("max_len", a.max_len.is_some()),
                 ("parse", a.parse.is_some()),
                 ("validate", a.validate.is_some()),
+                ("complete", a.complete.is_some()),
+                ("hint", a.hint.is_some()),
             ]
             .into_iter()
             .find_map(|(name, present)| present.then_some(name))
@@ -727,6 +732,8 @@ pub struct Arg {
     pub requires:        Vec<String>,
     pub hidden:          bool,
     pub global:          bool,
+    pub complete:        Option<TokenStream>,
+    pub hint:            Option<ValueHint>,
     /// `None` for the kinds that take no value
     pub conversion:      Option<Conversion>,
 }
@@ -804,6 +811,8 @@ impl Arg {
             requires: a.requires,
             hidden: a.hidden,
             global: a.global,
+            complete: a.complete,
+            hint: a.hint,
             conversion,
         })
     }
