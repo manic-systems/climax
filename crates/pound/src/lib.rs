@@ -163,15 +163,14 @@ pub trait Parse: Sized {
         parse_as(Self::SPEC, args)
     }
 
-    /// parse `std::env::args()`, naming the program after its file when the
+    /// parse [`std::env::args_os`], naming the program after its file when the
     /// spec asks for [`CommandSpec::invoked_name`].
     #[cfg(feature = "std")]
     fn try_parse() -> Result<Self, Error> {
         static INVOKED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
-        let mut argv = std::env::args();
+        let mut argv = std::env::args_os();
         let program = argv.next();
-        let args = argv.collect::<Vec<_>>();
         let invoked = INVOKED.get_or_init(|| {
             let path = std::path::Path::new(program.as_deref()?);
             Some(path.file_name()?.to_str()?.to_owned())
@@ -185,6 +184,20 @@ pub trait Parse: Sized {
             },
             _ => *Self::SPEC,
         };
+
+        let args = argv
+            .map(|arg| {
+                arg.into_string().map_err(|bad| {
+                    let kind = ErrorKind::InvalidUtf8(bad.to_string_lossy().into_owned());
+                    Error::from(kind).or_usage(|| {
+                        (
+                            help::usage_line(&spec, &[], &[]),
+                            parse::help_flag(&spec, &[]),
+                        )
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         parse_as(&spec, args.iter().map(String::as_str))
     }
 
@@ -230,10 +243,11 @@ fn parse_as<'a, T: Parse>(
 /// for a `#![no_std]` program that owns its entry point: pairs with
 /// [`Parse::try_parse_from`] once you `skip(1)` the program name.
 ///
-/// the yielded `&str`s borrow directly from `argv` — no allocation — and any
-/// non-UTF-8 argument is skipped. pound cannot *source* argv portably (that is
-/// the OS boundary `std` exists to cross), but it can bridge the pointers you
-/// already hold.
+/// the yielded `&str`s borrow directly from `argv` — no allocation. a
+/// non-UTF-8 argument is an [`ErrorKind::InvalidUtf8`] rather than a gap that
+/// would shift every positional after it. pound cannot *source* argv portably
+/// (that is the OS boundary `std` exists to cross), but it can bridge the
+/// pointers you already hold.
 ///
 /// ```no_run
 /// use core::ffi::{
@@ -242,11 +256,12 @@ fn parse_as<'a, T: Parse>(
 /// };
 ///
 /// // call this from your `#![no_main]` libc entry point, forwarding its args:
-/// fn run(argc: c_int, argv: *const *const c_char) {
+/// fn run(argc: c_int, argv: *const *const c_char) -> Result<(), pound::Error> {
 ///     // SAFETY: argc/argv are the unmodified parameters libc passed `main`.
-///     let args = unsafe { pound::args_from_raw(argc, argv) }.skip(1);
+///     let args = unsafe { pound::args_from_raw(argc, argv) }?.skip(1);
 ///     // let cmd = MyCommand::try_parse_from(args)?;
 ///     let _ = args.count();
+///     Ok(())
 /// }
 /// ```
 ///
@@ -261,15 +276,35 @@ fn parse_as<'a, T: Parse>(
 pub unsafe fn args_from_raw<'a>(
     argc: core::ffi::c_int,
     argv: *const *const core::ffi::c_char,
-) -> impl Iterator<Item = &'a str> {
+) -> Result<impl Iterator<Item = &'a str>, Error> {
     let count = usize::try_from(argc).unwrap_or(0); // a negative argc reads as empty
-    (0..count).filter_map(move |i| {
+    let args = (0..count).filter_map(move |i| {
         // SAFETY: `i < count <= argc`, so `argv.add(i)` is in bounds and points
         // at a valid C string per the documented contract.
         let ptr = unsafe { *argv.add(i) };
-        if ptr.is_null() {
-            return None;
-        }
-        unsafe { core::ffi::CStr::from_ptr(ptr) }.to_str().ok()
-    })
+        (!ptr.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr::<'a>(ptr) })
+    });
+
+    if let Some(bad) = args.clone().find(|arg| arg.to_str().is_err()) {
+        return Err(ErrorKind::InvalidUtf8(bad.to_string_lossy().into_owned()).into());
+    }
+    // SAFETY: every argument was checked above, and the contract keeps them
+    // unchanged for `'a`.
+    Ok(args.map(|arg| unsafe { core::str::from_utf8_unchecked(arg.to_bytes()) }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_args_reject_non_utf8() {
+        let raw = [c"prog".as_ptr(), c"\xff".as_ptr(), c"next".as_ptr()];
+        // SAFETY: three live, NUL-terminated C strings
+        let parsed = unsafe { args_from_raw(3, raw.as_ptr()) };
+        let Err(err) = parsed.map(Iterator::count) else {
+            panic!("a non-UTF-8 argument was accepted");
+        };
+        assert!(matches!(err.kind, ErrorKind::InvalidUtf8(_)));
+    }
 }

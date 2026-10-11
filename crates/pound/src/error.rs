@@ -22,6 +22,8 @@ pub enum ErrorKind {
     MissingRequired(String),
     /// a bare value with nowhere to go
     UnexpectedPositional(String),
+    /// an argument was not valid UTF-8, shown with the bad bytes replaced
+    InvalidUtf8(String),
     /// a flag was given a value (e.g. `--verbose=3`) but takes none
     UnexpectedValue(String),
     /// first positional named a subcommand that does not exist
@@ -113,6 +115,7 @@ impl fmt::Display for ErrorKind {
             Self::MissingValue(a) => write!(f, "'{a}' needs a value"),
             Self::MissingRequired(a) => write!(f, "missing required argument {a}"),
             Self::UnexpectedPositional(v) => write!(f, "unexpected argument '{v}'"),
+            Self::InvalidUtf8(v) => write!(f, "argument '{v}' is not valid UTF-8"),
             Self::UnexpectedValue(a) => write!(f, "'{a}' does not take a value"),
             Self::UnknownSubcommand { name, .. } => write!(f, "unknown subcommand '{name}'"),
             Self::MissingSubcommand { .. } => write!(f, "a subcommand is required"),
