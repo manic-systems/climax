@@ -185,16 +185,22 @@ impl<'a> Matches<'a> {
 
     /// resolve a flag to its final state, honoring the negation spelling and
     /// falling back to the env var or default when neither was given
-    #[must_use]
-    pub fn switch(&self, spec: &CommandSpec, i: usize) -> bool {
+    pub fn switch(&self, spec: &CommandSpec, i: usize) -> Result<bool, Error> {
         let slot = &self.slots[i];
         if slot.negated {
-            return false;
+            return Ok(false);
         }
         if slot.count > 0 {
-            return true;
+            return Ok(true);
         }
-        fallback(spec, i).is_some_and(|f| matches!(&*f.value, "1" | "true" | "yes"))
+        let word = |s: &str| {
+            match s {
+                "1" | "true" | "yes" => Ok(true),
+                "" | "0" | "false" | "no" => Ok(false),
+                _ => Err(ValueError::new(s, "expected 1, true, yes, 0, false or no")),
+            }
+        };
+        parse_fallback(spec, i, &word).unwrap_or(Ok(false))
     }
 
     /// how many times a count flag was supplied
@@ -1271,13 +1277,19 @@ mod tests {
             .default("true")];
         const SPEC: CommandSpec = CommandSpec::new("n").args(ARGS);
 
-        assert!(parse(&SPEC, &[]).unwrap().switch(&SPEC, 0));
-        assert!(!parse(&SPEC, &["--no-color"]).unwrap().switch(&SPEC, 0));
+        assert!(parse(&SPEC, &[]).unwrap().switch(&SPEC, 0).unwrap());
+        assert!(
+            !parse(&SPEC, &["--no-color"])
+                .unwrap()
+                .switch(&SPEC, 0)
+                .unwrap()
+        );
         // the last spelling on the line wins
         assert!(
             parse(&SPEC, &["--no-color", "--color"])
                 .unwrap()
                 .switch(&SPEC, 0)
+                .unwrap()
         );
         assert!(matches!(
             parse(&SPEC, &["--no-color=1"]),
