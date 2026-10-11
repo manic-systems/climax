@@ -5,6 +5,7 @@ members = [
 	"crates/bang-screw",
 	"crates/bang-screw-pty",
 	"crates/bang-terminal",
+	"crates/caress",
 	"crates/climax",
 	"crates/pound",
 	"crates/pound-derive",

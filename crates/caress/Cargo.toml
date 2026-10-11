@@ -1,0 +1,23 @@
+[package]
+name                 = "caress"
+version              = "0.1.0"
+description          = "shell completions for pound commands"
+keywords             = [ "cli", "completion", "shell", "pound" ]
+categories           = [ "command-line-interface" ]
+readme               = "../../README.md"
+authors.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[dependencies]
+pound = { version = "0.3.0", path = "../pound", default-features = false, features = [ "std" ] }
+
+[dev-dependencies]
+pound = { path = "../pound" }
+
+[[example]]
+name = "keyring"
+
+[lints]
+workspace = true
