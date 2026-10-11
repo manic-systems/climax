@@ -7,6 +7,6 @@
 - `pound` for derive-first argument parsing
 - `screw` for retained terminal rendering
 - `bang` for interactive terminal widgets
-- `caress` for shell completions
+- `caress` for shell completions and man pages
 
 it is still a work in progress.

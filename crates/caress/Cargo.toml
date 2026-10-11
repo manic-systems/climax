@@ -1,8 +1,8 @@
 [package]
 name                 = "caress"
 version              = "0.1.0"
-description          = "shell completions for pound commands"
-keywords             = [ "cli", "completion", "shell", "pound" ]
+description          = "shell completions and man pages for pound commands"
+keywords             = [ "cli", "completion", "manpage", "mdoc", "pound" ]
 categories           = [ "command-line-interface" ]
 readme               = "../../README.md"
 authors.workspace    = true
