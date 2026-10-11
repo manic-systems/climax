@@ -125,6 +125,7 @@ pub use pound_derive::{
 pub use spec::{
     ArgSpec,
     ArgumentOrder,
+    Command,
     CommandSpec,
     GroupSpec,
     Kind,
@@ -189,12 +190,7 @@ pub trait Parse: Sized {
             .map(|arg| {
                 arg.into_string().map_err(|bad| {
                     let kind = ErrorKind::InvalidUtf8(bad.to_string_lossy().into_owned());
-                    Error::from(kind).or_usage(|| {
-                        (
-                            help::usage_line(&spec, &[], &[]),
-                            parse::help_flag(&spec, &[]),
-                        )
-                    })
+                    Command::root(&spec).locate(Error::from(kind))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;

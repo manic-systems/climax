@@ -12,20 +12,25 @@
 //! - read a command through [`CommandSpec::arguments`] and
 //!   [`CommandSpec::subcommands`], which follow flattening, not the raw `args`
 //!   and `subs` fields
-//! - propagate globals downward
+//! - descend from [`Command::root`] through [`Command::subcommands`], which
+//!   carries each command's inherited globals down
 //! - match [`Kind`] with a `_` arm
 //! - construct spec types through their `const fn` builders
 //!
 //! `-h`/`--help` and `-V`/`--version` are generated unless a local arg or an
 //! inherited global claims the spelling, and `-V`/`--version` also need version
-//! or hash metadata
+//! or hash metadata. [`Command::builtins`] lists whichever survive.
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
 use alloc::vec::IntoIter;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
-use crate::value::const_eq;
+use crate::{
+    Error,
+    help,
+    value::const_eq,
+};
 
 /// what shape of argument a spec entry describes
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -666,6 +671,181 @@ impl CommandSpec {
     pub fn find_sub(&self, name: &str) -> Option<&'static SubSpec> {
         self.subcommands()
             .find(|s| s.name == name || s.aliases.contains(&name))
+    }
+}
+
+/// a command as the parser reaches it, its spec plus what the commands above
+/// it hand down
+///
+/// start at [`Command::root`] and descend with [`Command::subcommands`], which
+/// works out each child's inherited globals.
+#[derive(Clone, Debug)]
+pub struct Command<'s> {
+    spec:    &'s CommandSpec,
+    hidden:  bool,
+    path:    Vec<&'static str>,
+    globals: Vec<&'static ArgSpec>,
+}
+
+impl<'s> Command<'s> {
+    /// the top of a command tree
+    #[must_use]
+    pub const fn root(spec: &'s CommandSpec) -> Self {
+        Self {
+            spec,
+            hidden: false,
+            path: Vec::new(),
+            globals: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub const fn spec(&self) -> &'s CommandSpec {
+        self.spec
+    }
+
+    /// the names of the commands above this one, root first
+    #[must_use]
+    pub fn path(&self) -> &[&'static str] {
+        &self.path
+    }
+
+    /// the globals this command inherits from the commands above it, nearest
+    /// last
+    #[must_use]
+    pub fn globals(&self) -> &[&'static ArgSpec] {
+        &self.globals
+    }
+
+    /// whether the subcommand that reaches this command is hidden
+    #[must_use]
+    pub const fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    /// every subcommand, hidden ones included, with flattened enums spliced in
+    pub fn subcommands(&self) -> impl Iterator<Item = Self> + '_ {
+        self.spec
+            .subcommands()
+            .map(|sub| -> Self { self.child(sub) })
+    }
+
+    pub(crate) fn child(&self, sub: &'static SubSpec) -> Command<'static> {
+        let mut globals = self.globals.clone();
+        globals.extend(self.spec.arguments().filter(|a| a.global));
+        let mut path = self.path.clone();
+        path.push(self.spec.name);
+
+        Command {
+            spec: sub.spec,
+            hidden: sub.hidden,
+            path,
+            globals,
+        }
+    }
+
+    /// every name `-` or `--` reaches here and help lists, in help's order.
+    /// the command's own visible flags and options, then
+    /// [`Self::inherited`], then [`Self::builtins`].
+    #[must_use]
+    pub fn options(&self) -> Vec<ArgSpec> {
+        self.spec
+            .arguments()
+            .filter(|a| !a.hidden && !a.is_positional())
+            .copied()
+            .chain(self.inherited())
+            .chain(self.builtins())
+            .collect()
+    }
+
+    /// the arg `--name` reaches here, one of the command's own before an
+    /// inherited global, and a nearer global before a farther one
+    #[must_use]
+    pub fn long(&self, name: &str) -> Option<&'static ArgSpec> {
+        let globals = self.globals.iter().rev().copied();
+        self.spec
+            .arguments()
+            .chain(globals)
+            .find(|a| a.answers_long(name))
+    }
+
+    /// the visible positionals, in the order they fill
+    pub fn positionals(&self) -> impl Iterator<Item = &'static ArgSpec> {
+        self.spec
+            .arguments()
+            .filter(|a| !a.hidden && a.is_positional())
+    }
+
+    /// the inherited globals still reachable here, hidden ones left out and
+    /// each stripped of the spellings that a nearer arg answers to instead
+    #[must_use]
+    pub fn inherited(&self) -> Vec<ArgSpec> {
+        let own = self.spec.arguments().collect::<Vec<_>>();
+        let globals = &self.globals;
+        globals
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| !a.hidden)
+            .filter_map(|(i, &&global)| {
+                let nearer = &globals[i + 1..];
+                let mut shown = global;
+                shown.short = shown.short.filter(|&c| !claims_short(&own, nearer, c));
+                shown.long = shown.long.filter(|l| !claims_long(&own, nearer, l));
+                shown.negate = shown.negate.filter(|n| !claims_long(&own, nearer, n));
+                if shown.long.is_none() {
+                    shown.long = shown.negate.take();
+                }
+                (shown.short.is_some() || shown.long.is_some()).then_some(shown)
+            })
+            .collect()
+    }
+
+    /// the generated `-h`/`--help` and `-V`/`--version` flags, each with only
+    /// the spellings that no arg of this command or inherited global claims.
+    /// the parser answers each spelling on its own, so a command that takes
+    /// `-h` for itself still gets `--help`.
+    #[must_use]
+    pub fn builtins(&self) -> Vec<ArgSpec> {
+        let own = self.spec.arguments().collect::<Vec<_>>();
+        let builtin = |short, long, help| {
+            let free_short = !claims_short(&own, &self.globals, short);
+            let free_long = !claims_long(&own, &self.globals, long);
+            let mut a = ArgSpec::new(Kind::Flag).help(help);
+            if free_short {
+                a = a.short(short);
+            }
+            if free_long {
+                a = a.long(long);
+            }
+            (free_short || free_long).then_some(a)
+        };
+
+        let version = self
+            .spec
+            .has_version_info()
+            .then(|| builtin('V', "version", "Print version"));
+        builtin('h', "help", "Print help")
+            .into_iter()
+            .chain(version.flatten())
+            .collect()
+    }
+
+    /// the spelling that still reaches the generated help, if any does
+    pub(crate) fn help_flag(&self) -> Option<&'static str> {
+        let own = self.spec.arguments().collect::<Vec<_>>();
+        if !claims_long(&own, &self.globals, "help") {
+            Some("--help")
+        } else if !claims_short(&own, &self.globals, 'h') {
+            Some("-h")
+        } else {
+            None
+        }
+    }
+
+    /// tag `err` with this command's usage line, unless a nested command
+    /// already claimed it
+    pub(crate) fn locate(&self, err: Error) -> Error {
+        err.or_usage(|| (help::usage_line(self), self.help_flag()))
     }
 }
 

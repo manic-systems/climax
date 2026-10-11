@@ -16,6 +16,7 @@ use crate::{
     help,
     spec::{
         ArgSpec,
+        Command,
         CommandSpec,
         Kind,
         SubSpec,
@@ -45,15 +46,7 @@ pub struct Matches<'a> {
     flattened: Vec<Self>,
     sub:       Option<(usize, Box<Self>)>,
     /// the deepest command this parse selected, for errors raised afterwards
-    selected:  Option<Invocation>,
-}
-
-/// where a selected command sits, enough to render its usage line on demand
-#[derive(Debug)]
-struct Invocation {
-    spec:    &'static CommandSpec,
-    path:    Vec<&'static str>,
-    globals: Vec<&'static ArgSpec>,
+    selected:  Option<Command<'static>>,
 }
 
 /// an arg this command parses, and where its slot lives
@@ -158,17 +151,10 @@ impl<'a> Matches<'a> {
     /// tag `err` with the usage line and help spelling of the deepest command
     /// selected, or of `root` when none was
     pub(crate) fn locate(&self, root: &CommandSpec, err: Error) -> Error {
-        err.or_usage(|| {
-            match &self.selected {
-                Some(inv) => {
-                    (
-                        help::usage_line(inv.spec, &inv.path, &inv.globals),
-                        help_flag(inv.spec, &inv.globals),
-                    )
-                },
-                None => (help::usage_line(root, &[], &[]), help_flag(root, &[])),
-            }
-        })
+        match &self.selected {
+            Some(cmd) => cmd.locate(err),
+            None => Command::root(root).locate(err),
+        }
     }
 
     /// matches for the flattened struct at `index`
@@ -360,47 +346,25 @@ pub(crate) fn parse_spec<'a>(
 ) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     let mut hits = Vec::new();
-    parse_cmd(spec, &[], &mut it, &[], &mut hits)
+    parse_cmd(&Command::root(spec), &mut it, &mut hits)
 }
 
 /// parse one command, tagging whatever went wrong with this command's usage
 /// line unless a nested command already claimed it
 fn parse_cmd<'a>(
-    spec: &CommandSpec,
-    path: &[&'static str],
+    cmd: &Command<'_>,
     it: &mut IntoIter<&'a str>,
-    globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
-    walk_cmd(spec, path, it, globals, hits).map_err(|e| {
-        e.or_usage(|| {
-            (
-                help::usage_line(spec, path, globals),
-                help_flag(spec, globals),
-            )
-        })
-    })
-}
-
-/// the spelling that still reaches `spec`'s generated help, if any does
-pub(crate) fn help_flag(spec: &CommandSpec, globals: &[&ArgSpec]) -> Option<&'static str> {
-    let own: Vec<&ArgSpec> = spec.arguments().collect();
-    if !claims_long(&own, globals, "help") {
-        Some("--help")
-    } else if !claims_short(&own, globals, 'h') {
-        Some("-h")
-    } else {
-        None
-    }
+    walk_cmd(cmd, it, hits).map_err(|e| cmd.locate(e))
 }
 
 fn walk_cmd<'a>(
-    spec: &CommandSpec,
-    path: &[&'static str],
+    cmd: &Command<'_>,
     it: &mut IntoIter<&'a str>,
-    globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<Matches<'a>, Error> {
+    let (spec, globals) = (cmd.spec(), cmd.globals());
     let mut targets = Vec::new();
     spec.visit(&mut Vec::new(), &mut |path, index, arg| {
         targets.push(ArgTarget {
@@ -415,7 +379,7 @@ fn walk_cmd<'a>(
     let mut pos_cursor = 0_usize;
     let mut only_positional = false;
 
-    let builtin = |ch| builtin_short(spec, path, &targets, ch, globals);
+    let builtin = |ch| builtin_short(cmd, ch);
 
     while let Some(tok) = it.next() {
         if only_positional {
@@ -430,7 +394,7 @@ fn walk_cmd<'a>(
                 Some((n, v)) => (n, Some(v)),
                 None => (long, None),
             };
-            if let Some(sig) = builtin_long(spec, path, &targets, name, globals) {
+            if let Some(sig) = builtin_long(cmd, name) {
                 return Err(sig.into());
             }
             if let Some(target) = targets
@@ -455,7 +419,7 @@ fn walk_cmd<'a>(
             } else {
                 return Err(ErrorKind::Unknown {
                     arg:     format!("--{name}"),
-                    closest: closest_long(spec, globals, name),
+                    closest: closest_long(cmd, name),
                 }
                 .into());
             }
@@ -473,15 +437,9 @@ fn walk_cmd<'a>(
                 return Err(unknown(format!("-{first}")).into());
             }
         } else if let Some(target) = sub_dispatch(spec, &positionals, pos_cursor, tok)? {
-            let mut child_globals: Vec<&'static ArgSpec> = globals.to_vec();
-            child_globals.extend(targets.iter().map(|t| t.arg).filter(|a| a.global));
-            let child_path: Vec<&'static str> = path.iter().copied().chain([spec.name]).collect();
-            let mut sub_m = parse_cmd(target.command.spec, &child_path, it, &child_globals, hits)?;
-            m.selected = sub_m.selected.take().or(Some(Invocation {
-                spec:    target.command.spec,
-                path:    child_path,
-                globals: child_globals,
-            }));
+            let child = cmd.child(target.command);
+            let mut sub_m = parse_cmd(&child, it, hits)?;
+            m.selected = sub_m.selected.take().or(Some(child));
             target.store(&mut m, sub_m);
             break; // subcommand owns the rest
         } else {
@@ -491,7 +449,7 @@ fn walk_cmd<'a>(
 
     // must run before finalise so owned globals count toward required/group checks
     apply_global_hits(&targets, globals.len(), &mut m, hits);
-    finalise(spec, path, &m, globals)?;
+    finalise(cmd, &m)?;
     Ok(m)
 }
 
@@ -824,17 +782,13 @@ fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
 
 /// enforce `required` and group constraints. defaults resolve when a value is
 /// read, so a defaulted arg never counts as missing here.
-fn finalise(
-    spec: &CommandSpec,
-    path: &[&'static str],
-    m: &Matches,
-    globals: &[&'static ArgSpec],
-) -> Result<(), ErrorKind> {
+fn finalise(cmd: &Command<'_>, m: &Matches) -> Result<(), ErrorKind> {
+    let spec = cmd.spec();
     finalise_args(spec, m)?;
     finalise_groups(spec, m)?;
     if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
         return Err(ErrorKind::MissingSubcommand {
-            help: Some(help::render(spec, path, globals, false)),
+            help: Some(help::render(cmd, false)),
         });
     }
     Ok(())
@@ -954,38 +908,31 @@ fn target_slot_mut<'m, 'a>(m: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mu
     &mut owner.slots[target.index]
 }
 
-fn builtin_long(
-    spec: &CommandSpec,
-    path: &[&'static str],
-    targets: &[ArgTarget],
-    name: &str,
-    globals: &[&'static ArgSpec],
-) -> Option<ErrorKind> {
-    let mut claimants = targets.iter().map(|t| t.arg).chain(globals.iter().copied());
-    if claimants.any(|a| a.answers_long(name)) {
+/// the help or version a long spelling asks for, unless an arg claims it
+fn builtin_long(cmd: &Command<'_>, name: &str) -> Option<ErrorKind> {
+    let own = cmd.spec().arguments().collect::<Vec<_>>();
+    if claims_long(&own, cmd.globals(), name) {
         return None;
     }
     match name {
-        "help" => Some(ErrorKind::Help(help::render(spec, path, globals, true))),
-        "version" if spec.has_version_info() => Some(ErrorKind::Version(help::version_line(spec))),
+        "help" => Some(ErrorKind::Help(help::render(cmd, true))),
+        "version" if cmd.spec().has_version_info() => {
+            Some(ErrorKind::Version(help::version_line(cmd.spec())))
+        },
         _ => None,
     }
 }
 
-fn builtin_short(
-    spec: &CommandSpec,
-    path: &[&'static str],
-    targets: &[ArgTarget],
-    ch: char,
-    globals: &[&'static ArgSpec],
-) -> Option<ErrorKind> {
-    let mut claimants = targets.iter().map(|t| t.arg).chain(globals.iter().copied());
-    if claimants.any(|a| a.answers_short(ch)) {
+fn builtin_short(cmd: &Command<'_>, ch: char) -> Option<ErrorKind> {
+    let own = cmd.spec().arguments().collect::<Vec<_>>();
+    if claims_short(&own, cmd.globals(), ch) {
         return None;
     }
     match ch {
-        'h' => Some(ErrorKind::Help(help::render(spec, path, globals, false))),
-        'V' if spec.has_version_info() => Some(ErrorKind::Version(help::version_line(spec))),
+        'h' => Some(ErrorKind::Help(help::render(cmd, false))),
+        'V' if cmd.spec().has_version_info() => {
+            Some(ErrorKind::Version(help::version_line(cmd.spec())))
+        },
         _ => None,
     }
 }
@@ -996,10 +943,8 @@ const fn unknown(arg: String) -> ErrorKind {
 }
 
 /// every long spelling this command answers to, including the implicit ones
-fn long_names<'s>(
-    spec: &'s CommandSpec,
-    globals: &'s [&'static ArgSpec],
-) -> impl Iterator<Item = &'s str> {
+fn long_names<'s>(cmd: &'s Command<'_>) -> impl Iterator<Item = &'s str> {
+    let (spec, globals) = (cmd.spec(), cmd.globals());
     let own: Vec<&'static ArgSpec> = spec.arguments().collect();
     let help = !claims_long(&own, globals, "help");
     let version = spec.has_version_info() && !claims_long(&own, globals, "version");
@@ -1020,8 +965,8 @@ fn sub_names(s: &SubSpec) -> impl Iterator<Item = &str> {
     core::iter::once(s.name).chain(s.aliases.iter().copied())
 }
 
-fn closest_long(spec: &CommandSpec, globals: &[&'static ArgSpec], name: &str) -> Option<String> {
-    closest(long_names(spec, globals), name).map(|found| format!("--{found}"))
+fn closest_long(cmd: &Command<'_>, name: &str) -> Option<String> {
+    closest(long_names(cmd), name).map(|found| format!("--{found}"))
 }
 
 /// the nearest candidate, if one is close enough that a typo is the likely
