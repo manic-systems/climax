@@ -468,7 +468,7 @@ fn walk_cmd<'a>(
                 shorts(&targets, &mut m, rest, it, globals, hits, builtin)?;
             } else if first.is_ascii_digit() || first == '.' {
                 // a negative number is a value, not a flag
-                positional(&mut m, &positionals, &mut pos_cursor, tok)?;
+                only_positional = positional(&mut m, &positionals, &mut pos_cursor, tok)?;
             } else {
                 return Err(unknown(format!("-{first}")).into());
             }
@@ -485,7 +485,7 @@ fn walk_cmd<'a>(
             target.store(&mut m, sub_m);
             break; // subcommand owns the rest
         } else {
-            positional(&mut m, &positionals, &mut pos_cursor, tok)?;
+            only_positional = positional(&mut m, &positionals, &mut pos_cursor, tok)?;
         }
     }
 
@@ -758,13 +758,14 @@ fn apply_global_hits<'a>(
     });
 }
 
-/// assign a bare token to the next positional, or a trailing/variadic sink
+/// assign a bare token to the next positional, or a trailing/variadic sink,
+/// returning whether a trailing arg took it and so owns the rest of the line
 fn positional<'a>(
     m: &mut Matches<'a>,
     positionals: &[&ArgTarget],
     cursor: &mut usize,
     tok: &'a str,
-) -> Result<(), ErrorKind> {
+) -> Result<bool, ErrorKind> {
     let target = if *cursor < positionals.len() {
         positionals[*cursor]
     } else if let Some(&last) = positionals.last() {
@@ -786,7 +787,7 @@ fn positional<'a>(
     if !(a.multi || a.kind == Kind::Trailing) {
         *cursor += 1;
     }
-    Ok(())
+    Ok(a.kind == Kind::Trailing)
 }
 
 /// enforce a list arg's arity. an absent arg with a fallback is left alone,
@@ -1134,6 +1135,18 @@ mod tests {
         let m = parse(&FLAT, &["--", "--weird", "-x"]).unwrap();
         assert_eq!(m.raw(3), Some("--weird"));
         assert_eq!(m.raws(4), ["-x"]);
+    }
+
+    #[test]
+    fn trailing_takes_the_rest_after_its_first_value() {
+        const ARGS: &[ArgSpec] = &[
+            ArgSpec::new(Kind::Flag).long("force"),
+            ArgSpec::new(Kind::Trailing).value_name("cmd"),
+        ];
+        let wrap = CommandSpec { args: ARGS, ..FLAT };
+        let m = parse(&wrap, &["--force", "ls", "-la", "--force"]).unwrap();
+        assert!(m.flag(0));
+        assert_eq!(m.raws(1), ["ls", "-la", "--force"]);
     }
 
     #[test]
