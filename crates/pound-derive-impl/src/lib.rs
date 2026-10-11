@@ -12,7 +12,6 @@ mod emit;
 mod model;
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
 use venial::parse_item;
 
 use crate::{
@@ -58,28 +57,24 @@ impl Options {
 /// }
 /// ```
 pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
-    match parse_item(input) {
-        Ok(item) => {
-            Derive::new(&item).map_or_else(|e| err(&e), |d| Emitter::new(options).derive(&d))
-        },
-        Err(e) => e.to_compile_error(),
-    }
+    parse_item(input)
+        .and_then(|item| Derive::new(&item))
+        .map_or_else(
+            |e| e.to_compile_error(),
+            |d| Emitter::new(options).derive(&d),
+        )
 }
 
 /// expands `#[derive(ValueEnum)]` for the unit-variant enum in `input`, or
 /// yields a `compile_error!` naming the problem. see [`derive_parse`] for how a
 /// re-exporting crate wraps it.
 pub fn derive_value_enum(input: TokenStream2, options: &Options) -> TokenStream2 {
-    match parse_item(input) {
-        Ok(item) => {
-            ValueEnum::new(&item).map_or_else(|e| err(&e), |v| Emitter::new(options).value_enum(&v))
-        },
-        Err(e) => e.to_compile_error(),
-    }
-}
-
-fn err(msg: &str) -> TokenStream2 {
-    quote! { ::core::compile_error!(#msg); }
+    parse_item(input)
+        .and_then(|item| ValueEnum::new(&item))
+        .map_or_else(
+            |e| e.to_compile_error(),
+            |v| Emitter::new(options).value_enum(&v),
+        )
 }
 
 #[cfg(test)]
