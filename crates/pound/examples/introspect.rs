@@ -7,7 +7,7 @@ use pound::{
     Parse,
     spec::{
         ArgSpec,
-        CommandSpec,
+        Command,
     },
 };
 
@@ -50,12 +50,13 @@ enum Cmd {
 }
 
 fn main() {
-    walk(Grab::SPEC, 0, &[]);
+    walk(&Command::root(Grab::SPEC), 0);
 }
 
 /// print one command then recurse
-/// all walkers must pass down their globals
-fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
+/// `Command` carries the inherited globals down
+fn walk(cmd: &Command<'_>, depth: usize) {
+    let spec = cmd.spec();
     let pad = "  ".repeat(depth);
     let version = if spec.version.is_empty() {
         String::new()
@@ -67,40 +68,16 @@ fn walk(spec: &CommandSpec, depth: usize, inherited: &[&ArgSpec]) {
     for arg in spec.arguments().filter(|a| !a.hidden) {
         println!("{pad}  {}", row(arg));
     }
-    for arg in inherited.iter().filter(|a| !a.hidden) {
-        println!("{pad}  {}  [inherited global]", row(arg));
+    for arg in cmd.inherited() {
+        println!("{pad}  {}  [inherited global]", row(&arg));
     }
-    // help/version are accepted without living in `args`, and each spelling is
-    // dropped on its own when the command claims it, so check them separately.
-    for spelling in implicit(spec, inherited, 'h', "help") {
-        println!("{pad}  {spelling}  [implicit]");
-    }
-    if spec.has_version_info() {
-        for spelling in implicit(spec, inherited, 'V', "version") {
-            println!("{pad}  {spelling}  [implicit]");
-        }
+    for arg in cmd.builtins() {
+        println!("{pad}  {}  [implicit]", row(&arg));
     }
 
-    // globals accumulate down the tree
-    let mut globals = inherited.to_vec();
-    globals.extend(spec.arguments().filter(|a| a.global));
-    for sub in spec.subcommands().filter(|s| !s.hidden) {
-        walk(sub.spec, depth + 1, &globals);
+    for sub in cmd.subcommands().filter(|s| !s.hidden()) {
+        walk(&sub, depth + 1);
     }
-}
-
-/// whichever spellings of a builtin neither this command nor an inherited
-/// global has claimed
-fn implicit(spec: &CommandSpec, inherited: &[&ArgSpec], short: char, long: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let claimants = || spec.arguments().chain(inherited.iter().copied());
-    if !claimants().any(|a| a.answers_short(short)) {
-        out.push(format!("-{short}"));
-    }
-    if !claimants().any(|a| a.answers_long(long)) {
-        out.push(format!("--{long}"));
-    }
-    out
 }
 
 /// a single arg's specification

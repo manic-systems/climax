@@ -5,25 +5,24 @@
 #[cfg(feature = "help")] use core::fmt::Write as _;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
-use crate::spec::{
-    ArgSpec,
-    CommandSpec,
-};
 #[cfg(feature = "help")]
 use crate::spec::{
+    ArgSpec,
     Kind,
-    claims_long,
-    claims_short,
+};
+use crate::spec::{
+    Command,
+    CommandSpec,
 };
 
-/// the full invocation of `spec`, led by the names of the commands above it
-fn program(spec: &CommandSpec, path: &[&str]) -> String {
+/// the full invocation of `cmd`, led by the names of the commands above it
+fn program(cmd: &Command<'_>) -> String {
     let mut out = String::new();
-    for name in path {
+    for name in cmd.path() {
         out.push_str(name);
         out.push(' ');
     }
-    out.push_str(spec.name);
+    out.push_str(cmd.spec().name);
     out
 }
 
@@ -159,76 +158,17 @@ fn push_tag(s: &mut String, tag: core::fmt::Arguments<'_>) {
     let _ = write!(s, "[{tag}]");
 }
 
-/// the listing for `-h`/`--help` or `-V`/`--version`. the parser answers each
-/// spelling independently, so a command that takes `-h` for its own flag still
-/// gets `--help`, and the row has to say so.
 #[cfg(feature = "help")]
-fn builtin_row(
-    own: &[&ArgSpec],
-    globals: &[&ArgSpec],
-    short: char,
-    long: &'static str,
-    help: &'static str,
-) -> Option<(String, String)> {
-    let free_short = !claims_short(own, globals, short);
-    let free_long = !claims_long(own, globals, long);
-    if !free_short && !free_long {
-        return None;
-    }
-
-    let mut a = ArgSpec::new(Kind::Flag);
-    if free_short {
-        a = a.short(short);
-    }
-    if free_long {
-        a = a.long(long);
-    }
-    Some((invocation(&a), help.to_owned()))
-}
-
-/// the inherited globals as this command shows them, each stripped of the
-/// spellings that a nearer arg answers to instead
-#[cfg(feature = "help")]
-fn visible_globals(own: &[&ArgSpec], globals: &[&ArgSpec]) -> Vec<ArgSpec> {
-    globals
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| !a.hidden)
-        .filter_map(|(i, &&global)| {
-            let nearer = &globals[i + 1..];
-            let mut shown = global;
-            shown.short = shown.short.filter(|&c| !claims_short(own, nearer, c));
-            shown.long = shown.long.filter(|l| !claims_long(own, nearer, l));
-            shown.negate = shown.negate.filter(|n| !claims_long(own, nearer, n));
-            if shown.long.is_none() {
-                shown.long = shown.negate.take();
-            }
-            (shown.short.is_some() || shown.long.is_some()).then_some(shown)
-        })
-        .collect()
+pub(crate) fn usage_line(cmd: &Command<'_>) -> String {
+    let visible_args: Vec<&ArgSpec> = cmd.spec().arguments().filter(|a| !a.hidden).collect();
+    usage(cmd, &visible_args, !cmd.inherited().is_empty())
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn usage_line(spec: &CommandSpec, path: &[&str], globals: &[&ArgSpec]) -> String {
-    let own: Vec<&ArgSpec> = spec.arguments().collect();
-    let visible_args: Vec<&ArgSpec> = own.iter().copied().filter(|a| !a.hidden).collect();
-    usage(
-        spec,
-        path,
-        &visible_args,
-        !visible_globals(&own, globals).is_empty(),
-    )
-}
-
-#[cfg(feature = "help")]
-fn usage(
-    spec: &CommandSpec,
-    path: &[&str],
-    visible_args: &[&ArgSpec],
-    has_globals: bool,
-) -> String {
+fn usage(cmd: &Command<'_>, visible_args: &[&ArgSpec], has_globals: bool) -> String {
+    let spec = cmd.spec();
     let mut out = String::from("Usage: ");
-    out.push_str(&program(spec, path));
+    out.push_str(&program(cmd));
     if has_globals || visible_args.iter().any(|a| !a.is_positional()) {
         out.push_str(" [OPTION]...");
     }
@@ -243,12 +183,8 @@ fn usage(
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn render(
-    spec: &CommandSpec,
-    path: &[&str],
-    globals: &[&ArgSpec],
-    long: bool,
-) -> String {
+pub(crate) fn render(cmd: &Command<'_>, long: bool) -> String {
+    let spec = cmd.spec();
     let mut out = String::new();
 
     let about = if long && !spec.long_about.is_empty() {
@@ -261,15 +197,15 @@ pub(crate) fn render(
         out.push_str("\n\n");
     }
 
-    let own: Vec<&ArgSpec> = spec.arguments().collect();
-    let visible_args: Vec<&ArgSpec> = own.iter().copied().filter(|a| !a.hidden).collect();
+    let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|a| !a.hidden).collect();
     let visible_subs = spec.subcommands().filter(|s| !s.hidden).collect::<Vec<_>>();
-    let grows: Vec<(String, String)> = visible_globals(&own, globals)
+    let grows: Vec<(String, String)> = cmd
+        .inherited()
         .iter()
         .map(|a| (invocation(a), help_text(a, long)))
         .collect();
 
-    out.push_str(&usage(spec, path, &visible_args, !grows.is_empty()));
+    out.push_str(&usage(cmd, &visible_args, !grows.is_empty()));
     out.push('\n');
 
     if !visible_subs.is_empty() {
@@ -296,15 +232,11 @@ pub(crate) fn render(
         }
     }
 
-    let builtins = &mut sections[0].1;
-    if let Some(row) = builtin_row(&own, globals, 'h', "help", "Print help") {
-        builtins.push(row);
-    }
-    if spec.has_version_info()
-        && let Some(row) = builtin_row(&own, globals, 'V', "version", "Print version")
-    {
-        builtins.push(row);
-    }
+    sections[0].1.extend(
+        cmd.builtins()
+            .iter()
+            .map(|a| (invocation(a), a.help.to_owned())),
+    );
 
     // one width across every section, so the help column lines up throughout
     let width = positionals
@@ -356,22 +288,17 @@ fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn usage_line(spec: &CommandSpec, path: &[&str], _globals: &[&ArgSpec]) -> String {
-    let mut out = format!("Usage: {}", program(spec, path));
-    if spec.has_subs() {
-        out.push_str(command_placeholder(spec));
+pub(crate) fn usage_line(cmd: &Command<'_>) -> String {
+    let mut out = format!("Usage: {}", program(cmd));
+    if cmd.spec().has_subs() {
+        out.push_str(command_placeholder(cmd.spec()));
     }
     out
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn render(
-    spec: &CommandSpec,
-    path: &[&str],
-    globals: &[&ArgSpec],
-    _long: bool,
-) -> String {
-    usage_line(spec, path, globals)
+pub(crate) fn render(cmd: &Command<'_>, _long: bool) -> String {
+    usage_line(cmd)
 }
 
 #[cfg(all(test, feature = "help", feature = "std"))]
