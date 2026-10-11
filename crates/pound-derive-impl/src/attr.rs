@@ -217,6 +217,24 @@ pub fn summary(doc: &str) -> &str {
     doc.split("\n\n").next().unwrap_or(doc)
 }
 
+/// the summary as short help shows it, without the period that ends the
+/// sentence. an abbreviation like `e.g.` or `etc.` keeps its period
+pub fn short_help(doc: &str) -> &str {
+    let summary = summary(doc);
+
+    let Some(rest) = summary.strip_suffix('.') else {
+        return summary;
+    };
+
+    let last_word = rest.rsplit(char::is_whitespace).next().unwrap_or(rest);
+
+    if last_word.contains('.') || last_word == "etc" {
+        summary
+    } else {
+        rest
+    }
+}
+
 fn path_is(attr: &Attribute, name: &str) -> bool {
     attr.path.len() == 1 && matches!(&attr.path[0], TokenTree::Ident(id) if *id == name)
 }
