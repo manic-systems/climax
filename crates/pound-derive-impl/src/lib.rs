@@ -440,7 +440,7 @@ fn parse_enum(cx: &Ctx, e: &venial::Enum) -> TokenStream2 {
             .clone()
             .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
         let variant_doc = attr::doc(&variant.attributes);
-        let sub_about = help_lit(cx, attr::summary(&variant_doc));
+        let sub_about = help_lit(cx, attr::short_help(&variant_doc));
         let (about_call, long_about_call) = about_calls(cx, &variant_doc);
         let hidden = vattr.hidden;
 
@@ -941,11 +941,17 @@ fn plan_field(field: &NamedField, a: Pound) -> Result<Plan, String> {
         .help
         .clone()
         .unwrap_or_else(|| attr::doc(&field.attributes));
-    let help = attr::summary(&doc).to_owned();
+    let summary = attr::summary(&doc);
+    let help = if a.help.is_some() {
+        summary
+    } else {
+        attr::short_help(&doc)
+    }
+    .to_owned();
     let long_help = a
         .long_help
         .clone()
-        .or_else(|| (help != doc).then(|| doc.clone()));
+        .or_else(|| (summary != doc).then(|| doc.clone()));
 
     check_kind(&a, kind, &field.name)?;
     let (min_values, max_values) = arity(&a, card == Card::Many, &field.name)?;
@@ -1439,7 +1445,7 @@ fn git_hash_call() -> TokenStream2 {
 // the `.about()` / `.long_about()` calls for a doc comment. the long form is
 // chained only when it says more than the summary already does.
 fn about_calls(cx: &Ctx, doc: &str) -> (TokenStream2, TokenStream2) {
-    let summary = help_lit(cx, attr::summary(doc));
+    let summary = help_lit(cx, attr::short_help(doc));
     let about = quote! { .about(#summary) };
     if attr::summary(doc) == doc {
         return (about, quote!());
