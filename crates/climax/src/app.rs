@@ -12,7 +12,7 @@ where
 {
     #[cfg(feature = "complete")]
     caress::handle(C::SPEC);
-    run_with(C::try_parse()?, f)
+    run_with(C::parse(), f)
 }
 
 pub fn run_with<C, F>(command: C, f: F) -> Result<()>
