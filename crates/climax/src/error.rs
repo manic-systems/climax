@@ -7,7 +7,6 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
 pub enum Error {
     /// argument parsing failed
     #[cfg(feature = "parse")]
@@ -58,6 +57,20 @@ impl fmt::Display for Error {
                 write!(f, "expected {expected}, got {actual}")
             },
             Self::Message(message) => f.write_str(message),
+        }
+    }
+}
+
+impl fmt::Debug for Error {
+    // std prints an error returned from main through Debug
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            #[cfg(feature = "parse")]
+            Self::ArgParse(error) => {
+                let report = error.render();
+                f.write_str(report.strip_prefix("error: ").unwrap_or(&report))
+            },
+            _ => fmt::Display::fmt(self, f),
         }
     }
 }
