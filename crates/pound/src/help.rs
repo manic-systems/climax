@@ -472,7 +472,7 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
         .collect::<Vec<_>>();
     blocks.push(Block::Usage(usage(cmd, &visible_args, !globals.is_empty())));
 
-    let commands = spec
+    let mut commands = spec
         .subcommands()
         .filter(|s| !s.hidden)
         .map(|s| {
@@ -482,6 +482,12 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
             }
         })
         .collect::<Vec<_>>();
+    if let Some(sub) = cmd.help_command().filter(|_| !commands.is_empty()) {
+        commands.push(Row {
+            left: vec![Span::literal(sub.name)],
+            help: sub.about.to_owned(),
+        });
+    }
     if !commands.is_empty() {
         blocks.push(Block::Section {
             heading: "Commands".to_owned(),

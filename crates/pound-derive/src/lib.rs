@@ -132,7 +132,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `before_help = "text"`   | text this subcommand's help page opens with                                     |
 /// | `after_help = "text"`    | text this subcommand's help page closes with                                    |
 /// | `flatten`                | on a tuple variant holding one enum, offers that enum's commands as if declared here |
-/// | `external`               | on a `Vec<T>` or `pound::External` tuple variant, takes any other subcommand name and what follows |
+/// | `external`               | on a `Vec<T>` or `pound::External` tuple variant, takes any other subcommand name and what follows, `help` too |
 ///
 /// the doc comment on a variant is the subcommand's description. a variant is
 /// a unit variant or has named fields, and tuple fields are only for `flatten`

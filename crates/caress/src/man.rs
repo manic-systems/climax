@@ -196,19 +196,23 @@ impl<'m> Manual<'m> {
     }
 
     fn commands(&self, page: &mut Mdoc) {
-        let subs = self
+        let mut subs = self
             .cmd
             .subcommands()
             .filter(|sub| !sub.hidden())
+            .map(|sub| (sub.spec().name, "", sub.spec().about))
             .collect::<Vec<_>>();
         if subs.is_empty() {
             return;
         }
+        if let Some(help) = self.cmd.help_command() {
+            subs.push((help.name, " Op Ar command ...", help.about));
+        }
 
         page.line("Sh COMMANDS");
-        page.list(&subs, |page, sub| {
-            page.line(format_args!("It Cm {}", Word(sub.spec().name)));
-            page.text(sub.spec().about);
+        page.list(subs, |page, (name, operands, about)| {
+            page.line(format_args!("It Cm {}{operands}", Word(name)));
+            page.text(about);
         });
     }
 
