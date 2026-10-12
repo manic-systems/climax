@@ -246,7 +246,7 @@ impl<'m> Manual<'m> {
             .options
             .iter()
             .chain(self.positionals.iter().copied())
-            .filter_map(|a| Some((a.env?, a)))
+            .filter_map(|a| Some((a.env.filter(|_| !a.hide_env)?, a)))
             .collect::<Vec<_>>();
         if env.is_empty() {
             return;
@@ -359,6 +359,7 @@ impl Mdoc {
         self.text(a.long_help.unwrap_or(a.help));
         let choices = a
             .possible
+            .filter(|_| !a.hide_possible)
             .unwrap_or_default()
             .iter()
             .filter(|c| !c.hidden)
@@ -378,7 +379,10 @@ impl Mdoc {
                 self.line(format_args!("Cm {}{punct}", Word(choice.name)));
             }
         }
-        if let Some(default) = a.default.filter(|_| a.kind != Kind::Flag) {
+        if let Some(default) = a
+            .default
+            .filter(|_| a.kind != Kind::Flag && !a.hide_default)
+        {
             self.line("Pp");
             self.text("Defaults to");
             self.line(format_args!("Ql {} .", Word(default)));

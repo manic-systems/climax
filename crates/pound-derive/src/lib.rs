@@ -380,6 +380,9 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `value_name = "N"`   | the placeholder for the value in usage and errors, defaulting to the field name  |
 /// | `heading = "Output"` | list the arg under a help section of that name, where `Options` is the default   |
 /// | `hidden`             | accept the arg but leave it out of help                                          |
+/// | `hide_possible`      | leave the `[possible values: ...]` tag out of help and man pages                 |
+/// | `hide_default`       | leave the `[default: ...]` tag out of help and man pages                         |
+/// | `hide_env`           | leave the `[env: ...]` tag out of help and man pages                             |
 ///
 /// without `help`, the doc comment on the field is the description. as on an
 /// item, its first paragraph is the `-h` summary with one trailing period

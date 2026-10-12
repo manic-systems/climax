@@ -87,6 +87,9 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "requires",
     "alias",
     "short_alias",
+    "hide_possible",
+    "hide_default",
+    "hide_env",
 ];
 
 /// a `#[derive(Parse)]` input
@@ -888,6 +891,9 @@ pub struct Arg {
     pub conflicts_with:  Vec<String>,
     pub requires:        Vec<String>,
     pub hidden:          bool,
+    pub hide_possible:   bool,
+    pub hide_default:    bool,
+    pub hide_env:        bool,
     pub global:          bool,
     pub exclusive:       bool,
     pub complete:        Option<TokenStream>,
@@ -971,6 +977,9 @@ impl Arg {
             conflicts_with: a.conflicts_with,
             requires: a.requires,
             hidden: a.hidden,
+            hide_possible: a.hide_possible,
+            hide_default: a.hide_default,
+            hide_env: a.hide_env,
             global: a.global,
             exclusive: a.exclusive,
             complete: a.complete,
