@@ -167,7 +167,13 @@ impl Completions {
     fn values(&mut self, partial: &Partial<'_, '_>, arg: &ArgSpec, lead: &str, prefix: &str) {
         let found = match (arg.complete, arg.possible) {
             (Some(complete), _) => complete(partial, prefix),
-            (None, Some(possible)) => possible.iter().copied().map(Candidate::new).collect(),
+            (None, Some(possible)) => {
+                possible
+                    .iter()
+                    .filter(|c| !c.hidden)
+                    .map(|c| Candidate::new(c.name).help(c.help))
+                    .collect()
+            },
             (None, None) if arg.hint == Hint::Path && lead.is_empty() => {
                 self.fallback = Fallback::Files;
                 return;

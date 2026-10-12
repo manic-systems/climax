@@ -301,13 +301,25 @@ impl Mdoc {
 
     fn describe(&mut self, a: &ArgSpec) {
         self.text(a.long_help.unwrap_or(a.help));
-        if let Some(possible) = a.possible.filter(|p| !p.is_empty()) {
+        let choices = a
+            .possible
+            .unwrap_or_default()
+            .iter()
+            .filter(|c| !c.hidden)
+            .collect::<Vec<_>>();
+        if choices.iter().any(|c| !c.help.is_empty()) {
             self.line("Pp");
             self.text("One of");
-            let last = possible.len() - 1;
-            for (i, value) in possible.iter().enumerate() {
+            self.list(&choices, |page, choice| {
+                page.line(format_args!("It Cm {}", Word(choice.name)));
+                page.text(choice.help);
+            });
+        } else if let Some(last) = choices.len().checked_sub(1) {
+            self.line("Pp");
+            self.text("One of");
+            for (i, choice) in choices.iter().enumerate() {
                 let punct = if i == last { " ." } else { " ," };
-                self.line(format_args!("Cm {}{punct}", Word(value)));
+                self.line(format_args!("Cm {}{punct}", Word(choice.name)));
             }
         }
         if let Some(default) = a.default.filter(|_| a.kind != Kind::Flag) {

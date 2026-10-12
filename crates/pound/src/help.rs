@@ -341,14 +341,21 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
     } else {
         a.help
     };
+    let choices = a
+        .possible
+        .unwrap_or_default()
+        .iter()
+        .filter(|c| !c.hidden)
+        .collect::<Vec<_>>();
+    let listed = long && choices.iter().any(|c| !c.help.is_empty());
+
     let mut s = text.to_owned();
-    if let Some(values) = a.possible
-        && !values.is_empty()
-    {
-        if !s.is_empty() {
-            s.push(' ');
-        }
-        let _ = write!(s, "[possible values: {}]", values.join(", "));
+    if !choices.is_empty() && !listed {
+        let names = choices.iter().map(|c| c.name).collect::<Vec<_>>();
+        push_tag(
+            &mut s,
+            format_args!("possible values: {}", names.join(", ")),
+        );
     }
     let takes_value = matches!(a.kind, Kind::Opt | Kind::Positional | Kind::Trailing);
     if takes_value && let Some(default) = a.default {
@@ -357,6 +364,19 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
     #[cfg(feature = "std")]
     if let Some(env) = a.env {
         push_tag(&mut s, format_args!("env: {env}"));
+    }
+
+    if listed {
+        if !s.is_empty() {
+            s.push_str("\n\n");
+        }
+        s.push_str("Possible values:");
+        for choice in choices {
+            let _ = write!(s, "\n- {}", choice.name);
+            if !choice.help.is_empty() {
+                let _ = write!(s, ": {}", choice.help);
+            }
+        }
     }
     s
 }
@@ -522,13 +542,15 @@ pub(crate) fn render(cmd: &Command<'_>, _long: bool) -> Help {
 #[cfg(all(test, feature = "help", feature = "std"))]
 mod tests {
     use super::*;
+    use crate::Choice;
 
     #[test]
     fn defaults_and_env_follow_the_possible_values() {
+        const MODES: &[Choice] = &[Choice::new("fast"), Choice::new("slow")];
         let mode = ArgSpec::new(Kind::Opt)
             .long("mode")
             .help("how to run")
-            .possible(&["fast", "slow"])
+            .possible(MODES)
             .default("fast")
             .env("RUN_MODE");
         let loud = ArgSpec::new(Kind::Flag).long("loud").env("LOUD");

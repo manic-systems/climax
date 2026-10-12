@@ -144,6 +144,7 @@ pub use spec::{
 pub use term::Term;
 pub use value::{
     ArgValue,
+    Choice,
     FromArg,
     ValueError,
 };

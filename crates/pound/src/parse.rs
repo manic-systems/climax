@@ -466,10 +466,15 @@ fn parse_with<T>(
 ) -> Result<T, Error> {
     convert(s).map_err(|e| {
         let mut msg = e.msg;
-        if let Some(values) = spec.args[i].possible
-            && !values.is_empty()
-        {
-            msg = format!("{msg} (possible values: {})", values.join(", "));
+        let listed = spec.args[i]
+            .possible
+            .unwrap_or_default()
+            .iter()
+            .filter(|c| !c.hidden)
+            .map(|c| c.name)
+            .collect::<Vec<_>>();
+        if !listed.is_empty() {
+            msg = format!("{msg} (possible values: {})", listed.join(", "));
         }
         let arg = match env {
             Some(var) => format!("{} (from ${var})", spec.args[i].display_name()),
