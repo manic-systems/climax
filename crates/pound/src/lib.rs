@@ -167,6 +167,45 @@ pub trait Parse: Sized {
     /// against its own spec.
     fn from_matches(spec: &'static CommandSpec, matches: &Matches<'_>) -> Result<Self, Error>;
 
+    /// overwrite the fields `matches` gave a value on the line, leaving the
+    /// rest. a subcommand named again is updated, and a different one
+    /// replaces it. setting one member of a group or conflict clears the
+    /// others in the same struct. on an error `self` may be partly written.
+    fn update_from_matches(
+        &mut self,
+        spec: &'static CommandSpec,
+        matches: &Matches<'_>,
+    ) -> Result<(), Error>;
+
+    /// parse the given args as more words for `self`, overwriting only what
+    /// they give. nothing they leave out is required, and fallbacks are not
+    /// applied again, though a newly chosen subcommand is checked in full.
+    /// `self` is left as it was when this fails.
+    fn try_update_from<'a, I>(&mut self, args: I) -> Result<(), Error>
+    where
+        I: IntoIterator<Item = &'a str>,
+        Self: Clone,
+    {
+        let matches = parse::update_spec(Self::SPEC, args)?;
+        let mut next = self.clone();
+        next.update_from_matches(Self::SPEC, &matches)
+            .map_err(|e| matches.locate(Self::SPEC, e))?;
+        *self = next;
+        Ok(())
+    }
+
+    /// [`Parse::try_update_from`], printing help/version or errors and exiting
+    #[cfg(feature = "std")]
+    fn update_from<'a, I>(&mut self, args: I)
+    where
+        I: IntoIterator<Item = &'a str>,
+        Self: Clone,
+    {
+        if let Err(err) = self.try_update_from(args) {
+            err.exit();
+        }
+    }
+
     /// parse the given args, returning the typed value or an [`Error`].
     ///
     /// args are borrowed (`&str`), so matched values point straight into them;
