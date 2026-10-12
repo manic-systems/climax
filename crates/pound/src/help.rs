@@ -39,6 +39,7 @@ pub struct Help {
 )]
 enum Block {
     Text(String),
+    Closing(String),
     Usage(Usage),
     Section {
         heading: String,
@@ -90,6 +91,10 @@ impl Help {
                 Block::Text(text) => {
                     push_wrapped(&mut out, text, 0, term.width());
                     out.push('\n');
+                },
+                Block::Closing(text) => {
+                    out.push('\n');
+                    push_wrapped(&mut out, text, 0, term.width());
                 },
                 Block::Usage(usage) => {
                     out.push_str(&usage.render(term));
@@ -167,19 +172,22 @@ fn push_wrapped(out: &mut String, text: &str, indent: usize, width: Option<usize
             pad(out, indent);
         }
 
-        let mut filled = 0;
+        let body = line.trim_start_matches(' ');
+        let hang = line.len() - body.len();
+        let mut filled = hang;
+        pad(out, hang);
         let mut gap = 0;
-        for (nth, word) in line.split(' ').enumerate() {
+        for (nth, word) in body.split(' ').enumerate() {
             gap += usize::from(nth > 0);
             if word.is_empty() {
                 continue;
             }
 
             let len = Term::columns(word);
-            if filled > 0 && filled + gap + len > room {
+            if filled > hang && filled + gap + len > room {
                 out.push('\n');
-                pad(out, indent);
-                filled = 0;
+                pad(out, indent + hang);
+                filled = hang;
             } else {
                 pad(out, gap);
                 filled += gap;
@@ -423,6 +431,10 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
     let spec = cmd.spec();
     let mut blocks = Vec::new();
 
+    if !spec.before_help.is_empty() {
+        blocks.push(Block::Text(spec.before_help.to_owned()));
+    }
+
     let about = if long && !spec.long_about.is_empty() {
         spec.long_about
     } else {
@@ -513,6 +525,10 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
                 }
             }),
     );
+
+    if !spec.after_help.is_empty() {
+        blocks.push(Block::Closing(spec.after_help.to_owned()));
+    }
     Help { blocks }
 }
 

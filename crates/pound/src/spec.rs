@@ -509,6 +509,10 @@ pub struct CommandSpec {
     pub about:          &'static str,
     /// fuller description shown by `--help`, empty when it adds nothing
     pub long_about:     &'static str,
+    /// text help shows above everything else, empty for none
+    pub before_help:    &'static str,
+    /// text help shows below everything else, such as examples, empty for none
+    pub after_help:     &'static str,
     /// the args declared directly on this command
     pub args:           &'static [ArgSpec],
     /// structs embedded with `#[pound(flatten)]`, whose args parse at this
@@ -543,6 +547,8 @@ impl CommandSpec {
             hash: None,
             about: "",
             long_about: "",
+            before_help: "",
+            after_help: "",
             args: &[],
             flattened: &[],
             argument_order: &[],
@@ -597,6 +603,18 @@ impl CommandSpec {
     #[must_use]
     pub const fn long_about(mut self, long_about: &'static str) -> Self {
         self.long_about = long_about;
+        self
+    }
+
+    #[must_use]
+    pub const fn before_help(mut self, before_help: &'static str) -> Self {
+        self.before_help = before_help;
+        self
+    }
+
+    #[must_use]
+    pub const fn after_help(mut self, after_help: &'static str) -> Self {
+        self.after_help = after_help;
         self
     }
 

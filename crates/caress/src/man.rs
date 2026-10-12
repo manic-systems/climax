@@ -166,14 +166,16 @@ impl<'m> Manual<'m> {
     fn description(&self, page: &mut Mdoc) {
         page.line("Sh DESCRIPTION");
         let spec = self.cmd.spec();
-        page.text(if spec.long_about.is_empty() {
+        let about = if spec.long_about.is_empty() {
             spec.about
         } else {
             spec.long_about
-        });
+        };
+        page.block(spec.before_help);
+        page.block(about);
 
         if !self.positionals.is_empty() {
-            page.line("Pp");
+            page.paragraph();
             page.text("The arguments are as follows:");
             page.list(&self.positionals, |page, a| {
                 page.line(format_args!("It Ar {}", Meta(a)));
@@ -182,13 +184,15 @@ impl<'m> Manual<'m> {
         }
 
         if !self.options.is_empty() {
-            page.line("Pp");
+            page.paragraph();
             page.text("The options are as follows:");
             page.list(&self.options, |page, a| {
                 page.line(format_args!("It {}", Item(a)));
                 page.describe(a);
             });
         }
+
+        page.block(spec.after_help);
     }
 
     fn commands(&self, page: &mut Mdoc) {
@@ -274,19 +278,67 @@ impl Mdoc {
         let _ = writeln!(self.out, ".{line}");
     }
 
+    /// mandoc warns on a `Pp` straight after `Sh`
+    fn paragraph(&mut self) {
+        let fresh = self
+            .out
+            .lines()
+            .last()
+            .is_none_or(|last| last.starts_with(".Sh "));
+        if !fresh {
+            self.line("Pp");
+        }
+    }
+
+    fn block(&mut self, text: &str) {
+        if !text.trim().is_empty() {
+            self.paragraph();
+            self.text(text);
+        }
+    }
+
     /// guards a line starting with `.` or `'`, which mdoc reads as a request
     fn text(&mut self, text: &str) {
-        let paragraphs = text.split("\n\n").map(str::trim).filter(|p| !p.is_empty());
-        for (i, paragraph) in paragraphs.enumerate() {
-            if i > 0 {
-                self.line("Pp");
-            }
-            for line in paragraph.lines().map(str::trim) {
-                if line.starts_with(['.', '\'']) {
+        let indent = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
+        let flat = text
+            .lines()
+            .map(|line| if line.trim().is_empty() { "" } else { line })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let paragraphs = flat
+            .split("\n\n")
+            .map(|p| p.trim_matches('\n'))
+            .filter(|p| !p.is_empty());
+        for (nth, paragraph) in paragraphs.enumerate() {
+            let lines = paragraph.lines().collect::<Vec<_>>();
+            let mut margin = None;
+            for (at, line) in lines.iter().enumerate() {
+                match (margin, indent(line) > 0) {
+                    (None, true) => {
+                        self.line("Bd -literal -offset indent");
+                        let run = lines[at..].iter().take_while(|next| indent(next) > 0);
+                        margin = run.map(|next| indent(next)).min();
+                    },
+                    (Some(_), false) => {
+                        self.line("Ed");
+                        margin = None;
+                    },
+                    (None, false) if at == 0 && nth > 0 => self.line("Pp"),
+                    _ => {},
+                }
+
+                let shown = match margin {
+                    Some(width) => line[width..].trim_end(),
+                    None => line.trim(),
+                };
+                if shown.starts_with(['.', '\'']) {
                     self.out.push_str("\\&");
                 }
-                self.out.push_str(&line.replace('\\', "\\e"));
+                self.out.push_str(&shown.replace('\\', "\\e"));
                 self.out.push('\n');
+            }
+            if margin.is_some() {
+                self.line("Ed");
             }
         }
     }

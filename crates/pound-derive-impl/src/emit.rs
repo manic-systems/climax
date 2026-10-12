@@ -29,6 +29,7 @@ use crate::{
         Derive,
         ExternalField,
         Header,
+        Prose,
         Shape,
         Slot,
         ValueEnum,
@@ -180,15 +181,15 @@ impl Emitter {
         let root = &self.root;
         let vname = &variant.ident;
 
-        let (name, aliases, hidden, help_if_empty, doc, command) = match &variant.kind {
+        let (name, aliases, hidden, help_if_empty, prose, command) = match &variant.kind {
             VariantKind::Command {
                 name,
                 aliases,
                 hidden,
                 help_if_empty,
-                doc,
+                prose,
                 command,
-            } => (name, aliases, *hidden, *help_if_empty, doc, command),
+            } => (name, aliases, *hidden, *help_if_empty, prose, command),
             VariantKind::External(ExternalField::List) => {
                 let sp = local("s");
                 return VariantTokens {
@@ -236,17 +237,16 @@ impl Emitter {
 
         let fields = &command.fields;
         let ck = generated(&format!("CMD{idx}"));
-        let (about_call, long_about_call) = self.about_calls(doc);
+        let prose_calls = self.prose_calls(prose);
 
         let empty_call = help_if_empty.then(|| quote!(.help_if_empty()));
         let head = quote! {
             #root::CommandSpec::new(#name)
-                #about_call
-                #long_about_call
+                #prose_calls
                 #empty_call
         };
 
-        let about = self.help_lit(short_help(doc));
+        let about = self.help_lit(short_help(&prose.doc));
         let hidden_call = if hidden { quote!(.hidden()) } else { quote!() };
         let reads_spec = !fields.args.is_empty();
 
@@ -354,7 +354,7 @@ impl Emitter {
             |tokens| tokens.iter().cloned().collect::<TokenStream>(),
         );
 
-        let (about, long_about) = self.about_calls(&header.doc);
+        let prose = self.prose_calls(&header.prose);
 
         let empty = header.help_if_empty.then(|| quote!(.help_if_empty()));
 
@@ -362,8 +362,7 @@ impl Emitter {
             #new
                 .version(#version)
                 .hash_opt(::core::option_env!("POUND_GIT_HASH"))
-                #about
-                #long_about
+                #prose
                 #empty
         }
     }
@@ -869,18 +868,28 @@ impl Emitter {
         }
     }
 
-    // the `.about()` / `.long_about()` calls for a doc comment. the long form is
-    // chained only when it says more than the summary already does.
-    fn about_calls(&self, doc: &str) -> (TokenStream, TokenStream) {
-        let short = self.help_lit(short_help(doc));
-        let about = quote! { .about(#short) };
+    // the long form is chained only when it says more than the summary
+    // already does
+    fn prose_calls(&self, prose: &Prose) -> TokenStream {
+        let call = |name: &str, text: &str| {
+            let method = Ident::new(name, Span::call_site());
+            let lit = self.help_lit(text);
+            quote! { .#method(#lit) }
+        };
 
-        if summary(doc) == doc {
-            return (about, quote!());
-        }
+        let doc = prose.doc.as_str();
+        let about = call("about", short_help(doc));
+        let long = (summary(doc) != doc).then(|| call("long_about", doc));
+        let before = prose
+            .before_help
+            .as_deref()
+            .map(|text| call("before_help", text));
+        let after = prose
+            .after_help
+            .as_deref()
+            .map(|text| call("after_help", text));
 
-        let full = self.help_lit(doc);
-        (about, quote! { .long_about(#full) })
+        quote! { #about #long #before #after }
     }
 
     // bake the help string only when the wrapping crate asks for help text,
