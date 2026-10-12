@@ -81,13 +81,15 @@ pub trait FromArg: Sized {
 #[non_exhaustive]
 pub struct Choice {
     /// the spelling help and completion offer
-    pub name:    &'static str,
+    pub name:        &'static str,
     /// other spellings that select it, never listed
-    pub aliases: &'static [&'static str],
+    pub aliases:     &'static [&'static str],
     /// what it means, for long help and completion descriptions
-    pub help:    &'static str,
+    pub help:        &'static str,
     /// accepted, but left out of listings
-    pub hidden:  bool,
+    pub hidden:      bool,
+    /// answers to its spellings in any ASCII case
+    pub ignore_case: bool,
 }
 
 impl Choice {
@@ -98,6 +100,7 @@ impl Choice {
             aliases: &[],
             help: "",
             hidden: false,
+            ignore_case: false,
         }
     }
 
@@ -119,20 +122,34 @@ impl Choice {
         self
     }
 
+    #[must_use]
+    pub const fn ignore_case(mut self) -> Self {
+        self.ignore_case = true;
+        self
+    }
+
     /// whether `word` selects this choice, as its name or an alias
     #[must_use]
     pub const fn answers(&self, word: &str) -> bool {
-        if const_eq(self.name, word) {
+        if self.spells(self.name, word) {
             return true;
         }
         let mut i = 0;
         while i < self.aliases.len() {
-            if const_eq(self.aliases[i], word) {
+            if self.spells(self.aliases[i], word) {
                 return true;
             }
             i += 1;
         }
         false
+    }
+
+    const fn spells(&self, spelling: &str, word: &str) -> bool {
+        if self.ignore_case {
+            spelling.eq_ignore_ascii_case(word)
+        } else {
+            const_eq(spelling, word)
+        }
     }
 }
 

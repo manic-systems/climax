@@ -282,17 +282,19 @@ impl Emitter {
         let root = &self.root;
         let name = &value_enum.ident;
 
+        let ignore_case = value_enum.ignore_case.then(|| quote!(.ignore_case()));
         let choices = value_enum.variants.iter().map(|v| {
             let (label, aliases) = (&v.label, &v.aliases);
             let help = self.help_lit(&v.help);
             let hidden = v.hidden.then(|| quote!(.hidden()));
-            quote! { #root::Choice::new(#label).aliases(&[ #(#aliases),* ]).help(#help) #hidden }
+            quote! {
+                #root::Choice::new(#label).aliases(&[ #(#aliases),* ]).help(#help) #hidden #ignore_case
+            }
         });
 
-        let arms = value_enum.variants.iter().map(|v| {
+        let arms = value_enum.variants.iter().enumerate().map(|(i, v)| {
             let vname = &v.ident;
-            let words = v.spellings();
-            quote! { #(#words)|* => ::core::result::Result::Ok(Self::#vname), }
+            quote! { ::core::option::Option::Some(#i) => ::core::result::Result::Ok(Self::#vname), }
         });
 
         let spellings = value_enum.variants.iter().map(|v| {
@@ -305,7 +307,7 @@ impl Emitter {
             quote! { Self::#vname }
         });
 
-        let (raw, other) = (local("s"), local("other"));
+        let (raw, listed, choice) = (local("s"), local("listed"), local("choice"));
 
         quote! {
             impl #root::FromArg for #name {
@@ -313,10 +315,11 @@ impl Emitter {
                     ::core::option::Option::Some(&[ #(#choices),* ]);
 
                 fn from_arg(#raw: &str) -> ::core::result::Result<Self, #root::ValueError> {
-                    match #raw {
+                    let #listed = <Self as #root::FromArg>::POSSIBLE.unwrap_or_default();
+                    match #listed.iter().position(|#choice| #choice.answers(#raw)) {
                         #(#arms)*
-                        #other => ::core::result::Result::Err(
-                            #root::ValueError::new(#other, "unrecognized value")
+                        _ => ::core::result::Result::Err(
+                            #root::ValueError::new(#raw, "unrecognized value")
                         ),
                     }
                 }

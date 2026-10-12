@@ -172,6 +172,10 @@ impl Completions {
         let (done, prefix) = word.split_at(cut.unwrap_or(0));
         let lead = format!("{before}{done}");
 
+        let fold = arg.complete.is_none()
+            && arg
+                .possible
+                .is_some_and(|choices| choices.iter().any(|c| c.ignore_case));
         let found = match (arg.complete, arg.possible) {
             (Some(complete), _) => complete(partial, prefix),
             (None, Some(possible)) => {
@@ -193,9 +197,14 @@ impl Completions {
         };
 
         for candidate in found {
+            let typed = candidate
+                .value
+                .get(..prefix.len())
+                .filter(|head| fold && head.eq_ignore_ascii_case(prefix))
+                .unwrap_or(prefix);
             let candidate =
                 Candidate::new(format!("{lead}{}", candidate.value)).help(candidate.help);
-            self.offer(candidate, &format!("{lead}{prefix}"));
+            self.offer(candidate, &format!("{lead}{typed}"));
         }
     }
 

@@ -470,13 +470,16 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 /// of an option or positional that takes one of a fixed set of words.
 ///
 /// each variant is spelled in kebab case, so `PlainText` is `plain-text`. the
-/// attributes below go on the variants, and the enum itself takes none.
+/// attributes below go on the variants.
 ///
 /// | attribute        | meaning                                           |
 /// |------------------|---------------------------------------------------|
 /// | `name = "yml"`   | the spelling, in place of the kebab case one      |
 /// | `alias = "a, b"` | more spellings that select it, never listed       |
 /// | `hidden`         | accepted, but left out of help and completion     |
+///
+/// `#[pound(ignore_case)]` on the enum accepts a value in any ASCII case, so
+/// `JSON` selects `json`.
 ///
 /// a variant's doc comment describes it in long help and in completion.
 ///
