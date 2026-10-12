@@ -747,6 +747,7 @@ impl Emitter {
         let inner = &arg.ty.inner;
 
         let body = match (arg.kind, &arg.conversion) {
+            (ArgKind::Flag, _) if arg.ty.sourced => quote! { #m.switch_sourced(#spec, #i)? },
             (ArgKind::Flag, _) => quote! { #m.switch(#spec, #i)? },
             (ArgKind::Count, _) => {
                 let ty = &arg.ty.full;
@@ -755,6 +756,12 @@ impl Emitter {
             (_, Some(conversion)) => {
                 let convert = self.conversion_closure(conversion, inner);
                 match arg.ty.shape {
+                    Shape::One if arg.ty.sourced => {
+                        quote! { #m.required_sourced_map::<#inner>(#spec, #i, #convert)? }
+                    },
+                    Shape::Opt if arg.ty.sourced => {
+                        quote! { #m.optional_sourced_map::<#inner>(#spec, #i, #convert)? }
+                    },
                     Shape::Bool | Shape::One => {
                         quote! { #m.required_map::<#inner>(#spec, #i, #convert)? }
                     },

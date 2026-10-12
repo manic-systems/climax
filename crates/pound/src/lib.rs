@@ -147,6 +147,8 @@ pub use value::{
     ArgValue,
     Choice,
     FromArg,
+    Source,
+    Sourced,
     ValueError,
 };
 

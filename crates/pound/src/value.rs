@@ -76,6 +76,27 @@ pub trait FromArg: Sized {
     }
 }
 
+/// a value and where it came from, for a field that cares whether the user
+/// typed it, as when a config file should win over a default but not over the
+/// command line
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sourced<T> {
+    pub value:  T,
+    pub source: Source,
+}
+
+/// where a value came from
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Source {
+    /// typed on the command line
+    CommandLine,
+    /// read from this environment variable
+    Env(&'static str),
+    /// the arg's `default`, or `false` for a flag nothing set
+    Default,
+}
+
 /// one value a choice type accepts
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

@@ -554,11 +554,12 @@ impl CommandFields {
 
 /// a field's type and how many values it holds
 pub struct FieldType {
-    pub shape: Shape,
-    /// the type `FromArg` reads, inside any `Option` or `Vec`
-    pub inner: TokenStream,
+    pub shape:   Shape,
+    /// the type `FromArg` reads, inside any `Option`, `Vec` or `Sourced`
+    pub inner:   TokenStream,
+    pub sourced: bool,
     /// the field's type as written
-    pub full:  TokenStream,
+    pub full:    TokenStream,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -604,7 +605,24 @@ impl FieldType {
             (Shape::One, full.clone())
         };
 
-        Self { shape, inner, full }
+        let wrapped = inner.clone().into_iter().collect::<Vec<_>>();
+        let (value, sourced) =
+            match Self::strip_path(&wrapped, |path| path.last() == Some(&"Sourced")) {
+                Some(value) => (value, true),
+                None => (inner, false),
+            };
+        let shape = if sourced && shape == Shape::One && value.to_string() == "bool" {
+            Shape::Bool
+        } else {
+            shape
+        };
+
+        Self {
+            shape,
+            inner: value,
+            sourced,
+            full,
+        }
     }
 
     // `Wrapper < Inner >` -> the `Inner` tokens, where `Wrapper` may also be
@@ -615,6 +633,18 @@ impl FieldType {
         module: &str,
         crates: &[&str],
     ) -> Option<TokenStream> {
+        Self::strip_path(toks, |path| {
+            match path {
+                [name] => *name == wrapper,
+                [krate, home, name] => {
+                    crates.contains(krate) && *home == module && *name == wrapper
+                },
+                _ => false,
+            }
+        })
+    }
+
+    fn strip_path(toks: &[TokenTree], known: impl Fn(&[&str]) -> bool) -> Option<TokenStream> {
         let is_colon = |tok: Option<&TokenTree>| matches!(tok, Some(TokenTree::Punct(p)) if p.as_char() == ':');
 
         let mut at = if is_colon(toks.first()) && is_colon(toks.get(1)) {
@@ -636,11 +666,7 @@ impl FieldType {
             }
         }
 
-        let known = match path.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-            [name] => name == wrapper,
-            [krate, home, name] => crates.contains(&krate) && home == module && name == wrapper,
-            _ => false,
-        };
+        let known = known(&path.iter().map(String::as_str).collect::<Vec<_>>());
 
         let open_ok = matches!(toks.get(at), Some(TokenTree::Punct(p)) if p.as_char() == '<');
         let close_ok = matches!(toks.last(), Some(TokenTree::Punct(p)) if p.as_char() == '>');
@@ -663,7 +689,8 @@ pub enum ArgKind {
 }
 
 impl ArgKind {
-    fn new(a: &Pound, shape: Shape, ident: &Ident) -> Result<Self, Error> {
+    fn new(a: &Pound, ty: &FieldType, ident: &Ident) -> Result<Self, Error> {
+        let (shape, sourced) = (ty.shape, ty.sourced);
         let shape_count =
             usize::from(a.positional) + usize::from(a.trailing) + usize::from(a.count);
 
@@ -731,6 +758,14 @@ impl ArgKind {
                 ident.span(),
                 "pound: an `Option<Option<T>>` field needs a value option without \
                  `default_missing`",
+            ));
+        }
+
+        if sourced && (!matches!(shape, Shape::Bool | Shape::One | Shape::Opt) || a.count) {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: `Sourced<T>` holds one value, as `Sourced<T>`, `Option<Sourced<T>>` or a \
+                 `Sourced<bool>` flag",
             ));
         }
 
@@ -944,7 +979,7 @@ impl Arg {
     fn new(field: &NamedField, ty: FieldType, a: Pound) -> Result<Self, Error> {
         let ident = &field.name;
         let fname = ident.to_string();
-        let kind = ArgKind::new(&a, ty.shape, ident)?;
+        let kind = ArgKind::new(&a, &ty, ident)?;
 
         // long/short only for named kinds, defaulting a long name when neither
         // given.

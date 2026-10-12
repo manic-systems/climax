@@ -27,6 +27,8 @@ use crate::{
     },
     value::{
         FromArg,
+        Source,
+        Sourced,
         ValueError,
     },
 };
@@ -260,6 +262,12 @@ impl<'a> Matches<'a> {
         self.slots[i].count > 0
     }
 
+    /// whether arg `i` was written on the line, its negation included
+    #[must_use]
+    pub fn given(&self, i: usize) -> bool {
+        self.slots[i].count > 0 || self.slots[i].negated
+    }
+
     /// resolve a flag to its final state, honoring the negation spelling and
     /// falling back to the env var or default when neither was given
     pub fn switch(&self, spec: &CommandSpec, i: usize) -> Result<bool, Error> {
@@ -403,6 +411,58 @@ impl<'a> Matches<'a> {
         Ok(parse_fallback(spec, i, &convert).transpose()?.map(Some))
     }
 
+    /// where the value of arg `i` came from, `None` when it has none
+    #[must_use]
+    pub fn source(&self, spec: &CommandSpec, i: usize) -> Option<Source> {
+        if self.given(i) {
+            return Some(Source::CommandLine);
+        }
+        fallback(spec, i).map(|found| found.source())
+    }
+
+    /// resolve a flag like [`Self::switch`], with where its state came from
+    pub fn switch_sourced(&self, spec: &CommandSpec, i: usize) -> Result<Sourced<bool>, Error> {
+        Ok(Sourced {
+            value:  self.switch(spec, i)?,
+            source: self.source(spec, i).unwrap_or(Source::Default),
+        })
+    }
+
+    /// read a required value with where it came from
+    /// caller must supply conversion fn
+    pub fn required_sourced_map<T>(
+        &self,
+        spec: &CommandSpec,
+        i: usize,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
+    ) -> Result<Sourced<T>, Error> {
+        self.optional_sourced_map(spec, i, convert)?
+            .ok_or_else(|| ErrorKind::MissingRequired(spec.args[i].display_name()).into())
+    }
+
+    /// read an optional value with where it came from
+    /// caller must supply conversion fn
+    pub fn optional_sourced_map<T>(
+        &self,
+        spec: &CommandSpec,
+        i: usize,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
+    ) -> Result<Option<Sourced<T>>, Error> {
+        if let Some(s) = self.raw(i) {
+            return Ok(Some(Sourced {
+                value:  parse_with(spec, i, s, None, &convert)?,
+                source: Source::CommandLine,
+            }));
+        }
+        let Some(found) = fallback(spec, i) else {
+            return Ok(None);
+        };
+        Ok(Some(Sourced {
+            value:  parse_with(spec, i, &found.value, found.env, &convert)?,
+            source: found.source(),
+        }))
+    }
+
     /// read every value
     /// caller must supply conversion fn
     pub fn many_map<T>(
@@ -448,6 +508,12 @@ impl<'a> Matches<'a> {
 struct Fallback {
     value: Cow<'static, str>,
     env:   Option<&'static str>,
+}
+
+impl Fallback {
+    fn source(&self) -> Source {
+        self.env.map_or(Source::Default, Source::Env)
+    }
 }
 
 fn fallback(spec: &CommandSpec, i: usize) -> Option<Fallback> {
