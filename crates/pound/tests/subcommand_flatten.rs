@@ -78,9 +78,10 @@ fn a_flattened_struct_can_own_the_optional_selector() {
     {
         use pound::ErrorKind;
 
-        let ErrorKind::Help(text) = Root::try_parse_from(["--help"]).unwrap_err().kind else {
+        let ErrorKind::Help(help) = Root::try_parse_from(["--help"]).unwrap_err().kind else {
             panic!("expected help");
         };
+        let text = help.to_string();
         assert!(text.contains("Usage: demo [OPTION]... [COMMAND]"));
         assert!(text.contains("clean") && text.contains("purge"));
         assert!(!text.contains("internal"));

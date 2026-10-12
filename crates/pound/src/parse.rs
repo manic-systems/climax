@@ -1707,14 +1707,16 @@ mod tests {
     #[test]
     fn subcommand_usage_carries_the_program_path() {
         let err = parse_spec(&ROOT, argv(&["add", "only"])).unwrap_err();
-        assert_eq!(err.usage.as_deref(), Some(expected_add_usage()));
+        let usage = err.usage.map(|line| line.to_string());
+        assert_eq!(usage.as_deref(), Some(expected_add_usage()));
 
-        let ErrorKind::Help(text) = parse(&ROOT, &["add", "--help"]).unwrap_err() else {
+        let ErrorKind::Help(help) = parse(&ROOT, &["add", "--help"]).unwrap_err() else {
             panic!("expected help");
         };
+        let text = help.to_string();
         assert!(text.contains(expected_add_usage()), "{text}");
 
         let err = parse_spec(&ROOT, argv(&["--nope"])).unwrap_err();
-        assert!(err.usage.unwrap().starts_with("Usage: prog"));
+        assert!(err.usage.unwrap().to_string().starts_with("Usage: prog"));
     }
 }

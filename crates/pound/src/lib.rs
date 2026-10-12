@@ -111,11 +111,16 @@ mod error;
 mod help;
 mod parse;
 pub mod spec;
+mod term;
 mod value;
 
 pub use error::{
     Error,
     ErrorKind,
+};
+pub use help::{
+    Help,
+    Usage,
 };
 pub use parse::Matches;
 #[cfg(feature = "derive")]
@@ -133,6 +138,7 @@ pub use spec::{
     Kind,
     SubSpec,
 };
+pub use term::Term;
 pub use value::{
     ArgValue,
     FromArg,

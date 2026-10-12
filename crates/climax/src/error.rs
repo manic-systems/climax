@@ -67,7 +67,7 @@ impl fmt::Debug for Error {
         match self {
             #[cfg(feature = "parse")]
             Self::ArgParse(error) => {
-                let report = error.render();
+                let report = error.render(pound::Term::plain());
                 f.write_str(report.strip_prefix("error: ").unwrap_or(&report))
             },
             _ => fmt::Display::fmt(self, f),

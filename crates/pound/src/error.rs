@@ -5,6 +5,17 @@
 use core::fmt;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+use crate::{
+    help::{
+        Help,
+        Usage,
+    },
+    term::{
+        Paint,
+        Span,
+        Term,
+    },
+};
 
 /// what a parse attempt ran into, or which early exit it was asked for
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +48,7 @@ pub enum ErrorKind {
     MissingSubcommand {
         /// the command's help, which lists the subcommands to pick from, when
         /// the parser raised it
-        help: Option<String>,
+        help: Option<Help>,
     },
     /// a value failed to parse into its target type
     Value {
@@ -89,8 +100,8 @@ pub enum ErrorKind {
         /// the members to choose from, comma separated
         options: String,
     },
-    /// `-h` / `--help`, payload is rendered help
-    Help(String),
+    /// `-h` / `--help`, payload is the help page
+    Help(Help),
     /// `--version`, payload is the version line
     Version(String),
 }
@@ -143,7 +154,8 @@ impl fmt::Display for ErrorKind {
             Self::MissingGroup { group, options } => {
                 write!(f, "one of {options} is required ({group})")
             },
-            Self::Help(text) | Self::Version(text) => write!(f, "{text}"),
+            Self::Help(help) => write!(f, "{help}"),
+            Self::Version(text) => f.write_str(text),
         }
     }
 }
@@ -155,7 +167,7 @@ pub struct Error {
     /// what happened
     pub kind:      ErrorKind,
     /// the usage line of the command that raised it, when it came from a parse
-    pub usage:     Option<String>,
+    pub usage:     Option<Usage>,
     /// the spelling that still reaches the generated help, if any does
     pub help_flag: Option<&'static str>,
 }
@@ -171,7 +183,7 @@ impl Error {
     /// unless a nested command already claimed the failure as its own
     pub(crate) fn or_usage(
         mut self,
-        usage: impl FnOnce() -> (String, Option<&'static str>),
+        usage: impl FnOnce() -> (Usage, Option<&'static str>),
     ) -> Self {
         if self.usage.is_none() && !self.is_exit() {
             let (usage, help_flag) = usage();
@@ -181,33 +193,40 @@ impl Error {
         self
     }
 
-    /// the whole report: the message, a spelling suggestion, the usage line,
-    /// and where to look next
+    /// the whole report laid out for `term`, the message, a spelling
+    /// suggestion, the usage line, and where to look next
     #[must_use]
-    pub fn render(&self) -> String {
-        if let ErrorKind::Help(text) | ErrorKind::Version(text) = &self.kind {
-            return text.clone();
+    pub fn render(&self, term: Term) -> String {
+        match &self.kind {
+            ErrorKind::Help(help) => return help.render(term),
+            ErrorKind::Version(text) => return text.clone(),
+            _ => {},
         }
 
-        let mut out = format!("error: {}", self.kind);
+        let mut out = String::new();
+        Span::new("error:", Paint::Error).write(&mut out, term);
+        out.push(' ');
+        out.push_str(&self.kind.to_string());
         if let ErrorKind::MissingSubcommand { help: Some(help) } = &self.kind {
             out.push_str("\n\n");
-            out.push_str(help);
+            out.push_str(&help.render(term));
             return out;
         }
 
         if let Some(closest) = self.kind.closest() {
-            out.push_str("\n\n  tip: did you mean '");
-            out.push_str(closest);
+            out.push_str("\n\n  ");
+            Span::new("tip:", Paint::Tip).write(&mut out, term);
+            out.push_str(" did you mean '");
+            Span::literal(closest).write(&mut out, term);
             out.push('\'');
         }
         if let Some(usage) = &self.usage {
             out.push_str("\n\n");
-            out.push_str(usage);
+            out.push_str(&usage.render(term));
         }
         if let Some(flag) = self.help_flag {
             out.push_str("\n\nFor more information, try '");
-            out.push_str(flag);
+            Span::literal(flag).write(&mut out, term);
             out.push_str("'.");
         }
         out
@@ -219,14 +238,14 @@ impl Error {
         use std::io::Write as _;
 
         let code = if self.is_exit() {
-            match writeln!(std::io::stdout(), "{}", self.render()) {
+            match writeln!(std::io::stdout(), "{}", self.render(Term::stdout())) {
                 Ok(()) => 0,
                 // 128 + SIGPIPE, what a shell reports for a killed writer
                 Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => 141,
                 Err(_) => 1,
             }
         } else {
-            let _ = writeln!(std::io::stderr(), "{}", self.render());
+            let _ = writeln!(std::io::stderr(), "{}", self.render(Term::stderr()));
             2
         };
         std::process::exit(code);

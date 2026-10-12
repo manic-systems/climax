@@ -23,7 +23,7 @@ enum Commands {
 #[test]
 fn conversion_errors_carry_the_selected_command_usage() {
     let err = Cli::try_parse_from(["add", "oops"]).unwrap_err();
-    let usage = err.usage.as_deref().expect("usage line");
+    let usage = err.usage.expect("usage line").to_string();
     assert!(usage.starts_with("Usage: prog add"), "{usage}");
     assert_eq!(err.help_flag, Some("--help"));
 }
@@ -55,7 +55,7 @@ fn missing_nested_subcommand_reports_that_commands_help() {
     assert!(matches!(err.kind, pound::ErrorKind::MissingSubcommand {
         help: Some(_),
     }));
-    let report = err.render();
+    let report = err.render(pound::Term::plain());
     assert!(report.contains("Usage: prog pkg"), "{report}");
     #[cfg(feature = "help")]
     {
