@@ -58,6 +58,8 @@ pub struct Pound {
     pub exclusive:       bool,
     /// item- or variant-level: given no words, the command prints its help
     pub help_if_empty:   bool,
+    /// `ValueEnum`-level: its values match in any ASCII case
+    pub ignore_case:     bool,
     /// keep this arg/variant out of help output
     pub hidden:          bool,
     /// named flag/option that descendant subcommands also accept
@@ -152,6 +154,7 @@ impl Pound {
             "external"        => self.external        = bare(key, span, value.is_some())?,
             "exclusive"       => self.exclusive       = bare(key, span, value.is_some())?,
             "help_if_empty"   => self.help_if_empty   = bare(key, span, value.is_some())?,
+            "ignore_case"     => self.ignore_case     = bare(key, span, value.is_some())?,
             "hidden"          => self.hidden          = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
             "group"           => self.group           = Some(needed(key, span, value)?),
@@ -513,6 +516,7 @@ const BARE_KEYS: &[&str] = &[
     "subcommand",
     "flatten",
     "external",
+    "ignore_case",
     "exclusive",
     "help_if_empty",
     "hidden",

@@ -275,7 +275,7 @@ _caress_@IDENT@() {
     candidates=("${(@)out[2,-1]}")
     dirs=("${(@M)candidates:#*/}")
     candidates=("${(@)candidates:#*/}")
-    (( ${#candidates} )) && _describe -t values @PROGRAM@ candidates
+    (( ${#candidates} )) && _describe -t values @PROGRAM@ candidates -M 'm:{a-zA-Z}={A-Za-z}'
     (( ${#dirs} )) && _describe -t values @PROGRAM@ dirs -S ''
     [[ ${out[1]} == @FILES@ ]] && _files
 }

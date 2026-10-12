@@ -991,8 +991,9 @@ impl Arg {
 
 /// a `#[derive(ValueEnum)]` input
 pub struct ValueEnum {
-    pub ident:    Ident,
-    pub variants: Vec<ValueVariant>,
+    pub ident:       Ident,
+    pub variants:    Vec<ValueVariant>,
+    pub ignore_case: bool,
 }
 
 /// one variant of a `ValueEnum`, with every word that selects it
@@ -1017,7 +1018,16 @@ impl ValueEnum {
             return Err(Error::new("pound: ValueEnum can only derive on an enum"));
         };
 
-        pound(&e.attributes)?.allow_only(&[])?;
+        let item = pound(&e.attributes)?;
+        item.allow_only(&["ignore_case"])?;
+        let same = |left: &str, right: &str| {
+            if item.ignore_case {
+                left.eq_ignore_ascii_case(right)
+            } else {
+                left == right
+            }
+        };
+
         let mut variants = Vec::<ValueVariant>::new();
 
         for variant in e.variants.items() {
@@ -1045,7 +1055,7 @@ impl ValueEnum {
             for word in this.spellings() {
                 if let Some(first) = variants
                     .iter()
-                    .find(|other| other.spellings().any(|w| w == word))
+                    .find(|other| other.spellings().any(|w| same(w, word)))
                 {
                     let first = &first.ident;
                     return Err(Error::new_at_span(
@@ -1064,6 +1074,7 @@ impl ValueEnum {
         Ok(Self {
             ident: e.name.clone(),
             variants,
+            ignore_case: item.ignore_case,
         })
     }
 }
