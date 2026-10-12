@@ -15,9 +15,11 @@ default = [ "std", "help", "derive" ]
 std     = [  ]
 help    = [ "pound-derive?/help" ]
 derive  = [ "dep:pound-derive" ]
+unicode = [ "dep:unicode-width" ]
 
 [dependencies]
 pound-derive = { version = "0.3.0", path = "../pound-derive", optional = true }
+unicode-width = { version = "0.2.2", optional = true, default-features = false }
 
 [[example]]
 name              = "grab"

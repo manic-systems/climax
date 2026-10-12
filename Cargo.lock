@@ -107,6 +107,7 @@ name = "pound"
 version = "0.3.0"
 dependencies = [
  "pound-derive",
+ "unicode-width",
 ]
 
 [[package]]

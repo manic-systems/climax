@@ -2,6 +2,7 @@
 
 //! help and version rendering.
 
+use core::fmt;
 #[cfg(feature = "help")] use core::fmt::Write as _;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
@@ -10,10 +11,219 @@ use crate::spec::{
     ArgSpec,
     Kind,
 };
-use crate::spec::{
-    Command,
-    CommandSpec,
+use crate::{
+    spec::{
+        Command,
+        CommandSpec,
+    },
+    term::{
+        Paint,
+        Span,
+        Term,
+    },
 };
+
+/// a command's help page, laid out for whichever terminal prints it
+///
+/// `Display` gives the plain, unwrapped page. [`Help::render`] wraps it to a
+/// [`Term`]'s width and paints it when the terminal takes color.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Help {
+    blocks: Vec<Block>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    not(feature = "help"),
+    allow(dead_code, reason = "a usage line is all it renders")
+)]
+enum Block {
+    Text(String),
+    Usage(Usage),
+    Section {
+        heading: String,
+        rows:    Vec<Row>,
+        /// aligns to its own column, not the one the other sections share
+        own:     bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Row {
+    left: Vec<Span>,
+    help: String,
+}
+
+impl Row {
+    fn width(&self) -> usize {
+        self.left.iter().map(Span::width).sum()
+    }
+}
+
+const NEXT_LINE_INDENT: usize = 10;
+/// the narrowest help column worth keeping beside the left one
+const NARROWEST: usize = 20;
+
+impl Help {
+    /// the page laid out for `term`
+    #[must_use]
+    pub fn render(&self, term: Term) -> String {
+        let shared = self
+            .blocks
+            .iter()
+            .filter_map(|block| {
+                match block {
+                    Block::Section {
+                        rows, own: false, ..
+                    } => Some(rows),
+                    _ => None,
+                }
+            })
+            .flatten()
+            .map(Row::width)
+            .max()
+            .unwrap_or(0);
+
+        let mut out = String::new();
+        for block in &self.blocks {
+            match block {
+                Block::Text(text) => {
+                    push_wrapped(&mut out, text, 0, term.width());
+                    out.push('\n');
+                },
+                Block::Usage(usage) => {
+                    out.push_str(&usage.render(term));
+                    out.push('\n');
+                },
+                Block::Section { heading, rows, own } => {
+                    out.push('\n');
+                    Span::new(format!("{heading}:"), Paint::Heading).write(&mut out, term);
+                    out.push('\n');
+                    let column = if *own {
+                        rows.iter().map(Row::width).max().unwrap_or(0)
+                    } else {
+                        shared
+                    };
+                    for row in rows {
+                        push_row(&mut out, row, column, term);
+                    }
+                },
+            }
+        }
+
+        out.truncate(out.trim_end().len());
+        out
+    }
+}
+
+impl fmt::Display for Help {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render(Term::plain()))
+    }
+}
+
+fn push_row(out: &mut String, row: &Row, column: usize, term: Term) {
+    out.push_str("  ");
+    for span in &row.left {
+        span.write(out, term);
+    }
+    if row.help.is_empty() {
+        out.push('\n');
+        return;
+    }
+
+    let beside = 2 + column + 2;
+    let indent = match term.width() {
+        Some(width) if width.saturating_sub(beside) < NARROWEST => {
+            out.push('\n');
+            pad(out, NEXT_LINE_INDENT);
+            NEXT_LINE_INDENT
+        },
+        _ => {
+            pad(out, column - row.width() + 2);
+            beside
+        },
+    };
+
+    let mut first = true;
+    for paragraph in row.help.split('\n') {
+        if paragraph.is_empty() {
+            out.push('\n');
+            continue;
+        }
+        if !first {
+            pad(out, indent);
+        }
+        first = false;
+        push_wrapped(out, paragraph, indent, term.width());
+    }
+}
+
+/// the caller writes the first line's indent, later lines get it here
+fn push_wrapped(out: &mut String, text: &str, indent: usize, width: Option<usize>) {
+    let room = width.map_or(usize::MAX, |w| w.saturating_sub(indent).max(1));
+    for (i, line) in text.lines().enumerate() {
+        if i > 0 {
+            pad(out, indent);
+        }
+
+        let mut filled = 0;
+        let mut gap = 0;
+        for (nth, word) in line.split(' ').enumerate() {
+            gap += usize::from(nth > 0);
+            if word.is_empty() {
+                continue;
+            }
+
+            let len = Term::columns(word);
+            if filled > 0 && filled + gap + len > room {
+                out.push('\n');
+                pad(out, indent);
+                filled = 0;
+            } else {
+                pad(out, gap);
+                filled += gap;
+            }
+            gap = 0;
+            out.push_str(word);
+            filled += len;
+        }
+        out.push('\n');
+    }
+}
+
+fn pad(out: &mut String, columns: usize) {
+    out.extend(core::iter::repeat_n(' ', columns));
+}
+
+/// a command's usage line, `Usage: grab [OPTION]... URL`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Usage {
+    /// `grab fetch [OPTION]... URL`, without the `Usage:` lead
+    line:    Box<str>,
+    /// where the program, `grab fetch`, ends in `line`
+    program: usize,
+}
+
+impl Usage {
+    /// the line painted for `term`
+    #[must_use]
+    pub fn render(&self, term: Term) -> String {
+        let mut out = String::new();
+        Span::new("Usage:", Paint::Heading).write(&mut out, term);
+        out.push(' ');
+        let (program, args) = self.line.split_at(self.program);
+        Span::literal(program).write(&mut out, term);
+        out.push_str(args);
+        out
+    }
+}
+
+impl fmt::Display for Usage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.render(Term::plain()))
+    }
+}
 
 /// the full invocation of `cmd`, led by the names of the commands above it
 fn program(cmd: &Command<'_>) -> String {
@@ -77,50 +287,53 @@ fn value_suffix(a: &ArgSpec) -> String {
 /// the long spelling, folding a `no-` negation into the `--[no-]name` form and
 /// listing any other negation as a second spelling
 #[cfg(feature = "help")]
-fn long_form(a: &ArgSpec, long: &str) -> String {
+fn long_form(a: &ArgSpec, long: &str) -> Vec<Span> {
     match a.negate {
-        Some(negate) if negate.strip_prefix("no-") == Some(long) => format!("--[no-]{long}"),
-        Some(negate) => format!("--{long}, --{negate}"),
-        None => format!("--{long}"),
+        Some(negate) if negate.strip_prefix("no-") == Some(long) => {
+            vec![Span::literal(format!("--[no-]{long}"))]
+        },
+        Some(negate) => {
+            vec![
+                Span::literal(format!("--{long}")),
+                Span::plain(", "),
+                Span::literal(format!("--{negate}")),
+            ]
+        },
+        None => vec![Span::literal(format!("--{long}"))],
     }
 }
 
 #[cfg(feature = "help")]
-fn invocation(a: &ArgSpec) -> String {
-    let mut s = String::new();
+fn invocation(a: &ArgSpec) -> Vec<Span> {
     let takes_value = a.kind == Kind::Opt;
+    let mut spans = Vec::new();
     match (a.short, a.long) {
         (Some(c), Some(l)) => {
-            s.push('-');
-            s.push(c);
-            s.push_str(", ");
-            s.push_str(&long_form(a, l));
+            spans.push(Span::literal(format!("-{c}")));
+            spans.push(Span::plain(", "));
+            spans.extend(long_form(a, l));
             if takes_value {
-                s.push_str(&value_suffix(a));
+                spans.push(Span::plain(value_suffix(a)));
             }
         },
         (Some(c), None) => {
-            s.push('-');
-            s.push(c);
-            if takes_value {
-                s.push(' ');
-                if a.default_missing.is_some() {
-                    let _ = write!(s, "[{}]", a.metavar());
-                } else {
-                    s.push_str(&a.metavar());
-                }
+            spans.push(Span::literal(format!("-{c}")));
+            if takes_value && a.default_missing.is_some() {
+                spans.push(Span::plain(format!(" [{}]", a.metavar())));
+            } else if takes_value {
+                spans.push(Span::plain(format!(" {}", a.metavar())));
             }
         },
         (None, Some(l)) => {
-            s.push_str("    ");
-            s.push_str(&long_form(a, l));
+            spans.push(Span::plain("    "));
+            spans.extend(long_form(a, l));
             if takes_value {
-                s.push_str(&value_suffix(a));
+                spans.push(Span::plain(value_suffix(a)));
             }
         },
-        (None, None) => s.push_str(&a.metavar()),
+        (None, None) => spans.push(Span::plain(a.metavar())),
     }
-    s
+    spans
 }
 
 #[cfg(feature = "help")]
@@ -151,7 +364,7 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
 }
 
 #[cfg(feature = "help")]
-fn push_tag(s: &mut String, tag: core::fmt::Arguments<'_>) {
+fn push_tag(s: &mut String, tag: fmt::Arguments<'_>) {
     if !s.is_empty() {
         s.push(' ');
     }
@@ -159,33 +372,38 @@ fn push_tag(s: &mut String, tag: core::fmt::Arguments<'_>) {
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn usage_line(cmd: &Command<'_>) -> String {
+pub(crate) fn usage_line(cmd: &Command<'_>) -> Usage {
     let visible_args: Vec<&ArgSpec> = cmd.spec().arguments().filter(|a| !a.hidden).collect();
     usage(cmd, &visible_args, !cmd.inherited().is_empty())
 }
 
 #[cfg(feature = "help")]
-fn usage(cmd: &Command<'_>, visible_args: &[&ArgSpec], has_globals: bool) -> String {
+fn usage(cmd: &Command<'_>, visible_args: &[&ArgSpec], has_globals: bool) -> Usage {
     let spec = cmd.spec();
-    let mut out = String::from("Usage: ");
-    out.push_str(&program(cmd));
+    let mut args = String::new();
     if has_globals || visible_args.iter().any(|a| !a.is_positional()) {
-        out.push_str(" [OPTION]...");
+        args.push_str(" [OPTION]...");
     }
     for a in visible_args.iter().filter(|a| a.is_positional()) {
-        out.push(' ');
-        out.push_str(&usage_positional(a));
+        args.push(' ');
+        args.push_str(&usage_positional(a));
     }
     if spec.subcommands().any(|s| !s.hidden) {
-        out.push_str(command_placeholder(spec));
+        args.push_str(command_placeholder(spec));
     }
-    out
+    let mut line = program(cmd);
+    let program_end = line.len();
+    line.push_str(&args);
+    Usage {
+        line:    line.into(),
+        program: program_end,
+    }
 }
 
 #[cfg(feature = "help")]
-pub(crate) fn render(cmd: &Command<'_>, long: bool) -> String {
+pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
     let spec = cmd.spec();
-    let mut out = String::new();
+    let mut blocks = Vec::new();
 
     let about = if long && !spec.long_about.is_empty() {
         spec.long_about
@@ -193,112 +411,114 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> String {
         spec.about
     };
     if !about.is_empty() {
-        out.push_str(about);
-        out.push_str("\n\n");
+        blocks.push(Block::Text(about.to_owned()));
     }
 
     let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|a| !a.hidden).collect();
-    let visible_subs = spec.subcommands().filter(|s| !s.hidden).collect::<Vec<_>>();
-    let grows: Vec<(String, String)> = cmd
+    let globals = cmd
         .inherited()
         .iter()
-        .map(|a| (invocation(a), help_text(a, long)))
-        .collect();
+        .map(|a| {
+            Row {
+                left: invocation(a),
+                help: help_text(a, long),
+            }
+        })
+        .collect::<Vec<_>>();
+    blocks.push(Block::Usage(usage(cmd, &visible_args, !globals.is_empty())));
 
-    out.push_str(&usage(cmd, &visible_args, !grows.is_empty()));
-    out.push('\n');
-
-    if !visible_subs.is_empty() {
-        out.push_str("\nCommands:\n");
-        let width = visible_subs.iter().map(|s| s.name.len()).max().unwrap_or(0);
-        for s in &visible_subs {
-            let _ = writeln!(out, "  {:<width$}  {}", s.name, s.about);
-        }
+    let commands = spec
+        .subcommands()
+        .filter(|s| !s.hidden)
+        .map(|s| {
+            Row {
+                left: vec![Span::literal(s.name)],
+                help: s.about.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>();
+    if !commands.is_empty() {
+        blocks.push(Block::Section {
+            heading: "Commands".to_owned(),
+            rows:    commands,
+            own:     true,
+        });
     }
 
-    let positionals: Vec<(String, String)> = visible_args
+    let positionals = visible_args
         .iter()
         .filter(|a| a.is_positional())
-        .map(|&a| (usage_positional(a), help_text(a, long)))
-        .collect();
+        .map(|&a| {
+            Row {
+                left: vec![Span::plain(usage_positional(a))],
+                help: help_text(a, long),
+            }
+        })
+        .collect::<Vec<_>>();
+    if !positionals.is_empty() {
+        blocks.push(Block::Section {
+            heading: "Arguments".to_owned(),
+            rows:    positionals,
+            own:     false,
+        });
+    }
 
     let mut sections = vec![("Options", vec![])];
     for &a in visible_args.iter().filter(|a| !a.is_positional()) {
         let heading = a.heading.unwrap_or("Options");
-        let row = (invocation(a), help_text(a, long));
+        let row = Row {
+            left: invocation(a),
+            help: help_text(a, long),
+        };
         match sections.iter_mut().find(|(name, _)| *name == heading) {
             Some((_, rows)) => rows.push(row),
             None => sections.push((heading, vec![row])),
         }
     }
+    sections[0].1.extend(cmd.builtins().iter().map(|a| {
+        Row {
+            left: invocation(a),
+            help: a.help.to_owned(),
+        }
+    }));
+    sections.push(("Global options", globals));
 
-    sections[0].1.extend(
-        cmd.builtins()
-            .iter()
-            .map(|a| (invocation(a), a.help.to_owned())),
+    blocks.extend(
+        sections
+            .into_iter()
+            .filter(|(_, rows)| !rows.is_empty())
+            .map(|(heading, rows)| {
+                Block::Section {
+                    heading: heading.to_owned(),
+                    rows,
+                    own: false,
+                }
+            }),
     );
-
-    // one width across every section, so the help column lines up throughout
-    let width = positionals
-        .iter()
-        .chain(sections.iter().flat_map(|(_, rows)| rows))
-        .chain(&grows)
-        .map(|(left, _)| left.len())
-        .max()
-        .unwrap_or(0);
-
-    if !positionals.is_empty() {
-        out.push_str("\nArguments:\n");
-        push_rows(&mut out, &positionals, width);
-    }
-    for (heading, rows) in &sections {
-        if rows.is_empty() {
-            continue;
-        }
-        let _ = write!(out, "\n{heading}:\n");
-        push_rows(&mut out, rows, width);
-    }
-    if !grows.is_empty() {
-        out.push_str("\nGlobal options:\n");
-        push_rows(&mut out, &grows, width);
-    }
-
-    out.truncate(out.trim_end().len());
-    out
+    Help { blocks }
 }
 
-#[cfg(feature = "help")]
-fn push_rows(out: &mut String, rows: &[(String, String)], width: usize) {
-    for (left, help) in rows {
-        if help.is_empty() {
-            let _ = writeln!(out, "  {left}");
-            continue;
-        }
-        let mut paragraphs = help.split('\n');
-        let first = paragraphs.next().unwrap_or_default();
-        let _ = writeln!(out, "  {left:<width$}  {first}");
-        for paragraph in paragraphs {
-            if paragraph.is_empty() {
-                out.push('\n');
-            } else {
-                let _ = writeln!(out, "  {:<width$}  {paragraph}", "");
-            }
-        }
+#[cfg(not(feature = "help"))]
+pub(crate) fn usage_line(cmd: &Command<'_>) -> Usage {
+    let args = if cmd.spec().has_subs() {
+        command_placeholder(cmd.spec())
+    } else {
+        ""
+    };
+    let mut line = program(cmd);
+    let program_end = line.len();
+    line.push_str(args);
+    Usage {
+        line:    line.into(),
+        program: program_end,
     }
 }
 
 #[cfg(not(feature = "help"))]
-pub(crate) fn usage_line(cmd: &Command<'_>) -> String {
-    let mut out = format!("Usage: {}", program(cmd));
-    if cmd.spec().has_subs() {
-        out.push_str(command_placeholder(cmd.spec()));
+pub(crate) fn render(cmd: &Command<'_>, _long: bool) -> Help {
+    Help {
+        blocks: vec![Block::Usage(usage_line(cmd))],
     }
-    out
-}
-
-#[cfg(not(feature = "help"))]
-pub(crate) fn render(cmd: &Command<'_>, _long: bool) -> String {
-    usage_line(cmd)
 }
 
 #[cfg(all(test, feature = "help", feature = "std"))]
@@ -319,5 +539,23 @@ mod tests {
             "how to run [possible values: fast, slow] [default: fast] [env: RUN_MODE]"
         );
         assert_eq!(help_text(&loud, false), "[env: LOUD]");
+    }
+
+    #[test]
+    fn help_wraps_beside_its_column() {
+        let help = Help {
+            blocks: vec![Block::Section {
+                heading: "Options".to_owned(),
+                rows:    vec![Row {
+                    left: vec![Span::literal("--jobs")],
+                    help: "how many downloads run at once".to_owned(),
+                }],
+                own:     false,
+            }],
+        };
+        assert_eq!(
+            help.render(Term::new(Some(30), false)),
+            "\nOptions:\n  --jobs  how many downloads\n          run at once"
+        );
     }
 }
