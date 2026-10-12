@@ -726,6 +726,7 @@ impl Emitter {
     fn count_calls(&self, arg: &Arg) -> TokenStream {
         let root = &self.root;
         let multi = arg.ty.shape.is_many().then(|| quote! { .multi() });
+        let optional = (arg.ty.shape == Shape::OptOpt).then(|| quote! { .optional_value() });
         let min_values = arg.min_values.map(|n| quote! { .min_values(#n) });
         let max_values = arg.max_values.map(|n| quote! { .max_values(#n) });
         let delimiter = arg.delimiter.map(|d| quote! { .delimiter(#d) });
@@ -738,7 +739,7 @@ impl Emitter {
             quote! { .per_use(#arity) }
         });
 
-        quote! { #multi #min_values #max_values #delimiter #per_use }
+        quote! { #multi #optional #min_values #max_values #delimiter #per_use }
     }
 
     fn reader(&self, arg: &Arg, i: usize, m: &Ident, spec: &Ident) -> TokenStream {
@@ -762,6 +763,9 @@ impl Emitter {
                     Shape::OptMany => {
                         quote! { #m.optional_many_map::<#inner>(#spec, #i, #convert)? }
                     },
+                    Shape::OptOpt => {
+                        quote! { #m.optional_value_map::<#inner>(#spec, #i, #convert)? }
+                    },
                 }
             },
             (_, None) => {
@@ -770,6 +774,11 @@ impl Emitter {
                     Shape::Opt => quote! { #m.optional::<#inner>(#spec, #i)? },
                     Shape::Many => quote! { #m.many::<#inner>(#spec, #i)? },
                     Shape::OptMany => quote! { #m.optional_many::<#inner>(#spec, #i)? },
+                    Shape::OptOpt => {
+                        let root = &self.root;
+                        let from_arg = quote! { <#inner as #root::FromArg>::from_arg };
+                        quote! { #m.optional_value_map::<#inner>(#spec, #i, #from_arg)? }
+                    },
                 }
             },
         };

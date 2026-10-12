@@ -298,7 +298,7 @@ fn value_suffix(a: &ArgSpec) -> String {
     let meta = a.metavar();
     if let Some(words) = several(a) {
         format!(" {words}")
-    } else if a.default_missing.is_some() {
+    } else if a.value_may_be_left_out() {
         format!("[={meta}]")
     } else {
         format!("={meta}")
@@ -352,7 +352,7 @@ fn invocation(a: &ArgSpec) -> Vec<Span> {
             spans.push(Span::literal(format!("-{c}")));
             if let Some(words) = several(a) {
                 spans.push(Span::plain(format!(" {words}")));
-            } else if takes_value && a.default_missing.is_some() {
+            } else if takes_value && a.value_may_be_left_out() {
                 spans.push(Span::plain(format!(" [{}]", a.metavar())));
             } else if takes_value {
                 spans.push(Span::plain(format!(" {}", a.metavar())));

@@ -160,6 +160,9 @@ pub struct ArgSpec {
     /// value a [`Kind::Opt`] takes when given with no `=value`, which also
     /// stops it consuming the following token
     pub default_missing: Option<&'static str>,
+    /// a [`Kind::Opt`] written with no `=value` takes no value at all, which
+    /// also stops it consuming the following token
+    pub optional_value:  bool,
     /// name of an environment variable to fall back to when the arg is not
     /// given on the command line. disabled in nostd.
     pub env:             Option<&'static str>,
@@ -219,6 +222,7 @@ impl ArgSpec {
             group: None,
             default: None,
             default_missing: None,
+            optional_value: false,
             env: None,
             negate: None,
             value_name: "",
@@ -397,6 +401,12 @@ impl ArgSpec {
     }
 
     #[must_use]
+    pub const fn optional_value(mut self) -> Self {
+        self.optional_value = true;
+        self
+    }
+
+    #[must_use]
     pub const fn hyphen_values(mut self) -> Self {
         self.hyphen_values = true;
         self
@@ -478,10 +488,16 @@ impl ArgSpec {
         false
     }
 
+    /// whether this option may be written without a value
+    #[must_use]
+    pub const fn value_may_be_left_out(&self) -> bool {
+        self.optional_value || self.default_missing.is_some()
+    }
+
     /// how many words one use of this option takes, `None` when it takes one
     #[must_use]
     pub fn words_per_use(&self) -> Option<Arity> {
-        let takes_more = self.kind == Kind::Opt && self.multi && self.default_missing.is_none();
+        let takes_more = self.kind == Kind::Opt && self.multi && !self.value_may_be_left_out();
         (takes_more && self.per_use != Arity::ONE).then_some(self.per_use)
     }
 
