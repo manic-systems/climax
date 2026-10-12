@@ -82,6 +82,7 @@ pub struct Pound {
     pub after_help:      Option<String>,
     /// help section this arg is listed under
     pub heading:         Option<String>,
+    pub display_order:   Option<usize>,
     pub name:            Option<String>,
     /// any expression, not just a literal
     pub version:         Option<Vec<TokenTree>>,
@@ -180,6 +181,7 @@ impl Pound {
             "before_help"     => self.before_help     = Some(needed(key, span, value)?),
             "after_help"      => self.after_help      = Some(needed(key, span, value)?),
             "heading"         => self.heading         = Some(needed(key, span, value)?),
+            "display_order"   => self.display_order   = Some(number(key, span, value)?),
             "name"            => self.name            = Some(needed(key, span, value)?),
             "min"             => self.min             = Some(needed(key, span, value)?),
             "max"             => self.max             = Some(needed(key, span, value)?),
@@ -482,6 +484,12 @@ impl NumArgs {
         }
         Ok(Self { min, max })
     }
+}
+
+fn number(key: &str, span: Span, value: Option<String>) -> Result<usize, Error> {
+    let text = needed(key, span, value)?;
+    text.parse()
+        .map_err(|_| Error::new_at_span(span, format!("pound: `{key} = {text}` is not a number")))
 }
 
 fn needed(key: &str, span: Span, value: Option<String>) -> Result<String, Error> {

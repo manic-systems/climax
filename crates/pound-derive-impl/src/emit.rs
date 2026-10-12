@@ -182,15 +182,8 @@ impl Emitter {
         let root = &self.root;
         let vname = &variant.ident;
 
-        let (name, aliases, hidden, help_if_empty, prose, command) = match &variant.kind {
-            VariantKind::Command {
-                name,
-                aliases,
-                hidden,
-                help_if_empty,
-                prose,
-                command,
-            } => (name, aliases, *hidden, *help_if_empty, prose, command),
+        let named = match &variant.kind {
+            VariantKind::Command(named) => named,
             VariantKind::External(ExternalField::List) => {
                 let sp = local("s");
                 return VariantTokens {
@@ -236,19 +229,20 @@ impl Emitter {
             },
         };
 
-        let fields = &command.fields;
+        let (name, aliases, fields) = (&named.name, &named.aliases, &named.command.fields);
         let ck = generated(&format!("CMD{idx}"));
-        let prose_calls = self.prose_calls(prose);
+        let prose_calls = self.prose_calls(&named.prose);
 
-        let empty_call = help_if_empty.then(|| quote!(.help_if_empty()));
+        let empty_call = named.help_if_empty.then(|| quote!(.help_if_empty()));
         let head = quote! {
             #root::CommandSpec::new(#name)
                 #prose_calls
                 #empty_call
         };
 
-        let about = self.help_lit(short_help(&prose.doc));
-        let hidden_call = if hidden { quote!(.hidden()) } else { quote!() };
+        let about = self.help_lit(short_help(&named.prose.doc));
+        let hidden_call = named.hidden.then(|| quote!(.hidden()));
+        let order_call = named.display_order.map(|n| quote! { .display_order(#n) });
         let reads_spec = !fields.args.is_empty();
 
         let arm = if fields.args.is_empty() && fields.flattened.is_empty() && fields.sub.is_none() {
@@ -267,12 +261,13 @@ impl Emitter {
         };
 
         VariantTokens {
-            consts: self.command_consts(command, &head, &idx.to_string(), &ck),
+            consts: self.command_consts(&named.command, &head, &idx.to_string(), &ck),
             spec: quote! {
                 #root::SubSpec::new(#name, &#ck)
                     .aliases(&[ #(#aliases),* ])
                     .about(#about)
                     #hidden_call
+                    #order_call
             },
             arm,
             reads_spec,
@@ -656,6 +651,10 @@ impl Emitter {
 
         if let Some(h) = arg.heading.as_ref().filter(|_| self.help) {
             e = quote! { #e.heading(#h) };
+        }
+
+        if let Some(n) = arg.display_order {
+            e = quote! { #e.display_order(#n) };
         }
 
         let vn = &arg.value_name;

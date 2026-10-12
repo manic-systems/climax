@@ -46,6 +46,7 @@ const ITEM_ATTRIBUTES: &[&str] = &[
 ];
 const VARIANT_ATTRIBUTES: &[&str] = &[
     "name",
+    "display_order",
     "alias",
     "hidden",
     "required_group",
@@ -72,6 +73,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "help",
     "long_help",
     "heading",
+    "display_order",
     "min",
     "max",
     "max_len",
@@ -208,14 +210,17 @@ pub enum VariantKind {
     /// `#[pound(external)] V(Vec<T>)` or `V(pound::External)` takes any name
     /// no other variant answers to, with the words after it
     External(ExternalField),
-    Command {
-        name:          String,
-        aliases:       Vec<String>,
-        hidden:        bool,
-        help_if_empty: bool,
-        prose:         Prose,
-        command:       Box<Command>,
-    },
+    Command(Box<Named>),
+}
+
+pub struct Named {
+    pub name:          String,
+    pub aliases:       Vec<String>,
+    pub hidden:        bool,
+    pub display_order: Option<usize>,
+    pub help_if_empty: bool,
+    pub prose:         Prose,
+    pub command:       Command,
 }
 
 /// what an external variant holds the line in
@@ -262,16 +267,17 @@ impl Variant {
         )?;
 
         Ok(Self {
-            kind: VariantKind::Command {
-                name:          vattr
+            kind: VariantKind::Command(Box::new(Named {
+                name: vattr
                     .name
                     .unwrap_or_else(|| camel_to_kebab(&ident.to_string())),
-                aliases:       vattr.aliases,
-                hidden:        vattr.hidden,
+                aliases: vattr.aliases,
+                hidden: vattr.hidden,
+                display_order: vattr.display_order,
                 help_if_empty: vattr.help_if_empty,
-                prose:         Prose::new(&variant.attributes, vattr.before_help, vattr.after_help),
-                command:       Box::new(command),
-            },
+                prose: Prose::new(&variant.attributes, vattr.before_help, vattr.after_help),
+                command,
+            })),
             ident,
         })
     }
@@ -751,6 +757,14 @@ impl ArgKind {
     }
 
     fn check(self, a: &Pound, ident: &Ident) -> Result<(), Error> {
+        if a.display_order.is_some() && !self.is_named() {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(display_order)] needs a flag or option, positionals are listed in \
+                 the order they fill",
+            ));
+        }
+
         if a.heading.is_some() && !self.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
@@ -886,6 +900,7 @@ pub struct Arg {
     pub help:            String,
     pub long_help:       Option<String>,
     pub heading:         Option<String>,
+    pub display_order:   Option<usize>,
     pub aliases:         Vec<String>,
     pub short_aliases:   Vec<char>,
     pub conflicts_with:  Vec<String>,
@@ -972,6 +987,7 @@ impl Arg {
             help,
             long_help,
             heading: a.heading,
+            display_order: a.display_order,
             aliases: a.aliases,
             short_aliases: a.short_aliases,
             conflicts_with: a.conflicts_with,

@@ -173,6 +173,9 @@ pub struct ArgSpec {
     pub long_help:       Option<&'static str>,
     /// section this arg is listed under in help, `Options` when unset
     pub heading:         Option<&'static str>,
+    /// where help lists this flag or option among the others, in place of
+    /// its position in the declaration
+    pub display_order:   Option<usize>,
     /// the values a choice type accepts, `None` for free text
     pub possible:        Option<&'static [Choice]>,
     /// kept out of help output, but accepted by parser
@@ -219,6 +222,7 @@ impl ArgSpec {
             help: "",
             long_help: None,
             heading: None,
+            display_order: None,
             possible: None,
             hidden: false,
             hide_possible: false,
@@ -361,6 +365,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn hidden(mut self) -> Self {
         self.hidden = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn display_order(mut self, display_order: usize) -> Self {
+        self.display_order = Some(display_order);
         self
     }
 
@@ -538,20 +548,23 @@ pub enum ArgumentOrder {
 #[non_exhaustive]
 pub struct SubSpec {
     /// the name that selects the subcommand
-    pub name:      &'static str,
+    pub name:          &'static str,
     /// extra names that also select this subcommand, kept out of help
-    pub aliases:   &'static [&'static str],
+    pub aliases:       &'static [&'static str],
     /// the short description subcommand listings show
-    pub about:     &'static str,
+    pub about:         &'static str,
     /// the spec the subcommand parses against
-    pub spec:      &'static CommandSpec,
+    pub spec:          &'static CommandSpec,
     /// kept out of help output, still selectable on the command line
-    pub hidden:    bool,
+    pub hidden:        bool,
     /// offers `spec`'s subcommands at this level in place of a named command
-    pub flattened: bool,
+    pub flattened:     bool,
     /// takes any name no other subcommand answers to, with the rest of the
     /// line
-    pub external:  bool,
+    pub external:      bool,
+    /// where help lists this command among the others, in place of its
+    /// position in the declaration
+    pub display_order: Option<usize>,
 }
 
 impl SubSpec {
@@ -566,6 +579,7 @@ impl SubSpec {
             hidden: false,
             flattened: false,
             external: false,
+            display_order: None,
         }
     }
 
@@ -612,6 +626,12 @@ impl SubSpec {
     #[must_use]
     pub const fn hidden(mut self) -> Self {
         self.hidden = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn display_order(mut self, display_order: usize) -> Self {
+        self.display_order = Some(display_order);
         self
     }
 }
@@ -860,7 +880,7 @@ impl CommandSpec {
         if let Some(owner) = self.selector() {
             expand(owner.subs, &mut out);
         }
-        out.into_iter()
+        in_display_order(out, |sub| sub.display_order).into_iter()
     }
 
     /// every arg this command parses, flattened structs included, in
@@ -994,9 +1014,8 @@ impl<'s> Command<'s> {
     /// [`Self::inherited`], then [`Self::builtins`].
     #[must_use]
     pub fn options(&self) -> Vec<ArgSpec> {
-        self.spec
-            .arguments()
-            .filter(|a| !a.hidden && !a.is_positional())
+        self.own_options()
+            .into_iter()
             .copied()
             .chain(self.inherited())
             .chain(self.builtins())
@@ -1022,6 +1041,17 @@ impl<'s> Command<'s> {
             .arguments()
             .chain(globals)
             .find(|a| a.answers_short(c))
+    }
+
+    /// the visible flags and options declared on this command, in the order
+    /// help lists them
+    #[must_use]
+    pub fn own_options(&self) -> Vec<&'static ArgSpec> {
+        let options = self
+            .spec
+            .arguments()
+            .filter(|a| !a.hidden && !a.is_positional());
+        in_display_order(options, |a| a.display_order)
     }
 
     /// the visible positionals, in the order they fill
@@ -1114,6 +1144,36 @@ impl<'s> Command<'s> {
     /// already claimed it
     pub(crate) fn locate(&self, err: Error) -> Error {
         err.or_usage(|| (help::usage_line(self), self.help_flag()))
+    }
+}
+
+/// `items` with each one that asks for a display order placed at that
+/// position, and the rest filling the gaps in their own order
+fn in_display_order<T: Copy>(
+    items: impl IntoIterator<Item = T>,
+    order: impl Fn(T) -> Option<usize>,
+) -> Vec<T> {
+    let (mut asked, free) = items
+        .into_iter()
+        .partition::<Vec<_>, _>(|&item| order(item).is_some());
+    asked.sort_by_key(|&item| order(item));
+
+    let mut placed = asked.into_iter().peekable();
+    let mut rest = free.into_iter().peekable();
+    let mut out = Vec::new();
+    loop {
+        let due = placed
+            .peek()
+            .is_some_and(|&item| order(item) <= Some(out.len()));
+        let next = if due || rest.peek().is_none() {
+            placed.next()
+        } else {
+            rest.next()
+        };
+        let Some(item) = next else {
+            return out;
+        };
+        out.push(item);
     }
 }
 

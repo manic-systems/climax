@@ -1926,13 +1926,14 @@ mod tests {
         help_if_empty:  false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
-        name:      "add",
-        aliases:   &[],
-        about:     "add a pin",
-        spec:      &ADD,
-        hidden:    false,
-        flattened: false,
-        external:  false,
+        name:          "add",
+        aliases:       &[],
+        about:         "add a pin",
+        spec:          &ADD,
+        hidden:        false,
+        flattened:     false,
+        external:      false,
+        display_order: None,
     }];
     const ROOT: CommandSpec = CommandSpec {
         name:           "prog",
