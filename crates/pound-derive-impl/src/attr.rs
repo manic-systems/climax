@@ -62,6 +62,9 @@ pub struct Pound {
     pub ignore_case:     bool,
     /// keep this arg/variant out of help output
     pub hidden:          bool,
+    pub hide_possible:   bool,
+    pub hide_default:    bool,
+    pub hide_env:        bool,
     /// named flag/option that descendant subcommands also accept
     pub global:          bool,
     pub group:           Option<String>,
@@ -163,6 +166,9 @@ impl Pound {
             "help_if_empty"   => self.help_if_empty   = bare(key, span, value.is_some())?,
             "ignore_case"     => self.ignore_case     = bare(key, span, value.is_some())?,
             "hidden"          => self.hidden          = bare(key, span, value.is_some())?,
+            "hide_possible"   => self.hide_possible   = bare(key, span, value.is_some())?,
+            "hide_default"    => self.hide_default    = bare(key, span, value.is_some())?,
+            "hide_env"        => self.hide_env        = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
             "group"           => self.group           = Some(needed(key, span, value)?),
             "default"         => self.default         = Some(text(key, span, seg)?),
@@ -574,6 +580,9 @@ const BARE_KEYS: &[&str] = &[
     "exclusive",
     "help_if_empty",
     "hidden",
+    "hide_possible",
+    "hide_default",
+    "hide_env",
     "global",
 ];
 

@@ -379,6 +379,7 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
     };
     let choices = a
         .possible
+        .filter(|_| !a.hide_possible)
         .unwrap_or_default()
         .iter()
         .filter(|c| !c.hidden)
@@ -394,11 +395,11 @@ fn help_text(a: &ArgSpec, long: bool) -> String {
         );
     }
     let takes_value = matches!(a.kind, Kind::Opt | Kind::Positional | Kind::Trailing);
-    if takes_value && let Some(default) = a.default {
+    if takes_value && let Some(default) = a.default.filter(|_| !a.hide_default) {
         push_tag(&mut s, format_args!("default: {default}"));
     }
     #[cfg(feature = "std")]
-    if let Some(env) = a.env {
+    if let Some(env) = a.env.filter(|_| !a.hide_env) {
         push_tag(&mut s, format_args!("env: {env}"));
     }
 

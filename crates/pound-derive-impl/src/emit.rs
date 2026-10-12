@@ -673,9 +673,15 @@ impl Emitter {
             };
         }
 
-        if arg.hidden {
-            e = quote! { #e.hidden() };
-        }
+        let hide = [
+            (arg.hidden, quote! { .hidden() }),
+            (arg.hide_possible, quote! { .hide_possible() }),
+            (arg.hide_default, quote! { .hide_default() }),
+            (arg.hide_env, quote! { .hide_env() }),
+        ]
+        .into_iter()
+        .filter_map(|(set, call)| set.then_some(call));
+        e = quote! { #e #(#hide)* };
 
         if arg.global {
             e = quote! { #e.global() };

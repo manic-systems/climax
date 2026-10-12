@@ -177,6 +177,12 @@ pub struct ArgSpec {
     pub possible:        Option<&'static [Choice]>,
     /// kept out of help output, but accepted by parser
     pub hidden:          bool,
+    /// help and man pages leave out the possible values
+    pub hide_possible:   bool,
+    /// help and man pages leave out the default
+    pub hide_default:    bool,
+    /// help and man pages leave out the env var
+    pub hide_env:        bool,
     /// also accepted by every subcommand below this command
     pub global:          bool,
     /// given, it must be the only arg of its command, and it lifts the
@@ -215,6 +221,9 @@ impl ArgSpec {
             heading: None,
             possible: None,
             hidden: false,
+            hide_possible: false,
+            hide_default: false,
+            hide_env: false,
             global: false,
             exclusive: false,
             complete: None,
@@ -352,6 +361,24 @@ impl ArgSpec {
     #[must_use]
     pub const fn hidden(mut self) -> Self {
         self.hidden = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn hide_possible(mut self) -> Self {
+        self.hide_possible = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn hide_default(mut self) -> Self {
+        self.hide_default = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn hide_env(mut self) -> Self {
+        self.hide_env = true;
         self
     }
 
