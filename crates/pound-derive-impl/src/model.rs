@@ -34,8 +34,23 @@ use crate::attr::{
     summary,
 };
 
-const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group", "help_if_empty"];
-const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group", "help_if_empty"];
+const ITEM_ATTRIBUTES: &[&str] = &[
+    "name",
+    "version",
+    "required_group",
+    "help_if_empty",
+    "before_help",
+    "after_help",
+];
+const VARIANT_ATTRIBUTES: &[&str] = &[
+    "name",
+    "alias",
+    "hidden",
+    "required_group",
+    "help_if_empty",
+    "before_help",
+    "after_help",
+];
 const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden"];
 const FIELD_ATTRIBUTES: &[&str] = &[
     "short",
@@ -127,11 +142,31 @@ impl Derive {
     }
 }
 
+pub struct Prose {
+    pub doc:         String,
+    pub before_help: Option<String>,
+    pub after_help:  Option<String>,
+}
+
+impl Prose {
+    fn new(
+        attributes: &[Attribute],
+        before_help: Option<String>,
+        after_help: Option<String>,
+    ) -> Self {
+        Self {
+            doc: doc(attributes),
+            before_help,
+            after_help,
+        }
+    }
+}
+
 /// what the top of a derived command says about itself
 pub struct Header {
     pub name:            Option<String>,
     pub version:         Option<Vec<TokenTree>>,
-    pub doc:             String,
+    pub prose:           Prose,
     /// groups that need exactly one member set, which only a struct's command
     /// reads
     pub required_groups: Vec<String>,
@@ -146,7 +181,7 @@ impl Header {
         Ok(Self {
             name:            item.name,
             version:         item.version,
-            doc:             doc(attributes),
+            prose:           Prose::new(attributes, item.before_help, item.after_help),
             required_groups: item.required_groups,
             help_if_empty:   item.help_if_empty,
         })
@@ -169,7 +204,7 @@ pub enum VariantKind {
         aliases:       Vec<String>,
         hidden:        bool,
         help_if_empty: bool,
-        doc:           String,
+        prose:         Prose,
         command:       Box<Command>,
     },
 }
@@ -225,7 +260,7 @@ impl Variant {
                 aliases:       vattr.aliases,
                 hidden:        vattr.hidden,
                 help_if_empty: vattr.help_if_empty,
-                doc:           doc(&variant.attributes),
+                prose:         Prose::new(&variant.attributes, vattr.before_help, vattr.after_help),
                 command:       Box::new(command),
             },
             ident,

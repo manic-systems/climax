@@ -75,6 +75,8 @@ pub struct Pound {
     pub help:            Option<String>,
     /// help text `--help` shows in place of the short form
     pub long_help:       Option<String>,
+    pub before_help:     Option<String>,
+    pub after_help:      Option<String>,
     /// help section this arg is listed under
     pub heading:         Option<String>,
     pub name:            Option<String>,
@@ -164,6 +166,8 @@ impl Pound {
             "value_name"      => self.value_name      = Some(needed(key, span, value)?),
             "help"            => self.help            = Some(needed(key, span, value)?),
             "long_help"       => self.long_help       = Some(needed(key, span, value)?),
+            "before_help"     => self.before_help     = Some(needed(key, span, value)?),
+            "after_help"      => self.after_help      = Some(needed(key, span, value)?),
             "heading"         => self.heading         = Some(needed(key, span, value)?),
             "name"            => self.name            = Some(needed(key, span, value)?),
             "min"             => self.min             = Some(needed(key, span, value)?),
