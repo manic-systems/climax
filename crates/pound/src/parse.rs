@@ -2,10 +2,7 @@
 
 //! walks `argv` against a [`CommandSpec`] and produces [`Matches`]
 
-use alloc::{
-    borrow::Cow,
-    vec::IntoIter,
-};
+use alloc::borrow::Cow;
 use core::convert::Infallible;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
@@ -185,6 +182,8 @@ impl From<ErrorKind> for Halt {
         Self::Error(kind.into())
     }
 }
+
+type Words<'w, 'a> = dyn Iterator<Item = &'a str> + 'w;
 
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
@@ -465,7 +464,7 @@ pub(crate) fn parse_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
-    let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
+    let mut it = args.into_iter();
     let mut hits = Vec::new();
     parse_cmd::<Strict>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
 }
@@ -476,7 +475,7 @@ pub(crate) fn probe_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> (Matches<'a>, Next) {
-    let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
+    let mut it = args.into_iter();
     let mut hits = Vec::new();
     let Ok(walked) = parse_cmd::<Lenient>(&Command::root(spec), None, &mut it, &mut hits);
     walked
@@ -542,7 +541,7 @@ impl Mode for Lenient {
 fn parse_cmd<'a, M: Mode>(
     cmd: &Command<'_>,
     lead: Option<&'a str>,
-    it: &mut IntoIter<&'a str>,
+    it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(Matches<'a>, Next), M::Error> {
     walk_cmd::<M>(cmd, lead, it, hits).map_err(|e| M::locate(cmd, e))
@@ -565,7 +564,7 @@ struct Walk<'w, 'a> {
 fn walk_cmd<'a, M: Mode>(
     cmd: &Command<'_>,
     lead: Option<&'a str>,
-    it: &mut IntoIter<&'a str>,
+    it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(Matches<'a>, Next), M::Error> {
     let mut targets = Vec::new();
@@ -615,7 +614,7 @@ impl<'a> Walk<'_, 'a> {
     fn step(
         &mut self,
         tok: &'a str,
-        it: &mut IntoIter<&'a str>,
+        it: &mut Words<'_, 'a>,
         hits: &mut Vec<GlobalHit<'a>>,
     ) -> Result<Step<'a>, Halt> {
         if self.only_positional {
@@ -639,7 +638,7 @@ impl<'a> Walk<'_, 'a> {
     fn long(
         &mut self,
         long: &'a str,
-        it: &mut IntoIter<&'a str>,
+        it: &mut Words<'_, 'a>,
         hits: &mut Vec<GlobalHit<'a>>,
     ) -> Result<(), Halt> {
         let (name, inline) = match long.split_once('=') {
@@ -684,7 +683,7 @@ impl<'a> Walk<'_, 'a> {
         &mut self,
         tok: &'a str,
         rest: &'a str,
-        it: &mut IntoIter<&'a str>,
+        it: &mut Words<'_, 'a>,
         hits: &mut Vec<GlobalHit<'a>>,
     ) -> Result<(), Halt> {
         let (cmd, targets) = (self.cmd, self.targets);
@@ -707,7 +706,7 @@ impl<'a> Walk<'_, 'a> {
         &mut self,
         target: SubTarget,
         name: &'a str,
-        it: &mut IntoIter<&'a str>,
+        it: &mut Words<'_, 'a>,
         hits: &mut Vec<GlobalHit<'a>>,
     ) -> Result<Next, M::Error> {
         let child = self.cmd.child(target.command);
@@ -801,7 +800,7 @@ fn apply_named<'a>(
     m: &mut Matches<'a>,
     target: &ArgTarget,
     inline: Option<&'a str>,
-    it: &mut IntoIter<&'a str>,
+    it: &mut Words<'_, 'a>,
 ) -> Result<(), Halt> {
     let a = target.arg;
     let slot = target_slot_mut(m, target);
@@ -836,7 +835,7 @@ fn shorts<'a>(
     targets: &[ArgTarget],
     m: &mut Matches<'a>,
     cluster: &'a str,
-    it: &mut IntoIter<&'a str>,
+    it: &mut Words<'_, 'a>,
     globals: &[&'static ArgSpec],
     hits: &mut Vec<GlobalHit<'a>>,
     builtin: impl Fn(char) -> Option<ErrorKind>,
@@ -897,7 +896,7 @@ fn cluster_value<'a>(
     cluster: &'a str,
     off: usize,
     ch: char,
-    it: &mut IntoIter<&'a str>,
+    it: &mut Words<'_, 'a>,
     a: &'static ArgSpec,
 ) -> Result<&'a str, Halt> {
     let rest = &cluster[off + ch.len_utf8()..];
@@ -910,7 +909,7 @@ fn cluster_value<'a>(
 
 /// the value for an option written without an attached one. an option that
 /// declares `default_missing` takes that instead of eating the next token.
-fn detached_value<'a>(a: &'static ArgSpec, it: &mut IntoIter<&'a str>) -> Result<&'a str, Halt> {
+fn detached_value<'a>(a: &'static ArgSpec, it: &mut Words<'_, 'a>) -> Result<&'a str, Halt> {
     if let Some(missing) = a.default_missing {
         return Ok(missing);
     }
@@ -958,7 +957,7 @@ fn record_global<'a>(
     index: usize,
     g: &'static ArgSpec,
     inline: Option<&'a str>,
-    it: &mut IntoIter<&'a str>,
+    it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), Halt> {
     match g.kind {
