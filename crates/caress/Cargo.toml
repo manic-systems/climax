@@ -11,7 +11,7 @@ license.workspace    = true
 repository.workspace = true
 
 [dependencies]
-pound = { version = "0.3.0", path = "../pound", default-features = false, features = [ "std" ] }
+pound = { version = "0.4.0", path = "../pound", default-features = false, features = [ "std" ] }
 
 [dev-dependencies]
 pound = { path = "../pound" }
