@@ -84,6 +84,9 @@ pub struct ArgSpec {
     pub min_values:      Option<usize>,
     /// most values a `multi` arg accepts
     pub max_values:      Option<usize>,
+    /// splits each value of a `multi` arg into several, `,` for `--features
+    /// a,b`
+    pub delimiter:       Option<char>,
     /// the mutual-exclusion group this arg belongs to, see [`GroupSpec`]
     pub group:           Option<&'static str>,
     /// the value used when the arg is not given and no env var supplies one
@@ -132,6 +135,7 @@ impl ArgSpec {
             multi: false,
             min_values: None,
             max_values: None,
+            delimiter: None,
             group: None,
             default: None,
             default_missing: None,
@@ -189,6 +193,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn max_values(mut self, max_values: usize) -> Self {
         self.max_values = Some(max_values);
+        self
+    }
+
+    #[must_use]
+    pub const fn delimiter(mut self, delimiter: char) -> Self {
+        self.delimiter = Some(delimiter);
         self
     }
 
@@ -329,6 +339,11 @@ impl ArgSpec {
     #[must_use]
     pub const fn answers_short(&self, short: char) -> bool {
         matches!(self.short, Some(own) if own == short)
+    }
+
+    pub(crate) fn split<'w>(&self, word: &'w str) -> impl Iterator<Item = &'w str> {
+        let delimiter = self.delimiter.filter(|_| self.multi);
+        word.split(move |c| Some(c) == delimiter)
     }
 
     /// the placeholder usage and errors show for this arg's value, the

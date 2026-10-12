@@ -88,6 +88,8 @@ pub struct Pound {
     pub min_values:      Option<String>,
     /// field-level: most values a `Vec` field accepts
     pub max_values:      Option<String>,
+    /// field-level: splits each value of a `Vec` field into several
+    pub delimiter:       Option<char>,
     /// field-level: custom raw-value parser, a path or any callable expression
     pub parse:           Option<TokenStream>,
     /// field-level: custom parsed-value validation, a path or any callable
@@ -136,7 +138,7 @@ impl Pound {
         let key = name.as_str();
 
         match key {
-            "short" => self.short = Some(value.as_deref().map(|v| single_char(v, span)).transpose()?),
+            "short" => self.short = Some(value.as_deref().map(|v| single_char(key, v, span)).transpose()?),
             "negate" => {
                 self.negate = Some(value.map(|v| v.trim_start_matches('-').to_owned()));
             },
@@ -166,6 +168,7 @@ impl Pound {
             "max_len"         => self.max_len         = Some(needed(key, span, value)?),
             "min_values"      => self.min_values      = Some(needed(key, span, value)?),
             "max_values"      => self.max_values      = Some(needed(key, span, value)?),
+            "delimiter"       => self.delimiter       = Some(single_char(key, &needed(key, span, value)?, span)?),
             "parse"           => self.parse           = Some(callable(key, span, seg)?),
             "validate"        => self.validate        = Some(callable(key, span, seg)?),
             "complete"        => self.complete        = Some(callable(key, span, seg)?),
@@ -422,15 +425,15 @@ fn needed(key: &str, span: Span, value: Option<String>) -> Result<String, Error>
     value.ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))
 }
 
-fn single_char(value: &str, span: Span) -> Result<char, Error> {
+fn single_char(key: &str, value: &str, span: Span) -> Result<char, Error> {
     let mut chars = value.chars();
 
     match (chars.next(), chars.next()) {
-        (Some(short), None) => Ok(short),
+        (Some(c), None) => Ok(c),
         _ => {
             Err(Error::new_at_span(
                 span,
-                "pound: `short` needs one character",
+                format!("pound: `{key}` needs one character"),
             ))
         },
     }

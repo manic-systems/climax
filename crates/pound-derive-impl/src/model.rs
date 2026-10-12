@@ -60,6 +60,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "max_len",
     "min_values",
     "max_values",
+    "delimiter",
     "parse",
     "validate",
     "complete",
@@ -637,6 +638,14 @@ impl ArgKind {
             ));
         }
 
+        if a.delimiter.is_some() && (!shape.is_many() || a.trailing) {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(delimiter)] needs a `Vec` or `Option<Vec>` field that is not \
+                 trailing",
+            ));
+        }
+
         if a.min_values.is_some() && shape == Shape::OptMany {
             return Err(Error::new_at_span(
                 ident.span(),
@@ -799,6 +808,7 @@ pub struct Arg {
     pub required:        bool,
     pub min_values:      Option<usize>,
     pub max_values:      Option<usize>,
+    pub delimiter:       Option<char>,
     pub group:           Option<String>,
     pub default:         Option<Text>,
     pub default_missing: Option<String>,
@@ -879,6 +889,7 @@ impl Arg {
             required,
             min_values,
             max_values,
+            delimiter: a.delimiter,
             group: a.group,
             default: a.default,
             default_missing: a.default_missing,

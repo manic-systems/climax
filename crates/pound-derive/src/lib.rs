@@ -275,6 +275,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `max_len = "n"`         | the raw text may have at most `n` characters                                    |
 /// | `min_values = "n"`      | a `Vec` must receive at least `n` values, waived when a `default` or `env` fills it |
 /// | `max_values = "n"`      | a `Vec` may receive at most `n` values                                          |
+/// | `delimiter = ','`       | a `Vec` splits each value at `,`, so `--features a,b` gives two. `env` and `default` split too |
 /// | `complete = F`          | list shell completion candidates with `F`, a `pound::complete::Completer`       |
 /// | `hint = path`           | complete the value as a file path, when its type does not say so itself         |
 ///
@@ -297,19 +298,23 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// #[derive(Parse)]
 /// struct Run {
 ///     #[pound(long, parse = str::parse::<NonZeroUsize>)]
-///     jobs:  NonZeroUsize,
+///     jobs:     NonZeroUsize,
 ///     #[pound(long, parse = hex, validate = |n: &u32| if *n > 0 { Ok(()) } else { Err("zero") })]
-///     mask:  u32,
+///     mask:     u32,
 ///     #[pound(long, min = "1", max = "10")]
-///     level: u8,
+///     level:    u8,
 ///     #[pound(long, max_len = "8")]
-///     tag:   Option<String>,
+///     tag:      Option<String>,
+///     #[pound(long, delimiter = ',')]
+///     features: Vec<String>,
 ///     #[pound(positional, min_values = "1", max_values = "3")]
-///     paths: Vec<String>,
+///     paths:    Vec<String>,
 /// }
 ///
-/// let run = Run::try_parse_from(["--jobs", "4", "--mask", "ff", "--level", "3", "a"]).unwrap();
+/// let line = "--jobs 4 --mask ff --level 3 --features a,b a";
+/// let run = Run::try_parse_from(line.split(' ')).unwrap();
 /// assert_eq!(run.mask, 255);
+/// assert_eq!(run.features, ["a", "b"]);
 /// assert!(Run::try_parse_from(["--jobs", "1", "--mask", "1", "--level", "11", "a"]).is_err());
 /// assert!(Run::try_parse_from(["--jobs", "1", "--mask", "1", "--level", "3"]).is_err());
 /// ```

@@ -402,10 +402,13 @@ impl<'a> Matches<'a> {
                 .map(|&s| parse_with(spec, i, s, None, &convert))
                 .collect();
         }
-        Ok(parse_fallback(spec, i, &convert)
-            .transpose()?
-            .into_iter()
-            .collect())
+        let Some(found) = fallback(spec, i) else {
+            return Ok(Vec::new());
+        };
+        spec.args[i]
+            .split(&found.value)
+            .map(|s| parse_with(spec, i, s, found.env, &convert))
+            .collect()
     }
 
     /// read every value, or `None` when the arg was never given and has no
@@ -476,17 +479,20 @@ fn parse_with<T>(
         if !listed.is_empty() {
             msg = format!("{msg} (possible values: {})", listed.join(", "));
         }
-        let arg = match env {
-            Some(var) => format!("{} (from ${var})", spec.args[i].display_name()),
-            None => spec.args[i].display_name(),
-        };
         ErrorKind::Value {
-            arg,
+            arg: source_name(&spec.args[i], env),
             value: e.value,
             msg,
         }
         .into()
     })
+}
+
+fn source_name(a: &ArgSpec, env: Option<&str>) -> String {
+    match env {
+        Some(var) => format!("{} (from ${var})", a.display_name()),
+        None => a.display_name(),
+    }
 }
 
 /// entrypoint. parse `args[1..]` against `spec`
@@ -955,7 +961,7 @@ fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
     if !a.multi {
         slot.values.clear(); // last wins for single-valued opts
     }
-    slot.values.push(value);
+    slot.values.extend(a.split(value));
     slot.count += 1;
 }
 
@@ -1071,7 +1077,7 @@ fn positional<'a>(
 
     let a = target.arg;
     let slot = target_slot_mut(m, target);
-    slot.values.push(tok);
+    slot.values.extend(a.split(tok));
     slot.count += 1;
     // single positional advances the cursor, a variadic one keeps eating
     if !(a.multi || a.kind == Kind::Trailing) {
@@ -1080,13 +1086,26 @@ fn positional<'a>(
     Ok(a.kind == Kind::Trailing)
 }
 
-/// enforce a list arg's arity. an absent arg with a fallback is left alone,
-/// since the fallback supplies the one value the reader will see.
-fn count_values(a: &ArgSpec, got: usize, has_fallback: bool) -> Result<(), ErrorKind> {
-    let filled_by_fallback = got == 0 && has_fallback;
+/// enforce a list arg's arity. an absent arg with a fallback is held only to
+/// `max_values`, by the values its delimiter splits the fallback into.
+fn count_values(a: &ArgSpec, got: usize, fallback: Option<Fallback>) -> Result<(), ErrorKind> {
+    if got == 0
+        && let Some(found) = fallback
+    {
+        let got = a.split(&found.value).count();
+        return match a.max_values {
+            Some(max) if got > max => {
+                Err(ErrorKind::TooManyValues {
+                    arg: source_name(a, found.env),
+                    max,
+                    got,
+                })
+            },
+            _ => Ok(()),
+        };
+    }
     if let Some(min) = a.min_values
         && got < min
-        && !filled_by_fallback
     {
         return Err(ErrorKind::TooFewValues {
             arg: a.display_name(),
@@ -1173,7 +1192,7 @@ fn finalise_args(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<()
         if !supplied(spec, m, i) && a.required && demands == Demands::Checked {
             return Err(ErrorKind::MissingRequired(a.display_name()));
         }
-        count_values(a, m.slots[i].values.len(), fallback(spec, i).is_some())?;
+        count_values(a, m.slots[i].values.len(), fallback(spec, i))?;
     }
 
     for &(a, b) in spec.requires {
