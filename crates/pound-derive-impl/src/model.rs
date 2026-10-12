@@ -38,6 +38,7 @@ use crate::attr::{
 const ITEM_ATTRIBUTES: &[&str] = &[
     "name",
     "version",
+    "long_version",
     "required_group",
     "help_if_empty",
     "before_help",
@@ -168,6 +169,7 @@ impl Prose {
 pub struct Header {
     pub name:            Option<String>,
     pub version:         Option<Vec<TokenTree>>,
+    pub long_version:    Option<Vec<TokenTree>>,
     pub prose:           Prose,
     /// groups that need exactly one member set, which only a struct's command
     /// reads
@@ -183,6 +185,7 @@ impl Header {
         Ok(Self {
             name:            item.name,
             version:         item.version,
+            long_version:    item.long_version,
             prose:           Prose::new(attributes, item.before_help, item.after_help),
             required_groups: item.required_groups,
             help_if_empty:   item.help_if_empty,

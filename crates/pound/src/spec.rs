@@ -584,6 +584,9 @@ pub struct CommandSpec {
     pub invoked_name:   bool,
     /// the text `--version` prints, empty when there is none
     pub version:        &'static str,
+    /// fuller text `--version` prints in place of `version`, while `-V` keeps
+    /// the short line, empty when there is none
+    pub long_version:   &'static str,
     /// commit hash for the compiled program's source
     pub hash:           Option<&'static str>,
     /// the short description help shows
@@ -625,6 +628,7 @@ impl CommandSpec {
             name,
             invoked_name: false,
             version: "",
+            long_version: "",
             hash: None,
             about: "",
             long_about: "",
@@ -672,7 +676,13 @@ impl CommandSpec {
     /// whether `--version` has anything to print
     #[must_use]
     pub const fn has_version_info(&self) -> bool {
-        !self.version.is_empty() || self.hash.is_some()
+        !self.version.is_empty() || !self.long_version.is_empty() || self.hash.is_some()
+    }
+
+    #[must_use]
+    pub const fn long_version(mut self, long_version: &'static str) -> Self {
+        self.long_version = long_version;
+        self
     }
 
     #[must_use]
