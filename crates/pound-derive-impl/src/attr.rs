@@ -56,6 +56,8 @@ pub struct Pound {
     pub external:        bool,
     /// field-level: given, the field must be the only arg of its command
     pub exclusive:       bool,
+    /// item- or variant-level: given no words, the command prints its help
+    pub help_if_empty:   bool,
     /// keep this arg/variant out of help output
     pub hidden:          bool,
     /// named flag/option that descendant subcommands also accept
@@ -147,6 +149,7 @@ impl Pound {
             "flatten"         => self.flatten         = bare(key, span, value.is_some())?,
             "external"        => self.external        = bare(key, span, value.is_some())?,
             "exclusive"       => self.exclusive       = bare(key, span, value.is_some())?,
+            "help_if_empty"   => self.help_if_empty   = bare(key, span, value.is_some())?,
             "hidden"          => self.hidden          = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
             "group"           => self.group           = Some(needed(key, span, value)?),
@@ -508,6 +511,7 @@ const BARE_KEYS: &[&str] = &[
     "flatten",
     "external",
     "exclusive",
+    "help_if_empty",
     "hidden",
     "global",
 ];

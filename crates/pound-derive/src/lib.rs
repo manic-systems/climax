@@ -89,6 +89,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `name = "tool"`          | the command name shown in usage and help. defaults to the name the program runs as      |
 /// | `version = EXPR`         | the `--version` text. any expression of type `&'static str`, defaults to `CARGO_PKG_VERSION` |
 /// | `required_group = "g"`   | exactly one member of group `g` must be given. may repeat, see [groups](#groups)         |
+/// | `help_if_empty`          | given no words at all, print the help to stderr and exit 2, rather than parse            |
 ///
 /// the doc comment on the item is the command's description. its first
 /// paragraph is the summary that `-h` shows, with one trailing period dropped,
@@ -124,6 +125,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `alias = "remove, del"`  | extra names that select this subcommand, comma separated                        |
 /// | `hidden`                 | accepted but left out of help                                                   |
 /// | `required_group = "g"`   | exactly one member of group `g` among the variant's fields must be given        |
+/// | `help_if_empty`          | the same for this subcommand, given no words after its name                     |
 /// | `flatten`                | on a tuple variant holding one enum, offers that enum's commands as if declared here |
 /// | `external`               | on a `Vec<T>` or `pound::External` tuple variant, takes any other subcommand name and what follows |
 ///

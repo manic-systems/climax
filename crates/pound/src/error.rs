@@ -109,6 +109,9 @@ pub enum ErrorKind {
     },
     /// `-h` / `--help`, payload is the help page
     Help(Help),
+    /// a command that asks for help when given nothing was given nothing,
+    /// payload is its help page
+    NoArguments(Help),
     /// `--version`, payload is the version line
     Version(String),
 }
@@ -167,7 +170,7 @@ impl fmt::Display for ErrorKind {
             Self::MissingGroup { group, options } => {
                 write!(f, "one of {options} is required ({group})")
             },
-            Self::Help(help) => write!(f, "{help}"),
+            Self::Help(help) | Self::NoArguments(help) => write!(f, "{help}"),
             Self::Version(text) => f.write_str(text),
         }
     }
@@ -211,7 +214,7 @@ impl Error {
     #[must_use]
     pub fn render(&self, term: Term) -> String {
         match &self.kind {
-            ErrorKind::Help(help) => return help.render(term),
+            ErrorKind::Help(help) | ErrorKind::NoArguments(help) => return help.render(term),
             ErrorKind::Version(text) => return text.clone(),
             _ => {},
         }

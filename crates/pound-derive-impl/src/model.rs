@@ -34,8 +34,8 @@ use crate::attr::{
     summary,
 };
 
-const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group"];
-const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group"];
+const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group", "help_if_empty"];
+const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group", "help_if_empty"];
 const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name"];
 const FIELD_ATTRIBUTES: &[&str] = &[
     "short",
@@ -134,6 +134,7 @@ pub struct Header {
     /// groups that need exactly one member set, which only a struct's command
     /// reads
     pub required_groups: Vec<String>,
+    pub help_if_empty:   bool,
 }
 
 impl Header {
@@ -146,6 +147,7 @@ impl Header {
             version:         item.version,
             doc:             doc(attributes),
             required_groups: item.required_groups,
+            help_if_empty:   item.help_if_empty,
         })
     }
 }
@@ -162,11 +164,12 @@ pub enum VariantKind {
     /// no other variant answers to, with the words after it
     External(ExternalField),
     Command {
-        name:    String,
-        aliases: Vec<String>,
-        hidden:  bool,
-        doc:     String,
-        command: Box<Command>,
+        name:          String,
+        aliases:       Vec<String>,
+        hidden:        bool,
+        help_if_empty: bool,
+        doc:           String,
+        command:       Box<Command>,
     },
 }
 
@@ -215,13 +218,14 @@ impl Variant {
 
         Ok(Self {
             kind: VariantKind::Command {
-                name:    vattr
+                name:          vattr
                     .name
                     .unwrap_or_else(|| camel_to_kebab(&ident.to_string())),
-                aliases: vattr.aliases,
-                hidden:  vattr.hidden,
-                doc:     doc(&variant.attributes),
-                command: Box::new(command),
+                aliases:       vattr.aliases,
+                hidden:        vattr.hidden,
+                help_if_empty: vattr.help_if_empty,
+                doc:           doc(&variant.attributes),
+                command:       Box::new(command),
             },
             ident,
         })
