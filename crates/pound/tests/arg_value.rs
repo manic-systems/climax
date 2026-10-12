@@ -11,9 +11,11 @@ use pound::{
 #[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
 enum Format {
     Json,
-    #[pound(name = "yml")]
+    #[pound(name = "yml", alias = "yaml")]
     Yaml,
     PlainText,
+    #[pound(hidden)]
+    Debug,
 }
 
 #[derive(Debug, PartialEq, ValueEnum)]
@@ -25,6 +27,12 @@ fn every_spelling_parses_back_and_matches_possible_values() {
         assert_eq!(Format::from_arg(value.as_str()).unwrap(), *value);
     }
     let spellings = Format::ALL.iter().map(Format::as_str).collect::<Vec<_>>();
-    assert_eq!(Format::POSSIBLE, Some(spellings.as_slice()));
+    let choices = Format::POSSIBLE.unwrap_or_default();
+    assert_eq!(
+        choices.iter().map(|c| c.name).collect::<Vec<_>>(),
+        spellings
+    );
+    assert_eq!(Format::from_arg("yaml").unwrap(), Format::Yaml);
+    assert!(choices.iter().any(|c| c.name == "debug" && c.hidden));
     assert!(Empty::ALL.is_empty());
 }

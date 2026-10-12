@@ -36,7 +36,7 @@ use crate::attr::{
 
 const ITEM_ATTRIBUTES: &[&str] = &["name", "version", "required_group", "help_if_empty"];
 const VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "required_group", "help_if_empty"];
-const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name"];
+const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden"];
 const FIELD_ATTRIBUTES: &[&str] = &[
     "short",
     "long",
@@ -978,10 +978,26 @@ impl Arg {
     }
 }
 
-/// a `#[derive(ValueEnum)]` input, each variant with the word that selects it
+/// a `#[derive(ValueEnum)]` input
 pub struct ValueEnum {
     pub ident:    Ident,
-    pub variants: Vec<(Ident, String)>,
+    pub variants: Vec<ValueVariant>,
+}
+
+/// one variant of a `ValueEnum`, with every word that selects it
+pub struct ValueVariant {
+    pub ident:   Ident,
+    /// the spelling listed and printed back
+    pub label:   String,
+    pub aliases: Vec<String>,
+    pub help:    String,
+    pub hidden:  bool,
+}
+
+impl ValueVariant {
+    pub fn spellings(&self) -> impl Iterator<Item = &str> {
+        core::iter::once(self.label.as_str()).chain(self.aliases.iter().map(String::as_str))
+    }
 }
 
 impl ValueEnum {
@@ -991,7 +1007,7 @@ impl ValueEnum {
         };
 
         pound(&e.attributes)?.allow_only(&[])?;
-        let mut variants = Vec::<(Ident, String)>::new();
+        let mut variants = Vec::<ValueVariant>::new();
 
         for variant in e.variants.items() {
             if !matches!(variant.fields, Fields::Unit) {
@@ -1005,21 +1021,33 @@ impl ValueEnum {
             let vattr = pound(&variant.attributes)?;
             vattr.allow_only(VALUE_VARIANT_ATTRIBUTES)?;
 
-            let label = vattr
-                .name
-                .unwrap_or_else(|| camel_to_kebab(&vname.to_string()));
+            let this = ValueVariant {
+                ident:   vname.clone(),
+                label:   vattr
+                    .name
+                    .unwrap_or_else(|| camel_to_kebab(&vname.to_string())),
+                aliases: vattr.aliases,
+                help:    short_help(&doc(&variant.attributes)).to_owned(),
+                hidden:  vattr.hidden,
+            };
 
-            if let Some((first, _)) = variants.iter().find(|(_, other)| *other == label) {
-                return Err(Error::new_at_span(
-                    vname.span(),
-                    format!(
-                        "pound: ValueEnum variants `{first}` and `{vname}` both spell `{label}`, \
-                         so `{vname}` could never be parsed"
-                    ),
-                ));
+            for word in this.spellings() {
+                if let Some(first) = variants
+                    .iter()
+                    .find(|other| other.spellings().any(|w| w == word))
+                {
+                    let first = &first.ident;
+                    return Err(Error::new_at_span(
+                        vname.span(),
+                        format!(
+                            "pound: ValueEnum variants `{first}` and `{vname}` both spell \
+                             `{word}`, so `{vname}` could never be parsed by it"
+                        ),
+                    ));
+                }
             }
 
-            variants.push((vname.clone(), label));
+            variants.push(this);
         }
 
         Ok(Self {

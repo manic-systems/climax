@@ -60,7 +60,7 @@ pub trait FromArg: Sized {
     /// help and value errors. set by the `ValueEnum` derive, `None` otherwise.
     /// being a const lets the `Parse` derive wire it into a spec at compile
     /// time.
-    const POSSIBLE: Option<&'static [&'static str]> = None;
+    const POSSIBLE: Option<&'static [Choice]> = None;
 
     /// what the value names, so a shell completing it knows what to list.
     /// being a const lets the `Parse` derive wire it into a spec.
@@ -71,8 +71,68 @@ pub trait FromArg: Sized {
 
     /// runtime view of [`Self::POSSIBLE`].
     #[must_use]
-    fn possible_values() -> Option<&'static [&'static str]> {
+    fn possible_values() -> Option<&'static [Choice]> {
         Self::POSSIBLE
+    }
+}
+
+/// one value a choice type accepts
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Choice {
+    /// the spelling help and completion offer
+    pub name:    &'static str,
+    /// other spellings that select it, never listed
+    pub aliases: &'static [&'static str],
+    /// what it means, for long help and completion descriptions
+    pub help:    &'static str,
+    /// accepted, but left out of listings
+    pub hidden:  bool,
+}
+
+impl Choice {
+    #[must_use]
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            aliases: &[],
+            help: "",
+            hidden: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn aliases(mut self, aliases: &'static [&'static str]) -> Self {
+        self.aliases = aliases;
+        self
+    }
+
+    #[must_use]
+    pub const fn help(mut self, help: &'static str) -> Self {
+        self.help = help;
+        self
+    }
+
+    #[must_use]
+    pub const fn hidden(mut self) -> Self {
+        self.hidden = true;
+        self
+    }
+
+    /// whether `word` selects this choice, as its name or an alias
+    #[must_use]
+    pub const fn answers(&self, word: &str) -> bool {
+        if const_eq(self.name, word) {
+            return true;
+        }
+        let mut i = 0;
+        while i < self.aliases.len() {
+            if const_eq(self.aliases[i], word) {
+                return true;
+            }
+            i += 1;
+        }
+        false
     }
 }
 

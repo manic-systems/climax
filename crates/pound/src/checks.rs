@@ -11,7 +11,10 @@ use crate::{
         Kind,
         SubSpec,
     },
-    value::const_eq,
+    value::{
+        Choice,
+        const_eq,
+    },
 };
 
 /// whether a declared default survives its own type's value list.
@@ -20,13 +23,13 @@ use crate::{
 /// `ValueEnum` variant answers to fails the build instead of the first run that
 /// leaves the flag out.
 #[must_use]
-pub const fn default_allowed(default: &str, possible: Option<&[&str]>) -> bool {
+pub const fn default_allowed(default: &str, possible: Option<&[Choice]>) -> bool {
     let Some(values) = possible else {
         return true;
     };
     let mut i = 0;
     while i < values.len() {
-        if const_eq(values[i], default) {
+        if values[i].answers(default) {
             return true;
         }
         i += 1;

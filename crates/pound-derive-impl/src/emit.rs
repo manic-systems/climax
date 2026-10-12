@@ -281,29 +281,36 @@ impl Emitter {
     pub fn value_enum(&self, value_enum: &ValueEnum) -> TokenStream {
         let root = &self.root;
         let name = &value_enum.ident;
-        let labels = value_enum.variants.iter().map(|(_, label)| label);
 
-        let arms = value_enum
-            .variants
-            .iter()
-            .map(|(vname, label)| quote! { #label => ::core::result::Result::Ok(Self::#vname), });
+        let choices = value_enum.variants.iter().map(|v| {
+            let (label, aliases) = (&v.label, &v.aliases);
+            let help = self.help_lit(&v.help);
+            let hidden = v.hidden.then(|| quote!(.hidden()));
+            quote! { #root::Choice::new(#label).aliases(&[ #(#aliases),* ]).help(#help) #hidden }
+        });
 
-        let spellings = value_enum
-            .variants
-            .iter()
-            .map(|(vname, label)| quote! { Self::#vname => #label, });
+        let arms = value_enum.variants.iter().map(|v| {
+            let vname = &v.ident;
+            let words = v.spellings();
+            quote! { #(#words)|* => ::core::result::Result::Ok(Self::#vname), }
+        });
 
-        let variants = value_enum
-            .variants
-            .iter()
-            .map(|(vname, _)| quote! { Self::#vname });
+        let spellings = value_enum.variants.iter().map(|v| {
+            let (vname, label) = (&v.ident, &v.label);
+            quote! { Self::#vname => #label, }
+        });
+
+        let variants = value_enum.variants.iter().map(|v| {
+            let vname = &v.ident;
+            quote! { Self::#vname }
+        });
 
         let (raw, other) = (local("s"), local("other"));
 
         quote! {
             impl #root::FromArg for #name {
-                const POSSIBLE: ::core::option::Option<&'static [&'static str]> =
-                    ::core::option::Option::Some(&[ #(#labels),* ]);
+                const POSSIBLE: ::core::option::Option<&'static [#root::Choice]> =
+                    ::core::option::Option::Some(&[ #(#choices),* ]);
 
                 fn from_arg(#raw: &str) -> ::core::result::Result<Self, #root::ValueError> {
                     match #raw {

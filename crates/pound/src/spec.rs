@@ -30,7 +30,10 @@ use crate::{
     Error,
     complete::Completer,
     help,
-    value::const_eq,
+    value::{
+        Choice,
+        const_eq,
+    },
 };
 
 /// what shape of argument a spec entry describes
@@ -102,7 +105,7 @@ pub struct ArgSpec {
     /// section this arg is listed under in help, `Options` when unset
     pub heading:         Option<&'static str>,
     /// the values a choice type accepts, `None` for free text
-    pub possible:        Option<&'static [&'static str]>,
+    pub possible:        Option<&'static [Choice]>,
     /// kept out of help output, but accepted by parser
     pub hidden:          bool,
     /// also accepted by every subcommand below this command
@@ -244,14 +247,14 @@ impl ArgSpec {
     }
 
     #[must_use]
-    pub const fn possible(mut self, possible: &'static [&'static str]) -> Self {
+    pub const fn possible(mut self, possible: &'static [Choice]) -> Self {
         self.possible = Some(possible);
         self
     }
 
     /// set the possible-value list (`None` is freeform)
     #[must_use]
-    pub const fn possible_opt(mut self, possible: Option<&'static [&'static str]>) -> Self {
+    pub const fn possible_opt(mut self, possible: Option<&'static [Choice]>) -> Self {
         self.possible = possible;
         self
     }

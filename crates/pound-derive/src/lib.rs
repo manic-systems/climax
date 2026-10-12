@@ -464,13 +464,22 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 /// derives `FromArg` for an enum of unit variants, so the enum can be the type
 /// of an option or positional that takes one of a fixed set of words.
 ///
-/// each variant is spelled in kebab case on the command line, so `PlainText` is
-/// `plain-text`. `#[pound(name = "yml")]` on a variant picks its spelling.
-/// that is the only attribute accepted, and the enum itself takes none.
-/// it also implements `pound::ArgValue`, which gives each value's spelling back
-/// through `as_str` and lists them all in `ALL`. an unrecognized word fails
-/// with the full list of possible values, help lists them, and a `default`
-/// naming something else fails the build.
+/// each variant is spelled in kebab case, so `PlainText` is `plain-text`. the
+/// attributes below go on the variants, and the enum itself takes none.
+///
+/// | attribute        | meaning                                           |
+/// |------------------|---------------------------------------------------|
+/// | `name = "yml"`   | the spelling, in place of the kebab case one      |
+/// | `alias = "a, b"` | more spellings that select it, never listed       |
+/// | `hidden`         | accepted, but left out of help and completion     |
+///
+/// a variant's doc comment describes it in long help and in completion.
+///
+/// the derive also implements `pound::ArgValue`. its `as_str` gives a value's
+/// spelling back, and `ALL` lists every value.
+///
+/// an unrecognized word fails with the list of values, and a `default` that
+/// names none of them fails the build.
 ///
 /// ```
 /// use pound::{
@@ -480,8 +489,9 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 ///
 /// #[derive(ValueEnum, Debug, PartialEq)]
 /// enum Format {
+///     /// machine readable
 ///     Json,
-///     #[pound(name = "yml")]
+///     #[pound(name = "yml", alias = "yaml")]
 ///     Yaml,
 ///     PlainText,
 /// }

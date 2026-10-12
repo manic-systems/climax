@@ -45,7 +45,10 @@ enum Cmd {
 
 #[derive(ValueEnum)]
 enum Format {
+    /// the secret as stored
     Raw,
+    /// an object with the secret and its recipients
+    #[pound(alias = "js")]
     Json,
 }
 
