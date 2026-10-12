@@ -316,6 +316,12 @@ impl<'a> Matches<'a> {
         self.sub.as_ref().map(|(i, m)| (*i, m.as_ref()))
     }
 
+    /// check the subcommand selected among `spec`'s as a fresh parse would,
+    /// for an update that switches to it
+    pub fn demand_sub(&self, spec: &'static CommandSpec) -> Result<(), Error> {
+        Ok(demand_selected(spec, self)?)
+    }
+
     /// the name and words an external subcommand took, read from its matches
     #[must_use]
     pub fn external(&self) -> External {
@@ -588,6 +594,16 @@ pub(crate) fn parse_spec<'a>(
     parse_cmd::<Strict>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
 }
 
+pub(crate) fn update_spec<'a>(
+    spec: &CommandSpec,
+    args: impl IntoIterator<Item = &'a str>,
+) -> Result<Matches<'a>, Error> {
+    let mut args = args.into_iter();
+    let mut it = (&mut args as &mut dyn Iterator<Item = &'a str>).peekable();
+    let mut hits = Vec::new();
+    parse_cmd::<Update>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
+}
+
 /// parse `args` as the start of a command line, skipping whatever does not
 /// apply and checking no requirements, and say what the next word would be
 pub(crate) fn probe_spec<'a>(
@@ -605,6 +621,8 @@ pub(crate) fn probe_spec<'a>(
 trait Mode {
     type Error;
 
+    const DEMANDS: Demands;
+
     /// a token that could not be applied. an option still waiting on its value
     /// when the words ran out goes in `awaiting`.
     fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Self::Error>;
@@ -621,6 +639,8 @@ enum Strict {}
 impl Mode for Strict {
     type Error = Error;
 
+    const DEMANDS: Demands = Demands::Checked;
+
     fn halt(halt: Halt, _: &mut Option<&'static ArgSpec>) -> Result<(), Error> {
         match halt {
             Halt::Error(err) => Err(err),
@@ -633,7 +653,7 @@ impl Mode for Strict {
         if empty && cmd.spec().help_if_empty {
             return Err(ErrorKind::NoArguments(help::render(cmd, false)).into());
         }
-        Ok(finalise(cmd, m)?)
+        Ok(finalise(cmd, m, Self::DEMANDS)?)
     }
 
     fn locate(cmd: &Command<'_>, err: Error) -> Error {
@@ -645,12 +665,38 @@ impl Mode for Strict {
     }
 }
 
+enum Update {}
+
+impl Mode for Update {
+    type Error = Error;
+
+    const DEMANDS: Demands = Demands::Waived;
+
+    fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Error> {
+        Strict::halt(halt, awaiting)
+    }
+
+    fn finish(cmd: &Command<'_>, m: &Matches<'_>, _: bool) -> Result<(), Error> {
+        Ok(finalise(cmd, m, Self::DEMANDS)?)
+    }
+
+    fn locate(cmd: &Command<'_>, err: Error) -> Error {
+        Strict::locate(cmd, err)
+    }
+
+    fn show(cmd: &Command<'_>) -> Result<(), Error> {
+        Strict::show(cmd)
+    }
+}
+
 /// an unfinished line being completed, which skips what it cannot apply and
 /// so cannot fail
 enum Lenient {}
 
 impl Mode for Lenient {
     type Error = Infallible;
+
+    const DEMANDS: Demands = Demands::Checked;
 
     fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Infallible> {
         if let Halt::NeedsValue(arg) | Halt::TakesMore(arg) = halt {
@@ -696,6 +742,7 @@ struct Walk<'w, 'a> {
     positionals:     Vec<&'w ArgTarget>,
     cursor:          usize,
     only_positional: bool,
+    demands:         Demands,
     m:               Matches<'a>,
 }
 
@@ -720,6 +767,7 @@ fn walk_cmd<'a, M: Mode>(
         positionals: targets.iter().filter(|t| t.arg.is_positional()).collect(),
         cursor: 0,
         only_positional: false,
+        demands: M::DEMANDS,
         m: Matches::new(cmd.spec()),
     };
     let mut awaiting = None;
@@ -766,14 +814,9 @@ impl<'a> Walk<'_, 'a> {
             self.long(tok, long, it, hits)?;
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             self.short(tok, rest, it, hits)?;
-        } else if tok == "help"
-            && self.cmd.help_command().is_some()
-            && sub_open(self.cmd.spec(), &self.positionals, self.cursor)
-        {
+        } else if tok == "help" && self.cmd.help_command().is_some() && self.sub_open() {
             return Ok(Step::Help);
-        } else if let Some(target) =
-            sub_dispatch(self.cmd.spec(), &self.positionals, self.cursor, tok)?
-        {
+        } else if let Some(target) = self.sub_dispatch(tok)? {
             return Ok(Step::Dispatch(target, tok));
         } else {
             self.positional(tok)?;
@@ -917,6 +960,38 @@ impl<'a> Walk<'_, 'a> {
         Ok(next)
     }
 
+    fn sub_dispatch(&self, tok: &str) -> Result<Option<SubTarget>, ErrorKind> {
+        let spec = self.cmd.spec();
+        if !self.sub_open() {
+            return Ok(None);
+        }
+        match SubTarget::find(spec, tok) {
+            Some(target) => Ok(Some(target)),
+            // an open optional slot can still take it
+            None if self.cursor < self.positionals.len() => Ok(None),
+            None => {
+                SubTarget::find_external(spec)
+                    .map(Some)
+                    .ok_or_else(|| unknown_subcommand(spec, tok))
+            },
+        }
+    }
+
+    /// a bare token names a subcommand only once every required positional is
+    /// filled, unless requirements are waived, and never past a variadic one,
+    /// which stays greedy so its tail can fill
+    fn sub_open(&self) -> bool {
+        let next = self.positionals.get(self.cursor).map(|t| t.arg);
+        let pending = self
+            .positionals
+            .iter()
+            .skip(self.cursor)
+            .any(|t| t.arg.required);
+        self.cmd.spec().has_subs()
+            && !next.is_some_and(|a| a.multi || a.kind == Kind::Trailing)
+            && (self.demands == Demands::Waived || !pending)
+    }
+
     fn takes_hyphen_value(&self) -> bool {
         next_positional(&self.positionals, self.cursor).is_some_and(|t| t.arg.hyphen_values)
     }
@@ -934,33 +1009,9 @@ impl<'a> Walk<'_, 'a> {
         }
         Next::Word {
             positional:  next_positional(&self.positionals, self.cursor).map(|t| t.arg),
-            subcommands: !self.only_positional
-                && sub_open(self.cmd.spec(), &self.positionals, self.cursor),
+            subcommands: !self.only_positional && self.sub_open(),
             options:     !self.only_positional,
         }
-    }
-}
-
-/// a bare token names a subcommand only once every required positional is
-/// filled, and never past a variadic one, which stays greedy so its tail can
-/// fill
-fn sub_dispatch(
-    spec: &CommandSpec,
-    positionals: &[&ArgTarget],
-    cursor: usize,
-    tok: &str,
-) -> Result<Option<SubTarget>, ErrorKind> {
-    if !sub_open(spec, positionals, cursor) {
-        return Ok(None);
-    }
-    match SubTarget::find(spec, tok) {
-        Some(target) => Ok(Some(target)),
-        None if cursor < positionals.len() => Ok(None), // an open optional slot can still take it
-        None => {
-            SubTarget::find_external(spec)
-                .map(Some)
-                .ok_or_else(|| unknown_subcommand(spec, tok))
-        },
     }
 }
 
@@ -972,13 +1023,6 @@ fn unknown_subcommand(spec: &CommandSpec, tok: &str) -> ErrorKind {
             tok,
         ),
     }
-}
-
-fn sub_open(spec: &CommandSpec, positionals: &[&ArgTarget], cursor: usize) -> bool {
-    let next = positionals.get(cursor).map(|t| t.arg);
-    spec.has_subs()
-        && !next.is_some_and(|a| a.multi || a.kind == Kind::Trailing)
-        && !positionals.iter().skip(cursor).any(|t| t.arg.required)
 }
 
 /// the positional a bare word at `cursor` fills, which past the last one is
@@ -1382,12 +1426,12 @@ enum Demands {
 
 /// enforce `required` and group constraints. defaults resolve when a value is
 /// read, so a defaulted arg never counts as missing here.
-fn finalise(cmd: &Command<'_>, m: &Matches) -> Result<(), ErrorKind> {
+fn finalise(cmd: &Command<'_>, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
     let spec = cmd.spec();
     let owed = if exclusive_alone(spec, m)? {
         Demands::Waived
     } else {
-        Demands::Checked
+        demands
     };
     finalise_args(spec, m, owed)?;
     finalise_groups(spec, m, owed)?;
@@ -1398,6 +1442,55 @@ fn finalise(cmd: &Command<'_>, m: &Matches) -> Result<(), ErrorKind> {
         });
     }
     Ok(())
+}
+
+fn demand_selected(spec: &'static CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
+    let Some((index, chosen)) = m.sub() else {
+        return Ok(());
+    };
+    let sub = &spec.subs[index];
+    if sub.flattened {
+        return demand_selected(sub.spec, chosen);
+    }
+    if sub.external {
+        return Ok(());
+    }
+    demand(sub.spec, chosen)
+}
+
+/// [`finalise`] with every demand checked, down through the subcommands this
+/// line selected, for a command that had not been parsed before
+fn demand(spec: &'static CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
+    let owed = if exclusive_alone(spec, m)? {
+        Demands::Waived
+    } else {
+        Demands::Checked
+    };
+    finalise_args(spec, m, owed)?;
+    finalise_groups(spec, m, owed)?;
+    let Some((selector, selected)) = selector_matches(spec, m) else {
+        return Ok(());
+    };
+    match selected.sub() {
+        Some(_) => demand_selected(selector, selected),
+        None if spec.subcommand_optional() || owed == Demands::Waived => Ok(()),
+        None => Err(ErrorKind::MissingSubcommand { help: None }),
+    }
+}
+
+/// the spec declaring this command's subcommands and the matches read against
+/// it, which may sit inside a flattened struct
+fn selector_matches<'m, 'a>(
+    spec: &'static CommandSpec,
+    m: &'m Matches<'a>,
+) -> Option<(&'static CommandSpec, &'m Matches<'a>)> {
+    if !spec.subs.is_empty() {
+        return Some((spec, m));
+    }
+    spec.flattened
+        .iter()
+        .zip(&m.flattened)
+        .find_map(|(inner, inner_m)| selector_matches(inner, inner_m))
 }
 
 /// whether an exclusive arg was given, alone. given with another arg, it is

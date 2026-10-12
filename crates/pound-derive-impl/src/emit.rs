@@ -75,6 +75,8 @@ impl Emitter {
         let consts = self.command_consts(command, &head, "", &cmd_id);
         let (m, sp) = (local("m"), local("spec"));
         let readers = self.readers(fields, &m, &sp);
+        let updates = self.updates(command, &m, &sp, |field| quote! { self.#field });
+        let (update_m, update_spec) = (m.clone(), sp.clone());
 
         // avoid unused-param warnings when a command carries only a subcommand.
         let spec_param = if fields.args.is_empty() {
@@ -102,6 +104,16 @@ impl Emitter {
                 {
                     ::core::result::Result::Ok(Self { #readers })
                 }
+
+                fn update_from_matches(
+                    &mut self,
+                    #update_spec: &'static #root::CommandSpec,
+                    #update_m: &#root::Matches,
+                ) -> ::core::result::Result<(), #root::Error> {
+                    let _ = (#update_spec, #update_m);
+                    #updates
+                    ::core::result::Result::Ok(())
+                }
             }
         }
     }
@@ -121,6 +133,8 @@ impl Emitter {
         let sub_consts = built.iter().map(|v| &v.consts);
         let sub_specs = built.iter().map(|v| &v.spec);
         let arms = built.iter().map(|v| &v.arm);
+        let update_arms = built.iter().map(|v| &v.update_arm);
+        let picked = local("picked");
 
         let reading = built
             .iter()
@@ -174,6 +188,25 @@ impl Emitter {
                         _ => ::core::result::Result::Err(#root::ErrorKind::MissingSubcommand { help: ::core::option::Option::None }.into()),
                     }
                 }
+
+                fn update_from_matches(
+                    &mut self,
+                    #spec_ident: &'static #root::CommandSpec,
+                    #m_ident: &#root::Matches,
+                ) -> ::core::result::Result<(), #root::Error> {
+                    let ::core::option::Option::Some((#picked, #sm)) = #root::Matches::sub(#m_ident) else {
+                        return ::core::result::Result::Ok(());
+                    };
+                    let _ = #sm;
+                    match (#picked, &mut *self) {
+                        #(#update_arms)*
+                        _ => {
+                            #root::Matches::demand_sub(#m_ident, #spec_ident)?;
+                            *self = <Self as #root::Parse>::from_matches(#spec_ident, #m_ident)?;
+                        },
+                    }
+                    ::core::result::Result::Ok(())
+                }
             }
         }
     }
@@ -189,6 +222,7 @@ impl Emitter {
                 return VariantTokens {
                     consts:     TokenStream::new(),
                     spec:       quote! { #root::SubSpec::external() },
+                    update_arm: TokenStream::new(),
                     arm:        quote! {
                         ::core::option::Option::Some((#idx, #sm)) => {
                             let #sp = #spec.subs[#idx].spec;
@@ -202,6 +236,7 @@ impl Emitter {
                 return VariantTokens {
                     consts:     TokenStream::new(),
                     spec:       quote! { #root::SubSpec::external() },
+                    update_arm: TokenStream::new(),
                     arm:        quote! {
                         ::core::option::Option::Some((#idx, #sm)) => {
                             ::core::result::Result::Ok(Self::#vname(#sm.external()))
@@ -211,10 +246,18 @@ impl Emitter {
                 };
             },
             VariantKind::Flatten(ty) => {
+                let inner = local("inner");
                 return VariantTokens {
                     consts:     TokenStream::new(),
                     spec:       quote! {
                         #root::SubSpec::flatten(#root::checks::subcommand_spec::<#ty>())
+                    },
+                    update_arm: quote! {
+                        (#idx, Self::#vname(#inner)) => <#ty as #root::Parse>::update_from_matches(
+                            #inner,
+                            <#ty as #root::Parse>::SPEC,
+                            #sm,
+                        )?,
                     },
                     arm:        quote! {
                         ::core::option::Option::Some((#idx, #sm)) => ::core::result::Result::Ok(
@@ -261,6 +304,7 @@ impl Emitter {
         };
 
         VariantTokens {
+            update_arm: self.update_arm(idx, vname, &named.command, sm, spec),
             consts: self.command_consts(&named.command, &head, &idx.to_string(), &ck),
             spec: quote! {
                 #root::SubSpec::new(#name, &#ck)
@@ -271,6 +315,33 @@ impl Emitter {
             },
             arm,
             reads_spec,
+        }
+    }
+
+    fn update_arm(
+        &self,
+        idx: usize,
+        vname: &Ident,
+        command: &Command,
+        sm: &Ident,
+        spec: &Ident,
+    ) -> TokenStream {
+        let fields = &command.fields;
+        let sp = local("s");
+        let bind = (!fields.args.is_empty()).then(|| quote! { let #sp = #spec.subs[#idx].spec; });
+        let bindings = fields
+            .args
+            .iter()
+            .map(|arg| &arg.ident)
+            .chain(fields.flattened.iter().map(|flat| &flat.ident))
+            .chain(fields.sub.iter().map(|sub| &sub.ident));
+        let updates = self.updates(command, sm, &sp, |field| quote! { *#field });
+
+        quote! {
+            (#idx, Self::#vname { #(#bindings,)* .. }) => {
+                #bind
+                #updates
+            },
         }
     }
 
@@ -525,11 +596,10 @@ impl Emitter {
     fn readers(&self, fields: &CommandFields, m: &Ident, spec: &Ident) -> TokenStream {
         let root = &self.root;
 
-        let args = fields
-            .args
-            .iter()
-            .enumerate()
-            .map(|(i, arg)| self.reader(arg, i, m, spec));
+        let args = fields.args.iter().enumerate().map(|(i, arg)| {
+            let (field, value) = (&arg.ident, self.read(arg, i, m, spec));
+            quote! { #field: #value }
+        });
 
         let flattened = fields.flattened.iter().enumerate().map(|(i, field)| {
             let (ident, ty) = (&field.ident, &field.ty);
@@ -742,11 +812,10 @@ impl Emitter {
         quote! { #multi #optional #min_values #max_values #delimiter #per_use }
     }
 
-    fn reader(&self, arg: &Arg, i: usize, m: &Ident, spec: &Ident) -> TokenStream {
-        let fname = &arg.ident;
+    fn read(&self, arg: &Arg, i: usize, m: &Ident, spec: &Ident) -> TokenStream {
         let inner = &arg.ty.inner;
 
-        let body = match (arg.kind, &arg.conversion) {
+        match (arg.kind, &arg.conversion) {
             (ArgKind::Flag, _) if arg.ty.sourced => quote! { #m.switch_sourced(#spec, #i)? },
             (ArgKind::Flag, _) => quote! { #m.switch(#spec, #i)? },
             (ArgKind::Count, _) => {
@@ -788,9 +857,80 @@ impl Emitter {
                     },
                 }
             },
-        };
+        }
+    }
 
-        quote! { #fname: #body }
+    fn updates(
+        &self,
+        command: &Command,
+        m: &Ident,
+        spec: &Ident,
+        place: impl Fn(&Ident) -> TokenStream,
+    ) -> TokenStream {
+        let root = &self.root;
+        let fields = &command.fields;
+
+        // an arg given on the line clears the others it shares a group or a
+        // conflict with, which read back as if never given
+        let args = fields.args.iter().enumerate().map(|(i, arg)| {
+            let (field, value) = (place(&arg.ident), self.read(arg, i, m, spec));
+            let rivals = fields
+                .args
+                .iter()
+                .enumerate()
+                .filter(|&(j, other)| {
+                    let grouped = arg.group.is_some() && other.group == arg.group;
+                    let conflicting = command.conflicts.contains(&(i.min(j), i.max(j)));
+                    j != i && (grouped || conflicting)
+                })
+                .map(|(j, _)| j);
+            quote! {
+                if #root::Matches::given(#m, #i) #(|| #root::Matches::given(#m, #rivals))* {
+                    #field = #value;
+                }
+            }
+        });
+
+        let flattened = fields.flattened.iter().enumerate().map(|(i, flat)| {
+            let (field, ty) = (place(&flat.ident), &flat.ty);
+            quote! {
+                <#ty as #root::Parse>::update_from_matches(
+                    &mut #field,
+                    <#ty as #root::Parse>::SPEC,
+                    #root::Matches::flattened(#m, #i),
+                )?;
+            }
+        });
+
+        let sub = fields.sub.as_ref().map(|sub| {
+            let (field, ty) = (place(&sub.ident), &sub.ty);
+            let existing = local("existing");
+            let update = quote! {
+                <#ty as #root::Parse>::update_from_matches(#existing, <#ty as #root::Parse>::SPEC, #m)?
+            };
+            let build =
+                quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #m)? };
+
+            if sub.optional {
+                quote! {
+                    if #root::Matches::sub(#m).is_some() {
+                        if let ::core::option::Option::Some(#existing) = &mut #field {
+                            #update;
+                        } else {
+                            #root::Matches::demand_sub(#m, <#ty as #root::Parse>::SPEC)?;
+                            #field = ::core::option::Option::Some(#build);
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    let #existing = &mut #field;
+                    #update;
+                }
+            }
+        });
+
+        quote! { #(#args)* #(#flattened)* #sub }
     }
 
     fn conversion_closure(&self, conversion: &Conversion, inner: &TokenStream) -> TokenStream {
@@ -950,6 +1090,8 @@ struct VariantTokens {
     consts:     TokenStream,
     spec:       TokenStream,
     arm:        TokenStream,
+    /// empty when naming the variant again replaces it
+    update_arm: TokenStream,
     /// the arm reads its args against `spec.subs[idx].spec`
     reads_spec: bool,
 }
