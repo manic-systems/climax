@@ -678,7 +678,7 @@ impl<'a> Walk<'_, 'a> {
         } else if tok == "--" {
             self.only_positional = true;
         } else if let Some(long) = tok.strip_prefix("--") {
-            self.long(long, it, hits)?;
+            self.long(tok, long, it, hits)?;
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             self.short(tok, rest, it, hits)?;
         } else if tok == "help"
@@ -698,6 +698,7 @@ impl<'a> Walk<'_, 'a> {
 
     fn long(
         &mut self,
+        tok: &'a str,
         long: &'a str,
         it: &mut Words<'_, 'a>,
         hits: &mut Vec<GlobalHit<'a>>,
@@ -730,6 +731,8 @@ impl<'a> Walk<'_, 'a> {
                     negated: true,
                 });
             }
+        } else if self.takes_hyphen_value() {
+            self.positional(tok)?;
         } else {
             return Err(ErrorKind::Unknown {
                 arg:     format!("--{name}"),
@@ -750,12 +753,33 @@ impl<'a> Walk<'_, 'a> {
         let (cmd, targets) = (self.cmd, self.targets);
         let builtin = |ch| builtin_short(cmd, ch);
         let first = rest.chars().next().unwrap_or('-');
-        let known = targets.iter().any(|t| t.arg.answers_short(first))
-            || builtin(first).is_some()
-            || find_global_short(cmd.globals(), first).is_some();
-        if known {
+        let arg_for = |ch| {
+            targets
+                .iter()
+                .find(|t| t.arg.answers_short(ch))
+                .map(|t| t.arg)
+                .or_else(|| find_global_short(cmd.globals(), ch).map(|(_, g)| g))
+        };
+        let known = |ch| arg_for(ch).is_some() || builtin(ch).is_some();
+        let cluster_known = || {
+            for ch in rest.chars() {
+                match arg_for(ch) {
+                    Some(arg) if arg.kind == Kind::Opt => return true,
+                    _ if known(ch) => {},
+                    _ => return false,
+                }
+            }
+            true
+        };
+        let hyphen_value = self.takes_hyphen_value();
+        let options = if hyphen_value {
+            cluster_known()
+        } else {
+            known(first)
+        };
+        if options {
             shorts(targets, &mut self.m, rest, it, cmd.globals(), hits, builtin)
-        } else if first.is_ascii_digit() || first == '.' {
+        } else if first.is_ascii_digit() || first == '.' || hyphen_value {
             // a negative number is a value, not a flag
             Ok(self.positional(tok)?)
         } else {
@@ -806,6 +830,10 @@ impl<'a> Walk<'_, 'a> {
         };
         self.m.selected = named;
         Ok(next)
+    }
+
+    fn takes_hyphen_value(&self) -> bool {
+        next_positional(&self.positionals, self.cursor).is_some_and(|t| t.arg.hyphen_values)
     }
 
     fn positional(&mut self, tok: &'a str) -> Result<(), ErrorKind> {
@@ -1012,7 +1040,9 @@ fn more_values<'a>(
 
     let mut taken = 1;
     while arity.max().is_none_or(|max| taken < max) {
-        let Some(word) = it.next_if(|word| !looks_like_option(word)) else {
+        let Some(word) =
+            it.next_if(|word| *word != "--" && (a.hyphen_values || !looks_like_option(word)))
+        else {
             break;
         };
         each(word);
