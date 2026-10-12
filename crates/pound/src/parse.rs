@@ -384,6 +384,25 @@ impl<'a> Matches<'a> {
         parse_fallback(spec, i, &convert).transpose()
     }
 
+    /// read an option whose value may be left out, as `None` when it was
+    /// not given, `Some(None)` when given with no value, and `Some(Some(_))`
+    /// when given one or filled by its fallback
+    /// caller must supply conversion fn
+    pub fn optional_value_map<T>(
+        &self,
+        spec: &CommandSpec,
+        i: usize,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
+    ) -> Result<Option<Option<T>>, Error> {
+        if let Some(s) = self.raw(i) {
+            return Ok(Some(Some(parse_with(spec, i, s, None, &convert)?)));
+        }
+        if self.slots[i].count > 0 {
+            return Ok(Some(None));
+        }
+        Ok(parse_fallback(spec, i, &convert).transpose()?.map(Some))
+    }
+
     /// read every value
     /// caller must supply conversion fn
     pub fn many_map<T>(
@@ -935,15 +954,28 @@ fn apply_named<'a>(
         },
         Kind::Opt => {
             let value = match inline {
-                Some(v) => v,
+                Some(v) => Some(v),
                 None => detached_value(a, it)?,
             };
-            push_value(a, slot, value);
-            more_values(a, it, |more| push_value(a, slot, more))?;
+            use_option(a, slot, value, it)?;
         },
         Kind::Positional | Kind::Trailing => return Err(unknown(a.display_name()).into()),
     }
     Ok(())
+}
+
+fn use_option<'a>(
+    a: &'static ArgSpec,
+    slot: &mut Slot<'a>,
+    value: Option<&'a str>,
+    it: &mut Words<'_, 'a>,
+) -> Result<(), Halt> {
+    let Some(first) = value else {
+        push_bare(a, slot);
+        return Ok(());
+    };
+    push_value(a, slot, first);
+    more_values(a, it, |more| push_value(a, slot, more))
 }
 
 /// apply a cluster of short args
@@ -971,8 +1003,7 @@ fn shorts<'a>(
                 Kind::Count => slot.count += 1,
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, a)?;
-                    push_value(a, slot, value);
-                    more_values(a, it, |more| push_value(a, slot, more))?;
+                    use_option(a, slot, value, it)?;
                     return Ok(()); // option swallowed the cluster tail
                 },
                 Kind::Positional | Kind::Trailing => {
@@ -1011,22 +1042,28 @@ fn cluster_value<'a>(
     ch: char,
     it: &mut Words<'_, 'a>,
     a: &'static ArgSpec,
-) -> Result<&'a str, Halt> {
+) -> Result<Option<&'a str>, Halt> {
     let rest = &cluster[off + ch.len_utf8()..];
     if rest.is_empty() {
         detached_value(a, it)
     } else {
-        Ok(rest)
+        Ok(Some(rest))
     }
 }
 
 /// the value for an option written without an attached one. an option that
 /// declares `default_missing` takes that instead of eating the next token.
-fn detached_value<'a>(a: &'static ArgSpec, it: &mut Words<'_, 'a>) -> Result<&'a str, Halt> {
+fn detached_value<'a>(
+    a: &'static ArgSpec,
+    it: &mut Words<'_, 'a>,
+) -> Result<Option<&'a str>, Halt> {
     if let Some(missing) = a.default_missing {
-        return Ok(missing);
+        return Ok(Some(missing));
     }
-    it.next().ok_or(Halt::NeedsValue(a))
+    if a.optional_value {
+        return Ok(None);
+    }
+    it.next().map(Some).ok_or(Halt::NeedsValue(a))
 }
 
 fn more_values<'a>(
@@ -1072,23 +1109,32 @@ fn looks_like_option(word: &str) -> bool {
     })
 }
 
-/// record a global option's value, and those one use of it takes after it
 fn record_values<'a>(
     index: usize,
     g: &'static ArgSpec,
-    value: &'a str,
+    value: Option<&'a str>,
     it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), Halt> {
     let mut record = |word| {
         hits.push(GlobalHit {
             index,
-            value: Some(word),
+            value: word,
             negated: false,
         });
     };
     record(value);
-    more_values(g, it, record)
+    if value.is_none() {
+        return Ok(());
+    }
+    more_values(g, it, |word| record(Some(word)))
+}
+
+fn push_bare(a: &ArgSpec, slot: &mut Slot<'_>) {
+    if !a.multi {
+        slot.values.clear();
+    }
+    slot.count += 1;
 }
 
 fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
@@ -1148,7 +1194,7 @@ fn record_global<'a>(
         },
         Kind::Opt => {
             let value = match inline {
-                Some(v) => v,
+                Some(v) => Some(v),
                 None => detached_value(g, it)?,
             };
             record_values(index, g, value, it, hits)?;
@@ -1183,8 +1229,9 @@ fn apply_global_hits<'a>(
             },
             Kind::Count => slot.count += 1,
             Kind::Opt => {
-                if let Some(v) = h.value {
-                    push_value(a, slot, v);
+                match h.value {
+                    Some(v) => push_value(a, slot, v),
+                    None => push_bare(a, slot),
                 }
             },
             Kind::Positional | Kind::Trailing => {},

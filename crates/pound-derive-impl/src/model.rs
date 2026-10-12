@@ -512,7 +512,7 @@ impl CommandFields {
                 let optional = match ty.shape {
                     Shape::One => false,
                     Shape::Opt => true,
-                    Shape::Bool | Shape::Many | Shape::OptMany => {
+                    Shape::Bool | Shape::Many | Shape::OptMany | Shape::OptOpt => {
                         return Err(Error::new_at_span(
                             field.name.span(),
                             "pound: #[pound(subcommand)] must be `T` or `Option<T>`",
@@ -569,6 +569,9 @@ pub enum Shape {
     Many,
     /// `Option<Vec<T>>`, `None` when the arg was never given
     OptMany,
+    /// `Option<Option<T>>`, `Some(None)` when the option was given with no
+    /// value
+    OptOpt,
 }
 
 impl Shape {
@@ -588,9 +591,12 @@ impl FieldType {
         } else if let Some(inner) = Self::strip_wrapper(toks, "Option", "option", &["core", "std"])
         {
             let inner_toks = inner.clone().into_iter().collect::<Vec<_>>();
-            match Self::strip_wrapper(&inner_toks, "Vec", "vec", &["alloc", "std"]) {
-                Some(item) => (Shape::OptMany, item),
-                None => (Shape::Opt, inner),
+            let many = Self::strip_wrapper(&inner_toks, "Vec", "vec", &["alloc", "std"]);
+            let maybe = Self::strip_wrapper(&inner_toks, "Option", "option", &["core", "std"]);
+            match (many, maybe) {
+                (Some(item), _) => (Shape::OptMany, item),
+                (None, Some(item)) => (Shape::OptOpt, item),
+                (None, None) => (Shape::Opt, inner),
             }
         } else if let Some(inner) = Self::strip_wrapper(toks, "Vec", "vec", &["alloc", "std"]) {
             (Shape::Many, inner)
@@ -717,6 +723,14 @@ impl ArgKind {
                 ident.span(),
                 "pound: #[pound(num_args)] counts words and #[pound(delimiter)] splits them, pick \
                  one",
+            ));
+        }
+
+        if shape == Shape::OptOpt && (!a.is_named() || a.count || a.default_missing.is_some()) {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: an `Option<Option<T>>` field needs a value option without \
+                 `default_missing`",
             ));
         }
 

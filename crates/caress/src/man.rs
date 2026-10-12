@@ -142,7 +142,15 @@ impl<'m> Manual<'m> {
 
         for a in self.options.iter().filter(|a| a.kind == Kind::Opt) {
             let op = if a.required { "" } else { "Op " };
-            page.line(format_args!("{op}{} {}", Flag(a), Values(a)));
+            if a.value_may_be_left_out() {
+                let attached = Attached {
+                    arg:  a,
+                    long: a.short.is_none(),
+                };
+                page.line(format_args!("{op}{}{attached}", Flag(a)));
+            } else {
+                page.line(format_args!("{op}{} {}", Flag(a), Values(a)));
+            }
         }
         for a in &self.positionals {
             let dots = if a.multi || a.kind == Kind::Trailing {
@@ -448,6 +456,20 @@ impl fmt::Display for Values<'_> {
     }
 }
 
+/// a value that may be left out, which then has to be attached to its option,
+/// as in `-c[color]` or `--color[=color]`
+struct Attached<'a> {
+    arg:  &'a ArgSpec,
+    long: bool,
+}
+
+impl fmt::Display for Attached<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let equals = if self.long { "Ns = Ns " } else { "" };
+        write!(f, " Ns Oo {equals}Ar {} Oc", Meta(self.arg))
+    }
+}
+
 struct Flag<'a>(&'a ArgSpec);
 
 impl fmt::Display for Flag<'_> {
@@ -465,6 +487,7 @@ struct Item<'a>(&'a ArgSpec);
 
 impl fmt::Display for Item<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[derive(Clone, Copy)]
         enum Spelling<'s> {
             Short(char),
             Long(&'s str),
@@ -482,6 +505,10 @@ impl fmt::Display for Item<'_> {
                 Spelling::Long(long) => write!(f, "Fl \\-{}", Word(long))?,
             }
             match (a.kind, spelling) {
+                (Kind::Opt, _) if a.value_may_be_left_out() => {
+                    let long = matches!(spelling, Spelling::Long(_));
+                    write!(f, "{}", Attached { arg: a, long })?;
+                },
                 (Kind::Opt, Spelling::Long(_)) if a.words_per_use().is_none() => {
                     write!(f, " Ns = Ns Ar {}", Meta(a))?;
                 },
