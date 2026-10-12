@@ -63,6 +63,7 @@ dependencies = [
  "bang-screw",
  "bang-screw-pty",
  "bang-terminal",
+ "caress",
  "pound",
  "screw",
 ]
