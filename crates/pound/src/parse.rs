@@ -527,6 +527,8 @@ trait Mode {
     fn finish(cmd: &Command<'_>, m: &Matches<'_>, empty: bool) -> Result<(), Self::Error>;
 
     fn locate(cmd: &Command<'_>, err: Self::Error) -> Self::Error;
+
+    fn show(cmd: &Command<'_>) -> Result<(), Self::Error>;
 }
 
 enum Strict {}
@@ -552,6 +554,10 @@ impl Mode for Strict {
     fn locate(cmd: &Command<'_>, err: Error) -> Error {
         cmd.locate(err)
     }
+
+    fn show(cmd: &Command<'_>) -> Result<(), Error> {
+        Err(ErrorKind::Help(help::render(cmd, true)).into())
+    }
 }
 
 /// an unfinished line being completed, which skips what it cannot apply and
@@ -575,6 +581,10 @@ impl Mode for Lenient {
     fn locate(_: &Command<'_>, err: Infallible) -> Infallible {
         err
     }
+
+    fn show(_: &Command<'_>) -> Result<(), Infallible> {
+        Ok(())
+    }
 }
 
 /// parse one command, tagging whatever went wrong with this command's usage
@@ -592,6 +602,7 @@ fn parse_cmd<'a, M: Mode>(
 enum Step<'a> {
     Continue,
     Dispatch(SubTarget, &'a str),
+    Help,
 }
 
 struct Walk<'w, 'a> {
@@ -644,6 +655,7 @@ fn walk_cmd<'a, M: Mode>(
             Ok(Step::Dispatch(target, name)) => {
                 break walk.dispatch::<M>(target, name, it, hits)?;
             },
+            Ok(Step::Help) => break walk.help::<M>(it)?,
             Err(halt) => M::halt(halt, &mut awaiting)?,
         }
     };
@@ -669,6 +681,11 @@ impl<'a> Walk<'_, 'a> {
             self.long(long, it, hits)?;
         } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
             self.short(tok, rest, it, hits)?;
+        } else if tok == "help"
+            && self.cmd.help_command().is_some()
+            && sub_open(self.cmd.spec(), &self.positionals, self.cursor)
+        {
+            return Ok(Step::Help);
         } else if let Some(target) =
             sub_dispatch(self.cmd.spec(), &self.positionals, self.cursor, tok)?
         {
@@ -762,6 +779,32 @@ impl<'a> Walk<'_, 'a> {
         }
         self.m.selected = sub_m.selected.take().or(Some(child));
         target.store(&mut self.m, sub_m);
+        Ok(next)
+    }
+
+    /// a further `help` names the help command itself, so it is skipped
+    fn help<M: Mode>(&mut self, it: &mut Words<'_, 'a>) -> Result<Next, M::Error> {
+        let mut named = None::<Command<'static>>;
+        for word in it.by_ref() {
+            let at = named.as_ref().unwrap_or(self.cmd);
+            if word == "help" && at.help_command().is_some() {
+                continue;
+            }
+            let Some(target) = SubTarget::find(at.spec(), word) else {
+                M::halt(unknown_subcommand(at.spec(), word).into(), &mut None)?;
+                break;
+            };
+            named = Some(at.child(target.command));
+        }
+
+        let shown = named.as_ref().unwrap_or(self.cmd);
+        M::show(shown)?;
+        let next = Next::Word {
+            positional:  None,
+            subcommands: shown.spec().has_subs(),
+            options:     false,
+        };
+        self.m.selected = named;
         Ok(next)
     }
 

@@ -19,7 +19,9 @@
 //!
 //! `-h`/`--help` and `-V`/`--version` are generated unless a local arg or an
 //! inherited global claims the spelling, and `-V`/`--version` also need version
-//! or hash metadata. [`Command::builtins`] lists whichever survive.
+//! or hash metadata. [`Command::builtins`] lists whichever survive. a command
+//! with subcommands also takes `help <command>...`, see
+//! [`Command::help_command`].
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
@@ -568,6 +570,9 @@ impl SubSpec {
     }
 }
 
+const HELP_SPEC: CommandSpec = CommandSpec::new("help");
+static HELP_COMMAND: SubSpec = SubSpec::new("help", &HELP_SPEC).about("Print help for a command");
+
 /// a command or subcommand: identity, args, groups, children
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -1022,6 +1027,19 @@ impl<'s> Command<'s> {
             .into_iter()
             .chain(version.flatten())
             .collect()
+    }
+
+    /// the generated `help` command, which takes the names of the command to
+    /// show help for. a command with subcommands has it unless one of them
+    /// answers to `help`, or an external one takes the names nothing else
+    /// does.
+    #[must_use]
+    pub fn help_command(&self) -> Option<&'static SubSpec> {
+        let taken = self
+            .spec
+            .subcommands()
+            .any(|s| s.external || s.name == "help" || s.aliases.contains(&"help"));
+        (self.spec.has_subs() && !taken).then_some(&HELP_COMMAND)
     }
 
     /// the spelling that still reaches the generated help, if any does

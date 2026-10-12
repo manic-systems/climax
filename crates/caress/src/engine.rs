@@ -254,6 +254,9 @@ impl Completions {
             let spec = sub.spec();
             self.offer(Candidate::new(spec.name).help(spec.about), prefix);
         }
+        if let Some(help) = command.help_command() {
+            self.offer(Candidate::new(help.name).help(help.about), prefix);
+        }
     }
 }
 
