@@ -25,6 +25,7 @@ use venial::{
 };
 
 use crate::attr::{
+    NumArgs,
     Pound,
     Text,
     ValueHint,
@@ -76,6 +77,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "min_values",
     "max_values",
     "delimiter",
+    "num_args",
     "parse",
     "validate",
     "complete",
@@ -689,6 +691,21 @@ impl ArgKind {
             ));
         }
 
+        if a.num_args.is_some() && !shape.is_many() {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(num_args)] needs a `Vec` or `Option<Vec>` field",
+            ));
+        }
+
+        if a.num_args.is_some() && a.delimiter.is_some() {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(num_args)] counts words and #[pound(delimiter)] splits them, pick \
+                 one",
+            ));
+        }
+
         if a.count && shape != Shape::One {
             return Err(Error::new_at_span(
                 ident.span(),
@@ -731,6 +748,13 @@ impl ArgKind {
                 ident.span(),
                 "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
                  Arguments",
+            ));
+        }
+
+        if a.num_args.is_some() && (self != Self::Opt || a.default_missing.is_some()) {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(num_args)] needs an option without `default_missing`",
             ));
         }
 
@@ -844,6 +868,7 @@ pub struct Arg {
     pub min_values:      Option<usize>,
     pub max_values:      Option<usize>,
     pub delimiter:       Option<char>,
+    pub num_args:        Option<NumArgs>,
     pub group:           Option<String>,
     pub default:         Option<Text>,
     pub default_missing: Option<String>,
@@ -925,6 +950,7 @@ impl Arg {
             min_values,
             max_values,
             delimiter: a.delimiter,
+            num_args: a.num_args,
             group: a.group,
             default: a.default,
             default_missing: a.default_missing,

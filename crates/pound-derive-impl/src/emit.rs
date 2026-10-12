@@ -15,6 +15,7 @@ use quote::quote;
 use crate::{
     Options,
     attr::{
+        NumArgs,
         Text,
         ValueHint,
         short_help,
@@ -651,6 +652,15 @@ impl Emitter {
 
         if let Some(d) = arg.delimiter {
             e = quote! { #e.delimiter(#d) };
+        }
+
+        if let Some(NumArgs { min, max }) = arg.num_args {
+            let arity = match max {
+                Some(limit) if limit == min => quote! { #root::Arity::exactly(#min) },
+                Some(limit) => quote! { #root::Arity::between(#min, #limit) },
+                None => quote! { #root::Arity::at_least(#min) },
+            };
+            e = quote! { #e.per_use(#arity) };
         }
 
         if let Some(g) = &arg.group {
