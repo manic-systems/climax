@@ -89,6 +89,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// |--------------------------|------------------------------------------------------------------------------------------|
 /// | `name = "tool"`          | the command name shown in usage and help. defaults to the name the program runs as      |
 /// | `version = EXPR`         | the `--version` text. any expression of type `&'static str`, defaults to `CARGO_PKG_VERSION` |
+/// | `long_version = EXPR`    | fuller text `--version` prints, such as build details, while `-V` keeps `version`       |
 /// | `required_group = "g"`   | exactly one member of group `g` must be given. may repeat, see [groups](#groups)         |
 /// | `help_if_empty`          | given no words at all, print the help to stderr and exit 2, rather than parse            |
 /// | `before_help = "text"`   | text the help page opens with, above the description                                    |

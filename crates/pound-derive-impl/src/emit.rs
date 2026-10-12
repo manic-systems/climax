@@ -355,6 +355,10 @@ impl Emitter {
             |tokens| tokens.iter().cloned().collect::<TokenStream>(),
         );
 
+        let long_version = header.long_version.as_ref().map(|tokens| {
+            let text = tokens.iter().cloned().collect::<TokenStream>();
+            quote! { .long_version(#text) }
+        });
         let prose = self.prose_calls(&header.prose);
 
         let empty = header.help_if_empty.then(|| quote!(.help_if_empty()));
@@ -362,6 +366,7 @@ impl Emitter {
         quote! {
             #new
                 .version(#version)
+                #long_version
                 .hash_opt(::core::option_env!("POUND_GIT_HASH"))
                 #prose
                 #empty

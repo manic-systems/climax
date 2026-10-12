@@ -250,16 +250,29 @@ const fn command_placeholder(spec: &CommandSpec) -> &'static str {
     }
 }
 
-pub(crate) fn version_line(spec: &CommandSpec) -> String {
+pub(crate) fn version_line(spec: &CommandSpec, long: bool) -> String {
+    let text = if (long || spec.version.is_empty()) && !spec.long_version.is_empty() {
+        spec.long_version
+    } else {
+        spec.version
+    };
+    let (first, more) = text
+        .split_once('\n')
+        .map_or((text, None), |(head, tail)| (head, Some(tail)));
+
     let mut out = spec.name.to_owned();
-    if !spec.version.is_empty() {
+    if !first.is_empty() {
         out.push(' ');
-        out.push_str(spec.version);
+        out.push_str(first);
     }
     if let Some(hash) = spec.hash {
         out.push_str(" (");
         out.push_str(hash);
         out.push(')');
+    }
+    if long && let Some(more) = more {
+        out.push('\n');
+        out.push_str(more);
     }
     out
 }

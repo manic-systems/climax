@@ -1405,7 +1405,7 @@ fn builtin_long(cmd: &Command<'_>, name: &str) -> Option<ErrorKind> {
     match name {
         "help" => Some(ErrorKind::Help(help::render(cmd, true))),
         "version" if cmd.spec().has_version_info() => {
-            Some(ErrorKind::Version(help::version_line(cmd.spec())))
+            Some(ErrorKind::Version(help::version_line(cmd.spec(), true)))
         },
         _ => None,
     }
@@ -1419,7 +1419,7 @@ fn builtin_short(cmd: &Command<'_>, ch: char) -> Option<ErrorKind> {
     match ch {
         'h' => Some(ErrorKind::Help(help::render(cmd, false))),
         'V' if cmd.spec().has_version_info() => {
-            Some(ErrorKind::Version(help::version_line(cmd.spec())))
+            Some(ErrorKind::Version(help::version_line(cmd.spec(), false)))
         },
         _ => None,
     }
@@ -1514,6 +1514,7 @@ mod tests {
         name:           "flat",
         invoked_name:   false,
         version:        "0.1.0",
+        long_version:   "",
         hash:           None,
         long_about:     "",
         before_help:    "",
@@ -1707,6 +1708,7 @@ mod tests {
             name:           "d",
             invoked_name:   false,
             version:        "",
+            long_version:   "",
             hash:           None,
             long_about:     "",
             before_help:    "",
@@ -1794,6 +1796,7 @@ mod tests {
             name:           "g",
             invoked_name:   false,
             version:        "",
+            long_version:   "",
             hash:           None,
             long_about:     "",
             before_help:    "",
@@ -1873,6 +1876,7 @@ mod tests {
             name:           "c",
             invoked_name:   false,
             version:        "",
+            long_version:   "",
             hash:           None,
             long_about:     "",
             before_help:    "",
@@ -1905,6 +1909,7 @@ mod tests {
         name:           "add",
         invoked_name:   false,
         version:        "",
+        long_version:   "",
         hash:           None,
         long_about:     "",
         before_help:    "",
@@ -1933,6 +1938,7 @@ mod tests {
         name:           "prog",
         invoked_name:   false,
         version:        "1.0.0",
+        long_version:   "",
         hash:           None,
         long_about:     "",
         before_help:    "",

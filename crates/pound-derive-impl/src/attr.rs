@@ -82,6 +82,8 @@ pub struct Pound {
     pub name:            Option<String>,
     /// any expression, not just a literal
     pub version:         Option<Vec<TokenTree>>,
+    /// any expression, not just a literal
+    pub long_version:    Option<Vec<TokenTree>>,
     /// field-level: minimum accepted parsed value
     pub min:             Option<String>,
     /// field-level: maximum accepted parsed value
@@ -149,6 +151,7 @@ impl Pound {
             },
             "long"            => self.long            = Some(value),
             "version"         => self.version         = expr(seg),
+            "long_version"    => self.long_version    = expr(seg),
             "positional"      => self.positional      = bare(key, span, value.is_some())?,
             "trailing"        => self.trailing        = bare(key, span, value.is_some())?,
             "count"           => self.count           = bare(key, span, value.is_some())?,
@@ -310,7 +313,14 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
 }
 
 /// keys whose value is read as tokens rather than as a single literal
-const EXPR_KEYS: &[&str] = &["version", "default", "parse", "validate", "complete"];
+const EXPR_KEYS: &[&str] = &[
+    "version",
+    "long_version",
+    "default",
+    "parse",
+    "validate",
+    "complete",
+];
 
 /// a `default` is a literal, a bare word, or a braced constant expression of
 /// type `&str`. a lone `{ CONST }` loses its braces, which would trip
