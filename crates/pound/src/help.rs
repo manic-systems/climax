@@ -283,11 +283,24 @@ fn usage_positional(a: &ArgSpec) -> String {
 #[cfg(feature = "help")]
 fn value_suffix(a: &ArgSpec) -> String {
     let meta = a.metavar();
-    if a.default_missing.is_some() {
+    if let Some(words) = several(a) {
+        format!(" {words}")
+    } else if a.default_missing.is_some() {
         format!("[={meta}]")
     } else {
         format!("={meta}")
     }
+}
+
+#[cfg(feature = "help")]
+fn several(a: &ArgSpec) -> Option<String> {
+    let arity = a.words_per_use()?;
+    let meta = a.metavar();
+    let mut words = vec![meta.as_str(); arity.min()].join(" ");
+    if arity.max() != Some(arity.min()) {
+        words.push_str("...");
+    }
+    Some(words)
 }
 
 /// the long spelling, folding a `no-` negation into the `--[no-]name` form and
@@ -324,7 +337,9 @@ fn invocation(a: &ArgSpec) -> Vec<Span> {
         },
         (Some(c), None) => {
             spans.push(Span::literal(format!("-{c}")));
-            if takes_value && a.default_missing.is_some() {
+            if let Some(words) = several(a) {
+                spans.push(Span::plain(format!(" {words}")));
+            } else if takes_value && a.default_missing.is_some() {
                 spans.push(Span::plain(format!(" [{}]", a.metavar())));
             } else if takes_value {
                 spans.push(Span::plain(format!(" {}", a.metavar())));

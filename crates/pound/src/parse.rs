@@ -3,7 +3,10 @@
 //! walks `argv` against a [`CommandSpec`] and produces [`Matches`]
 
 use alloc::borrow::Cow;
-use core::convert::Infallible;
+use core::{
+    convert::Infallible,
+    iter::Peekable,
+};
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
@@ -166,15 +169,9 @@ enum Halt {
     Error(Error),
     /// the words ran out where this arg wanted its value
     NeedsValue(&'static ArgSpec),
-}
-
-impl Halt {
-    fn into_error(self) -> Error {
-        match self {
-            Self::Error(err) => err,
-            Self::NeedsValue(a) => ErrorKind::MissingValue(a.display_name()).into(),
-        }
-    }
+    /// the words ran out where this arg had its values but could take more,
+    /// which is only news to a completion
+    TakesMore(&'static ArgSpec),
 }
 
 impl From<ErrorKind> for Halt {
@@ -183,7 +180,7 @@ impl From<ErrorKind> for Halt {
     }
 }
 
-type Words<'w, 'a> = dyn Iterator<Item = &'a str> + 'w;
+type Words<'w, 'a> = Peekable<&'w mut dyn Iterator<Item = &'a str>>;
 
 /// a global flag/option seen in a descendant
 struct GlobalHit<'a> {
@@ -500,7 +497,8 @@ pub(crate) fn parse_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
-    let mut it = args.into_iter();
+    let mut args = args.into_iter();
+    let mut it = (&mut args as &mut dyn Iterator<Item = &'a str>).peekable();
     let mut hits = Vec::new();
     parse_cmd::<Strict>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
 }
@@ -511,7 +509,8 @@ pub(crate) fn probe_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> (Matches<'a>, Next) {
-    let mut it = args.into_iter();
+    let mut args = args.into_iter();
+    let mut it = (&mut args as &mut dyn Iterator<Item = &'a str>).peekable();
     let mut hits = Vec::new();
     let Ok(walked) = parse_cmd::<Lenient>(&Command::root(spec), None, &mut it, &mut hits);
     walked
@@ -536,7 +535,11 @@ impl Mode for Strict {
     type Error = Error;
 
     fn halt(halt: Halt, _: &mut Option<&'static ArgSpec>) -> Result<(), Error> {
-        Err(halt.into_error())
+        match halt {
+            Halt::Error(err) => Err(err),
+            Halt::NeedsValue(a) => Err(ErrorKind::MissingValue(a.display_name()).into()),
+            Halt::TakesMore(_) => Ok(()),
+        }
     }
 
     fn finish(cmd: &Command<'_>, m: &Matches<'_>, empty: bool) -> Result<(), Error> {
@@ -559,7 +562,7 @@ impl Mode for Lenient {
     type Error = Infallible;
 
     fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Infallible> {
-        if let Halt::NeedsValue(arg) = halt {
+        if let Halt::NeedsValue(arg) | Halt::TakesMore(arg) = halt {
             *awaiting = Some(arg);
         }
         Ok(())
@@ -865,6 +868,7 @@ fn apply_named<'a>(
                 None => detached_value(a, it)?,
             };
             push_value(a, slot, value);
+            more_values(a, it, |more| push_value(a, slot, more))?;
         },
         Kind::Positional | Kind::Trailing => return Err(unknown(a.display_name()).into()),
     }
@@ -897,6 +901,7 @@ fn shorts<'a>(
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, a)?;
                     push_value(a, slot, value);
+                    more_values(a, it, |more| push_value(a, slot, more))?;
                     return Ok(()); // option swallowed the cluster tail
                 },
                 Kind::Positional | Kind::Trailing => {
@@ -914,11 +919,7 @@ fn shorts<'a>(
                 },
                 Kind::Opt => {
                     let value = cluster_value(cluster, off, ch, it, g)?;
-                    hits.push(GlobalHit {
-                        index,
-                        value: Some(value),
-                        negated: false,
-                    });
+                    record_values(index, g, value, it, hits)?;
                     return Ok(());
                 },
                 Kind::Positional | Kind::Trailing => {
@@ -955,6 +956,66 @@ fn detached_value<'a>(a: &'static ArgSpec, it: &mut Words<'_, 'a>) -> Result<&'a
         return Ok(missing);
     }
     it.next().ok_or(Halt::NeedsValue(a))
+}
+
+fn more_values<'a>(
+    a: &'static ArgSpec,
+    it: &mut Words<'_, 'a>,
+    mut each: impl FnMut(&'a str),
+) -> Result<(), Halt> {
+    let Some(arity) = a.words_per_use() else {
+        return Ok(());
+    };
+
+    let mut taken = 1;
+    while arity.max().is_none_or(|max| taken < max) {
+        let Some(word) = it.next_if(|word| !looks_like_option(word)) else {
+            break;
+        };
+        each(word);
+        taken += 1;
+    }
+
+    let min = arity.min();
+    let open = arity.max().is_none_or(|max| taken < max);
+    match it.peek() {
+        None if taken >= min && open => Err(Halt::TakesMore(a)),
+        _ if taken >= min => Ok(()),
+        None => Err(Halt::NeedsValue(a)),
+        Some(_) => {
+            Err(ErrorKind::TooFewValues {
+                arg: a.display_name(),
+                min,
+                got: taken,
+            }
+            .into())
+        },
+    }
+}
+
+fn looks_like_option(word: &str) -> bool {
+    word.strip_prefix('-').is_some_and(|rest| {
+        !rest.is_empty() && !rest.starts_with(|ch: char| ch.is_ascii_digit() || ch == '.')
+    })
+}
+
+/// record a global option's value, and those one use of it takes after it
+fn record_values<'a>(
+    index: usize,
+    g: &'static ArgSpec,
+    value: &'a str,
+    it: &mut Words<'_, 'a>,
+    hits: &mut Vec<GlobalHit<'a>>,
+) -> Result<(), Halt> {
+    let mut record = |word| {
+        hits.push(GlobalHit {
+            index,
+            value: Some(word),
+            negated: false,
+        });
+    };
+    record(value);
+    more_values(g, it, record)
 }
 
 fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
@@ -1017,11 +1078,7 @@ fn record_global<'a>(
                 Some(v) => v,
                 None => detached_value(g, it)?,
             };
-            hits.push(GlobalHit {
-                index,
-                value: Some(value),
-                negated: false,
-            });
+            record_values(index, g, value, it, hits)?;
         },
         Kind::Positional | Kind::Trailing => return Err(unknown(g.display_name()).into()),
     }

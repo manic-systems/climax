@@ -280,6 +280,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `min_values = "n"`      | a `Vec` must receive at least `n` values, waived when a `default` or `env` fills it |
 /// | `max_values = "n"`      | a `Vec` may receive at most `n` values                                          |
 /// | `delimiter = ','`       | a `Vec` splits each value at `,`, so `--features a,b` gives two. `env` and `default` split too |
+/// | `num_args = 2`          | one use of a `Vec` option takes 2 words, `--move a b`. `"1.."` takes words up to the next option, `"1..=3"` at most 3. not with `delimiter` |
 /// | `complete = F`          | list shell completion candidates with `F`, a `pound::complete::Completer`       |
 /// | `hint = path`           | complete the value as a file path, when its type does not say so itself         |
 ///

@@ -94,6 +94,7 @@ pub struct Pound {
     pub max_values:      Option<String>,
     /// field-level: splits each value of a `Vec` field into several
     pub delimiter:       Option<char>,
+    pub num_args:        Option<NumArgs>,
     /// field-level: custom raw-value parser, a path or any callable expression
     pub parse:           Option<TokenStream>,
     /// field-level: custom parsed-value validation, a path or any callable
@@ -176,6 +177,7 @@ impl Pound {
             "min_values"      => self.min_values      = Some(needed(key, span, value)?),
             "max_values"      => self.max_values      = Some(needed(key, span, value)?),
             "delimiter"       => self.delimiter       = Some(single_char(key, &needed(key, span, value)?, span)?),
+            "num_args"        => self.num_args        = Some(NumArgs::new(&needed(key, span, value)?, span)?),
             "parse"           => self.parse           = Some(callable(key, span, seg)?),
             "validate"        => self.validate        = Some(callable(key, span, seg)?),
             "complete"        => self.complete        = Some(callable(key, span, seg)?),
@@ -425,6 +427,38 @@ impl ValueHint {
             "path" => Ok(Self::Path),
             _ => Err(Error::new_at_span(span, "pound: `hint` takes `path`")),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumArgs {
+    pub min: usize,
+    pub max: Option<usize>,
+}
+
+impl NumArgs {
+    fn new(text: &str, span: Span) -> Result<Self, Error> {
+        let invalid = || {
+            Error::new_at_span(
+                span,
+                format!("pound: `num_args = {text}` is not `N`, `N..` or `N..=M` with N above 0"),
+            )
+        };
+        let count = |word: &str| word.trim().parse::<usize>().map_err(|_| invalid());
+
+        let (min, max) = match text.split_once("..") {
+            None => (count(text)?, Some(count(text)?)),
+            Some((low, "")) => (count(low)?, None),
+            Some((low, high)) => {
+                let inclusive = high.strip_prefix('=').ok_or_else(invalid)?;
+                (count(low)?, Some(count(inclusive)?))
+            },
+        };
+
+        if min == 0 || max.is_some_and(|limit| limit < min) {
+            return Err(invalid());
+        }
+        Ok(Self { min, max })
     }
 }
 

@@ -63,6 +63,66 @@ pub enum Hint {
     Path,
 }
 
+/// how many words one use of an option takes, at least one
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Arity {
+    min: usize,
+    max: Option<usize>,
+}
+
+impl Arity {
+    /// one word, as most options take
+    pub const ONE: Self = Self::exactly(1);
+
+    /// exactly `count` words, as `--move FROM TO` takes two
+    ///
+    /// # Panics
+    ///
+    /// when `count` is zero
+    #[must_use]
+    pub const fn exactly(count: usize) -> Self {
+        Self::between(count, count)
+    }
+
+    /// `min` words or more, up to the next word that looks like an option
+    ///
+    /// # Panics
+    ///
+    /// when `min` is zero
+    #[must_use]
+    pub const fn at_least(min: usize) -> Self {
+        assert!(min > 0, "an option takes at least one word");
+        Self { min, max: None }
+    }
+
+    /// `min` to `max` words, stopping early at a word that looks like an
+    /// option
+    ///
+    /// # Panics
+    ///
+    /// when `min` is zero or above `max`
+    #[must_use]
+    pub const fn between(min: usize, max: usize) -> Self {
+        assert!(min > 0 && min <= max, "an option takes 1 to `max` words");
+        Self {
+            min,
+            max: Some(max),
+        }
+    }
+
+    /// the fewest words a use takes
+    #[must_use]
+    pub const fn min(self) -> usize {
+        self.min
+    }
+
+    /// the most words a use takes, `None` for no limit
+    #[must_use]
+    pub const fn max(self) -> Option<usize> {
+        self.max
+    }
+}
+
 /// one argument's full description
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug)]
@@ -87,6 +147,8 @@ pub struct ArgSpec {
     /// splits each value of a `multi` arg into several, `,` for `--features
     /// a,b`
     pub delimiter:       Option<char>,
+    /// how many words one use of a `multi` option takes
+    pub per_use:         Arity,
     /// the mutual-exclusion group this arg belongs to, see [`GroupSpec`]
     pub group:           Option<&'static str>,
     /// the value used when the arg is not given and no env var supplies one
@@ -136,6 +198,7 @@ impl ArgSpec {
             min_values: None,
             max_values: None,
             delimiter: None,
+            per_use: Arity::ONE,
             group: None,
             default: None,
             default_missing: None,
@@ -199,6 +262,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn delimiter(mut self, delimiter: char) -> Self {
         self.delimiter = Some(delimiter);
+        self
+    }
+
+    #[must_use]
+    pub const fn per_use(mut self, per_use: Arity) -> Self {
+        self.per_use = per_use;
         self
     }
 
@@ -339,6 +408,13 @@ impl ArgSpec {
     #[must_use]
     pub const fn answers_short(&self, short: char) -> bool {
         matches!(self.short, Some(own) if own == short)
+    }
+
+    /// how many words one use of this option takes, `None` when it takes one
+    #[must_use]
+    pub fn words_per_use(&self) -> Option<Arity> {
+        let takes_more = self.kind == Kind::Opt && self.multi && self.default_missing.is_none();
+        (takes_more && self.per_use != Arity::ONE).then_some(self.per_use)
     }
 
     pub(crate) fn split<'w>(&self, word: &'w str) -> impl Iterator<Item = &'w str> {

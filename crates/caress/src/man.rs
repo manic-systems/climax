@@ -142,7 +142,7 @@ impl<'m> Manual<'m> {
 
         for a in self.options.iter().filter(|a| a.kind == Kind::Opt) {
             let op = if a.required { "" } else { "Op " };
-            page.line(format_args!("{op}{} Ar {}", Flag(a), Meta(a)));
+            page.line(format_args!("{op}{} {}", Flag(a), Values(a)));
         }
         for a in &self.positionals {
             let dots = if a.multi || a.kind == Kind::Trailing {
@@ -421,6 +421,25 @@ impl fmt::Display for Meta<'_> {
     }
 }
 
+struct Values<'a>(&'a ArgSpec);
+
+impl fmt::Display for Values<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some(arity) = self.0.words_per_use() else {
+            return write!(f, "Ar {}", Meta(self.0));
+        };
+
+        for nth in 0..arity.min() {
+            let gap = if nth > 0 { " " } else { "" };
+            write!(f, "{gap}Ar {}", Meta(self.0))?;
+        }
+        if arity.max() != Some(arity.min()) {
+            f.write_str(" No ...")?;
+        }
+        Ok(())
+    }
+}
+
 struct Flag<'a>(&'a ArgSpec);
 
 impl fmt::Display for Flag<'_> {
@@ -455,8 +474,10 @@ impl fmt::Display for Item<'_> {
                 Spelling::Long(long) => write!(f, "Fl \\-{}", Word(long))?,
             }
             match (a.kind, spelling) {
-                (Kind::Opt, Spelling::Short(_)) => write!(f, " Ar {}", Meta(a))?,
-                (Kind::Opt, Spelling::Long(_)) => write!(f, " Ns = Ns Ar {}", Meta(a))?,
+                (Kind::Opt, Spelling::Long(_)) if a.words_per_use().is_none() => {
+                    write!(f, " Ns = Ns Ar {}", Meta(a))?;
+                },
+                (Kind::Opt, _) => write!(f, " {}", Values(a))?,
                 _ => {},
             }
         }

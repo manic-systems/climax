@@ -134,6 +134,7 @@ pub use pound_derive::{
 pub use spec::{
     ArgSpec,
     ArgumentOrder,
+    Arity,
     Command,
     CommandSpec,
     GroupSpec,
