@@ -180,6 +180,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `trailing`           | collect the rest of the line, flags too, from `--` or its first value. must be last positional |
 /// | `count`              | count repeats of a flag into an integer. it takes no `default` or `env`                        |
 /// | `alias = "a, b"`     | extra long names for a flag or option, comma separated                                         |
+/// | `short_alias = "x, y"` | extra short names for a flag or option, comma separated                                      |
 /// | `subcommand`         | the field holds the command's subcommand tree. use `Option<T>` when one is not required        |
 /// | `flatten`            | embed another `Parse` struct's args at this level. it takes no other attribute                 |
 /// | `exclusive`          | the only arg allowed when given, and lifts requirements. every other field must be optional    |

@@ -136,6 +136,8 @@ pub struct ArgSpec {
     pub aliases:         &'static [&'static str],
     /// the `-n` spelling
     pub short:           Option<char>,
+    /// extra short names that also match this arg, kept out of help
+    pub short_aliases:   &'static [char],
     /// the shape of the argument
     pub kind:            Kind,
     /// parsing fails when it is absent and no fallback fills it
@@ -194,6 +196,7 @@ impl ArgSpec {
             long: None,
             aliases: &[],
             short: None,
+            short_aliases: &[],
             kind,
             required: false,
             multi: false,
@@ -234,6 +237,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn short(mut self, short: char) -> Self {
         self.short = Some(short);
+        self
+    }
+
+    #[must_use]
+    pub const fn short_aliases(mut self, short_aliases: &'static [char]) -> Self {
+        self.short_aliases = short_aliases;
         self
     }
 
@@ -406,10 +415,20 @@ impl ArgSpec {
         false
     }
 
-    /// whether `-c` reaches this arg
+    /// whether `-c` reaches this arg, as its short name or an alias
     #[must_use]
     pub const fn answers_short(&self, short: char) -> bool {
-        matches!(self.short, Some(own) if own == short)
+        if matches!(self.short, Some(own) if own == short) {
+            return true;
+        }
+        let mut i = 0;
+        while i < self.short_aliases.len() {
+            if self.short_aliases[i] == short {
+                return true;
+            }
+            i += 1;
+        }
+        false
     }
 
     /// how many words one use of this option takes, `None` when it takes one
