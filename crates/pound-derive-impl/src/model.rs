@@ -460,7 +460,7 @@ impl CommandFields {
                 let optional = match ty.shape {
                     Shape::One => false,
                     Shape::Opt => true,
-                    Shape::Bool | Shape::Many => {
+                    Shape::Bool | Shape::Many | Shape::OptMany => {
                         return Err(Error::new_at_span(
                             field.name.span(),
                             "pound: #[pound(subcommand)] must be `T` or `Option<T>`",
@@ -515,6 +515,14 @@ pub enum Shape {
     One,
     Opt,
     Many,
+    /// `Option<Vec<T>>`, `None` when the arg was never given
+    OptMany,
+}
+
+impl Shape {
+    pub const fn is_many(self) -> bool {
+        matches!(self, Self::Many | Self::OptMany)
+    }
 }
 
 impl FieldType {
@@ -527,7 +535,11 @@ impl FieldType {
             (Shape::Bool, quote!(bool))
         } else if let Some(inner) = Self::strip_wrapper(toks, "Option", "option", &["core", "std"])
         {
-            (Shape::Opt, inner)
+            let inner_toks = inner.clone().into_iter().collect::<Vec<_>>();
+            match Self::strip_wrapper(&inner_toks, "Vec", "vec", &["alloc", "std"]) {
+                Some(item) => (Shape::OptMany, item),
+                None => (Shape::Opt, inner),
+            }
         } else if let Some(inner) = Self::strip_wrapper(toks, "Vec", "vec", &["alloc", "std"]) {
             (Shape::Many, inner)
         } else {
@@ -618,10 +630,18 @@ impl ArgKind {
             ));
         }
 
-        if a.trailing && shape != Shape::Many {
+        if a.trailing && !shape.is_many() {
             return Err(Error::new_at_span(
                 ident.span(),
-                "pound: #[pound(trailing)] needs a `Vec` field",
+                "pound: #[pound(trailing)] needs a `Vec` or `Option<Vec>` field",
+            ));
+        }
+
+        if a.min_values.is_some() && shape == Shape::OptMany {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(min_values)] needs a `Vec` field, an `Option<Vec>` is `None` when \
+                 never given",
             ));
         }
 
@@ -840,7 +860,7 @@ impl Arg {
             .or_else(|| (summary != doc).then(|| doc.clone()));
 
         kind.check(&a, ident)?;
-        let (min_values, max_values) = Self::arity(&a, ty.shape == Shape::Many, ident)?;
+        let (min_values, max_values) = Self::arity(&a, ty.shape.is_many(), ident)?;
         let negate = Self::negation(&a, kind, long.as_deref(), ident)?;
 
         let required = kind.takes_value() && ty.shape == Shape::One && a.default.is_none();

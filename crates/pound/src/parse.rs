@@ -348,6 +348,16 @@ impl<'a> Matches<'a> {
         self.many_map(spec, i, T::from_arg)
     }
 
+    /// read every value into `Some(Vec<T>)`, or `None` when the arg was never
+    /// given and has no fallback
+    pub fn optional_many<T: FromArg>(
+        &self,
+        spec: &CommandSpec,
+        i: usize,
+    ) -> Result<Option<Vec<T>>, Error> {
+        self.optional_many_map(spec, i, T::from_arg)
+    }
+
     /// read a required value
     /// caller must supply conversion fn
     pub fn required_map<T>(
@@ -396,6 +406,21 @@ impl<'a> Matches<'a> {
             .transpose()?
             .into_iter()
             .collect())
+    }
+
+    /// read every value, or `None` when the arg was never given and has no
+    /// fallback
+    /// caller must supply conversion fn
+    pub fn optional_many_map<T>(
+        &self,
+        spec: &CommandSpec,
+        i: usize,
+        convert: impl Fn(&str) -> Result<T, ValueError>,
+    ) -> Result<Option<Vec<T>>, Error> {
+        if self.raws(i).is_empty() && fallback(spec, i).is_none() {
+            return Ok(None);
+        }
+        self.many_map(spec, i, convert).map(Some)
     }
 }
 

@@ -28,6 +28,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `T` with `short` or `long`             | option that must be given or have a `default`            |
 /// | `Option<T>` with `short` or `long`     | optional option                                          |
 /// | `Vec<T>` with `short` or `long`        | option that repeats, `--name a --name b`                 |
+/// | `Option<Vec<T>>`                       | like `Vec<T>`, but `None` when never given               |
 /// | integer with `count`                   | `-vvv` or `--verbose --verbose` counted                  |
 /// | `Vec<T>` with `trailing`               | everything after `--` or after its first value           |
 /// | `T` or `Option<T>` with `subcommand`   | the subcommand tree held by a [`Parse`] enum             |

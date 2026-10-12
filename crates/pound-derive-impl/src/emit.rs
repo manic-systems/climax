@@ -619,7 +619,7 @@ impl Emitter {
             e = quote! { #e.required() };
         }
 
-        if arg.ty.shape == Shape::Many {
+        if arg.ty.shape.is_many() {
             e = quote! { #e.multi() };
         }
 
@@ -726,6 +726,9 @@ impl Emitter {
                     },
                     Shape::Opt => quote! { #m.optional_map::<#inner>(#spec, #i, #convert)? },
                     Shape::Many => quote! { #m.many_map::<#inner>(#spec, #i, #convert)? },
+                    Shape::OptMany => {
+                        quote! { #m.optional_many_map::<#inner>(#spec, #i, #convert)? }
+                    },
                 }
             },
             (_, None) => {
@@ -733,6 +736,7 @@ impl Emitter {
                     Shape::Bool | Shape::One => quote! { #m.required::<#inner>(#spec, #i)? },
                     Shape::Opt => quote! { #m.optional::<#inner>(#spec, #i)? },
                     Shape::Many => quote! { #m.many::<#inner>(#spec, #i)? },
+                    Shape::OptMany => quote! { #m.optional_many::<#inner>(#spec, #i)? },
                 }
             },
         };
