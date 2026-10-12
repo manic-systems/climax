@@ -629,43 +629,12 @@ impl Emitter {
             ArgKind::Trailing => quote! { #root::Kind::Trailing },
         };
 
-        let mut e = quote! { #root::ArgSpec::new(#kind) };
-
-        if let Some(l) = &arg.long {
-            e = quote! { #e.long(#l) };
-        }
-
-        if let Some(c) = arg.short {
-            e = quote! { #e.short(#c) };
-        }
+        let spellings = Self::spelling_calls(arg);
+        let counts = self.count_calls(arg);
+        let mut e = quote! { #root::ArgSpec::new(#kind) #spellings #counts };
 
         if arg.required {
             e = quote! { #e.required() };
-        }
-
-        if arg.ty.shape.is_many() {
-            e = quote! { #e.multi() };
-        }
-
-        if let Some(n) = arg.min_values {
-            e = quote! { #e.min_values(#n) };
-        }
-
-        if let Some(n) = arg.max_values {
-            e = quote! { #e.max_values(#n) };
-        }
-
-        if let Some(d) = arg.delimiter {
-            e = quote! { #e.delimiter(#d) };
-        }
-
-        if let Some(NumArgs { min, max }) = arg.num_args {
-            let arity = match max {
-                Some(limit) if limit == min => quote! { #root::Arity::exactly(#min) },
-                Some(limit) => quote! { #root::Arity::between(#min, #limit) },
-                None => quote! { #root::Arity::at_least(#min) },
-            };
-            e = quote! { #e.per_use(#arity) };
         }
 
         if let Some(g) = &arg.group {
@@ -683,15 +652,6 @@ impl Emitter {
 
         if let Some(ev) = &arg.env {
             e = quote! { #e.env(#ev) };
-        }
-
-        if let Some(n) = &arg.negate {
-            e = quote! { #e.negate(#n) };
-        }
-
-        if !arg.aliases.is_empty() {
-            let al = &arg.aliases;
-            e = quote! { #e.aliases(&[ #(#al),* ]) };
         }
 
         if let Some(h) = arg.heading.as_ref().filter(|_| self.help) {
@@ -743,6 +703,36 @@ impl Emitter {
 
         let help = self.help_lit(&arg.help);
         quote! { #e.help(#help) }
+    }
+
+    fn spelling_calls(arg: &Arg) -> TokenStream {
+        let long = arg.long.as_ref().map(|name| quote! { .long(#name) });
+        let short = arg.short.map(|name| quote! { .short(#name) });
+        let negate = arg.negate.as_ref().map(|name| quote! { .negate(#name) });
+        let (longs, shorts) = (&arg.aliases, &arg.short_aliases);
+        let aliases = (!longs.is_empty()).then(|| quote! { .aliases(&[ #(#longs),* ]) });
+        let short_aliases =
+            (!shorts.is_empty()).then(|| quote! { .short_aliases(&[ #(#shorts),* ]) });
+
+        quote! { #long #short #negate #aliases #short_aliases }
+    }
+
+    fn count_calls(&self, arg: &Arg) -> TokenStream {
+        let root = &self.root;
+        let multi = arg.ty.shape.is_many().then(|| quote! { .multi() });
+        let min_values = arg.min_values.map(|n| quote! { .min_values(#n) });
+        let max_values = arg.max_values.map(|n| quote! { .max_values(#n) });
+        let delimiter = arg.delimiter.map(|d| quote! { .delimiter(#d) });
+        let per_use = arg.num_args.map(|NumArgs { min, max }| {
+            let arity = match max {
+                Some(limit) if limit == min => quote! { #root::Arity::exactly(#min) },
+                Some(limit) => quote! { #root::Arity::between(#min, #limit) },
+                None => quote! { #root::Arity::at_least(#min) },
+            };
+            quote! { .per_use(#arity) }
+        });
+
+        quote! { #multi #min_values #max_values #delimiter #per_use }
     }
 
     fn reader(&self, arg: &Arg, i: usize, m: &Ident, spec: &Ident) -> TokenStream {

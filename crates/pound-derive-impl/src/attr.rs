@@ -115,6 +115,7 @@ pub struct Pound {
     pub requires:        Vec<String>,
     /// extra long names (fields) or command names (variants) that also match
     pub aliases:         Vec<String>,
+    pub short_aliases:   Vec<char>,
 }
 
 impl Pound {
@@ -189,6 +190,11 @@ impl Pound {
             "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, span, value)?)),
             "requires"        => self.requires.extend(csv(&needed(key, span, value)?)),
             "alias"           => self.aliases.extend(csv(&needed(key, span, value)?)),
+            "short_alias"     => {
+                for short in csv(&needed(key, span, value)?) {
+                    self.short_aliases.push(single_char(key, &short, span)?);
+                }
+            },
             _                 => {
                 return Err(Error::new_at_span(span, format!("pound: unknown attribute `{key}`")));
             },

@@ -86,6 +86,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "conflicts_with",
     "requires",
     "alias",
+    "short_alias",
 ];
 
 /// a `#[derive(Parse)]` input
@@ -728,7 +729,8 @@ impl ArgKind {
             Self::Positional
         };
 
-        if !kind.is_named() && !a.aliases.is_empty() {
+        let aliased = !a.aliases.is_empty() || !a.short_aliases.is_empty();
+        if aliased && !kind.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: aliases need a flag or option",
@@ -882,6 +884,7 @@ pub struct Arg {
     pub long_help:       Option<String>,
     pub heading:         Option<String>,
     pub aliases:         Vec<String>,
+    pub short_aliases:   Vec<char>,
     pub conflicts_with:  Vec<String>,
     pub requires:        Vec<String>,
     pub hidden:          bool,
@@ -964,6 +967,7 @@ impl Arg {
             long_help,
             heading: a.heading,
             aliases: a.aliases,
+            short_aliases: a.short_aliases,
             conflicts_with: a.conflicts_with,
             requires: a.requires,
             hidden: a.hidden,

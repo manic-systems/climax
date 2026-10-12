@@ -117,6 +117,13 @@ const fn names_unique_within(root: &CommandSpec, spec: &CommandSpec) -> bool {
             }
             alias += 1;
         }
+        let mut short_alias = 0;
+        while short_alias < arg.short_aliases.len() {
+            if claimants(root, Spelling::Short(arg.short_aliases[short_alias])) > 1 {
+                return false;
+            }
+            short_alias += 1;
+        }
         i += 1;
     }
     let mut inner = 0;
