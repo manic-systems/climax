@@ -122,7 +122,10 @@ pub use help::{
     Help,
     Usage,
 };
-pub use parse::Matches;
+pub use parse::{
+    External,
+    Matches,
+};
 #[cfg(feature = "derive")]
 pub use pound_derive::{
     Parse,

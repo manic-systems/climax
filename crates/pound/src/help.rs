@@ -227,13 +227,11 @@ impl fmt::Display for Usage {
 
 /// the full invocation of `cmd`, led by the names of the commands above it
 fn program(cmd: &Command<'_>) -> String {
-    let mut out = String::new();
-    for name in cmd.path() {
-        out.push_str(name);
-        out.push(' ');
-    }
-    out.push_str(cmd.spec().name);
-    out
+    let names = cmd.path().iter().copied().chain([cmd.spec().name]);
+    names
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 const fn command_placeholder(spec: &CommandSpec) -> &'static str {
@@ -388,7 +386,7 @@ fn usage(cmd: &Command<'_>, visible_args: &[&ArgSpec], has_globals: bool) -> Usa
         args.push(' ');
         args.push_str(&usage_positional(a));
     }
-    if spec.subcommands().any(|s| !s.hidden) {
+    if spec.subcommands().any(|s| !s.hidden || s.external) {
         args.push_str(command_placeholder(spec));
     }
     let mut line = program(cmd);

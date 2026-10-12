@@ -397,6 +397,9 @@ pub struct SubSpec {
     pub hidden:    bool,
     /// offers `spec`'s subcommands at this level in place of a named command
     pub flattened: bool,
+    /// takes any name no other subcommand answers to, with the rest of the
+    /// line
+    pub external:  bool,
 }
 
 impl SubSpec {
@@ -410,6 +413,7 @@ impl SubSpec {
             spec,
             hidden: false,
             flattened: false,
+            external: false,
         }
     }
 
@@ -420,6 +424,24 @@ impl SubSpec {
         Self {
             flattened: true,
             ..Self::new("", spec)
+        }
+    }
+
+    /// an entry taking any subcommand name no other entry answers to, the way
+    /// `cargo foo` runs `cargo-foo`. it parses the name and every word after
+    /// it, flags included, into one trailing list. it is never matched by name
+    /// and stays out of help.
+    #[must_use]
+    pub const fn external() -> Self {
+        const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Trailing)
+            .value_name("command")
+            .required()];
+        const SPEC: CommandSpec = CommandSpec::new("").args(ARGS);
+
+        Self {
+            hidden: true,
+            external: true,
+            ..Self::new("", &SPEC)
         }
     }
 
@@ -700,7 +722,7 @@ impl CommandSpec {
     #[must_use]
     pub fn find_sub(&self, name: &str) -> Option<&'static SubSpec> {
         self.subcommands()
-            .find(|s| s.name == name || s.aliases.contains(&name))
+            .find(|s| !s.external && (s.name == name || s.aliases.contains(&name)))
     }
 }
 

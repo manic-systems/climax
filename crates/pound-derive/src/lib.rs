@@ -125,9 +125,16 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `hidden`                 | accepted but left out of help                                                   |
 /// | `required_group = "g"`   | exactly one member of group `g` among the variant's fields must be given        |
 /// | `flatten`                | on a tuple variant holding one enum, offers that enum's commands as if declared here |
+/// | `external`               | on a `Vec<T>` or `pound::External` tuple variant, takes any other subcommand name and what follows |
 ///
 /// the doc comment on a variant is the subcommand's description. a variant is
-/// a unit variant or has named fields, and tuple fields are only for `flatten`.
+/// a unit variant or has named fields, and tuple fields are only for `flatten`
+/// and `external`. an `external` variant gets the name it was called by first,
+/// then every word after it as given, flags included, the way `cargo foo` runs
+/// `cargo-foo`. it stays out of help, and an enum has at most one. a
+/// `pound::External` keeps the name apart from the words, and its `unknown`
+/// gives the error the name would have raised, with a close match as the tip,
+/// for when nothing answers to it.
 ///
 /// ```
 /// use pound::Parse;

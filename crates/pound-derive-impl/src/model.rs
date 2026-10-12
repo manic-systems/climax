@@ -157,6 +157,9 @@ pub struct Variant {
 pub enum VariantKind {
     /// `#[pound(flatten)] V(Other)` offers `Other`'s commands at this level
     Flatten(TokenStream),
+    /// `#[pound(external)] V(Vec<T>)` or `V(pound::External)` takes any name
+    /// no other variant answers to, with the words after it
+    External(ExternalField),
     Command {
         name:    String,
         aliases: Vec<String>,
@@ -166,6 +169,14 @@ pub enum VariantKind {
     },
 }
 
+/// what an external variant holds the line in
+pub enum ExternalField {
+    /// `Vec<T>`, the name then every word after it
+    List,
+    /// `pound::External`, which can also say what the name was close to
+    Payload,
+}
+
 impl Variant {
     fn new(owner: &Ident, variant: &EnumVariant) -> Result<Self, Error> {
         let vattr = pound(&variant.attributes)?;
@@ -173,11 +184,21 @@ impl Variant {
 
         if vattr.flatten {
             vattr.allow_only(&["flatten"])?;
-            let ty = Self::flattened_ty(variant)?;
+            let ty = Self::single_field(variant, "flatten")?;
 
             return Ok(Self {
                 ident,
-                kind: VariantKind::Flatten(ty),
+                kind: VariantKind::Flatten(ty.tokens.iter().cloned().collect()),
+            });
+        }
+
+        if vattr.external {
+            vattr.allow_only(&["external"])?;
+            let field = Self::external_field(variant)?;
+
+            return Ok(Self {
+                ident,
+                kind: VariantKind::External(field),
             });
         }
 
@@ -205,9 +226,10 @@ impl Variant {
         })
     }
 
-    // the one tuple field of a `#[pound(flatten)]` enum variant
-    fn flattened_ty(variant: &EnumVariant) -> Result<TokenStream, Error> {
-        let message = "pound: #[pound(flatten)] needs exactly one unattributed tuple field";
+    // the one tuple field of a `#[pound(flatten)]` or `#[pound(external)]`
+    // enum variant
+    fn single_field<'v>(variant: &'v EnumVariant, attr: &str) -> Result<&'v TypeExpr, Error> {
+        let message = format!("pound: #[pound({attr})] needs exactly one unattributed tuple field");
 
         let Fields::Tuple(tuple) = &variant.fields else {
             return Err(Error::new_at_span(variant.name.span(), message));
@@ -216,11 +238,34 @@ impl Variant {
         let mut fields = tuple.fields.items();
 
         match (fields.next(), fields.next()) {
-            (Some(field), None) if field.attributes.is_empty() => {
-                Ok(field.ty.tokens.iter().cloned().collect())
-            },
+            (Some(field), None) if field.attributes.is_empty() => Ok(&field.ty),
             _ => Err(Error::new_at_span(variant.name.span(), message)),
         }
+    }
+
+    fn external_field(variant: &EnumVariant) -> Result<ExternalField, Error> {
+        let ty = Self::single_field(variant, "external")?;
+        if FieldType::new(ty).shape == Shape::Many {
+            return Ok(ExternalField::List);
+        }
+
+        let path = ty.tokens.iter().all(|tok| {
+            match tok {
+                TokenTree::Ident(_) => true,
+                TokenTree::Punct(p) => p.as_char() == ':',
+                _ => false,
+            }
+        });
+        if path && matches!(ty.tokens.last(), Some(TokenTree::Ident(id)) if id == "External") {
+            return Ok(ExternalField::Payload);
+        }
+
+        Err(Error::new_at_span(
+            ty.tokens
+                .first()
+                .map_or_else(|| variant.name.span(), TokenTree::span),
+            "pound: #[pound(external)] needs a `Vec<T>` or `pound::External` field",
+        ))
     }
 }
 

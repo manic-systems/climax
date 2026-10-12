@@ -52,6 +52,8 @@ pub struct Pound {
     pub subcommand:      bool,
     /// field embeds another `Parse` type's args at this command level
     pub flatten:         bool,
+    /// variant-level: takes any subcommand name no other variant answers to
+    pub external:        bool,
     /// keep this arg/variant out of help output
     pub hidden:          bool,
     /// named flag/option that descendant subcommands also accept
@@ -141,6 +143,7 @@ impl Pound {
             "count"           => self.count           = bare(key, span, value.is_some())?,
             "subcommand"      => self.subcommand      = bare(key, span, value.is_some())?,
             "flatten"         => self.flatten         = bare(key, span, value.is_some())?,
+            "external"        => self.external        = bare(key, span, value.is_some())?,
             "hidden"          => self.hidden          = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
             "group"           => self.group           = Some(needed(key, span, value)?),
@@ -500,6 +503,7 @@ const BARE_KEYS: &[&str] = &[
     "count",
     "subcommand",
     "flatten",
+    "external",
     "hidden",
     "global",
 ];
