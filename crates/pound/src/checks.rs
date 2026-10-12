@@ -117,7 +117,7 @@ const fn commands_unique_within(root: &[SubSpec], subs: &[SubSpec]) -> bool {
             if !commands_unique_within(root, sub.spec.subs) {
                 return false;
             }
-        } else {
+        } else if !sub.external {
             if command_claimants(root, sub.name) > 1 {
                 return false;
             }
@@ -134,6 +134,24 @@ const fn commands_unique_within(root: &[SubSpec], subs: &[SubSpec]) -> bool {
     true
 }
 
+/// the external entries an enum offers, counting the ones of enums it
+/// flattens in. the derive asserts there is at most one.
+#[must_use]
+pub const fn externals(subs: &[SubSpec]) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while i < subs.len() {
+        let sub = &subs[i];
+        if sub.flattened {
+            count += externals(sub.spec.subs);
+        } else if sub.external {
+            count += 1;
+        }
+        i += 1;
+    }
+    count
+}
+
 const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
     let mut count = 0;
     let mut i = 0;
@@ -141,7 +159,7 @@ const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
         let sub = &subs[i];
         if sub.flattened {
             count += command_claimants(sub.spec.subs, name);
-        } else {
+        } else if !sub.external {
             if const_eq(sub.name, name) {
                 count += 1;
             }

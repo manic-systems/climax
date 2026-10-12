@@ -49,6 +49,34 @@ pub struct Matches<'a> {
     sub:       Option<(usize, Box<Self>)>,
     /// the deepest command this parse selected, for errors raised afterwards
     selected:  Option<Command<'static>>,
+    /// what an external entry's name would have failed with
+    unknown:   Option<Box<Error>>,
+}
+
+/// the command line an external subcommand took, the way `cargo foo` runs
+/// `cargo-foo`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct External {
+    /// the name it was called by
+    pub name: String,
+    /// every word after the name, flags included
+    pub args: Vec<String>,
+    unknown:  Error,
+}
+
+impl External {
+    /// the subcommand `name` was probably meant to be, when one is close
+    #[must_use]
+    pub fn closest(&self) -> Option<&str> {
+        self.unknown.kind.closest()
+    }
+
+    /// the error the parse would have raised with no external subcommand, for
+    /// when nothing answers to `name`
+    #[must_use]
+    pub fn unknown(&self) -> Error {
+        self.unknown.clone()
+    }
 }
 
 /// an arg this command parses, and where its slot lives
@@ -70,17 +98,27 @@ struct SubTarget {
 
 impl SubTarget {
     fn find(spec: &CommandSpec, name: &str) -> Option<Self> {
+        Self::find_by(spec, &|sub| {
+            !sub.external && (sub.name == name || sub.aliases.contains(&name))
+        })
+    }
+
+    fn find_external(spec: &CommandSpec) -> Option<Self> {
+        Self::find_by(spec, &|sub| sub.external)
+    }
+
+    fn find_by(spec: &CommandSpec, wanted: &impl Fn(&SubSpec) -> bool) -> Option<Self> {
         fn search(
             subs: &'static [SubSpec],
-            name: &str,
+            wanted: &impl Fn(&SubSpec) -> bool,
             chain: &mut Vec<(usize, &'static SubSpec)>,
         ) -> bool {
             for (i, sub) in subs.iter().enumerate() {
                 chain.push((i, sub));
                 let hit = if sub.flattened {
-                    search(sub.spec.subs, name, chain)
+                    search(sub.spec.subs, wanted, chain)
                 } else {
-                    sub.name == name || sub.aliases.contains(&name)
+                    wanted(sub)
                 };
                 if hit {
                     return true;
@@ -92,13 +130,13 @@ impl SubTarget {
 
         if spec.subs.is_empty() {
             return spec.flattened.iter().enumerate().find_map(|(i, inner)| {
-                let mut target = Self::find(inner, name)?;
+                let mut target = Self::find_by(inner, wanted)?;
                 target.path.insert(0, i);
                 Some(target)
             });
         }
         let mut wrappers = Vec::new();
-        if !search(spec.subs, name, &mut wrappers) {
+        if !search(spec.subs, wanted, &mut wrappers) {
             return None;
         }
         let (index, command) = wrappers.pop()?;
@@ -168,6 +206,7 @@ impl<'a> Matches<'a> {
                 .collect(),
             sub:       None,
             selected:  None,
+            unknown:   None,
         }
     }
 
@@ -271,6 +310,28 @@ impl<'a> Matches<'a> {
     #[must_use]
     pub fn sub(&self) -> Option<(usize, &Self)> {
         self.sub.as_ref().map(|(i, m)| (*i, m.as_ref()))
+    }
+
+    /// the name and words an external subcommand took, read from its matches
+    #[must_use]
+    pub fn external(&self) -> External {
+        let (name, args) = self.raws(0).split_first().unwrap_or((&"", &[]));
+        let name = (*name).to_owned();
+        let unknown = match &self.unknown {
+            Some(err) => (**err).clone(),
+            None => {
+                ErrorKind::UnknownSubcommand {
+                    name:    name.clone(),
+                    closest: None,
+                }
+                .into()
+            },
+        };
+        External {
+            name,
+            args: args.iter().map(|&s| s.to_owned()).collect(),
+            unknown,
+        }
     }
 
     /// read a required value as `T`
@@ -406,7 +467,7 @@ pub(crate) fn parse_spec<'a>(
 ) -> Result<Matches<'a>, Error> {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     let mut hits = Vec::new();
-    parse_cmd::<Strict>(&Command::root(spec), &mut it, &mut hits).map(|(matches, _)| matches)
+    parse_cmd::<Strict>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
 }
 
 /// parse `args` as the start of a command line, skipping whatever does not
@@ -417,7 +478,7 @@ pub(crate) fn probe_spec<'a>(
 ) -> (Matches<'a>, Next) {
     let mut it = args.into_iter().collect::<Vec<_>>().into_iter();
     let mut hits = Vec::new();
-    let Ok(walked) = parse_cmd::<Lenient>(&Command::root(spec), &mut it, &mut hits);
+    let Ok(walked) = parse_cmd::<Lenient>(&Command::root(spec), None, &mut it, &mut hits);
     walked
 }
 
@@ -480,15 +541,16 @@ impl Mode for Lenient {
 /// after the last one would be.
 fn parse_cmd<'a, M: Mode>(
     cmd: &Command<'_>,
+    lead: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(Matches<'a>, Next), M::Error> {
-    walk_cmd::<M>(cmd, it, hits).map_err(|e| M::locate(cmd, e))
+    walk_cmd::<M>(cmd, lead, it, hits).map_err(|e| M::locate(cmd, e))
 }
 
-enum Step {
+enum Step<'a> {
     Continue,
-    Dispatch(SubTarget),
+    Dispatch(SubTarget, &'a str),
 }
 
 struct Walk<'w, 'a> {
@@ -502,6 +564,7 @@ struct Walk<'w, 'a> {
 
 fn walk_cmd<'a, M: Mode>(
     cmd: &Command<'_>,
+    lead: Option<&'a str>,
     it: &mut IntoIter<&'a str>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(Matches<'a>, Next), M::Error> {
@@ -523,6 +586,11 @@ fn walk_cmd<'a, M: Mode>(
         m: Matches::new(cmd.spec()),
     };
     let mut awaiting = None;
+    if let Some(tok) = lead
+        && let Err(err) = walk.positional(tok)
+    {
+        M::halt(err.into(), &mut awaiting)?;
+    }
 
     let next = loop {
         let Some(tok) = it.next() else {
@@ -530,7 +598,9 @@ fn walk_cmd<'a, M: Mode>(
         };
         match walk.step(tok, it, hits) {
             Ok(Step::Continue) => {},
-            Ok(Step::Dispatch(target)) => break walk.dispatch::<M>(target, it, hits)?,
+            Ok(Step::Dispatch(target, name)) => {
+                break walk.dispatch::<M>(target, name, it, hits)?;
+            },
             Err(halt) => M::halt(halt, &mut awaiting)?,
         }
     };
@@ -547,7 +617,7 @@ impl<'a> Walk<'_, 'a> {
         tok: &'a str,
         it: &mut IntoIter<&'a str>,
         hits: &mut Vec<GlobalHit<'a>>,
-    ) -> Result<Step, Halt> {
+    ) -> Result<Step<'a>, Halt> {
         if self.only_positional {
             self.positional(tok)?;
         } else if tok == "--" {
@@ -559,7 +629,7 @@ impl<'a> Walk<'_, 'a> {
         } else if let Some(target) =
             sub_dispatch(self.cmd.spec(), &self.positionals, self.cursor, tok)?
         {
-            return Ok(Step::Dispatch(target));
+            return Ok(Step::Dispatch(target, tok));
         } else {
             self.positional(tok)?;
         }
@@ -636,11 +706,17 @@ impl<'a> Walk<'_, 'a> {
     fn dispatch<M: Mode>(
         &mut self,
         target: SubTarget,
+        name: &'a str,
         it: &mut IntoIter<&'a str>,
         hits: &mut Vec<GlobalHit<'a>>,
     ) -> Result<Next, M::Error> {
         let child = self.cmd.child(target.command);
-        let (mut sub_m, next) = parse_cmd::<M>(&child, it, hits)?;
+        let lead = target.command.external.then_some(name);
+        let (mut sub_m, next) = parse_cmd::<M>(&child, lead, it, hits)?;
+        if target.command.external {
+            let err = unknown_subcommand(self.cmd.spec(), name).into();
+            sub_m.unknown = Some(Box::new(self.cmd.locate(err)));
+        }
         self.m.selected = sub_m.selected.take().or(Some(child));
         target.store(&mut self.m, sub_m);
         Ok(next)
@@ -682,14 +758,20 @@ fn sub_dispatch(
         Some(target) => Ok(Some(target)),
         None if cursor < positionals.len() => Ok(None), // an open optional slot can still take it
         None => {
-            Err(ErrorKind::UnknownSubcommand {
-                name:    tok.to_owned(),
-                closest: closest(
-                    spec.subcommands().filter(|s| !s.hidden).flat_map(sub_names),
-                    tok,
-                ),
-            })
+            SubTarget::find_external(spec)
+                .map(Some)
+                .ok_or_else(|| unknown_subcommand(spec, tok))
         },
+    }
+}
+
+fn unknown_subcommand(spec: &CommandSpec, tok: &str) -> ErrorKind {
+    ErrorKind::UnknownSubcommand {
+        name:    tok.to_owned(),
+        closest: closest(
+            spec.subcommands().filter(|s| !s.hidden).flat_map(sub_names),
+            tok,
+        ),
     }
 }
 
@@ -1625,6 +1707,7 @@ mod tests {
         spec:      &ADD,
         hidden:    false,
         flattened: false,
+        external:  false,
     }];
     const ROOT: CommandSpec = CommandSpec {
         name:           "prog",
@@ -1702,6 +1785,24 @@ mod tests {
         } else {
             "Usage: prog add"
         }
+    }
+
+    #[test]
+    fn an_unknown_subcommand_goes_external_with_the_rest_of_the_line() {
+        const SUBS: &[SubSpec] = &[ROOT_SUBS[0], SubSpec::external()];
+        let root = CommandSpec { subs: SUBS, ..ROOT };
+
+        let m = parse(&root, &["frob", "--force", "x"]).unwrap();
+        let (index, ext) = m.sub().unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(ext.raws(0), ["frob", "--force", "x"]);
+        assert_eq!(
+            parse(&root, &["add", "a", "b"])
+                .unwrap()
+                .sub()
+                .map(|(i, _)| i),
+            Some(0)
+        );
     }
 
     #[test]

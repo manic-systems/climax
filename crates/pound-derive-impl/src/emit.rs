@@ -27,6 +27,7 @@ use crate::{
         CommandFields,
         Conversion,
         Derive,
+        ExternalField,
         Header,
         Shape,
         Slot,
@@ -139,6 +140,8 @@ impl Emitter {
         };
 
         let unique_message = format!("pound: two commands of `{name}` share a name or alias");
+        let external_message =
+            format!("pound: `{name}` has more than one #[pound(external)] variant");
 
         quote! {
             impl #root::Subcommands for #name {}
@@ -150,6 +153,10 @@ impl Emitter {
                     const _: () = ::core::assert!(
                         #root::checks::commands_unique(#subs_id),
                         #unique_message
+                    );
+                    const _: () = ::core::assert!(
+                        #root::checks::externals(#subs_id) <= 1,
+                        #external_message
                     );
                     const #root_id: #root::CommandSpec = #head
                         .subs(#subs_id);
@@ -181,6 +188,32 @@ impl Emitter {
                 doc,
                 command,
             } => (name, aliases, *hidden, doc, command),
+            VariantKind::External(ExternalField::List) => {
+                let sp = local("s");
+                return VariantTokens {
+                    consts:     TokenStream::new(),
+                    spec:       quote! { #root::SubSpec::external() },
+                    arm:        quote! {
+                        ::core::option::Option::Some((#idx, #sm)) => {
+                            let #sp = #spec.subs[#idx].spec;
+                            ::core::result::Result::Ok(Self::#vname(#sm.many(#sp, 0)?))
+                        },
+                    },
+                    reads_spec: true,
+                };
+            },
+            VariantKind::External(ExternalField::Payload) => {
+                return VariantTokens {
+                    consts:     TokenStream::new(),
+                    spec:       quote! { #root::SubSpec::external() },
+                    arm:        quote! {
+                        ::core::option::Option::Some((#idx, #sm)) => {
+                            ::core::result::Result::Ok(Self::#vname(#sm.external()))
+                        },
+                    },
+                    reads_spec: false,
+                };
+            },
             VariantKind::Flatten(ty) => {
                 return VariantTokens {
                     consts:     TokenStream::new(),
