@@ -21,12 +21,49 @@ use crate::{
 ///
 /// the `Parse` derive calls this from a `const` block, so a `default` that no
 /// `ValueEnum` variant answers to fails the build instead of the first run that
-/// leaves the flag out.
+/// leaves the flag out. a list arg's default is checked value by value, cut at
+/// its `delimiter`.
 #[must_use]
-pub const fn default_allowed(default: &str, possible: Option<&[Choice]>) -> bool {
+pub const fn default_allowed(
+    default: &str,
+    delimiter: Option<char>,
+    possible: Option<&[Choice]>,
+) -> bool {
     let Some(values) = possible else {
         return true;
     };
+    let Some(delimiter) = delimiter else {
+        return answered(default, values);
+    };
+    let mut buf = [0; 4];
+    let delimiter = delimiter.encode_utf8(&mut buf).as_bytes();
+    let mut rest = default;
+    while let Some(at) = find(rest.as_bytes(), delimiter) {
+        let (value, tail) = rest.split_at(at);
+        if !answered(value, values) {
+            return false;
+        }
+        rest = tail.split_at(delimiter.len()).1;
+    }
+    answered(rest, values)
+}
+
+const fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    let mut at = 0;
+    while at + needle.len() <= haystack.len() {
+        let mut i = 0;
+        while i < needle.len() && haystack[at + i] == needle[i] {
+            i += 1;
+        }
+        if i == needle.len() {
+            return Some(at);
+        }
+        at += 1;
+    }
+    None
+}
+
+const fn answered(default: &str, values: &[Choice]) -> bool {
     let mut i = 0;
     while i < values.len() {
         if values[i].answers(default) {

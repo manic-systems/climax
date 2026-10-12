@@ -164,7 +164,14 @@ impl Completions {
         }
     }
 
-    fn values(&mut self, partial: &Partial<'_, '_>, arg: &ArgSpec, lead: &str, prefix: &str) {
+    fn values(&mut self, partial: &Partial<'_, '_>, arg: &ArgSpec, before: &str, word: &str) {
+        let cut = arg
+            .delimiter
+            .filter(|_| arg.multi)
+            .and_then(|delim| word.rfind(delim).map(|at| at + delim.len_utf8()));
+        let (done, prefix) = word.split_at(cut.unwrap_or(0));
+        let lead = format!("{before}{done}");
+
         let found = match (arg.complete, arg.possible) {
             (Some(complete), _) => complete(partial, prefix),
             (None, Some(possible)) => {
@@ -179,7 +186,7 @@ impl Completions {
                 return;
             },
             (None, None) if arg.hint == Hint::Path => {
-                self.files(lead, prefix);
+                self.files(&lead, prefix);
                 return;
             },
             (None, None) => return,

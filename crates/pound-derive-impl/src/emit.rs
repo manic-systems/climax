@@ -593,9 +593,18 @@ impl Emitter {
             },
         };
 
+        let delimiter = arg.delimiter.map_or_else(
+            || quote!(::core::option::Option::None),
+            |d| quote!(::core::option::Option::Some(#d)),
+        );
+
         Some(quote! {
             const _: () = ::core::assert!(
-                #root::checks::default_allowed(#tokens, <#inner as #root::FromArg>::POSSIBLE),
+                #root::checks::default_allowed(
+                    #tokens,
+                    #delimiter,
+                    <#inner as #root::FromArg>::POSSIBLE,
+                ),
                 #message
             );
         })
@@ -636,6 +645,10 @@ impl Emitter {
 
         if let Some(n) = arg.max_values {
             e = quote! { #e.max_values(#n) };
+        }
+
+        if let Some(d) = arg.delimiter {
+            e = quote! { #e.delimiter(#d) };
         }
 
         if let Some(g) = &arg.group {
