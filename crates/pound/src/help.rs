@@ -529,7 +529,7 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
     }
 
     let mut sections = vec![("Options", vec![])];
-    for &a in visible_args.iter().filter(|a| !a.is_positional()) {
+    for a in cmd.own_options() {
         let heading = a.heading.unwrap_or("Options");
         let row = Row {
             left: invocation(a),
