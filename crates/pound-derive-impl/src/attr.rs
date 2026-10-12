@@ -67,6 +67,7 @@ pub struct Pound {
     pub hide_env:        bool,
     /// named flag/option that descendant subcommands also accept
     pub global:          bool,
+    pub hyphen_values:   bool,
     pub group:           Option<String>,
     pub default:         Option<Text>,
     /// value an option takes when written with no `=value`
@@ -171,6 +172,7 @@ impl Pound {
             "hide_default"    => self.hide_default    = bare(key, span, value.is_some())?,
             "hide_env"        => self.hide_env        = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
+            "allow_hyphen_values" => self.hyphen_values = bare(key, span, value.is_some())?,
             "group"           => self.group           = Some(needed(key, span, value)?),
             "default"         => self.default         = Some(text(key, span, seg)?),
             "default_missing" => self.default_missing = Some(needed(key, span, value)?),
@@ -592,6 +594,7 @@ const BARE_KEYS: &[&str] = &[
     "hide_default",
     "hide_env",
     "global",
+    "allow_hyphen_values",
 ];
 
 fn unquote(tok: &TokenTree) -> String {

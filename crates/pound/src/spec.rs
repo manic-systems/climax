@@ -186,6 +186,9 @@ pub struct ArgSpec {
     pub hide_default:    bool,
     /// help and man pages leave out the env var
     pub hide_env:        bool,
+    /// takes a value that starts with a dash, as a positional when no option
+    /// answers to the word, or as a word after a multi-word option's first
+    pub hyphen_values:   bool,
     /// also accepted by every subcommand below this command
     pub global:          bool,
     /// given, it must be the only arg of its command, and it lifts the
@@ -228,6 +231,7 @@ impl ArgSpec {
             hide_possible: false,
             hide_default: false,
             hide_env: false,
+            hyphen_values: false,
             global: false,
             exclusive: false,
             complete: None,
@@ -389,6 +393,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn hide_env(mut self) -> Self {
         self.hide_env = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn hyphen_values(mut self) -> Self {
+        self.hyphen_values = true;
         self
     }
 

@@ -677,6 +677,7 @@ impl Emitter {
             (arg.hide_possible, quote! { .hide_possible() }),
             (arg.hide_default, quote! { .hide_default() }),
             (arg.hide_env, quote! { .hide_env() }),
+            (arg.hyphen_values, quote! { .hyphen_values() }),
         ]
         .into_iter()
         .filter_map(|(set, call)| set.then_some(call));

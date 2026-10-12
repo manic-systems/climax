@@ -92,6 +92,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "hide_possible",
     "hide_default",
     "hide_env",
+    "allow_hyphen_values",
 ];
 
 /// a `#[derive(Parse)]` input
@@ -765,6 +766,13 @@ impl ArgKind {
             ));
         }
 
+        if a.hyphen_values && !matches!(self, Self::Opt | Self::Positional) {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(allow_hyphen_values)] needs an option or a positional",
+            ));
+        }
+
         if a.heading.is_some() && !self.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
@@ -909,6 +917,7 @@ pub struct Arg {
     pub hide_possible:   bool,
     pub hide_default:    bool,
     pub hide_env:        bool,
+    pub hyphen_values:   bool,
     pub global:          bool,
     pub exclusive:       bool,
     pub complete:        Option<TokenStream>,
@@ -996,6 +1005,7 @@ impl Arg {
             hide_possible: a.hide_possible,
             hide_default: a.hide_default,
             hide_env: a.hide_env,
+            hyphen_values: a.hyphen_values,
             global: a.global,
             exclusive: a.exclusive,
             complete: a.complete,
