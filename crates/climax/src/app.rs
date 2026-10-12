@@ -10,6 +10,8 @@ where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
+    #[cfg(feature = "complete")]
+    caress::handle(C::SPEC);
     run_with(C::try_parse()?, f)
 }
 

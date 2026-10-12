@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod error;
+#[cfg(feature = "complete")] pub mod install;
 pub mod output;
 pub mod prelude;
 
