@@ -496,17 +496,70 @@ fn unquote(tok: &TokenTree) -> String {
         other => return other.to_string(),
     };
 
+    if let Some(hashed) = raw.strip_prefix('r') {
+        let fence = &hashed[..hashed.len() - hashed.trim_start_matches('#').len()];
+        let inner = hashed
+            .strip_prefix(fence)
+            .and_then(|rest| rest.strip_suffix(fence))
+            .and_then(|rest| rest.strip_prefix('"'))
+            .and_then(|rest| rest.strip_suffix('"'));
+        if let Some(body) = inner {
+            return body.to_owned();
+        }
+    }
+
     let bytes = raw.as_bytes();
 
     if bytes.len() >= 2
         && (bytes[0] == b'"' || bytes[0] == b'\'')
         && bytes[bytes.len() - 1] == bytes[0]
     {
-        raw[1..raw.len() - 1]
-            .replace("\\\"", "\"")
-            .replace("\\'", "'")
-            .replace("\\\\", "\\")
+        unescape(&raw[1..raw.len() - 1])
     } else {
         raw
     }
+}
+
+/// the text a string or char literal's body stands for. the compiler has
+/// already rejected any escape that is not valid.
+fn unescape(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some('0') => out.push('\0'),
+            Some('x') => {
+                let code = chars.by_ref().take(2).collect::<String>();
+                out.extend(u8::from_str_radix(&code, 16).ok().map(char::from));
+            },
+            Some('u') => {
+                let code = chars
+                    .by_ref()
+                    .skip(1)
+                    .take_while(|&digit| digit != '}')
+                    .filter(|&digit| digit != '_')
+                    .collect::<String>();
+                out.extend(u32::from_str_radix(&code, 16).ok().and_then(char::from_u32));
+            },
+            Some('\n') => {
+                chars = chars
+                    .as_str()
+                    .trim_start_matches([' ', '\t', '\n', '\r'])
+                    .chars();
+            },
+            Some(other) => out.push(other),
+            None => {},
+        }
+    }
+
+    out
 }
