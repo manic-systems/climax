@@ -434,6 +434,21 @@ impl Emitter {
             }
         };
 
+        // an exclusive arg lifts the requirements of flattened fields too,
+        // which only the spec can see
+        let exclusive_assert = if fields.flattened.is_empty() {
+            TokenStream::new()
+        } else {
+            let message = format!(
+                "pound: `{owner}` has an exclusive arg beside a required field, which fails to \
+                 read when the exclusive arg is given alone"
+            );
+
+            quote! {
+                const _: () = ::core::assert!(#root::checks::exclusive_readable(&#cmd_id), #message);
+            }
+        };
+
         let positional_message = format!(
             "pound: `{owner}` has a positional or subcommand after a variadic or trailing \
              positional"
@@ -456,6 +471,7 @@ impl Emitter {
             const _: () = ::core::assert!(#root::checks::names_unique(&#cmd_id), #unique_message);
             #(#group_asserts)*
             #selector_assert
+            #exclusive_assert
             const _: () = ::core::assert!(
                 #root::checks::positionals_reachable(&#cmd_id),
                 #positional_message
@@ -660,6 +676,10 @@ impl Emitter {
 
         if arg.global {
             e = quote! { #e.global() };
+        }
+
+        if arg.exclusive {
+            e = quote! { #e.exclusive() };
         }
 
         if let Some(complete) = &arg.complete {

@@ -174,6 +174,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `alias = "a, b"`     | extra long names for a flag or option, comma separated                                         |
 /// | `subcommand`         | the field holds the command's subcommand tree. use `Option<T>` when one is not required        |
 /// | `flatten`            | embed another `Parse` struct's args at this level. it takes no other attribute                 |
+/// | `exclusive`          | the only arg allowed when given, and lifts requirements. every other field must be optional    |
 ///
 /// `positional`, `trailing` and `count` exclude each other. a positional takes
 /// no names or aliases, `trailing` needs a `Vec`, and `count` needs a scalar.

@@ -107,6 +107,9 @@ pub struct ArgSpec {
     pub hidden:          bool,
     /// also accepted by every subcommand below this command
     pub global:          bool,
+    /// given, it must be the only arg of its command, and it lifts the
+    /// command's requirements
+    pub exclusive:       bool,
     /// lists candidate values for shell completion
     pub complete:        Option<Completer>,
     /// what the value names, for a shell with no candidates to offer
@@ -138,6 +141,7 @@ impl ArgSpec {
             possible: None,
             hidden: false,
             global: false,
+            exclusive: false,
             complete: None,
             hint: Hint::Unknown,
         }
@@ -261,6 +265,12 @@ impl ArgSpec {
     #[must_use]
     pub const fn global(mut self) -> Self {
         self.global = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn exclusive(mut self) -> Self {
+        self.exclusive = true;
         self
     }
 

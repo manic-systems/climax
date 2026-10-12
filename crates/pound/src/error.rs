@@ -68,6 +68,13 @@ pub enum ErrorKind {
         /// the second of the two arguments
         second: String,
     },
+    /// an exclusive arg was given alongside another
+    Exclusive {
+        /// the exclusive argument
+        arg:   String,
+        /// another argument that was given with it
+        other: String,
+    },
     /// an arg was set without the other arg it obliges
     Requires {
         /// the argument that was set
@@ -145,6 +152,12 @@ impl fmt::Display for ErrorKind {
                 }
             },
             Self::Requires { arg, needs } => write!(f, "{arg} requires {needs}"),
+            Self::Exclusive { arg, other } => {
+                write!(
+                    f,
+                    "{arg} cannot be used with any other argument, but {other} was given"
+                )
+            },
             Self::TooFewValues { arg, min, got } => {
                 write!(f, "{arg} takes at least {min} values, got {got}")
             },
