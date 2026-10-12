@@ -247,6 +247,55 @@ pub const fn group_has_members(spec: &CommandSpec, group: &str) -> bool {
     false
 }
 
+/// whether `spec`, flattened structs included, reads with only its exclusive
+/// arg given.
+///
+/// the derive asserts this, since the parse lifts requirements for that arg
+/// but a required field would still fail to read.
+#[must_use]
+pub const fn exclusive_readable(spec: &CommandSpec) -> bool {
+    !has_exclusive(spec) || !demands_any(spec)
+}
+
+const fn has_exclusive(spec: &CommandSpec) -> bool {
+    let mut i = 0;
+    while i < spec.args.len() {
+        if spec.args[i].exclusive {
+            return true;
+        }
+        i += 1;
+    }
+    let mut inner = 0;
+    while inner < spec.flattened.len() {
+        if has_exclusive(spec.flattened[inner]) {
+            return true;
+        }
+        inner += 1;
+    }
+    false
+}
+
+const fn demands_any(spec: &CommandSpec) -> bool {
+    if !spec.subcommand_optional() {
+        return true;
+    }
+    let mut i = 0;
+    while i < spec.args.len() {
+        if spec.args[i].required {
+            return true;
+        }
+        i += 1;
+    }
+    let mut inner = 0;
+    while inner < spec.flattened.len() {
+        if demands_any(spec.flattened[inner]) {
+            return true;
+        }
+        inner += 1;
+    }
+    false
+}
+
 #[derive(Clone, Copy)]
 enum Spelling<'a> {
     Short(char),

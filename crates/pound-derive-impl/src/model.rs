@@ -45,6 +45,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "count",
     "hidden",
     "global",
+    "exclusive",
     "group",
     "default",
     "default_missing",
@@ -303,6 +304,17 @@ impl Command {
             return Err(Error::new_at_span(
                 arg.ident.span(),
                 "pound: #[pound(global)] needs a flag or option (short/long), not a positional",
+            ));
+        }
+
+        if let Some(arg) = args.iter().find(|arg| arg.exclusive)
+            && (args.iter().any(|other| other.required)
+                || fields.sub.as_ref().is_some_and(|sub| !sub.optional))
+        {
+            return Err(Error::new_at_span(
+                arg.ident.span(),
+                "pound: #[pound(exclusive)] needs every other field optional, or reading them \
+                 fails when it is given alone",
             ));
         }
 
@@ -777,6 +789,7 @@ pub struct Arg {
     pub requires:        Vec<String>,
     pub hidden:          bool,
     pub global:          bool,
+    pub exclusive:       bool,
     pub complete:        Option<TokenStream>,
     pub hint:            Option<ValueHint>,
     /// `None` for the kinds that take no value
@@ -856,6 +869,7 @@ impl Arg {
             requires: a.requires,
             hidden: a.hidden,
             global: a.global,
+            exclusive: a.exclusive,
             complete: a.complete,
             hint: a.hint,
             conversion,

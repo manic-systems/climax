@@ -1077,13 +1077,25 @@ fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
     m.slots[i].count > 0 || !m.slots[i].values.is_empty() || fallback(spec, i).is_some()
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Demands {
+    Checked,
+    Waived,
+}
+
 /// enforce `required` and group constraints. defaults resolve when a value is
 /// read, so a defaulted arg never counts as missing here.
 fn finalise(cmd: &Command<'_>, m: &Matches) -> Result<(), ErrorKind> {
     let spec = cmd.spec();
-    finalise_args(spec, m)?;
-    finalise_groups(spec, m)?;
-    if spec.has_subs() && !selected_command(m) && !spec.subcommand_optional() {
+    let owed = if exclusive_alone(spec, m)? {
+        Demands::Waived
+    } else {
+        Demands::Checked
+    };
+    finalise_args(spec, m, owed)?;
+    finalise_groups(spec, m, owed)?;
+    let missing = spec.has_subs() && !selected_command(m) && !spec.subcommand_optional();
+    if missing && owed == Demands::Checked {
         return Err(ErrorKind::MissingSubcommand {
             help: Some(help::render(cmd, false)),
         });
@@ -1091,14 +1103,39 @@ fn finalise(cmd: &Command<'_>, m: &Matches) -> Result<(), ErrorKind> {
     Ok(())
 }
 
+/// whether an exclusive arg was given, alone. given with another arg, it is
+/// an error.
+fn exclusive_alone(spec: &CommandSpec, m: &Matches) -> Result<bool, ErrorKind> {
+    let mut given = Vec::new();
+    spec.visit(&mut Vec::new(), &mut |path, index, arg| {
+        let owner = path.iter().fold(m, |owner, &i| &owner.flattened[i]);
+        if owner.slots[index].count > 0 || owner.slots[index].negated {
+            given.push(arg);
+        }
+    });
+
+    let Some(exclusive) = given.iter().find(|a| a.exclusive) else {
+        return Ok(false);
+    };
+    match given.iter().find(|a| !core::ptr::eq(**a, *exclusive)) {
+        Some(other) => {
+            Err(ErrorKind::Exclusive {
+                arg:   exclusive.display_name(),
+                other: other.display_name(),
+            })
+        },
+        None => Ok(true),
+    }
+}
+
 /// whether a subcommand was chosen here or inside a flattened struct
 fn selected_command(m: &Matches) -> bool {
     m.sub.is_some() || m.flattened.iter().any(selected_command)
 }
 
-fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
+fn finalise_args(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
     for (i, a) in spec.args.iter().enumerate() {
-        if !supplied(spec, m, i) && a.required {
+        if !supplied(spec, m, i) && a.required && demands == Demands::Checked {
             return Err(ErrorKind::MissingRequired(a.display_name()));
         }
         count_values(a, m.slots[i].values.len(), fallback(spec, i).is_some())?;
@@ -1124,7 +1161,7 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
     }
 
     for (inner, inner_matches) in spec.flattened.iter().zip(&m.flattened) {
-        finalise_args(inner, inner_matches)?;
+        finalise_args(inner, inner_matches, demands)?;
     }
 
     Ok(())
@@ -1132,7 +1169,7 @@ fn finalise_args(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
 
 /// a group spans every flattened struct at a command level, so each name is
 /// checked once against all its members, required if any declaration says so
-fn finalise_groups(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
+fn finalise_groups(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
     for (name, required) in command_groups(spec) {
         let members = group_members(spec, m, name);
         let set: Vec<String> = members
@@ -1147,7 +1184,7 @@ fn finalise_groups(spec: &CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
                 second: set[1].clone(),
             });
         }
-        if set.is_empty() && required {
+        if set.is_empty() && required && demands == Demands::Checked {
             let options = members
                 .iter()
                 .map(|(a, _)| a.display_name())
@@ -1389,6 +1426,21 @@ mod tests {
         let m = parse(&wrap, &["--force", "ls", "-la", "--force"]).unwrap();
         assert!(m.flag(0));
         assert_eq!(m.raws(1), ["ls", "-la", "--force"]);
+    }
+
+    #[test]
+    fn an_exclusive_arg_stands_alone_and_lifts_requirements() {
+        const ARGS: &[ArgSpec] = &[
+            ArgSpec::new(Kind::Flag).long("list").exclusive(),
+            ArgSpec::new(Kind::Flag).long("force"),
+            ArgSpec::new(Kind::Positional).value_name("name").required(),
+        ];
+        let tool = CommandSpec { args: ARGS, ..FLAT };
+        assert!(parse(&tool, &["--list"]).is_ok());
+        assert!(matches!(
+            parse(&tool, &["--list", "--force"]),
+            Err(ErrorKind::Exclusive { .. })
+        ));
     }
 
     #[test]
