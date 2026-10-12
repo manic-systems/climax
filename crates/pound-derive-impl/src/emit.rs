@@ -180,14 +180,15 @@ impl Emitter {
         let root = &self.root;
         let vname = &variant.ident;
 
-        let (name, aliases, hidden, doc, command) = match &variant.kind {
+        let (name, aliases, hidden, help_if_empty, doc, command) = match &variant.kind {
             VariantKind::Command {
                 name,
                 aliases,
                 hidden,
+                help_if_empty,
                 doc,
                 command,
-            } => (name, aliases, *hidden, doc, command),
+            } => (name, aliases, *hidden, *help_if_empty, doc, command),
             VariantKind::External(ExternalField::List) => {
                 let sp = local("s");
                 return VariantTokens {
@@ -237,10 +238,12 @@ impl Emitter {
         let ck = generated(&format!("CMD{idx}"));
         let (about_call, long_about_call) = self.about_calls(doc);
 
+        let empty_call = help_if_empty.then(|| quote!(.help_if_empty()));
         let head = quote! {
             #root::CommandSpec::new(#name)
                 #about_call
                 #long_about_call
+                #empty_call
         };
 
         let about = self.help_lit(short_help(doc));
@@ -343,12 +346,15 @@ impl Emitter {
 
         let (about, long_about) = self.about_calls(&header.doc);
 
+        let empty = header.help_if_empty.then(|| quote!(.help_if_empty()));
+
         quote! {
             #new
                 .version(#version)
                 .hash_opt(::core::option_env!("POUND_GIT_HASH"))
                 #about
                 #long_about
+                #empty
         }
     }
 

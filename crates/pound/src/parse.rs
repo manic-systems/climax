@@ -489,7 +489,7 @@ trait Mode {
     /// when the words ran out goes in `awaiting`.
     fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Self::Error>;
 
-    fn finish(cmd: &Command<'_>, m: &Matches<'_>) -> Result<(), Self::Error>;
+    fn finish(cmd: &Command<'_>, m: &Matches<'_>, empty: bool) -> Result<(), Self::Error>;
 
     fn locate(cmd: &Command<'_>, err: Self::Error) -> Self::Error;
 }
@@ -503,7 +503,10 @@ impl Mode for Strict {
         Err(halt.into_error())
     }
 
-    fn finish(cmd: &Command<'_>, m: &Matches<'_>) -> Result<(), Error> {
+    fn finish(cmd: &Command<'_>, m: &Matches<'_>, empty: bool) -> Result<(), Error> {
+        if empty && cmd.spec().help_if_empty {
+            return Err(ErrorKind::NoArguments(help::render(cmd, false)).into());
+        }
         Ok(finalise(cmd, m)?)
     }
 
@@ -526,7 +529,7 @@ impl Mode for Lenient {
         Ok(())
     }
 
-    fn finish(_: &Command<'_>, _: &Matches<'_>) -> Result<(), Infallible> {
+    fn finish(_: &Command<'_>, _: &Matches<'_>, _: bool) -> Result<(), Infallible> {
         Ok(())
     }
 
@@ -585,6 +588,7 @@ fn walk_cmd<'a, M: Mode>(
         m: Matches::new(cmd.spec()),
     };
     let mut awaiting = None;
+    let mut empty = lead.is_none();
     if let Some(tok) = lead
         && let Err(err) = walk.positional(tok)
     {
@@ -595,6 +599,7 @@ fn walk_cmd<'a, M: Mode>(
         let Some(tok) = it.next() else {
             break walk.next(awaiting);
         };
+        empty = false;
         match walk.step(tok, it, hits) {
             Ok(Step::Continue) => {},
             Ok(Step::Dispatch(target, name)) => {
@@ -606,7 +611,7 @@ fn walk_cmd<'a, M: Mode>(
 
     // must run before finalise so owned globals count toward required/group checks
     apply_global_hits(&targets, cmd.globals().len(), &mut walk.m, hits);
-    M::finish(cmd, &walk.m)?;
+    M::finish(cmd, &walk.m, empty)?;
     Ok((walk.m, next))
 }
 
@@ -1371,6 +1376,7 @@ mod tests {
         requires:       &[],
         subs:           &[],
         sub_optional:   false,
+        help_if_empty:  false,
     };
 
     fn parse<'a>(spec: &CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, ErrorKind> {
@@ -1561,6 +1567,7 @@ mod tests {
             requires:       &[],
             subs:           &[],
             sub_optional:   false,
+            help_if_empty:  false,
         };
         // unset: the reader falls back to the default
         let m = parse(&SPEC, &[]).unwrap();
@@ -1645,6 +1652,7 @@ mod tests {
             requires:       &[],
             subs:           &[],
             sub_optional:   false,
+            help_if_empty:  false,
         };
         const REQ: CommandSpec = CommandSpec {
             groups: &[GroupSpec::new("mode").required()],
@@ -1721,6 +1729,7 @@ mod tests {
             requires:       &[],
             subs:           &[],
             sub_optional:   false,
+            help_if_empty:  false,
         };
         assert!(parse(&SPEC, &["--a"]).is_ok());
         assert!(matches!(
@@ -1750,6 +1759,7 @@ mod tests {
         requires:       &[],
         subs:           &[],
         sub_optional:   false,
+        help_if_empty:  false,
     };
     const ROOT_SUBS: &[SubSpec] = &[SubSpec {
         name:      "add",
@@ -1775,6 +1785,7 @@ mod tests {
         requires:       &[],
         subs:           ROOT_SUBS,
         sub_optional:   false,
+        help_if_empty:  false,
     };
 
     #[test]

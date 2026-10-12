@@ -510,6 +510,8 @@ pub struct CommandSpec {
     pub subs:           &'static [SubSpec],
     /// when true, a missing subcommand is allowed rather than showing help
     pub sub_optional:   bool,
+    /// when true, a command given no words at all prints its help instead
+    pub help_if_empty:  bool,
 }
 
 impl CommandSpec {
@@ -531,6 +533,7 @@ impl CommandSpec {
             requires: &[],
             subs: &[],
             sub_optional: false,
+            help_if_empty: false,
         }
     }
 
@@ -627,6 +630,13 @@ impl CommandSpec {
     #[must_use]
     pub const fn sub_optional(mut self) -> Self {
         self.sub_optional = true;
+        self
+    }
+
+    /// print help rather than parse when the command is given no words
+    #[must_use]
+    pub const fn help_if_empty(mut self) -> Self {
+        self.help_if_empty = true;
         self
     }
 
