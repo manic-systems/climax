@@ -151,7 +151,7 @@ impl Emitter {
         };
 
         let spec_assert = match reading[..] {
-            [_, .., last] => quote! { assert!(#spec_ident.subs.len() > #last); },
+            [_, .., last] => quote! { ::core::assert!(#spec_ident.subs.len() > #last); },
             _ => quote! {},
         };
 
@@ -194,6 +194,7 @@ impl Emitter {
                     #spec_ident: &'static #root::CommandSpec,
                     #m_ident: &#root::Matches,
                 ) -> ::core::result::Result<(), #root::Error> {
+                    #spec_assert
                     let ::core::option::Option::Some((#picked, #sm)) = #root::Matches::sub(#m_ident) else {
                         return ::core::result::Result::Ok(());
                     };
