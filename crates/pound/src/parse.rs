@@ -576,6 +576,25 @@ fn parse_with<T>(
     })
 }
 
+/// an arg left off the line reads its env var, which [`fallback`] would skip
+/// in silence when it holds no UTF-8
+#[cfg(feature = "std")]
+fn env_readable(a: &ArgSpec) -> Result<(), ErrorKind> {
+    let Some(var) = a.env else {
+        return Ok(());
+    };
+    match std::env::var(var) {
+        Err(std::env::VarError::NotUnicode(raw)) => {
+            Err(ErrorKind::Value {
+                arg:   source_name(a, Some(var)),
+                value: raw.to_string_lossy().into_owned(),
+                msg:   "not valid UTF-8".to_owned(),
+            })
+        },
+        _ => Ok(()),
+    }
+}
+
 fn source_name(a: &ArgSpec, env: Option<&str>) -> String {
     match env {
         Some(var) => format!("{} (from ${var})", a.display_name()),
@@ -1525,6 +1544,10 @@ fn selected_command(m: &Matches) -> bool {
 
 fn finalise_args(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
     for (i, a) in spec.args.iter().enumerate() {
+        #[cfg(feature = "std")]
+        if !m.given(i) && m.slots[i].values.is_empty() {
+            env_readable(a)?;
+        }
         if !supplied(spec, m, i) && a.required && demands == Demands::Checked {
             return Err(ErrorKind::MissingRequired(a.display_name()));
         }
