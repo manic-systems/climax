@@ -2,6 +2,12 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.4.1
+
+### Fixed
+
+- The derived `update_from_matches` on a subcommand enum asserts the subcommand index before reading it, as `from_matches` already did, so `clippy::missing_asserts_for_indexing` no longer fires on `#[derive(Parse)]`.
+
 ## 0.4.0
 
 ### Breaking
