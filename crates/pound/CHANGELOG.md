@@ -2,6 +2,12 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.4.2
+
+### Fixed
+
+- An env var that holds no UTF-8 fails with `ErrorKind::Value` naming the var, where it used to be skipped in silence so the arg fell back to its default.
+
 ## 0.4.1
 
 ### Fixed
