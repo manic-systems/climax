@@ -94,7 +94,7 @@ mod tests {
 
         assert_eq!(
             render_plain_with_frame(&app, 0),
-            "/ building\none\ntwo\n[━━──]\n> "
+            "/ building\none\ntwo\n[\u{2501}\u{2501}\u{2500}\u{2500}]\n> "
         );
         assert_eq!(
             render_cursor(&app),

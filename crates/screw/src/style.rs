@@ -154,7 +154,7 @@ impl Style {
 
     pub(crate) fn sgr(self) -> String {
         if self == Self::default() {
-            return "\x1b[0m".to_string();
+            return "\x1b[0m".to_owned();
         }
 
         let mut codes = Vec::new();
@@ -174,11 +174,11 @@ impl Style {
             codes.push(bg.bg_code());
         }
 
-        let codes = codes
+        let joined = codes
             .into_iter()
             .map(|code| code.to_string())
             .collect::<Vec<_>>()
             .join(";");
-        format!("\x1b[{codes}m")
+        format!("\x1b[{joined}m")
     }
 }

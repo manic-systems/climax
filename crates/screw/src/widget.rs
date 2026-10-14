@@ -1,14 +1,18 @@
-use std::{
-    collections::{
-        HashMap,
-        VecDeque,
-    },
+use alloc::{
+    collections::VecDeque,
+    sync::Arc,
+};
+use core::{
     hash::Hash,
-    sync::{
-        Arc,
-        Mutex,
-    },
+    ops::Range,
     time::Duration,
+};
+use std::{
+    collections::HashMap,
+    sync::{
+        Mutex,
+        PoisonError,
+    },
 };
 
 use unicode_width::UnicodeWidthChar as _;
@@ -153,7 +157,7 @@ impl WindowedLines {
     }
 
     pub fn push(&self, line: impl Into<String>) {
-        let mut lines = self.lines.lock().expect("windowed lines mutex poisoned");
+        let mut lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
         if self.capacity == 0 {
             return;
         }
@@ -166,7 +170,7 @@ impl WindowedLines {
     pub fn lines(&self) -> Vec<String> {
         self.lines
             .lock()
-            .expect("windowed lines mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .cloned()
             .collect()
@@ -194,8 +198,8 @@ pub struct List {
 }
 
 impl List {
-    pub fn new(rows: impl Into<Vec<String>>) -> Self {
-        let rows = rows.into();
+    pub fn new(items: impl Into<Vec<String>>) -> Self {
+        let rows = items.into();
         let height = rows.len().max(1);
         Self {
             rows: rows.into(),
@@ -225,7 +229,7 @@ impl List {
         self
     }
 
-    pub fn visible_range(&self) -> std::ops::Range<usize> {
+    pub fn visible_range(&self) -> Range<usize> {
         if self.rows.is_empty() || self.height == 0 {
             return 0..0;
         }
@@ -348,28 +352,31 @@ impl ProgressBar {
     }
 
     pub fn set_fraction(&self, fraction: f32) {
-        *self.fraction.lock().expect("progress bar mutex poisoned") = fraction.clamp(0.0, 1.0);
+        *self.fraction.lock().unwrap_or_else(PoisonError::into_inner) = fraction.clamp(0.0, 1.0);
     }
 
     pub fn fraction(&self) -> f32 {
-        *self.fraction.lock().expect("progress bar mutex poisoned")
+        *self.fraction.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl Widget for ProgressBar {
-    #[allow(
+    #[expect(
+        clippy::as_conversions,
         clippy::cast_possible_truncation,
         clippy::cast_precision_loss,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        clippy::float_arithmetic,
+        reason = "a fraction of the bar width has no exact integer form"
     )]
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         let filled = (self.fraction() * self.width as f32).round() as usize;
         out.write("[", Style::default());
         for _ in 0..filled.min(self.width) {
-            out.write("━", self.filled);
+            out.write("\u{2501}", self.filled);
         }
         for _ in filled.min(self.width)..self.width {
-            out.write("─", self.empty);
+            out.write("\u{2500}", self.empty);
         }
         out.write("]", Style::default());
     }
@@ -532,13 +539,13 @@ where
     }
 
     pub fn set_state(&self, state: S) {
-        *self.state.lock().expect("stateful widget mutex poisoned") = state;
+        *self.state.lock().unwrap_or_else(PoisonError::into_inner) = state;
     }
 
     pub fn state(&self) -> S {
         self.state
             .lock()
-            .expect("stateful widget mutex poisoned")
+            .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 }

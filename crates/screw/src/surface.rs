@@ -157,7 +157,7 @@ impl Surface {
     pub fn row_width(&self, row: usize) -> usize {
         self.rows
             .get(row)
-            .map_or(0, |row| row.cells().iter().map(|cell| cell.width).sum())
+            .map_or(0, |found| found.cells().iter().map(|cell| cell.width).sum())
     }
 
     pub fn fit_width(&mut self, terminal_width: usize) {
@@ -206,6 +206,10 @@ impl Surface {
         self.rows.push(Row::new());
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "rows starts with one row and never shrinks"
+    )]
     fn current_row_mut(&mut self) -> &mut Row {
         self.rows
             .last_mut()

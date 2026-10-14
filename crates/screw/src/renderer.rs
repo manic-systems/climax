@@ -86,6 +86,9 @@ where
         self
     }
 
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn draw<T>(&mut self, widget: &T) -> io::Result<RenderStats>
     where
         T: Widget + ?Sized,
@@ -103,6 +106,9 @@ where
         self.draw_surface(next)
     }
 
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
         let next_physical = self.layout_surface(next_logical.clone());
 
@@ -157,6 +163,9 @@ where
         Ok(stats)
     }
 
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         let Some(previous) = self.previous.take() else {
             return Ok(RenderStats::default());
@@ -205,18 +214,18 @@ impl Renderer<io::Stderr> {
 
 pub fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMode) -> Surface {
     match (width, mode) {
-        (Some(width), LayoutMode::Clip) => {
-            surface.fit_width(width);
+        (Some(columns), LayoutMode::Clip) => {
+            surface.fit_width(columns);
             surface
         },
-        (Some(width), LayoutMode::Wrap) => wrap_surface(&surface, width),
+        (Some(columns), LayoutMode::Wrap) => wrap_surface(&surface, columns),
         (None, _) => surface,
     }
 }
 
 fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
     let max_columns = fitted_columns(terminal_width);
-    let cursor = surface.cursor();
+    let logical_cursor = surface.cursor();
     let mut out = Surface::new();
     let mut first_physical_row = true;
     let mut physical_cursor = None;
@@ -227,10 +236,10 @@ fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
         }
         first_physical_row = false;
         let mut logical_col = 0_usize;
-        let cursor_on_row = cursor.filter(|cursor| cursor.row == logical_row);
+        let cursor_on_row = logical_cursor.filter(|position| position.row == logical_row);
 
         if row.is_empty() {
-            if cursor_on_row.is_some_and(|cursor| cursor.col == 0) {
+            if cursor_on_row.is_some_and(|position| position.col == 0) {
                 physical_cursor = Some(Position {
                     row: out.height().saturating_sub(1),
                     col: 0,
@@ -266,7 +275,7 @@ fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
             logical_col += cell.width;
         }
 
-        if cursor_on_row.is_some_and(|cursor| cursor.col >= logical_col) {
+        if cursor_on_row.is_some_and(|position| position.col >= logical_col) {
             physical_cursor = Some(Position {
                 row: out.height().saturating_sub(1),
                 col: out.current_col(),
@@ -274,15 +283,15 @@ fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
         }
     }
 
-    if let Some(cursor) = physical_cursor {
-        out.set_cursor(cursor);
+    if let Some(position) = physical_cursor {
+        out.set_cursor(position);
     }
     out
 }
 
 fn cursor_crosses_cell(cursor: Option<Position>, logical_col: usize, cell_width: usize) -> bool {
-    cursor.is_some_and(|cursor| {
-        cursor.col >= logical_col && cursor.col < logical_col.saturating_add(cell_width)
+    cursor.is_some_and(|position| {
+        position.col >= logical_col && position.col < logical_col.saturating_add(cell_width)
     })
 }
 
@@ -431,7 +440,7 @@ fn write_row_tail(
 fn common_prefix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .zip(new)
-        .take_while(|(old, new)| old == new)
+        .take_while(|(before, after)| before == after)
         .count()
 }
 
@@ -439,7 +448,7 @@ fn common_suffix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .rev()
         .zip(new.iter().rev())
-        .take_while(|(old, new)| old == new)
+        .take_while(|(before, after)| before == after)
         .count()
 }
 

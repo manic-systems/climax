@@ -1,5 +1,7 @@
 //! render primitives
 
+extern crate alloc;
+
 mod layout;
 mod plain;
 mod renderer;

@@ -40,6 +40,9 @@ where
     surface.plain_text()
 }
 
+/// # Errors
+///
+/// fails when the frame cannot be written to `writer`.
 pub fn write_plain<T>(writer: &mut impl Write, widget: &T) -> io::Result<()>
 where
     T: Widget + ?Sized,
