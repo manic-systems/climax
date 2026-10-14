@@ -3,8 +3,6 @@
 //! the tokens for a checked model: the static `CommandSpec`, its const
 //! asserts, and the `from_matches` reader
 
-use std::str::FromStr;
-
 use proc_macro2::{
     Ident,
     Span,
@@ -46,8 +44,15 @@ pub struct Emitter {
 
 impl Emitter {
     pub fn new(options: &Options) -> Self {
+        let lead = options.root.starts_with("::").then(|| quote!(::));
+        let segments = options
+            .root
+            .split("::")
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| Ident::new(segment, Span::call_site()));
+
         Self {
-            root: TokenStream::from_str(options.root).expect("Options::root is a path"),
+            root: quote! { #lead #(#segments)::* },
             help: options.help,
         }
     }
@@ -689,8 +694,9 @@ impl Emitter {
         let default = arg.default.as_ref()?;
 
         if let Text::Value(path) = default {
-            let (inner, path) = (&arg.ty.inner, path.iter().cloned().collect::<TokenStream>());
-            return Some(quote! { const _: #inner = #path; });
+            let (inner, value_tokens) =
+                (&arg.ty.inner, path.iter().cloned().collect::<TokenStream>());
+            return Some(quote! { const _: #inner = #value_tokens; });
         }
 
         if !arg
@@ -819,16 +825,16 @@ impl Emitter {
         }
 
         if let Some(hint) = &arg.hint {
-            let hint = match hint {
+            let hint_tokens = match hint {
                 ValueHint::Path => quote! { #root::Hint::Path },
                 ValueHint::Variant(variant) => quote! { #root::Hint::#variant },
             };
-            spec = quote! { #spec.hint(#hint) };
+            spec = quote! { #spec.hint(#hint_tokens) };
         }
 
-        if let Some(lh) = &arg.long_help {
-            let lh = self.help_lit(lh);
-            spec = quote! { #spec.long_help(#lh) };
+        if let Some(long_help) = &arg.long_help {
+            let long_help_text = self.help_lit(long_help);
+            spec = quote! { #spec.long_help(#long_help_text) };
         }
 
         let help = self.help_lit(&arg.help);
@@ -1009,7 +1015,7 @@ impl Emitter {
             } => {
                 (
                     quote! { <#inner as #root::FromArg>::from_arg(#sv)? },
-                    max_len.as_ref().map(|max| self.max_len_check(max)),
+                    max_len.as_ref().map(|bound| self.max_len_check(bound)),
                     min.as_deref()
                         .map(|bound| self.bound_check(inner, "min", bound)),
                     max.as_deref()
@@ -1030,7 +1036,7 @@ impl Emitter {
             },
         };
 
-        let validate = validate.map(|check| {
+        let validation_tokens = validate.map(|check| {
             quote! {
                 if let ::core::result::Result::Err(#fail) = (#check)(&#val) {
                     return ::core::result::Result::Err(#root::ValueError::new(#sv, #fail));
@@ -1044,7 +1050,7 @@ impl Emitter {
                 let #val = #parse;
                 #min
                 #max
-                #validate
+                #validation_tokens
                 ::core::result::Result::Ok(#val)
             }
         }

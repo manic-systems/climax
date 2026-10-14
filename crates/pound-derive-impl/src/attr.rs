@@ -2,7 +2,10 @@
 
 //! parsing `#[pound(...)]` metas and doc comments off venial attributes
 
-use std::str::FromStr;
+use core::{
+    mem::take,
+    str::FromStr as _,
+};
 
 use proc_macro2::{
     Delimiter,
@@ -36,24 +39,50 @@ impl Text {
         match self {
             Self::Lit(text) => quote! { #text },
             Self::Expr(tokens) => tokens.iter().cloned().collect(),
-            Self::Value(path) => {
-                let path = path.iter().cloned().collect::<TokenStream>();
-                quote! { #path.__pound_label() }
+            Self::Value(value_path) => {
+                let value_tokens = value_path.iter().cloned().collect::<TokenStream>();
+                quote! { #value_tokens.__pound_label() }
             },
         }
     }
 }
 
+/// how a `short`, `long` or `negate` key was written
+#[derive(Clone)]
+pub enum Spelling<T> {
+    /// bare, so the spelling comes from the field name
+    Inferred,
+    Given(T),
+}
+
+impl<T: Clone> Spelling<T> {
+    pub fn or_infer(&self, infer: impl FnOnce() -> T) -> T {
+        match self {
+            Self::Inferred => infer(),
+            Self::Given(given) => given.clone(),
+        }
+    }
+}
+
+impl<T> From<Option<T>> for Spelling<T> {
+    fn from(value: Option<T>) -> Self {
+        value.map_or(Self::Inferred, Self::Given)
+    }
+}
+
 /// the parsed `#[pound(...)]` options for one field or item
 // short/long are tristate: absent, bare, or with a value
-#[allow(clippy::option_option, clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bare key is its own switch"
+)]
 #[derive(Default)]
-pub struct Pound {
-    keys:                Vec<Ident>,
-    /// `None` absent, `Some(None)` bare `short`, `Some(Some(c))` `short = 'c'`
-    pub short:           Option<Option<char>>,
-    /// `None` absent, `Some(None)` bare `long`, `Some(Some(s))` `long = "s"`
-    pub long:            Option<Option<String>>,
+pub(crate) struct Pound {
+    pub keys:            Vec<Ident>,
+    /// `None` absent, `Inferred` bare `short`, `Given(c)` `short = 'c'`
+    pub short:           Option<Spelling<char>>,
+    /// `None` absent, `Inferred` bare `long`, `Given(s)` `long = "s"`
+    pub long:            Option<Spelling<String>>,
     pub positional:      bool,
     pub trailing:        bool,
     pub count:           bool,
@@ -82,8 +111,8 @@ pub struct Pound {
     /// value an option takes when written with no `=value`
     pub default_missing: Option<String>,
     pub env:             Option<String>,
-    /// `None` absent, `Some(None)` bare `negate`, which infers `no-<long>`
-    pub negate:          Option<Option<String>>,
+    /// `None` absent, `Inferred` bare `negate`, which infers `no-<long>`
+    pub negate:          Option<Spelling<String>>,
     pub value_name:      Option<String>,
     pub help:            Option<String>,
     /// help text `--help` shows in place of the short form
@@ -160,11 +189,11 @@ impl Pound {
         let key = name.as_str();
 
         match key {
-            "short" => self.short = Some(value.as_deref().map(|short| single_char(key, short, span)).transpose()?),
+            "short" => self.short = Some(Spelling::from(value.as_deref().map(|short| single_char(key, short, span)).transpose()?)),
             "negate" => {
-                self.negate = Some(value.map(|negate| negate.trim_start_matches('-').to_owned()));
+                self.negate = Some(Spelling::from(value.map(|negate| negate.trim_start_matches('-').to_owned())));
             },
-            "long"            => self.long            = Some(value),
+            "long"            => self.long            = Some(Spelling::from(value)),
             "version"         => self.version         = expr(seg),
             "long_version"    => self.long_version    = expr(seg),
             "positional"      => self.positional      = bare(key, span, value.is_some())?,
@@ -269,13 +298,27 @@ pub fn written_keys(item: &Item) -> Vec<Ident> {
     let (own, variants, fields) = match item {
         Item::Struct(shape) => (&shape.attributes, None, Some(&shape.fields)),
         Item::Enum(shape) => (&shape.attributes, Some(&shape.variants), None),
-        _ => return Vec::new(),
+        Item::Union(_)
+        | Item::Module(_)
+        | Item::Trait(_)
+        | Item::Impl(_)
+        | Item::TypeAlias(_)
+        | Item::Function(_)
+        | Item::Constant(_)
+        | Item::UseDeclaration(_)
+        | Item::Macro(_)
+        | Item::ExternBlock(_)
+        | Item::ExternCrate(_)
+        | _ => return Vec::new(),
     };
 
     let mut lists = vec![own];
     lists.extend(fields.map(field_attrs).unwrap_or_default());
 
-    for variant in variants.iter().flat_map(|variants| variants.items()) {
+    for variant in variants
+        .iter()
+        .flat_map(|variant_list| variant_list.items())
+    {
         lists.push(&variant.attributes);
         lists.extend(field_attrs(&variant.fields));
     }
@@ -287,7 +330,7 @@ pub fn written_keys(item: &Item) -> Vec<Ident> {
         .filter_map(|attr| {
             match &attr.value {
                 AttributeValue::Group(_, tokens) => Some(split_commas(tokens)),
-                _ => None,
+                AttributeValue::Equals(..) | AttributeValue::Empty => None,
             }
         })
         .flatten()
@@ -431,11 +474,11 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
         return Ok(Text::Value(tokens));
     }
 
-    let [tok] = tokens.as_slice() else {
+    let [raw_tok] = tokens.as_slice() else {
         return Err(Error::new_at_span(span, braces_hint(key)));
     };
 
-    let tok = match tok {
+    let tok = match raw_tok {
         TokenTree::Group(group) if group.delimiter() == Delimiter::None => {
             let mut inner = group.stream().into_iter();
             match (inner.next(), inner.next()) {
@@ -443,7 +486,9 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
                 _ => return Err(Error::new_at_span(span, braces_hint(key))),
             }
         },
-        other => other.clone(),
+        TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {
+            raw_tok.clone()
+        },
     };
 
     match &tok {
@@ -464,7 +509,9 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
                 .any(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'));
             Ok(Text::Expr(if has_statements { vec![tok] } else { inner }))
         },
-        _ => Err(Error::new_at_span(span, braces_hint(key))),
+        TokenTree::Group(_) | TokenTree::Punct(_) => {
+            Err(Error::new_at_span(span, braces_hint(key)))
+        },
     }
 }
 
@@ -489,8 +536,11 @@ fn callable(key: &str, span: Span, seg: &[TokenTree]) -> Result<TokenStream, Err
 
     let stream = match tokens.as_slice() {
         [tok] if is_quoted(tok) => {
-            TokenStream::from_str(&unquote(tok)).map_err(|_| {
-                Error::new_at_span(span, format!("pound: `{key}` is not a valid path"))
+            TokenStream::from_str(&unquote(tok)).map_err(|parse_error| {
+                Error::new_at_span(
+                    span,
+                    format!("pound: `{key}` is not a valid path: {parse_error}"),
+                )
             })?
         },
         _ => tokens.into_iter().collect(),
@@ -513,9 +563,12 @@ fn is_quoted(tok: &TokenTree) -> bool {
         TokenTree::Literal(lit) => lit.to_string().starts_with('"'),
         TokenTree::Group(group) if group.delimiter() == Delimiter::None => {
             let mut inner = group.stream().into_iter();
-            matches!((inner.next(), inner.next()), (Some(tok), None) if is_quoted(&tok))
+            matches!(
+                (inner.next(), inner.next()),
+                (Some(quoted_tok), None) if is_quoted(&quoted_tok)
+            )
         },
-        _ => false,
+        TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Punct(_) => false,
     }
 }
 
@@ -570,7 +623,14 @@ impl NumArgs {
                 format!("pound: `num_args = {text}` is not `N`, `N..` or `N..=M` with N above 0"),
             )
         };
-        let count = |word: &str| word.trim().parse::<usize>().map_err(|_| invalid());
+        let count = |word: &str| {
+            word.trim().parse::<usize>().map_err(|parse_error| {
+                Error::new_at_span(
+                    span,
+                    format!("pound: `num_args = {word}` is not a count: {parse_error}"),
+                )
+            })
+        };
 
         let (min, max) = match text.split_once("..") {
             None => (count(text)?, Some(count(text)?)),
@@ -590,8 +650,12 @@ impl NumArgs {
 
 fn number(key: &str, span: Span, value: Option<String>) -> Result<usize, Error> {
     let text = needed(key, span, value)?;
-    text.parse()
-        .map_err(|_| Error::new_at_span(span, format!("pound: `{key} = {text}` is not a number")))
+    text.parse().map_err(|parse_error| {
+        Error::new_at_span(
+            span,
+            format!("pound: `{key} = {text}` is not a number: {parse_error}"),
+        )
+    })
 }
 
 fn needed(key: &str, span: Span, value: Option<String>) -> Result<String, Error> {
@@ -702,7 +766,7 @@ fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
             && starts_meta(&tokens[i + 1..])
         {
             if !cur.is_empty() {
-                segs.push(std::mem::take(&mut cur));
+                segs.push(take(&mut cur));
             }
         } else {
             cur.push(tok.clone());
@@ -720,11 +784,11 @@ fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
 // closure's parameters, so a comma separates two metas only when a
 // `key = ..`, a known bare key or the end follows it
 fn starts_meta(rest: &[TokenTree]) -> bool {
-    let [TokenTree::Ident(key), after @ ..] = rest else {
+    let [TokenTree::Ident(key_ident), after @ ..] = rest else {
         return rest.is_empty();
     };
 
-    let key = key.to_string();
+    let key = key_ident.to_string();
 
     if !key.starts_with(|ch: char| ch.is_ascii_lowercase()) {
         return false;
@@ -774,7 +838,7 @@ fn unquote(tok: &TokenTree) -> String {
                 .as_ref()
                 .map_or_else(String::new, unquote);
         },
-        other => return other.to_string(),
+        TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Punct(_) => return tok.to_string(),
     };
 
     if let Some(hashed) = raw.strip_prefix('r') {

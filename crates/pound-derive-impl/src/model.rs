@@ -3,10 +3,11 @@
 //! what a derive input means, checked against pound's rules before any tokens
 //! are written
 
-use std::{
-    collections::HashMap,
-    str::FromStr,
+use core::{
+    iter::once,
+    str::FromStr as _,
 };
+use std::collections::HashMap;
 
 use proc_macro2::{
     Ident,
@@ -147,7 +148,18 @@ impl Derive {
                     variants,
                 })
             },
-            _ => {
+            Item::Union(_)
+            | Item::Module(_)
+            | Item::Trait(_)
+            | Item::Impl(_)
+            | Item::TypeAlias(_)
+            | Item::Function(_)
+            | Item::Constant(_)
+            | Item::UseDeclaration(_)
+            | Item::Macro(_)
+            | Item::ExternBlock(_)
+            | Item::ExternCrate(_)
+            | _ => {
                 Err(Error::new(
                     "pound: Parse can only derive on a struct or enum",
                 ))
@@ -314,7 +326,7 @@ impl Variant {
             match tok {
                 TokenTree::Ident(_) => true,
                 TokenTree::Punct(punct) => punct.as_char() == ':',
-                _ => false,
+                TokenTree::Group(_) | TokenTree::Literal(_) => false,
             }
         });
         if path && matches!(ty.tokens.last(), Some(TokenTree::Ident(id)) if id == "External") {
@@ -381,12 +393,14 @@ impl Command {
         let mut groups = Vec::<Group>::new();
         let named = args.iter().filter_map(|arg| arg.group.as_ref());
 
-        for name in named.chain(required_groups) {
-            if !groups.iter().any(|group| group.name == *name) {
+        for group_name in named.chain(required_groups) {
+            if !groups.iter().any(|group| group.name == *group_name) {
                 groups.push(Group {
-                    name:     name.clone(),
-                    required: required_groups.contains(name),
-                    direct:   args.iter().any(|arg| arg.group.as_ref() == Some(name)),
+                    name:     group_name.clone(),
+                    required: required_groups.contains(group_name),
+                    direct:   args
+                        .iter()
+                        .any(|arg| arg.group.as_ref() == Some(group_name)),
                 });
             }
         }
@@ -410,15 +424,15 @@ impl Command {
         // the emitted field reference, so the expansion still holds the
         // half-typed name rust-analyzer completes against
         let lookup = |key: &str, field: &Ident| {
-            let name = field.to_string();
+            let field_name = field.to_string();
             let other = fields
                 .flattened
                 .iter()
                 .map(|flat| &flat.ident)
                 .chain(fields.sub.iter().map(|sub| &sub.ident))
-                .any(|ident| *ident == name);
+                .any(|ident| *ident == field_name);
 
-            match index.get(&name) {
+            match index.get(&field_name) {
                 Some(&j) => Ok(Some(j)),
                 None if other => {
                     Err(Error::new_at_span(
@@ -631,14 +645,14 @@ impl FieldType {
         let wrapped = inner.clone().into_iter().collect::<Vec<_>>();
         let (value, sourced) = Self::strip_path(&wrapped, |path| path.last() == Some(&"Sourced"))
             .map_or((inner, false), |stripped| (stripped, true));
-        let shape = if sourced && shape == Shape::One && value.to_string() == "bool" {
+        let resolved_shape = if sourced && shape == Shape::One && value.to_string() == "bool" {
             Shape::Bool
         } else {
             shape
         };
 
         Self {
-            shape,
+            shape: resolved_shape,
             inner: value,
             sourced,
             full,
@@ -686,18 +700,15 @@ impl FieldType {
             }
         }
 
-        let known = known(&path.iter().map(String::as_str).collect::<Vec<_>>());
+        let is_known = known(&path.iter().map(String::as_str).collect::<Vec<_>>());
 
         let open_ok =
             matches!(toks.get(at), Some(TokenTree::Punct(punct)) if punct.as_char() == '<');
         let close_ok =
             matches!(toks.last(), Some(TokenTree::Punct(punct)) if punct.as_char() == '>');
 
-        if known && open_ok && close_ok && toks.len() >= at + 3 {
-            Some(toks[at + 1..toks.len() - 1].iter().cloned().collect())
-        } else {
-            None
-        }
+        (is_known && open_ok && close_ok && toks.len() >= at + 3)
+            .then(|| toks[at + 1..toks.len() - 1].iter().cloned().collect())
     }
 }
 
@@ -947,8 +958,11 @@ impl Conversion {
                     .max_len
                     .as_deref()
                     .map(|text| {
-                        TokenStream::from_str(text).map_err(|_| {
-                            Error::new_at_span(ident.span(), "pound: invalid max_len bound")
+                        TokenStream::from_str(text).map_err(|parse_error| {
+                            Error::new_at_span(
+                                ident.span(),
+                                format!("pound: invalid max_len bound: {parse_error}"),
+                            )
                         })
                     })
                     .transpose()?,
@@ -968,7 +982,10 @@ impl Conversion {
 }
 
 /// one field that parses as an argument
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "argument fields need independent boolean switches"
+)]
 pub struct Arg {
     pub ident:           Ident,
     pub kind:            ArgKind,
@@ -1019,11 +1036,11 @@ impl Arg {
 
         if kind.is_named() {
             if let Some(given) = &attr.long {
-                long = Some(given.clone().unwrap_or_else(|| fname.replace('_', "-")));
+                long = Some(given.or_infer(|| fname.replace('_', "-")));
             }
 
             if let Some(given) = &attr.short {
-                short = Some(given.unwrap_or_else(|| fname.chars().next().unwrap_or('?')));
+                short = Some(given.or_infer(|| fname.chars().next().unwrap_or('?')));
             }
 
             if long.is_none() && short.is_none() {
@@ -1112,10 +1129,12 @@ impl Arg {
                     ))
                 },
                 Some(text) => {
-                    text.parse::<usize>().map(Some).map_err(|_| {
+                    text.parse::<usize>().map(Some).map_err(|parse_error| {
                         Error::new_at_span(
                             ident.span(),
-                            format!("pound: #[pound({name} = {text})] is not a count"),
+                            format!(
+                                "pound: #[pound({name} = {text})] is not a count: {parse_error}"
+                            ),
                         )
                     })
                 },
@@ -1125,12 +1144,12 @@ impl Arg {
         let min = read("min_values", attr.min_values.as_ref())?;
         let max = read("max_values", attr.max_values.as_ref())?;
 
-        if let (Some(min), Some(max)) = (min, max)
-            && min > max
+        if let (Some(minimum), Some(maximum)) = (min, max)
+            && minimum > maximum
         {
             return Err(Error::new_at_span(
                 ident.span(),
-                format!("pound: min_values {min} exceeds max_values {max}"),
+                format!("pound: min_values {minimum} exceeds max_values {maximum}"),
             ));
         }
 
@@ -1161,16 +1180,16 @@ impl Arg {
             ));
         };
 
-        let spelling = spelling.clone().unwrap_or_else(|| format!("no-{name}"));
+        let resolved_spelling = spelling.or_infer(|| format!("no-{name}"));
 
-        if spelling == name || attr.aliases.contains(&spelling) {
+        if resolved_spelling == name || attr.aliases.contains(&resolved_spelling) {
             return Err(Error::new_at_span(
                 ident.span(),
-                format!("pound: negation `{spelling}` is also a positive spelling"),
+                format!("pound: negation `{resolved_spelling}` is also a positive spelling"),
             ));
         }
 
-        Ok(Some(spelling))
+        Ok(Some(resolved_spelling))
     }
 }
 
@@ -1193,7 +1212,7 @@ pub struct ValueVariant {
 
 impl ValueVariant {
     pub fn spellings(&self) -> impl Iterator<Item = &str> {
-        core::iter::once(self.label.as_str()).chain(self.aliases.iter().map(String::as_str))
+        once(self.label.as_str()).chain(self.aliases.iter().map(String::as_str))
     }
 }
 
@@ -1203,10 +1222,10 @@ impl ValueEnum {
             return Err(Error::new("pound: ValueEnum can only derive on an enum"));
         };
 
-        let item = pound(&shape.attributes)?;
-        item.allow_only(&["ignore_case"])?;
+        let attributes = pound(&shape.attributes)?;
+        attributes.allow_only(&["ignore_case"])?;
         let same = |left: &str, right: &str| {
-            if item.ignore_case {
+            if attributes.ignore_case {
                 left.eq_ignore_ascii_case(right)
             } else {
                 left == right
@@ -1238,15 +1257,15 @@ impl ValueEnum {
             };
 
             for word in this.spellings() {
-                if let Some(first) = variants
+                if let Some(first_variant) = variants
                     .iter()
-                    .find(|other| other.spellings().any(|w| same(w, word)))
+                    .find(|other| other.spellings().any(|word_text| same(word_text, word)))
                 {
-                    let first = &first.ident;
+                    let first_ident = &first_variant.ident;
                     return Err(Error::new_at_span(
                         vname.span(),
                         format!(
-                            "pound: ValueEnum variants `{first}` and `{vname}` both spell \
+                            "pound: ValueEnum variants `{first_ident}` and `{vname}` both spell \
                              `{word}`, so `{vname}` could never be parsed by it"
                         ),
                     ));
@@ -1259,7 +1278,7 @@ impl ValueEnum {
         Ok(Self {
             ident: shape.name.clone(),
             variants,
-            ignore_case: item.ignore_case,
+            ignore_case: attributes.ignore_case,
         })
     }
 }
