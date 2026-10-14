@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::ops::{
+    BitOr,
+    BitOrAssign,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Event {
     /// key press
@@ -90,7 +95,7 @@ impl Modifiers {
     }
 }
 
-impl core::ops::BitOr for Modifiers {
+impl BitOr for Modifiers {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -98,7 +103,7 @@ impl core::ops::BitOr for Modifiers {
     }
 }
 
-impl core::ops::BitOrAssign for Modifiers {
+impl BitOrAssign for Modifiers {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
     }

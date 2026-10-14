@@ -32,6 +32,19 @@ pub struct TextInput {
 
 impl TextInput {
     #[must_use]
+    pub fn text_view(&self) -> TextInputView {
+        TextInputView {
+            id:            Some(ViewId::owned(format!("{}/input", self.id.as_str()))),
+            prompt:        self.prompt.clone(),
+            value:         self.value.clone(),
+            placeholder:   self.placeholder.clone(),
+            cursor:        self.cursor_char_index(),
+            cursor_anchor: self.cursor_anchor(),
+            error:         self.error.clone(),
+        }
+    }
+
+    #[must_use]
     pub fn new(id: impl Into<WidgetId>) -> Self {
         Self {
             id:          id.into(),
@@ -111,13 +124,16 @@ impl TextInput {
         Reaction::Changed
     }
 
-    fn insert_str(&mut self, value: &str) -> Reaction {
-        let value: String = value.chars().filter(|value| !value.is_control()).collect();
-        if value.is_empty() {
+    fn insert_str(&mut self, text: &str) -> Reaction {
+        let filtered_text: String = text
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
+        if filtered_text.is_empty() {
             return Reaction::Ignored;
         }
-        self.value.insert_str(self.cursor, &value);
-        self.cursor += value.len();
+        self.value.insert_str(self.cursor, &filtered_text);
+        self.cursor += filtered_text.len();
         self.error = None;
         Reaction::Changed
     }
@@ -213,7 +229,13 @@ impl Widget for TextInput {
                     Key::End => self.move_end(),
                     Key::Enter => self.submit(),
                     Key::Esc => Reaction::Cancel,
-                    _ => Reaction::Ignored,
+                    Key::Char(_)
+                    | Key::Tab
+                    | Key::Backtab
+                    | Key::Up
+                    | Key::Down
+                    | Key::PageUp
+                    | Key::PageDown => Reaction::Ignored,
                 }
             },
             Event::Paste(value) => self.insert_str(&value),
@@ -222,15 +244,7 @@ impl Widget for TextInput {
     }
 
     fn view(&self, _cx: &ViewContext) -> View {
-        View::TextInput(TextInputView {
-            id:            Some(ViewId::owned(format!("{}/input", self.id.as_str()))),
-            prompt:        self.prompt.clone(),
-            value:         self.value.clone(),
-            placeholder:   self.placeholder.clone(),
-            cursor:        self.cursor_char_index(),
-            cursor_anchor: self.cursor_anchor(),
-            error:         self.error.clone(),
-        })
+        View::TextInput(self.text_view())
     }
 
     fn current_value(&self) -> Option<Value> {

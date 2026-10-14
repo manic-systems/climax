@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use super::SelectItem;
 use crate::{
@@ -118,11 +118,11 @@ pub struct ReviewActionBinding {
 impl ReviewActionBinding {
     #[must_use]
     pub fn new(key: char, name: impl Into<String>) -> Self {
-        let name = name.into();
+        let binding_name = name.into();
         Self {
             key,
-            help: name.clone(),
-            name,
+            help: binding_name.clone(),
+            name: binding_name,
         }
     }
 
@@ -170,12 +170,12 @@ impl ReviewList {
     where
         T: Into<SelectItem>,
     {
-        let items: Vec<_> = items.into_iter().map(Into::into).collect();
-        let states = vec![ReviewState::Unconfirmed; items.len()];
+        let collected_items: Vec<_> = items.into_iter().map(Into::into).collect();
+        let states = vec![ReviewState::Unconfirmed; collected_items.len()];
         Self {
             id: id.into(),
             header: Vec::new(),
-            items,
+            items: collected_items,
             initial_states: states.clone(),
             states,
             selected: 0,
@@ -323,29 +323,30 @@ impl ReviewList {
         let Some(next) = move_index(current, visible.len(), delta, self.wrap) else {
             return Reaction::Ignored;
         };
-        let next = visible[next];
-        if next == self.selected {
+        let selected_index = visible[next];
+        if selected_index == self.selected {
             return Reaction::Ignored;
         }
-        self.selected = next;
+        self.selected = selected_index;
         self.ensure_visible();
         Reaction::Changed
     }
 
-    fn move_to(&mut self, selected: usize) -> Reaction {
+    fn move_to(&mut self, requested_selected: usize) -> Reaction {
         let visible = self.visible_indices();
         if visible.is_empty() {
             return Reaction::Ignored;
         }
-        let selected = visible
+        let last_visible = visible[visible.len() - 1];
+        let selected_index = visible
             .iter()
             .copied()
-            .find(|index| *index >= selected)
-            .unwrap_or_else(|| *visible.last().expect("visible is not empty"));
-        if selected == self.selected {
+            .find(|index| *index >= requested_selected)
+            .unwrap_or(last_visible);
+        if selected_index == self.selected {
             return Reaction::Ignored;
         }
-        self.selected = selected;
+        self.selected = selected_index;
         self.ensure_visible();
         Reaction::Changed
     }
@@ -559,7 +560,9 @@ impl Widget for ReviewList {
             },
             Key::Enter => self.submit(ReviewAction::Save),
             Key::Esc => Reaction::Cancel,
-            _ => Reaction::Ignored,
+            Key::Char(_) | Key::Backtab | Key::Backspace | Key::Delete | Key::Left | Key::Right => {
+                Reaction::Ignored
+            },
         }
     }
 
@@ -577,15 +580,15 @@ fn move_index(current: usize, len: usize, delta: isize, wrap: bool) -> Option<us
         return None;
     }
 
-    let current = current.min(len - 1);
+    let bounded_current = current.min(len - 1);
     if wrap {
-        let len = isize::try_from(len).ok()?;
-        let current = isize::try_from(current).ok()?;
-        let next = (current + delta).rem_euclid(len);
+        let signed_len = isize::try_from(len).ok()?;
+        let signed_current = isize::try_from(bounded_current).ok()?;
+        let next = (signed_current + delta).rem_euclid(signed_len);
         return usize::try_from(next).ok();
     }
 
-    let next = current.saturating_add_signed(delta).min(len - 1);
+    let next = bounded_current.saturating_add_signed(delta).min(len - 1);
     Some(next)
 }
 

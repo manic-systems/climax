@@ -2,6 +2,8 @@
 
 //! widgets for bang.
 
+extern crate alloc;
+
 mod action;
 mod event;
 mod ids;

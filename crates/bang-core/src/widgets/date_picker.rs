@@ -190,7 +190,9 @@ impl Widget for DatePicker {
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_days(7),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
-            _ => Reaction::Ignored,
+            Key::Char(_) | Key::Tab | Key::Backtab | Key::Backspace | Key::Delete => {
+                Reaction::Ignored
+            },
         }
     }
 
@@ -233,20 +235,21 @@ fn add_days(date: Date, days: i32) -> Date {
 }
 
 fn days_from_civil(year: i32, month: u8, day: u8) -> i32 {
-    let year = year - i32::from(month <= 2);
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let month = i32::from(month);
-    let day = i32::from(day);
-    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let adjusted_year = year - i32::from(month <= 2);
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let month_number = i32::from(month);
+    let day_number = i32::from(day);
+    let day_of_year =
+        (153 * (month_number + if month_number > 2 { -3 } else { 9 }) + 2) / 5 + day_number - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
 }
 
 fn civil_from_days(days: i32) -> Date {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days - era * 146_097;
+    let shifted_days = days + 719_468;
+    let era = shifted_days.div_euclid(146_097);
+    let day_of_era = shifted_days - era * 146_097;
     let year_of_era =
         (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let year = year_of_era + era * 400;

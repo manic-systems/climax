@@ -42,15 +42,15 @@ impl SearchSelect {
     where
         T: Into<SelectItem>,
     {
-        let id = id.into();
-        let items: Vec<_> = items.into_iter().map(Into::into).collect();
-        let matches = (0..items.len()).collect();
+        let widget_id = id.into();
+        let collected_items: Vec<_> = items.into_iter().map(Into::into).collect();
+        let matches = (0..collected_items.len()).collect();
         Self {
-            input: TextInput::new(WidgetId::owned(format!("{}/query", id.as_str())))
+            input: TextInput::new(WidgetId::owned(format!("{}/query", widget_id.as_str())))
                 .with_prompt("search: "),
             header: Vec::new(),
-            id,
-            items,
+            id: widget_id,
+            items: collected_items,
             matches,
             selected: 0,
             top: 0,
@@ -204,10 +204,7 @@ impl SearchSelect {
     }
 
     fn input_view(&self) -> TextInputView {
-        let View::TextInput(view) = self.input.view(&ViewContext::default()) else {
-            unreachable!("TextInput must render TextInputView")
-        };
-        view
+        self.input.text_view()
     }
 
     fn list_view(&self) -> ListView {
@@ -269,7 +266,15 @@ impl Widget for SearchSelect {
                     Key::Char('j' | 'J') if no_modifiers(key) => self.move_by(1),
                     Key::Enter => self.submit(),
                     Key::Esc => Reaction::Cancel,
-                    _ => self.handle_input(event, cx),
+                    Key::Char(_)
+                    | Key::Tab
+                    | Key::Backtab
+                    | Key::Backspace
+                    | Key::Delete
+                    | Key::Left
+                    | Key::Right
+                    | Key::Home
+                    | Key::End => self.handle_input(event, cx),
                 }
             },
             Event::Paste(_) => self.handle_input(event, cx),
@@ -329,15 +334,15 @@ fn move_index(current: usize, len: usize, delta: isize, wrap: bool) -> Option<us
         return None;
     }
 
-    let current = current.min(len - 1);
+    let bounded_current = current.min(len - 1);
     if wrap {
-        let len = isize::try_from(len).ok()?;
-        let current = isize::try_from(current).ok()?;
-        let next = (current + delta).rem_euclid(len);
+        let signed_len = isize::try_from(len).ok()?;
+        let signed_current = isize::try_from(bounded_current).ok()?;
+        let next = (signed_current + delta).rem_euclid(signed_len);
         return usize::try_from(next).ok();
     }
 
-    let next = current.saturating_add_signed(delta).min(len - 1);
+    let next = bounded_current.saturating_add_signed(delta).min(len - 1);
     Some(next)
 }
 
