@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::str;
+
 use bang_core::{
     Event,
     Key,
@@ -242,7 +244,7 @@ fn decode_utf8_prefix(bytes: &[u8]) -> Utf8Result {
     if bytes.len() < width {
         return Utf8Result::Pending;
     }
-    std::str::from_utf8(&bytes[..width])
+    str::from_utf8(&bytes[..width])
         .ok()
         .and_then(|value| value.chars().next())
         .map_or(Utf8Result::Invalid, |first| Utf8Result::Char(first, width))

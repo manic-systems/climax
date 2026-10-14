@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::mem::MaybeUninit;
 use std::io;
 
 /// restore terminal state on drop
@@ -48,7 +49,7 @@ const fn stdin_fd() -> libc::c_int {
 
 #[cfg(unix)]
 fn termios(fd: libc::c_int) -> io::Result<libc::termios> {
-    let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+    let mut termios = MaybeUninit::<libc::termios>::uninit();
     // SAFETY: termios points to valid writable memory for tcgetattr
     if unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } != 0 {
         return Err(terminal_mode_error());
@@ -82,7 +83,9 @@ fn set_termios(fd: libc::c_int, termios: &libc::termios) -> io::Result<()> {
 #[cfg(unix)]
 fn configure_raw_timeout(termios: &mut libc::termios) {
     // SAFETY: termios is a valid mutable termios struct
-    unsafe { libc::cfmakeraw(termios) };
+    unsafe {
+        libc::cfmakeraw(termios);
+    }
     termios.c_cc[libc::VMIN] = 0;
     termios.c_cc[libc::VTIME] = 1;
 }

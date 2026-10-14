@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io;
-#[cfg(unix)]
-use std::sync::atomic::{
-    AtomicI32,
-    Ordering,
+use core::{
+    mem::zeroed,
+    ptr::null_mut,
+    sync::atomic::{
+        AtomicI32,
+        Ordering,
+    },
 };
-
+use std::io;
 #[cfg(unix)]
 static SIGNAL_WRITE_FD: AtomicI32 = AtomicI32::new(-1);
 
@@ -48,12 +50,15 @@ impl Drop for SignalGuard {
         {
             for (signal, previous) in &self.previous {
                 // SAFETY: previous was returned by sigaction for this signal
-                let _result = unsafe { libc::sigaction(*signal, previous, std::ptr::null_mut()) };
+                let _result = unsafe { libc::sigaction(*signal, previous, null_mut()) };
             }
             SIGNAL_WRITE_FD.store(-1, Ordering::SeqCst);
-            // SAFETY: both fds are owned by guard
+            // SAFETY: read_fd is owned by guard
             unsafe {
                 libc::close(self.read_fd);
+            }
+            // SAFETY: write_fd is owned by guard
+            unsafe {
                 libc::close(self.write_fd);
             }
         }
@@ -75,14 +80,17 @@ fn install_terminal_handlers() -> io::Result<SignalGuard> {
         match install_handler(*signal) {
             Ok(old) => previous.push((*signal, old)),
             Err(error) => {
-                for (signal, old) in &previous {
+                for (previous_signal, old) in &previous {
                     // SAFETY: old was returned by sigaction
-                    let _result = unsafe { libc::sigaction(*signal, old, std::ptr::null_mut()) };
+                    let _result = unsafe { libc::sigaction(*previous_signal, old, null_mut()) };
                 }
                 SIGNAL_WRITE_FD.store(-1, Ordering::SeqCst);
-                // SAFETY: both fds are owned locally
+                // SAFETY: read_fd is owned locally
                 unsafe {
                     libc::close(read_fd);
+                }
+                // SAFETY: write_fd is owned locally
+                unsafe {
                     libc::close(write_fd);
                 }
                 return Err(error);
@@ -113,7 +121,10 @@ fn poll_signal(guard: &mut SignalGuard) -> io::Result<Option<i32>> {
         };
         if read > 0 {
             if first.is_none() {
-                first = buffer[..usize::try_from(read).expect("positive read fits usize")]
+                let read_length = usize::try_from(read).map_err(|conversion_error| {
+                    io::Error::new(io::ErrorKind::InvalidData, conversion_error)
+                })?;
+                first = buffer[..read_length]
                     .iter()
                     .copied()
                     .find(|value| *value != 0)
@@ -173,9 +184,13 @@ fn set_cloexec(fd: libc::c_int) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+#[expect(
+    clippy::as_conversions,
+    reason = "libc requires a handler address integer"
+)]
 fn install_handler(signal: libc::c_int) -> io::Result<libc::sigaction> {
     // SAFETY: zeroed sigaction is immediately initialized
-    let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    let mut action = unsafe { zeroed::<libc::sigaction>() };
     action.sa_sigaction = signal_handler as *const () as usize;
     action.sa_flags = 0;
     // SAFETY: sa_mask points to valid memory
@@ -184,7 +199,7 @@ fn install_handler(signal: libc::c_int) -> io::Result<libc::sigaction> {
     }
 
     // SAFETY: zeroed storage will be written by sigaction
-    let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
+    let mut previous = unsafe { zeroed::<libc::sigaction>() };
     // SAFETY: both pointers are valid
     if unsafe { libc::sigaction(signal, &raw const action, &raw mut previous) } != 0 {
         return Err(io::Error::last_os_error());
@@ -210,14 +225,18 @@ extern "C" fn signal_handler(signal: libc::c_int) {
 /// signal cannot be raised.
 #[cfg(unix)]
 pub fn restore_default_and_raise(signal: i32) -> io::Result<()> {
-    let signal = libc::c_int::try_from(signal)
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "signal out of range"))?;
+    let signal_number = libc::c_int::try_from(signal).map_err(|conversion_error| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("signal out of range: {conversion_error}"),
+        )
+    })?;
     // SAFETY: SIG_DFL is a valid value
-    if unsafe { libc::signal(signal, libc::SIG_DFL) } == libc::SIG_ERR {
+    if unsafe { libc::signal(signal_number, libc::SIG_DFL) } == libc::SIG_ERR {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: raising a signal is safe
-    if unsafe { libc::raise(signal) } != 0 {
+    if unsafe { libc::raise(signal_number) } != 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
