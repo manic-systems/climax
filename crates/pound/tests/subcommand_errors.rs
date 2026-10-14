@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 #![cfg(feature = "derive")]
-#![allow(dead_code)]
 
 use pound::Parse;
 

@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 #![cfg(feature = "derive")]
-#![allow(non_upper_case_globals, non_camel_case_types, dead_code)]
+#![expect(
+    non_camel_case_types,
+    dead_code,
+    reason = "the names exercise generated identifier hygiene"
+)]
 
 use pound::Parse;
 

@@ -14,7 +14,6 @@ use pound::{
 /// fetch urls to disk
 #[derive(Parse)]
 #[pound(name = "grab", version = "0.1.0")]
-#[allow(dead_code, reason = "not a runnable example")]
 struct Grab {
     /// download directory
     #[pound(short, long)]
@@ -28,7 +27,6 @@ struct Grab {
 
 /// cache maintenance
 #[derive(Parse)]
-#[allow(dead_code, reason = "not a runnable example")]
 enum Cmd {
     /// download urls
     Fetch {
@@ -55,6 +53,10 @@ fn main() {
 
 /// print one command then recurse
 /// `Command` carries the inherited globals down
+#[expect(
+    clippy::print_stdout,
+    reason = "the example prints each command specification"
+)]
 fn walk(cmd: &Command<'_>, depth: usize) {
     let spec = cmd.spec();
     let pad = "  ".repeat(depth);

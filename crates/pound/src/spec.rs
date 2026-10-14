@@ -126,7 +126,10 @@ impl Arity {
 }
 
 /// one argument's full description
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the argument specification exposes independent boolean options"
+)]
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct ArgSpec {
@@ -758,7 +761,7 @@ impl CommandSpec {
     #[must_use]
     pub const fn hash_opt(self, hash: Option<&'static str>) -> Self {
         match hash {
-            Some(hash) if !hash.is_empty() => self.hash(hash),
+            Some(value) if !value.is_empty() => self.hash(value),
             _ => self,
         }
     }

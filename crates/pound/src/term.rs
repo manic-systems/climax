@@ -2,6 +2,11 @@
 
 //! the terminal a report is laid out for, and how its spans are painted
 
+#[cfg(feature = "std")] use std::{
+    env,
+    io,
+};
+
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 
 /// the width and color a help page or error is laid out for
@@ -33,9 +38,9 @@ impl Term {
     #[cfg(feature = "std")]
     #[must_use]
     pub fn stdout() -> Self {
-        use std::io::IsTerminal as _;
+        use io::IsTerminal as _;
 
-        Self::detect(std::io::stdout().is_terminal(), 1)
+        Self::detect(io::stdout().is_terminal(), 1)
     }
 
     /// what standard error is, plain unless it is a terminal or color is
@@ -43,9 +48,9 @@ impl Term {
     #[cfg(feature = "std")]
     #[must_use]
     pub fn stderr() -> Self {
-        use std::io::IsTerminal as _;
+        use io::IsTerminal as _;
 
-        Self::detect(std::io::stderr().is_terminal(), 2)
+        Self::detect(io::stderr().is_terminal(), 2)
     }
 
     #[cfg(feature = "std")]
@@ -55,20 +60,15 @@ impl Term {
             return Self { width: None, color };
         }
 
-        let width = sys::columns(fd).or_else(|| {
-            std::env::var("COLUMNS")
-                .ok()?
-                .parse()
-                .ok()
-                .filter(|&w| w > 0)
-        });
+        let width =
+            sys::columns(fd).or_else(|| env::var("COLUMNS").ok()?.parse().ok().filter(|&w| w > 0));
         Self { width, color }
     }
 
     /// `NO_COLOR` outranks `CLICOLOR_FORCE`, which paints a pipe too
     #[cfg(feature = "std")]
     fn color(tty: bool) -> bool {
-        let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+        let var = |name| env::var_os(name).filter(|value| !value.is_empty());
         if var("NO_COLOR").is_some() {
             return false;
         }
@@ -93,10 +93,6 @@ impl Term {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Paint {
-    #[cfg_attr(
-        not(feature = "help"),
-        allow(dead_code, reason = "only help rows have plain spans")
-    )]
     Plain,
     Heading,
     /// text typed as is, a flag spelling or a command name
@@ -119,8 +115,8 @@ impl Paint {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Span {
-    pub(crate) text:  String,
-    pub(crate) paint: Paint,
+    text:  String,
+    paint: Paint,
 }
 
 impl Span {
@@ -133,7 +129,7 @@ impl Span {
 
     #[cfg_attr(
         not(feature = "help"),
-        allow(dead_code, reason = "only help rows have plain spans")
+        expect(dead_code, reason = "only help rows have plain spans")
     )]
     pub(crate) fn plain(text: impl Into<String>) -> Self {
         Self::new(text, Paint::Plain)
@@ -161,7 +157,10 @@ impl Span {
 
 #[cfg(all(feature = "std", unix))]
 mod sys {
-    use core::ffi::c_int;
+    use core::ffi::{
+        c_int,
+        c_ulong,
+    };
 
     // bionic, musl and illumos declare the request as `int`, glibc and the BSDs
     // as `unsigned long`
@@ -180,7 +179,7 @@ mod sys {
         target_os = "illumos",
         target_os = "solaris",
     )))]
-    type Request = core::ffi::c_ulong;
+    type Request = c_ulong;
 
     #[cfg(all(
         any(target_os = "linux", target_os = "android"),
@@ -216,11 +215,7 @@ mod sys {
         target_os = "openbsd",
         target_os = "dragonfly",
     ))]
-    #[allow(
-        clippy::cast_possible_wrap,
-        reason = "musl spells the request as `int`"
-    )]
-    const TIOCGWINSZ: Option<Request> = Some(0x4008_7468 as Request);
+    const TIOCGWINSZ: Option<Request> = Some(0x4008_7468);
     #[cfg(any(target_os = "illumos", target_os = "solaris"))]
     const TIOCGWINSZ: Option<Request> = Some(0x5468);
     #[cfg(not(any(

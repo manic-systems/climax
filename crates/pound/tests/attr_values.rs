@@ -2,14 +2,17 @@
 
 #![cfg(feature = "derive")]
 
-use core::num::NonZeroUsize;
+use core::{
+    marker::PhantomData,
+    num::NonZeroUsize,
+};
 
 use pound::Parse;
 
 const SYSTEM_PROFILE: &str = "system";
 
 fn even(raw: &str) -> Result<u32, &'static str> {
-    let n: u32 = raw.parse().map_err(|_| "not a number")?;
+    let n: u32 = raw.parse().map_err(|_parse_error| "not a number")?;
     if n.is_multiple_of(2) {
         Ok(n)
     } else {
@@ -17,12 +20,16 @@ fn even(raw: &str) -> Result<u32, &'static str> {
     }
 }
 
-#[allow(clippy::missing_const_for_fn, clippy::trivially_copy_pass_by_ref)]
+#[expect(
+    clippy::missing_const_for_fn,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "validator hooks receive the parsed field by reference"
+)]
 fn small(n: &u32) -> Result<(), &'static str> {
     if *n < 100 { Ok(()) } else { Err("too big") }
 }
 
-struct Wrap<A, B>(core::marker::PhantomData<(A, B)>);
+struct Wrap<A, B>(PhantomData<(A, B)>);
 
 impl<A, B> Wrap<A, B> {
     fn raw(raw: &str) -> Result<u32, &'static str> {
@@ -65,10 +72,10 @@ fn parse_validate_and_default_take_expressions() {
         (SYSTEM_PROFILE, "auto")
     );
 
-    assert!(parse(&["--jobs", "0", "--pairs", "8"]).is_err());
-    assert!(parse(&["--jobs", "1", "--pairs", "7"]).is_err());
-    assert!(parse(&["--jobs", "1", "--pairs", "200"]).is_err());
-    assert!(parse(&["--jobs", "1", "--pairs", "2", "--compared", "0"]).is_err());
+    parse(&["--jobs", "0", "--pairs", "8"]).unwrap_err();
+    parse(&["--jobs", "1", "--pairs", "7"]).unwrap_err();
+    parse(&["--jobs", "1", "--pairs", "200"]).unwrap_err();
+    parse(&["--jobs", "1", "--pairs", "2", "--compared", "0"]).unwrap_err();
 }
 
 macro_rules! forwarded {
@@ -96,6 +103,6 @@ fn forwarded_values_keep_their_meaning() {
         (args.bare.as_str(), args.constant.as_str()),
         ("auto", SYSTEM_PROFILE)
     );
-    assert!(parse(&["--pairs", "7"]).is_err());
-    assert!(parse(&["--pairs", "200"]).is_err());
+    parse(&["--pairs", "7"]).unwrap_err();
+    parse(&["--pairs", "200"]).unwrap_err();
 }

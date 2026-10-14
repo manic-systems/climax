@@ -89,6 +89,21 @@
 
 extern crate alloc;
 
+use core::{
+    ffi::{
+        CStr,
+        c_char,
+        c_int,
+    },
+    str,
+};
+#[cfg(feature = "std")]
+use std::{
+    env,
+    path::Path,
+    sync::OnceLock,
+};
+
 // alloc machinery for nostd
 mod alloc_prelude {
     #[cfg(not(feature = "std"))]
@@ -250,12 +265,12 @@ pub trait Parse: Sized {
     /// [`ErrorKind::InvalidUtf8`] when an argument is not UTF-8.
     #[cfg(feature = "std")]
     fn try_parse() -> Result<Self, Error> {
-        static INVOKED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        static INVOKED: OnceLock<Option<String>> = OnceLock::new();
 
-        let mut argv = std::env::args_os();
+        let mut argv = env::args_os();
         let program = argv.next();
         let invoked = INVOKED.get_or_init(|| {
-            let path = std::path::Path::new(program.as_deref()?);
+            let path = Path::new(program.as_deref()?);
             Some(path.file_name()?.to_str()?.to_owned())
         });
         let spec = match invoked {
@@ -354,17 +369,28 @@ fn parse_as<'a, T: Parse>(
 /// fails with [`ErrorKind::InvalidUtf8`] when an argument is not UTF-8.
 // argc/argv are the libc contract names; keeping them reads clearer than any
 // rename clippy's `similar_names` would prefer.
-#[allow(clippy::similar_names)]
+#[expect(
+    clippy::similar_names,
+    reason = "argc and argv are the names of the libc entry point contract"
+)]
 pub unsafe fn args_from_raw<'a>(
-    argc: core::ffi::c_int,
-    argv: *const *const core::ffi::c_char,
+    argc: c_int,
+    argv: *const *const c_char,
 ) -> Result<impl Iterator<Item = &'a str>, Error> {
     let count = usize::try_from(argc).unwrap_or(0); // a negative argc reads as empty
     let args = (0..count).filter_map(move |i| {
-        // SAFETY: `i < count <= argc`, so `argv.add(i)` is in bounds and points
-        // at a valid C string per the documented contract.
-        let ptr = unsafe { *argv.add(i) };
-        (!ptr.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr::<'a>(ptr) })
+        // SAFETY: libc supplies argc consecutive readable slots starting at
+        // argv.
+        let address = unsafe { argv.add(i) };
+        // SAFETY: libc's argv contract guarantees every slot in the argc array
+        // is initialized.
+        let ptr = unsafe { *address };
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: ptr is non-null and points to a valid NUL-terminated string
+        // under the contract.
+        Some(unsafe { CStr::from_ptr::<'a>(ptr) })
     });
 
     if let Some(bad) = args.clone().find(|arg| arg.to_str().is_err()) {
@@ -372,7 +398,7 @@ pub unsafe fn args_from_raw<'a>(
     }
     // SAFETY: every argument was checked above, and the contract keeps them
     // unchanged for `'a`.
-    Ok(args.map(|arg| unsafe { core::str::from_utf8_unchecked(arg.to_bytes()) }))
+    Ok(args.map(|arg| unsafe { str::from_utf8_unchecked(arg.to_bytes()) }))
 }
 
 #[cfg(test)]

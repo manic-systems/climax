@@ -232,7 +232,7 @@ mod tests {
             options: true,
         } = partial.next()
         else {
-            panic!("expected the secret positional, got {:?}", partial.next());
+            panic!("expected the secret positional");
         };
         assert_eq!(arg.value_name, "secret");
         assert_eq!(

@@ -12,6 +12,12 @@ use pound::Parse;
     clippy::min_ident_chars,
     reason = "the fields are placeholders, only their type paths are under test"
 )]
+#[expect(
+    clippy::absolute_paths,
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    reason = "qualified paths are the behavior under test"
+)]
 struct Args {
     #[pound(long)]
     a: ::core::option::Option<u8>,
