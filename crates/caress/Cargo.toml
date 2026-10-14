@@ -1,6 +1,6 @@
 [package]
 name                 = "caress"
-version              = "0.1.0"
+version              = "0.2.0"
 description          = "shell completions and man pages for pound commands"
 keywords             = [ "cli", "completion", "manpage", "mdoc", "pound" ]
 categories           = [ "command-line-interface" ]
