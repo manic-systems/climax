@@ -55,14 +55,26 @@
 //!
 //! [`man::pages`] renders an mdoc page for the command and each subcommand.
 
+extern crate alloc;
+
 mod engine;
 pub mod man;
 mod shell;
 
 use std::{
+    env::{
+        args_os,
+        var,
+        var_os,
+    },
     ffi::OsStr,
-    io::Write as _,
+    io::{
+        Write as _,
+        stderr,
+        stdout,
+    },
     path::Path,
+    process::exit,
 };
 
 pub use engine::{
@@ -80,22 +92,26 @@ pub use shell::{
 ///
 /// returns without doing anything when `COMPLETE` is unset, empty, or `0`,
 /// see [`Request::from_env`].
+#[expect(
+    clippy::exit,
+    reason = "completion requests must exit before application startup"
+)]
 pub fn handle(spec: &CommandSpec) {
     let Some(request) = Request::from_env(spec) else {
         return;
     };
 
     let code = match request {
-        Ok(request) => {
-            let answer = request.answer(spec);
-            i32::from(std::io::stdout().write_all(answer.as_bytes()).is_err())
+        Ok(parsed) => {
+            let answer = parsed.answer(spec);
+            i32::from(stdout().write_all(answer.as_bytes()).is_err())
         },
-        Err(err) => {
-            let _ = writeln!(std::io::stderr(), "error: {err}");
+        Err(error) => {
+            let _write_result = writeln!(stderr(), "error: {error}");
             2
         },
     };
-    std::process::exit(code);
+    exit(code);
 }
 
 /// what a shell asked the program for
@@ -114,23 +130,22 @@ impl Request {
     /// named after `spec`.
     #[must_use]
     pub fn from_env(spec: &CommandSpec) -> Option<Result<Self, UnknownShell>> {
-        let shell =
-            std::env::var_os("COMPLETE").filter(|value| !value.is_empty() && value != "0")?;
-        let shell = match shell.to_string_lossy().parse::<Shell>() {
-            Ok(shell) => shell,
-            Err(err) => return Some(Err(err)),
+        let shell_name = var_os("COMPLETE").filter(|value| !value.is_empty() && value != "0")?;
+        let parsed_shell = match shell_name.to_string_lossy().parse::<Shell>() {
+            Ok(parsed) => parsed,
+            Err(error) => return Some(Err(error)),
         };
 
-        let mut args = std::env::args_os();
-        let program = args
+        let mut arguments = args_os();
+        let program = arguments
             .next()
             .and_then(|arg0| program_name(&arg0))
             .unwrap_or_else(|| spec.name.to_owned());
-        let rest = args.map(|arg| arg.to_string_lossy().into_owned());
-        let cursor = std::env::var("COMPLETE_INDEX")
+        let rest = arguments.map(|arg| arg.to_string_lossy().into_owned());
+        let cursor = var("COMPLETE_INDEX")
             .ok()
-            .and_then(|i| i.parse().ok());
-        Some(Ok(Self::from_args(shell, program, rest, cursor)))
+            .and_then(|index| index.parse().ok());
+        Some(Ok(Self::from_args(parsed_shell, program, rest, cursor)))
     }
 
     /// the request in the arguments after the program name, a line after
@@ -143,12 +158,12 @@ impl Request {
         args: impl IntoIterator<Item = String>,
         cursor: Option<usize>,
     ) -> Self {
-        let mut args = args.into_iter();
-        if args.next().as_deref() != Some("--") {
+        let mut arguments = args.into_iter();
+        if arguments.next().as_deref() != Some("--") {
             return Self::Script { shell, program };
         }
 
-        let mut words = args.collect::<Vec<_>>();
+        let mut words = arguments.collect::<Vec<_>>();
         let typed = match cursor {
             Some(at) => {
                 let typed = words.get(at).cloned().unwrap_or_default();

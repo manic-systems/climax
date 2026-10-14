@@ -1,6 +1,7 @@
 //! what a package installs beside the binary, its shell completion scripts and
 //! man pages
 
+use caress::man::pages;
 pub use caress::{
     Shell,
     man::Page,
@@ -11,5 +12,5 @@ use pound::Parse;
 /// each page as written, e.g. `October 11, 2026`.
 #[must_use]
 pub fn manual<C: Parse>(date: &str) -> Vec<Page> {
-    caress::man::pages(C::SPEC, date)
+    pages(C::SPEC, date)
 }

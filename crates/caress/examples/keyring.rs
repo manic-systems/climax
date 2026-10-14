@@ -18,7 +18,6 @@ use pound::{
 /// keep secrets in age-encrypted files
 #[derive(Parse)]
 #[pound(name = "keyring", version = "0.1.0")]
-#[allow(dead_code, reason = "demo only completes")]
 struct Keyring {
     /// the secrets file
     #[pound(short, long, global, default = "secrets.nix")]
@@ -28,7 +27,6 @@ struct Keyring {
 }
 
 #[derive(Parse)]
-#[allow(dead_code, reason = "demo only completes")]
 enum Cmd {
     /// decrypt a secret to stdout
     Open {

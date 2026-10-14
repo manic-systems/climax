@@ -1,11 +1,12 @@
-#[cfg(any(feature = "render", feature = "interactive"))]
-use std::io;
-use std::{
+use core::{
     error,
     fmt,
+    result::Result as CoreResult,
 };
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::io;
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = CoreResult<T, Error>;
 
 pub enum Error {
     /// argument parsing failed
@@ -104,7 +105,11 @@ impl From<bang_screw::LiveSessionError> for Error {
         match value {
             bang_screw::LiveSessionError::Cancelled => Self::Cancelled,
             bang_screw::LiveSessionError::InputEnded => Self::InputEnded,
-            other => Self::Interact(other),
+            other @ (bang_screw::LiveSessionError::RawMode(_)
+            | bang_screw::LiveSessionError::Signals(_)
+            | bang_screw::LiveSessionError::TerminalIo(_)
+            | bang_screw::LiveSessionError::Signalled(_)
+            | bang_screw::LiveSessionError::ReraiseSignal { .. }) => Self::Interact(other),
         }
     }
 }

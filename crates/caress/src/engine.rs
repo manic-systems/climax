@@ -2,6 +2,8 @@
 
 //! what to offer for the word under the cursor
 
+use std::fs::read_dir;
+
 use pound::{
     complete::{
         Candidate,
@@ -205,9 +207,8 @@ impl Completions {
                 .get(..prefix.len())
                 .filter(|head| fold && head.eq_ignore_ascii_case(prefix))
                 .unwrap_or(prefix);
-            let candidate =
-                Candidate::new(format!("{lead}{}", candidate.value)).help(candidate.help);
-            self.offer(candidate, &format!("{lead}{typed}"));
+            let offered = Candidate::new(format!("{lead}{}", candidate.value)).help(candidate.help);
+            self.offer(offered, &format!("{lead}{typed}"));
         }
     }
 
@@ -219,7 +220,7 @@ impl Completions {
             Some((dir, _)) => (dir, format!("{dir}/")),
             None => (".", String::new()),
         };
-        let Ok(entries) = std::fs::read_dir(read) else {
+        let Ok(entries) = read_dir(read) else {
             return;
         };
 
@@ -281,7 +282,6 @@ mod tests {
     }
 
     #[derive(Parse)]
-    #[allow(dead_code, reason = "only the spec is read")]
     struct Cp {
         #[pound(long)]
         jobs:   Option<u32>,
@@ -291,8 +291,8 @@ mod tests {
     }
 
     fn complete(words: &[&str], typed: &str) -> Completions {
-        let words = words.iter().map(|w| (*w).to_owned()).collect();
-        Line::new(words, typed.to_owned()).complete(Cp::SPEC)
+        let owned_words = words.iter().map(|w| (*w).to_owned()).collect();
+        Line::new(owned_words, typed.to_owned()).complete(Cp::SPEC)
     }
 
     #[test]
@@ -305,7 +305,7 @@ mod tests {
     fn an_inline_value_keeps_its_option() {
         let values = complete(&[], "--format=j").candidates;
         assert_eq!(values, [Candidate::new("--format=json")]);
-        let values = complete(&[], "-Fj").candidates;
-        assert_eq!(values, [Candidate::new("-Fjson")]);
+        let short_values = complete(&[], "-Fj").candidates;
+        assert_eq!(short_values, [Candidate::new("-Fjson")]);
     }
 }

@@ -1,3 +1,5 @@
+use std::io::Stderr;
+
 use screw::{
     Looping,
     Runtime,
@@ -83,7 +85,7 @@ impl Status {
 }
 
 pub struct StatusRuntime {
-    runtime: screw::AutoRuntime<std::io::Stderr>,
+    runtime: screw::AutoRuntime<Stderr>,
 }
 
 impl StatusRuntime {

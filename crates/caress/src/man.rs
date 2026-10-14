@@ -5,11 +5,11 @@
 //! the root command gets `<name>.1` and every visible subcommand gets
 //! `<name>-<sub>.1`, the layout git and cargo use, so `man grab-fetch` works.
 
+use alloc::collections::VecDeque;
 use core::fmt::{
     self,
     Write as _,
 };
-use std::collections::VecDeque;
 
 use pound::spec::{
     ArgSpec,
@@ -188,18 +188,18 @@ impl<'m> Manual<'m> {
         if !self.positionals.is_empty() {
             page.paragraph();
             page.text("The arguments are as follows:");
-            page.list(&self.positionals, |page, arg| {
-                page.line(format_args!("It Ar {}", Meta(arg)));
-                page.describe(arg);
+            page.list(&self.positionals, |doc, arg| {
+                doc.line(format_args!("It Ar {}", Meta(arg)));
+                doc.describe(arg);
             });
         }
 
         if !self.options.is_empty() {
             page.paragraph();
             page.text("The options are as follows:");
-            page.list(&self.options, |page, arg| {
-                page.line(format_args!("It {}", Item(arg)));
-                page.describe(arg);
+            page.list(&self.options, |doc, arg| {
+                doc.line(format_args!("It {}", Item(arg)));
+                doc.describe(arg);
             });
         }
 
@@ -221,9 +221,9 @@ impl<'m> Manual<'m> {
         }
 
         page.line("Sh COMMANDS");
-        page.list(subs, |page, (name, operands, about)| {
-            page.line(format_args!("It Cm {}{operands}", Word(name)));
-            page.text(about);
+        page.list(subs, |doc, (name, operands, about)| {
+            doc.line(format_args!("It Cm {}{operands}", Word(name)));
+            doc.text(about);
         });
     }
 
@@ -239,16 +239,16 @@ impl<'m> Manual<'m> {
             .into_iter()
             .chain(children)
             .collect::<Vec<_>>();
-        pages.sort_by_cached_key(|name| name.to_lowercase());
+        pages.sort_by_cached_key(|page_name| page_name.to_lowercase());
         if pages.is_empty() {
             return;
         }
 
         page.line("Sh SEE ALSO");
         let last = pages.len() - 1;
-        for (i, name) in pages.iter().enumerate() {
-            let comma = if i == last { "" } else { " ," };
-            page.line(format_args!("Xr {} 1{comma}", Word(name)));
+        for (index, page_name) in pages.iter().enumerate() {
+            let comma = if index == last { "" } else { " ," };
+            page.line(format_args!("Xr {} 1{comma}", Word(page_name)));
         }
     }
 
@@ -264,19 +264,19 @@ impl<'m> Manual<'m> {
         }
 
         page.line("Sh ENVIRONMENT");
-        page.list(env, |page, (var, arg)| {
-            page.line(format_args!("It Ev {}", Word(var)));
-            page.text("Default for");
+        page.list(env, |doc, (var, arg)| {
+            doc.line(format_args!("It Ev {}", Word(var)));
+            doc.text("Default for");
             match (arg.long, arg.short) {
-                _ if arg.is_positional() => page.line(format_args!("Ar {} .", Meta(arg))),
-                (Some(long), _) => page.line(format_args!("Fl \\-{} .", Word(long))),
+                _ if arg.is_positional() => doc.line(format_args!("Ar {} .", Meta(arg))),
+                (Some(long), _) => doc.line(format_args!("Fl \\-{} .", Word(long))),
                 (None, Some(short)) => {
-                    page.line(format_args!(
+                    doc.line(format_args!(
                         "Fl {} .",
                         Word(short.encode_utf8(&mut [0; 4]))
                     ));
                 },
-                (None, None) => page.line(format_args!("Ar {} .", Meta(arg))),
+                (None, None) => doc.line(format_args!("Ar {} .", Meta(arg))),
             }
         });
     }
@@ -290,7 +290,7 @@ struct Mdoc {
 impl Mdoc {
     /// its words must already be escaped
     fn line(&mut self, line: impl fmt::Display) {
-        let _ = writeln!(self.out, ".{line}");
+        let _write_result = writeln!(self.out, ".{line}");
     }
 
     /// mandoc warns on a `Pp` straight after `Sh`
