@@ -82,8 +82,8 @@ pub struct alias;
 /// field: extra short names for a flag or option, comma separated
 pub struct short_alias;
 
-/// field: the value when the arg is not given, as `"auto"`, a bare `auto`, or
-/// a braced `&str` expression like `{ PROFILE }`
+/// field: the value when the arg is not given. `"auto"`, a bare `auto`, a
+/// value enum variant like `Format::Json`, or a braced `&str` constant
 pub struct default;
 
 /// field: the value of an option written with no value, so `--color` alone
@@ -104,7 +104,7 @@ pub struct parse;
 /// returning `Result<(), E>`
 pub struct validate;
 
-/// field: the parsed value must be at least this
+/// field: the parsed value must be at least this, as `min = -1`
 pub struct min;
 
 /// field: the parsed value must be at most this
@@ -123,16 +123,16 @@ pub struct max_values;
 /// too
 pub struct delimiter;
 
-/// field: how many words one use of a `Vec` option takes, as `2`, `"1.."` or
-/// `"1..=3"`
+/// field: how many words one use of a `Vec` option takes, as `2`, `1..` or
+/// `1..=3`
 pub struct num_args;
 
 /// field: list shell completion candidates with this
 /// `pound::complete::Completer`
 pub struct complete;
 
-/// field: what the value names for completion, such as `path`, when its type
-/// does not say
+/// field: what the value names for completion, a [`Hint`](crate::Hint)
+/// variant such as `Path`, when its type does not say
 pub struct hint;
 
 /// field: at most one member of the named group may be given
