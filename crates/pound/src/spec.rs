@@ -522,12 +522,10 @@ impl ArgSpec {
     /// its placeholder
     #[must_use]
     pub fn display_name(&self) -> String {
-        if let Some(long) = self.long {
-            format!("--{long}")
-        } else if let Some(short) = self.short {
-            format!("-{short}")
-        } else {
-            self.metavar()
+        match (self.long, self.short) {
+            (Some(long), _) => format!("--{long}"),
+            (None, Some(short)) => format!("-{short}"),
+            (None, None) => self.metavar(),
         }
     }
 }

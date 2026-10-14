@@ -458,12 +458,10 @@ impl Emitter {
     fn header(&self, header: &Header) -> TokenStream {
         let root = &self.root;
 
-        let new = match &header.name {
-            Some(name) => quote! { #root::CommandSpec::new(#name) },
-            None => {
-                quote! { #root::CommandSpec::new(::core::env!("CARGO_PKG_NAME")).invoked_name() }
-            },
-        };
+        let new = header.name.as_ref().map_or_else(
+            || quote! { #root::CommandSpec::new(::core::env!("CARGO_PKG_NAME")).invoked_name() },
+            |name| quote! { #root::CommandSpec::new(#name) },
+        );
 
         let version = header.version.as_ref().map_or_else(
             || quote! { ::core::env!("CARGO_PKG_VERSION") },
@@ -524,8 +522,9 @@ impl Emitter {
         let requires = index_pairs(&command.requires);
         let flatten_calls = self.flatten_calls(fields);
 
-        let (subs, sub_optional_call) = match &fields.sub {
-            Some(sub) => {
+        let (subs, sub_optional_call) = fields.sub.as_ref().map_or_else(
+            || (quote! { &[] }, quote!()),
+            |sub| {
                 let ty = &sub.ty;
                 let optional = if sub.optional {
                     quote!(.sub_optional())
@@ -537,8 +536,7 @@ impl Emitter {
                     optional,
                 )
             },
-            None => (quote! { &[] }, quote!()),
-        };
+        );
 
         let unique_message = format!("pound: two args of `{owner}` answer to the same spelling");
 

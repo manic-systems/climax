@@ -242,15 +242,10 @@ fn decode_utf8_prefix(bytes: &[u8]) -> Utf8Result {
     if bytes.len() < width {
         return Utf8Result::Pending;
     }
-    match std::str::from_utf8(&bytes[..width]) {
-        Ok(value) => {
-            value
-                .chars()
-                .next()
-                .map_or(Utf8Result::Invalid, |value| Utf8Result::Char(value, width))
-        },
-        Err(_) => Utf8Result::Invalid,
-    }
+    std::str::from_utf8(&bytes[..width])
+        .ok()
+        .and_then(|value| value.chars().next())
+        .map_or(Utf8Result::Invalid, |first| Utf8Result::Char(first, width))
 }
 
 const fn utf8_width(first: u8) -> usize {

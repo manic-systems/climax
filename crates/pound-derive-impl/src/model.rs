@@ -625,11 +625,8 @@ impl FieldType {
         };
 
         let wrapped = inner.clone().into_iter().collect::<Vec<_>>();
-        let (value, sourced) =
-            match Self::strip_path(&wrapped, |path| path.last() == Some(&"Sourced")) {
-                Some(value) => (value, true),
-                None => (inner, false),
-            };
+        let (value, sourced) = Self::strip_path(&wrapped, |path| path.last() == Some(&"Sourced"))
+            .map_or((inner, false), |stripped| (stripped, true));
         let shape = if sourced && shape == Shape::One && value.to_string() == "bool" {
             Shape::Bool
         } else {

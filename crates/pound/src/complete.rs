@@ -123,13 +123,13 @@ impl<'s, 'a> Partial<'s, 'a> {
     #[must_use]
     pub fn arg(&self, name: &str) -> Option<Given<'_, 'a>> {
         let reaches = |a: &ArgSpec| {
-            if let Some(long) = name.strip_prefix("--") {
-                a.answers_long(long)
-            } else if let Some(short) = name.strip_prefix('-') {
-                let mut chars = short.chars();
-                matches!((chars.next(), chars.next()), (Some(c), None) if a.answers_short(c))
-            } else {
-                a.is_positional() && a.value_name == name
+            match (name.strip_prefix("--"), name.strip_prefix('-')) {
+                (Some(long), _) => a.answers_long(long),
+                (None, Some(short)) => {
+                    let mut chars = short.chars();
+                    matches!((chars.next(), chars.next()), (Some(c), None) if a.answers_short(c))
+                },
+                (None, None) => a.is_positional() && a.value_name == name,
             }
         };
 

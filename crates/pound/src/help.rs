@@ -296,12 +296,10 @@ fn usage_positional(a: &ArgSpec) -> String {
 #[cfg(feature = "help")]
 fn value_suffix(a: &ArgSpec) -> String {
     let meta = a.metavar();
-    if let Some(words) = several(a) {
-        format!(" {words}")
-    } else if a.value_may_be_left_out() {
-        format!("[={meta}]")
-    } else {
-        format!("={meta}")
+    match several(a) {
+        Some(words) => format!(" {words}"),
+        None if a.value_may_be_left_out() => format!("[={meta}]"),
+        None => format!("={meta}"),
     }
 }
 
