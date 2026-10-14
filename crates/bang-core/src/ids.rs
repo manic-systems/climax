@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct WidgetId(Cow<'static, str>);

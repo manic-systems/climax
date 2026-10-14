@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::{
     Context,
@@ -73,11 +73,11 @@ impl Form {
             return Reaction::Ignored;
         }
 
-        let active = active.min(self.fields.len() - 1);
-        if active == self.active {
+        let bounded_active = active.min(self.fields.len() - 1);
+        if bounded_active == self.active {
             return Reaction::Ignored;
         }
-        self.active = active;
+        self.active = bounded_active;
         self.focus_reaction()
     }
 
@@ -130,7 +130,18 @@ impl Widget for Form {
                     Key::Tab => return self.move_focus(1),
                     Key::Backtab => return self.move_focus(-1),
                     Key::Esc => return Reaction::Cancel,
-                    _ => {},
+                    Key::Char(_)
+                    | Key::Enter
+                    | Key::Backspace
+                    | Key::Delete
+                    | Key::Up
+                    | Key::Down
+                    | Key::Left
+                    | Key::Right
+                    | Key::Home
+                    | Key::End
+                    | Key::PageUp
+                    | Key::PageDown => {},
                 }
             },
             Event::Resize { .. } | Event::Tick | Event::Paste(_) => {},
@@ -139,7 +150,9 @@ impl Widget for Form {
         let Some(field) = self.fields.get_mut(self.active) else {
             return match event {
                 Event::Key(key) if key.key == Key::Enter => Reaction::Submit(self.object_value()),
-                _ => Reaction::Ignored,
+                Event::Key(_) | Event::Paste(_) | Event::Resize { .. } | Event::Tick => {
+                    Reaction::Ignored
+                },
             };
         };
 
@@ -151,7 +164,7 @@ impl Widget for Form {
             Reaction::Focus(FocusTarget::Widget(id)) => {
                 self.fields
                     .iter()
-                    .position(|field| field.widget.id() == id)
+                    .position(|candidate| candidate.widget.id() == id)
                     .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
                         self.set_active_index(index)
                     })

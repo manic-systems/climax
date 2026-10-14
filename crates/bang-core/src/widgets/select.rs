@@ -155,15 +155,15 @@ impl Select {
         Reaction::Changed
     }
 
-    fn move_to(&mut self, selected: usize) -> Reaction {
+    fn move_to(&mut self, requested_selected: usize) -> Reaction {
         if self.items.is_empty() {
             return Reaction::Ignored;
         }
-        let selected = selected.min(self.items.len() - 1);
-        if selected == self.selected {
+        let selected_index = requested_selected.min(self.items.len() - 1);
+        if selected_index == self.selected {
             return Reaction::Ignored;
         }
-        self.selected = selected;
+        self.selected = selected_index;
         self.ensure_visible();
         Reaction::Changed
     }
@@ -259,7 +259,13 @@ impl Widget for Select {
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_by(1),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
-            _ => Reaction::Ignored,
+            Key::Char(_)
+            | Key::Tab
+            | Key::Backtab
+            | Key::Backspace
+            | Key::Delete
+            | Key::Left
+            | Key::Right => Reaction::Ignored,
         }
     }
 
@@ -388,7 +394,18 @@ impl Widget for MultiSelect {
             Key::Char('n' | 'N') if no_modifiers(key) => self.set_all(false),
             Key::Enter => Reaction::Submit(Value::List(self.checked_values())),
             Key::Esc => Reaction::Cancel,
-            _ => self.select.handle(event, cx),
+            Key::Char(_)
+            | Key::Backtab
+            | Key::Backspace
+            | Key::Delete
+            | Key::Up
+            | Key::Down
+            | Key::Left
+            | Key::Right
+            | Key::Home
+            | Key::End
+            | Key::PageUp
+            | Key::PageDown => self.select.handle(event, cx),
         }
     }
 
@@ -406,15 +423,15 @@ fn move_index(current: usize, len: usize, delta: isize, wrap: bool) -> Option<us
         return None;
     }
 
-    let current = current.min(len - 1);
+    let bounded_current = current.min(len - 1);
     if wrap {
-        let len = isize::try_from(len).ok()?;
-        let current = isize::try_from(current).ok()?;
-        let next = (current + delta).rem_euclid(len);
+        let signed_len = isize::try_from(len).ok()?;
+        let signed_current = isize::try_from(bounded_current).ok()?;
+        let next = (signed_current + delta).rem_euclid(signed_len);
         return usize::try_from(next).ok();
     }
 
-    let next = current.saturating_add_signed(delta).min(len - 1);
+    let next = bounded_current.saturating_add_signed(delta).min(len - 1);
     Some(next)
 }
 

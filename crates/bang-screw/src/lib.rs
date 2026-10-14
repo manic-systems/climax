@@ -2,9 +2,11 @@
 
 //! adapter from bang views to screw render surface
 
+extern crate alloc;
+
+use alloc::fmt;
 use std::{
     error,
-    fmt,
     io::{
         self,
         Write,
@@ -219,9 +221,9 @@ pub fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, Live
         .map_err(LiveSessionError::Signals)?;
     let stdin = io::stdin();
     let stderr = io::stderr();
-    let mut stderr = stderr.lock();
+    let mut stderr_handle = stderr.lock();
 
-    let mut screen = bang_terminal::InlineScreenGuard::enter(&mut stderr)
+    let mut screen = bang_terminal::InlineScreenGuard::enter(&mut stderr_handle)
         .map_err(LiveSessionError::TerminalIo)?;
     let mut renderer = ScrewSessionRenderer::new(screen.writer());
     let result = bang_terminal::drive_tty_session_with_signals(
@@ -284,7 +286,7 @@ pub const fn map_role(role: BangRole) -> ScrewRole {
         BangRole::Match => ScrewRole::Match,
         BangRole::Error => ScrewRole::Error,
         BangRole::Success => ScrewRole::Success,
-        _ => ScrewRole::Normal,
+        BangRole::Normal | _ => ScrewRole::Normal,
     }
 }
 
@@ -323,7 +325,7 @@ impl<'a> ViewRenderer<'a> {
                     col: cursor.column,
                 });
             },
-            _ => {},
+            View::Empty | _ => {},
         }
     }
 

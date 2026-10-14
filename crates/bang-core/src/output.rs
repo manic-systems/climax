@@ -24,36 +24,42 @@ pub fn format_output(value: &Value, output: OutputFormat) -> String {
 pub fn format_text(value: &Value) -> String {
     match value {
         Value::Null => "\n".to_owned(),
-        Value::Bool(value) => format!("{value}\n"),
-        Value::String(value) => format!("{value}\n"),
+        Value::Bool(bool_value) => format!("{bool_value}\n"),
+        Value::String(string_value) => format!("{string_value}\n"),
         Value::Number(number) => format!("{number:?}\n"),
         Value::Date(date) => format!("{date}\n"),
         Value::List(values) => {
-            values
+            let mut output = values
                 .iter()
-                .map(|value| {
-                    match value {
-                        Value::String(value) => value.clone(),
-                        _ => format_json(value),
+                .map(|item| {
+                    match item {
+                        Value::String(string_value) => string_value.clone(),
+                        Value::Null
+                        | Value::Bool(_)
+                        | Value::Number(_)
+                        | Value::Date(_)
+                        | Value::List(_)
+                        | Value::Object(_) => format_json(item),
                     }
                 })
                 .collect::<Vec<_>>()
-                .join("\n")
-                + "\n"
+                .join("\n");
+            output.push('\n');
+            output
         },
-        _ => format!("{}\n", format_json(value)),
+        Value::Object(_) => format!("{}\n", format_json(value)),
     }
 }
 
 #[must_use]
 pub fn format_json(value: &Value) -> String {
     match value {
-        Value::Bool(value) => value.to_string(),
-        Value::String(value) => format!("\"{}\"", escape_json(value)),
+        Value::Bool(bool_value) => bool_value.to_string(),
+        Value::String(string_value) => format!("\"{}\"", escape_json(string_value)),
         Value::Number(number) => {
             match number {
-                Number::Integer(value) => value.to_string(),
-                Number::Float(value) => value.to_string(),
+                Number::Integer(integer_value) => integer_value.to_string(),
+                Number::Float(float_value) => float_value.to_string(),
             }
         },
         Value::Date(date) => format!("\"{date}\""),
@@ -68,12 +74,14 @@ pub fn format_json(value: &Value) -> String {
                 "{{{}}}",
                 values
                     .iter()
-                    .map(|(key, value)| format!("\"{}\":{}", escape_json(key), format_json(value)))
+                    .map(|(key, object_value)| {
+                        format!("\"{}\":{}", escape_json(key), format_json(object_value))
+                    })
                     .collect::<Vec<_>>()
                     .join(",")
             )
         },
-        _ => "null".to_owned(),
+        Value::Null => "null".to_owned(),
     }
 }
 
@@ -81,14 +89,14 @@ pub fn format_json(value: &Value) -> String {
 pub fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| {
-            match value {
+        .flat_map(|character| {
+            match character {
                 '"' => "\\\"".chars().collect::<Vec<_>>(),
                 '\\' => "\\\\".chars().collect(),
                 '\n' => "\\n".chars().collect(),
                 '\r' => "\\r".chars().collect(),
                 '\t' => "\\t".chars().collect(),
-                value => vec![value],
+                other => vec![other],
             }
         })
         .collect()
