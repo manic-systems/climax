@@ -19,12 +19,18 @@ pub enum Format {
     Json,
 }
 
+/// # Errors
+///
+/// fails with [`crate::Error::Draw`] when writing to `writer` fails.
 #[cfg(feature = "interactive")]
 pub fn write_value(mut writer: impl Write, value: &Value, format: Format) -> Result<()> {
     writer.write_all(bang_core::format_output(value, format.into()).as_bytes())?;
     Ok(())
 }
 
+/// # Errors
+///
+/// fails with [`crate::Error::Draw`] when writing to stdout fails.
 #[cfg(feature = "interactive")]
 pub fn print_value(value: &Value, format: Format) -> Result<()> {
     write_value(io::stdout().lock(), value, format)

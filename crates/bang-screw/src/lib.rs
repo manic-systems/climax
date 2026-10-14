@@ -97,10 +97,16 @@ where
         self.renderer.resize(width);
     }
 
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written or flushed.
     pub fn render(&mut self, view: &View) -> io::Result<RenderStats> {
         self.renderer.draw(&BangView::new(view.clone()))
     }
 
+    /// # Errors
+    ///
+    /// fails when erasing the drawn lines cannot be written or flushed.
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         self.renderer.clear()
     }
@@ -127,6 +133,9 @@ where
         Self { renderer }
     }
 
+    /// # Errors
+    ///
+    /// fails when erasing the drawn lines cannot be written or flushed.
     pub fn clear(&mut self) -> io::Result<RenderStats> {
         self.renderer.clear()
     }
@@ -197,6 +206,12 @@ impl error::Error for LiveSessionError {
 }
 
 /// run a session using `screw` for rendering
+///
+/// # Errors
+///
+/// fails when stdin is not a terminal, raw mode or the signal handlers cannot
+/// be set up, or terminal I/O fails, and when the user cancels, input ends or
+/// a signal arrives.
 pub fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, LiveSessionError> {
     let terminal =
         bang_terminal::TerminalModeGuard::activate_stdin().map_err(LiveSessionError::RawMode)?;

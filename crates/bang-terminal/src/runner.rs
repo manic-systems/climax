@@ -33,13 +33,22 @@ pub enum RunOutcome {
 }
 
 pub trait SessionRenderer {
+    /// # Errors
+    ///
+    /// fails when the view cannot be written out.
     fn render(&mut self, view: &View) -> io::Result<()>;
 
+    /// # Errors
+    ///
+    /// fails when the renderer cannot take the new size.
     fn resize(&mut self, _size: TerminalSize) -> io::Result<()> {
         Ok(())
     }
 }
 
+/// # Errors
+///
+/// fails when reading `input` or rendering fails.
 pub fn drive_blocking_session(
     widget: impl Widget + 'static,
     mut input: impl Read,
@@ -55,6 +64,9 @@ pub fn drive_blocking_session(
     )
 }
 
+/// # Errors
+///
+/// fails when reading `input` or rendering fails.
 pub fn drive_tty_session(
     widget: impl Widget + 'static,
     mut input: impl Read,
@@ -63,6 +75,9 @@ pub fn drive_tty_session(
     drive_tty_session_with_signal_source(widget, &mut input, renderer, &mut NoSignals)
 }
 
+/// # Errors
+///
+/// fails when reading `input`, rendering or polling `signals` fails.
 pub fn drive_tty_session_with_signals(
     widget: impl Widget + 'static,
     mut input: impl Read,

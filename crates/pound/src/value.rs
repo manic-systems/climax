@@ -67,6 +67,10 @@ pub trait FromArg: Sized {
     const HINT: Hint = Hint::Unknown;
 
     /// attempt the conversion.
+    ///
+    /// # Errors
+    ///
+    /// fails with a [`ValueError`] when `s` is not a valid `Self`.
     fn from_arg(s: &str) -> Result<Self, ValueError>;
 
     /// runtime view of [`Self::POSSIBLE`].

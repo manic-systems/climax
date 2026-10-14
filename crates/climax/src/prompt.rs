@@ -91,6 +91,11 @@ impl SelectPrompt {
         self
     }
 
+    /// # Errors
+    ///
+    /// fails with [`Error::Cancelled`] when the user cancels,
+    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
+    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let mut widget = Select::new(self.id, self.items).with_page_size(self.page_size);
         if let Some(selected) = self.selected {
@@ -99,6 +104,10 @@ impl SelectPrompt {
         run_widget(widget, self.actions)
     }
 
+    /// # Errors
+    ///
+    /// fails like [`Self::run`], and with [`Error::UnexpectedValue`] when the
+    /// result is not a string.
     pub fn run_string(self) -> Result<String> {
         into_string(self.run()?)
     }
@@ -156,6 +165,11 @@ impl MultiSelectPrompt {
         self
     }
 
+    /// # Errors
+    ///
+    /// fails with [`Error::Cancelled`] when the user cancels,
+    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
+    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let widget = MultiSelect::new(self.id, self.items)
             .with_page_size(self.page_size)
@@ -224,6 +238,11 @@ impl SearchPrompt {
         self
     }
 
+    /// # Errors
+    ///
+    /// fails with [`Error::Cancelled`] when the user cancels,
+    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
+    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let mut widget = SearchSelect::new(self.id, self.items).with_page_size(self.page_size);
         if let Some(prompt) = self.prompt {
@@ -281,6 +300,11 @@ impl TextPrompt {
         self
     }
 
+    /// # Errors
+    ///
+    /// fails with [`Error::Cancelled`] when the user cancels,
+    /// [`Error::InputEnded`] when input ends first, and [`Error::Interact`]
+    /// when the terminal session fails.
     pub fn run(self) -> Result<Value> {
         let mut widget = TextInput::new(self.id).with_prompt(self.prompt);
         if let Some(placeholder) = self.placeholder {
@@ -292,17 +316,31 @@ impl TextPrompt {
         run_widget(widget, self.actions)
     }
 
+    /// # Errors
+    ///
+    /// fails like [`Self::run`], and with [`Error::UnexpectedValue`] when the
+    /// result is not a string.
     pub fn run_string(self) -> Result<String> {
         into_string(self.run()?)
     }
 }
 
+/// # Errors
+///
+/// fails with [`Error::Cancelled`] when the user cancels, [`Error::InputEnded`]
+/// when input ends first, and [`Error::Interact`] when the terminal session
+/// fails.
 pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Result<Value> {
     let widget = bang_core::ActionLayer::new(widget).with_actions(actions);
     bang_screw::run_live_session(widget).map_err(Error::from)
 }
 
 /// Drive a widget with already-decoded events. Useful for tests and examples.
+///
+/// # Errors
+///
+/// fails with [`Error::Cancelled`] when the widget cancels, and
+/// [`Error::InputEnded`] when the events run out before it submits.
 pub fn replay_events(
     widget: impl Widget + 'static,
     events: impl IntoIterator<Item = bang_core::Event>,
