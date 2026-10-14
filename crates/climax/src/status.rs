@@ -61,6 +61,9 @@ impl Status {
         }
     }
 
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when the final frame cannot be drawn.
     pub fn finish(self) -> Result<()> {
         self.start().finish()
     }
@@ -84,11 +87,19 @@ pub struct StatusRuntime {
 }
 
 impl StatusRuntime {
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when the render thread has already
+    /// stopped.
     pub fn mark_dirty(&self) -> Result<()> {
         self.runtime.mark_dirty()?;
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when the render thread has stopped or
+    /// the final frame cannot be drawn.
     pub fn finish(self) -> Result<()> {
         let _stderr = self.runtime.finish()?;
         Ok(())

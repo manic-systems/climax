@@ -17,6 +17,9 @@ impl<'a, W> InlineScreenGuard<'a, W>
 where
     W: Write,
 {
+    /// # Errors
+    ///
+    /// fails when hiding the cursor cannot be written or flushed.
     pub fn enter(output: &'a mut W) -> io::Result<Self> {
         enter_inline_screen(output)?;
         Ok(Self {
@@ -29,6 +32,10 @@ where
         self.output
     }
 
+    /// # Errors
+    ///
+    /// fails when clearing the line and showing the cursor cannot be written or
+    /// flushed.
     pub fn leave(mut self) -> io::Result<()> {
         self.leave_active()
     }
@@ -51,11 +58,18 @@ where
     }
 }
 
+/// # Errors
+///
+/// fails when hiding the cursor cannot be written or flushed.
 pub fn enter_inline_screen(output: &mut impl Write) -> io::Result<()> {
     output.write_all(b"\x1b[?25l")?;
     output.flush()
 }
 
+/// # Errors
+///
+/// fails when clearing the line and showing the cursor cannot be written or
+/// flushed.
 pub fn leave_inline_screen(output: &mut impl Write) -> io::Result<()> {
     output.write_all(b"\r\x1b[2K\x1b[?25h")?;
     output.flush()

@@ -151,16 +151,29 @@ impl From<OutputFormat> for CoreOutputFormat {
     }
 }
 
+/// # Errors
+///
+/// fails with the rendered parse error, which carries help and version text
+/// too, or whatever [`run`] fails with.
 pub fn run_from_env() -> Result<String, String> {
     let cli = Cli::try_parse().map_err(|error| error.to_string())?;
     run(cli)
 }
 
+/// # Errors
+///
+/// fails with the rendered parse error, which carries help and version text
+/// too, or whatever [`run`] fails with.
 pub fn run_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<String, String> {
     let cli = Cli::try_parse_from(args).map_err(|error| error.to_string())?;
     run(cli)
 }
 
+/// # Errors
+///
+/// fails when both or neither of `--config` and a subcommand are given, the
+/// config or an option is invalid, or the session is cancelled or its input
+/// ends before a value is submitted.
 pub fn run(cli: Cli) -> Result<String, String> {
     let output = cli.output;
     let result = match (cli.config, cli.command) {

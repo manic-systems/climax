@@ -4,6 +4,9 @@
 
 use crate::Result;
 
+/// # Errors
+///
+/// fails with whatever `f` returns.
 #[cfg(feature = "parse")]
 pub fn run<C, F>(f: F) -> Result<()>
 where
@@ -15,6 +18,9 @@ where
     run_with(C::parse(), f)
 }
 
+/// # Errors
+///
+/// fails with whatever `f` returns.
 pub fn run_with<C, F>(command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
@@ -137,10 +143,16 @@ impl OutputContext {
         self
     }
 
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when writing to `writer` fails.
     pub fn write_value(self, writer: impl Write, value: &Value) -> Result<()> {
         crate::output::write_value(writer, value, self.format)
     }
 
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when writing to `writer` fails.
     pub fn write_value_as(
         self,
         writer: impl Write,
@@ -150,10 +162,16 @@ impl OutputContext {
         crate::output::write_value(writer, value, format)
     }
 
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when writing to stdout fails.
     pub fn print_value(self, value: &Value) -> Result<()> {
         crate::output::print_value(value, self.format)
     }
 
+    /// # Errors
+    ///
+    /// fails with [`crate::Error::Draw`] when writing to stdout fails.
     pub fn print_value_as(self, value: &Value, format: crate::output::Format) -> Result<()> {
         crate::output::print_value(value, format)
     }

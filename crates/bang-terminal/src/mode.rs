@@ -13,6 +13,10 @@ pub struct TerminalModeGuard {
 }
 
 impl TerminalModeGuard {
+    /// # Errors
+    ///
+    /// fails with [`io::ErrorKind::NotConnected`] when stdin is not a terminal,
+    /// and with the OS error when its mode cannot be read or set.
     pub fn activate_stdin() -> io::Result<Self> {
         activate_fd(stdin_fd())
     }

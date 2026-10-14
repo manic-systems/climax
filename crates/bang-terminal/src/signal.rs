@@ -26,10 +26,17 @@ pub struct SignalGuard {
 }
 
 impl SignalGuard {
+    /// # Errors
+    ///
+    /// fails with the OS error when the self-pipe cannot be created and
+    /// configured or a handler cannot be installed.
     pub fn install_terminal_handlers() -> io::Result<Self> {
         install_terminal_handlers()
     }
 
+    /// # Errors
+    ///
+    /// fails with the OS error when reading the self-pipe fails.
     pub fn poll_signal(&mut self) -> io::Result<Option<i32>> {
         poll_signal(self)
     }
@@ -196,6 +203,11 @@ extern "C" fn signal_handler(signal: libc::c_int) {
     let _result = unsafe { libc::write(fd, (&raw const byte).cast::<libc::c_void>(), 1) };
 }
 
+/// # Errors
+///
+/// fails with [`io::ErrorKind::InvalidInput`] when `signal` is out of range,
+/// and with the OS error when the default handler cannot be restored or the
+/// signal cannot be raised.
 #[cfg(unix)]
 pub fn restore_default_and_raise(signal: i32) -> io::Result<()> {
     let signal = libc::c_int::try_from(signal)

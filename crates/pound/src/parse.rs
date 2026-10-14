@@ -270,6 +270,11 @@ impl<'a> Matches<'a> {
 
     /// resolve a flag to its final state, honoring the negation spelling and
     /// falling back to the env var or default when neither was given
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when the flag falls back to an env var
+    /// or default that is not one of 1, true, yes, 0, false or no.
     pub fn switch(&self, spec: &CommandSpec, i: usize) -> Result<bool, Error> {
         let slot = &self.slots[i];
         if slot.negated {
@@ -318,6 +323,11 @@ impl<'a> Matches<'a> {
 
     /// check the subcommand selected among `spec`'s as a fresh parse would,
     /// for an update that switches to it
+    ///
+    /// # Errors
+    ///
+    /// fails when the selected subcommand misses a required arg, group or
+    /// subcommand, or breaks a conflict, requires or arity rule.
     pub fn demand_sub(&self, spec: &'static CommandSpec) -> Result<(), Error> {
         Ok(demand_selected(spec, self)?)
     }
@@ -345,22 +355,43 @@ impl<'a> Matches<'a> {
     }
 
     /// read a required value as `T`
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when the value, or the env var or
+    /// default it falls back to, does not convert, and
+    /// [`ErrorKind::MissingRequired`] when it has none of them.
     pub fn required<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<T, Error> {
         self.required_map(spec, i, T::from_arg)
     }
 
     /// read an optional value as `Option<T>`
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when a value, or the env var or default
+    /// it falls back to, does not convert.
     pub fn optional<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Option<T>, Error> {
         self.optional_map(spec, i, T::from_arg)
     }
 
     /// read every value into `Vec<T>`
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when a value, or the env var or default
+    /// it falls back to, does not convert.
     pub fn many<T: FromArg>(&self, spec: &CommandSpec, i: usize) -> Result<Vec<T>, Error> {
         self.many_map(spec, i, T::from_arg)
     }
 
     /// read every value into `Some(Vec<T>)`, or `None` when the arg was never
     /// given and has no fallback
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when a value, or the env var or default
+    /// it falls back to, does not convert.
     pub fn optional_many<T: FromArg>(
         &self,
         spec: &CommandSpec,
@@ -371,6 +402,11 @@ impl<'a> Matches<'a> {
 
     /// read a required value
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects the value or its
+    /// fallback, and [`ErrorKind::MissingRequired`] when it has neither.
     pub fn required_map<T>(
         &self,
         spec: &CommandSpec,
@@ -386,6 +422,11 @@ impl<'a> Matches<'a> {
 
     /// read an optional value
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects the value or its
+    /// fallback.
     pub fn optional_map<T>(
         &self,
         spec: &CommandSpec,
@@ -402,6 +443,11 @@ impl<'a> Matches<'a> {
     /// not given, `Some(None)` when given with no value, and `Some(Some(_))`
     /// when given one or filled by its fallback
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects the value or its
+    /// fallback.
     pub fn optional_value_map<T>(
         &self,
         spec: &CommandSpec,
@@ -427,6 +473,10 @@ impl<'a> Matches<'a> {
     }
 
     /// resolve a flag like [`Self::switch`], with where its state came from
+    ///
+    /// # Errors
+    ///
+    /// fails like [`Self::switch`].
     pub fn switch_sourced(&self, spec: &CommandSpec, i: usize) -> Result<Sourced<bool>, Error> {
         Ok(Sourced {
             value:  self.switch(spec, i)?,
@@ -436,6 +486,11 @@ impl<'a> Matches<'a> {
 
     /// read a required value with where it came from
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects the value or its
+    /// fallback, and [`ErrorKind::MissingRequired`] when it has neither.
     pub fn required_sourced_map<T>(
         &self,
         spec: &CommandSpec,
@@ -448,6 +503,11 @@ impl<'a> Matches<'a> {
 
     /// read an optional value with where it came from
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects the value or its
+    /// fallback.
     pub fn optional_sourced_map<T>(
         &self,
         spec: &CommandSpec,
@@ -471,6 +531,11 @@ impl<'a> Matches<'a> {
 
     /// read every value
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects any value, or any
+    /// piece of the split fallback.
     pub fn many_map<T>(
         &self,
         spec: &CommandSpec,
@@ -496,6 +561,11 @@ impl<'a> Matches<'a> {
     /// read every value, or `None` when the arg was never given and has no
     /// fallback
     /// caller must supply conversion fn
+    ///
+    /// # Errors
+    ///
+    /// fails with [`ErrorKind::Value`] when `convert` rejects any value, or any
+    /// piece of the split fallback.
     pub fn optional_many_map<T>(
         &self,
         spec: &CommandSpec,

@@ -166,12 +166,22 @@ pub trait Parse: Sized {
     /// build `Self` from matches against `spec`. `spec` is passed in (not read
     /// from [`Self::SPEC`]) so the same method works for a subcommand reading
     /// against its own spec.
+    ///
+    /// # Errors
+    ///
+    /// fails when a value does not convert to its field's type, or a required
+    /// field has no value.
     fn from_matches(spec: &'static CommandSpec, matches: &Matches<'_>) -> Result<Self, Error>;
 
     /// overwrite the fields `matches` gave a value on the line, leaving the
     /// rest. a subcommand named again is updated, and a different one
     /// replaces it. setting one member of a group or conflict clears the
     /// others in the same struct. on an error `self` may be partly written.
+    ///
+    /// # Errors
+    ///
+    /// fails when a value does not convert to its field's type, or a newly
+    /// chosen subcommand misses something it requires.
     fn update_from_matches(
         &mut self,
         spec: &'static CommandSpec,
@@ -182,6 +192,12 @@ pub trait Parse: Sized {
     /// they give. nothing they leave out is required, and fallbacks are not
     /// applied again, though a newly chosen subcommand is checked in full.
     /// `self` is left as it was when this fails.
+    ///
+    /// # Errors
+    ///
+    /// fails on any parse error, a value that does not convert, or a help or
+    /// version request, which come back as [`ErrorKind::Help`] and
+    /// [`ErrorKind::Version`].
     fn try_update_from<'a, I>(&mut self, args: I) -> Result<(), Error>
     where
         I: IntoIterator<Item = &'a str>,
@@ -212,6 +228,12 @@ pub trait Parse: Sized {
     /// args are borrowed (`&str`), so matched values point straight into them;
     /// the iterator's items must outlive the call (which is fine, `Self` owns
     /// any field it keeps). this is the `no_std` entry point.
+    ///
+    /// # Errors
+    ///
+    /// fails on any parse error, a missing required arg, a value that does
+    /// not convert, or a help or version request, which come back as
+    /// [`ErrorKind::Help`] and [`ErrorKind::Version`].
     fn try_parse_from<'a, I>(args: I) -> Result<Self, Error>
     where
         I: IntoIterator<Item = &'a str>,
@@ -221,6 +243,11 @@ pub trait Parse: Sized {
 
     /// parse [`std::env::args_os`], naming the program after its file when the
     /// spec asks for [`CommandSpec::invoked_name`].
+    ///
+    /// # Errors
+    ///
+    /// fails like [`Parse::try_parse_from`], and with
+    /// [`ErrorKind::InvalidUtf8`] when an argument is not UTF-8.
     #[cfg(feature = "std")]
     fn try_parse() -> Result<Self, Error> {
         static INVOKED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -321,6 +348,10 @@ fn parse_as<'a, T: Parse>(
 /// `argv` must point to `argc` consecutive, valid, NUL-terminated C strings
 /// that stay alive and immutable for `'a` — exactly the contract a libc runtime
 /// upholds for `main`'s parameters. A negative `argc` is treated as zero.
+///
+/// # Errors
+///
+/// fails with [`ErrorKind::InvalidUtf8`] when an argument is not UTF-8.
 // argc/argv are the libc contract names; keeping them reads clearer than any
 // rename clippy's `similar_names` would prefer.
 #[allow(clippy::similar_names)]
