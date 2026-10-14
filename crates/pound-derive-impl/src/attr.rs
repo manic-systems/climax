@@ -16,6 +16,8 @@ use venial::{
     Attribute,
     AttributeValue,
     Error,
+    Fields,
+    Item,
 };
 
 /// a `&'static str` attribute value, written as a literal or as a constant
@@ -146,7 +148,7 @@ impl Pound {
 
     /// apply one `key` or `key = value` meta
     #[rustfmt::skip]
-    fn set(&mut self, ident: &Ident, value: Option<String>, seg: &[TokenTree]) -> Result<(), Error> {
+    fn set(&mut self, ident: &Ident, value: Option<String>, seg: &[TokenTree]) -> Result<bool, Error> {
         let (name, span) = (ident.to_string(), ident.span());
         let key = name.as_str();
 
@@ -205,12 +207,10 @@ impl Pound {
                     self.short_aliases.push(single_char(key, &short, span)?);
                 }
             },
-            _                 => {
-                return Err(Error::new_at_span(span, format!("pound: unknown attribute `{key}`")));
-            },
+            _                 => return Ok(false),
         }
 
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -234,6 +234,63 @@ pub fn pound(attrs: &[Attribute]) -> Result<Pound, Error> {
     }
 
     Ok(out)
+}
+
+/// every key written in a `#[pound(...)]` on the item, its variants and its
+/// fields, malformed or not
+pub fn written_keys(item: &Item) -> Vec<Ident> {
+    fn field_attrs(fields: &Fields) -> Vec<&Vec<Attribute>> {
+        match fields {
+            Fields::Named(named) => {
+                named
+                    .fields
+                    .items()
+                    .map(|field| &field.attributes)
+                    .collect()
+            },
+            Fields::Tuple(tuple) => {
+                tuple
+                    .fields
+                    .items()
+                    .map(|field| &field.attributes)
+                    .collect()
+            },
+            Fields::Unit => Vec::new(),
+        }
+    }
+
+    let (own, variants, fields) = match item {
+        Item::Struct(shape) => (&shape.attributes, None, Some(&shape.fields)),
+        Item::Enum(shape) => (&shape.attributes, Some(&shape.variants), None),
+        _ => return Vec::new(),
+    };
+
+    let mut lists = vec![own];
+    lists.extend(fields.map(field_attrs).unwrap_or_default());
+
+    for variant in variants.iter().flat_map(|variants| variants.items()) {
+        lists.push(&variant.attributes);
+        lists.extend(field_attrs(&variant.fields));
+    }
+
+    lists
+        .into_iter()
+        .flatten()
+        .filter(|attr| path_is(attr, "pound"))
+        .filter_map(|attr| {
+            match &attr.value {
+                AttributeValue::Group(_, tokens) => Some(split_commas(tokens)),
+                _ => None,
+            }
+        })
+        .flatten()
+        .filter_map(|seg| {
+            match seg.first() {
+                Some(TokenTree::Ident(key)) => Some(key.clone()),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// the doc comment of an item or field, empty when none. lines are joined into
@@ -321,8 +378,11 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
             },
         };
 
-        out.set(ident, value, &seg)?;
-        out.keys.push(ident.clone());
+        // an unknown key is left to rustc, which rejects it at the emitted
+        // `pound::attr` path with the closest match
+        if out.set(ident, value, &seg)? {
+            out.keys.push(ident.clone());
+        }
     }
 
     Ok(())
