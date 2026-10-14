@@ -167,10 +167,10 @@ enum Cmd {
         #[pound(short, long)]
         format:         Option<Format>,
         /// write to this file
-        #[pound(short, long, group = "dest")]
+        #[pound(short, long, group = dest)]
         output:         Option<String>,
         /// write to stdout
-        #[pound(long, group = "dest")]
+        #[pound(long, group = dest)]
         stdout:         bool,
         /// filter by tag
         #[pound(short, long)]
@@ -205,14 +205,14 @@ enum Cmd {
 ///
 /// this paragraph and the one above it are shown by --help but not by -h.
 #[derive(Parse, Debug)]
-#[pound(name = "vault", version = "0.1.0", required_group = "auth")]
+#[pound(name = "vault", version = "0.1.0", required_group = auth)]
 struct Cli {
     /// unlock with this token
-    #[pound(long, group = "auth", heading = "Authentication")]
+    #[pound(long, group = auth, heading = "Authentication")]
     token: Option<String>,
 
     /// unlock with this key file (exactly one auth method is required)
-    #[pound(long, group = "auth", heading = "Authentication")]
+    #[pound(long, group = auth, heading = "Authentication")]
     key_file: Option<String>,
 
     /// active namespace (also accepts --ns)

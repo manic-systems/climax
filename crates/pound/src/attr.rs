@@ -76,10 +76,11 @@ pub struct global;
 pub struct allow_hyphen_values;
 
 /// field: extra long names. subcommand: extra names. value: extra spellings,
-/// never listed. comma separated
+/// never listed. one as `"a"`, several as `["a", "b"]`
 pub struct alias;
 
-/// field: extra short names for a flag or option, comma separated
+/// field: extra short names for a flag or option, one as `'x'`, several as
+/// `['x', 'y']`
 pub struct short_alias;
 
 /// field: the value when the arg is not given. `"auto"`, a bare `auto`, a

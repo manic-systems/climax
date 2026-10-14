@@ -92,7 +92,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `name = "tool"`          | the command name shown in usage and help. defaults to the name the program runs as      |
 /// | `version = EXPR`         | the `--version` text. any expression of type `&'static str`, defaults to `CARGO_PKG_VERSION` |
 /// | `long_version = EXPR`    | fuller text `--version` prints, such as build details, while `-V` keeps `version`       |
-/// | `required_group = "g"`   | exactly one member of group `g` must be given. may repeat, see [groups](#groups)         |
+/// | `required_group = g`     | exactly one member of group `g` must be given. may repeat, see [groups](#groups)         |
 /// | `help_if_empty`          | given no words at all, print the help to stderr and exit 2, rather than parse            |
 /// | `before_help = "text"`   | text the help page opens with, above the description                                    |
 /// | `after_help = "text"`    | text the help page closes with, such as examples. a line keeps its leading spaces        |
@@ -108,11 +108,11 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// /// ships the thing.
 /// #[derive(Parse)]
-/// #[pound(name = "shipit", version = BUILD, required_group = "target")]
+/// #[pound(name = "shipit", version = BUILD, required_group = target)]
 /// struct Ship {
-///     #[pound(long, group = "target")]
+///     #[pound(long, group = target)]
 ///     staging:    bool,
-///     #[pound(long, group = "target")]
+///     #[pound(long, group = target)]
 ///     production: bool,
 /// }
 ///
@@ -128,10 +128,10 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | attribute                | meaning                                                                         |
 /// |--------------------------|---------------------------------------------------------------------------------|
 /// | `name = "rm"`            | the subcommand name. defaults to the variant name in kebab case                 |
-/// | `alias = "remove, del"`  | extra names that select this subcommand, comma separated                        |
+/// | `alias = ["remove", "del"]` | extra names that select this subcommand, one as `"remove"`                   |
 /// | `hidden`                 | accepted but left out of help                                                   |
 /// | `display_order = 0`      | list the subcommand at that position, where one without it keeps its own        |
-/// | `required_group = "g"`   | exactly one member of group `g` among the variant's fields must be given        |
+/// | `required_group = g`     | exactly one member of group `g` among the variant's fields must be given        |
 /// | `help_if_empty`          | the same for this subcommand, given no words after its name                     |
 /// | `before_help = "text"`   | text this subcommand's help page opens with                                     |
 /// | `after_help = "text"`    | text this subcommand's help page closes with                                    |
@@ -154,7 +154,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// enum Cmd {
 ///     /// adds a remote.
 ///     Add { name: String },
-///     #[pound(name = "rm", alias = "remove, del")]
+///     #[pound(name = "rm", alias = ["remove", "del"])]
 ///     RemoveRemote { name: String },
 ///     #[pound(hidden)]
 ///     Debug,
@@ -182,8 +182,8 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `positional`         | a positional, which is already what a field with neither `short` nor `long` is                 |
 /// | `trailing`           | collect the rest of the line, flags too, from `--` or its first value. must be last positional |
 /// | `count`              | count repeats of a flag into an integer. it takes no `default` or `env`                        |
-/// | `alias = "a, b"`     | extra long names for a flag or option, comma separated                                         |
-/// | `short_alias = "x, y"` | extra short names for a flag or option, comma separated                                      |
+/// | `alias = ["a", "b"]` | extra long names for a flag or option, one as `"a"`                                            |
+/// | `short_alias = ['x', 'y']` | extra short names for a flag or option, one as `'x'`                                   |
 /// | `subcommand`         | the field holds the command's subcommand tree. use `Option<T>` when one is not required        |
 /// | `flatten`            | embed another `Parse` struct's args at this level. it takes no other attribute                 |
 /// | `exclusive`          | the only arg allowed when given, and lifts requirements. every other field must be optional    |
@@ -336,7 +336,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// | attribute                  | meaning                                                                    |
 /// |----------------------------|----------------------------------------------------------------------------|
-/// | `group = "g"`              | at most one member of group `g` may be given                               |
+/// | `group = g`                | at most one member of group `g` may be given                               |
 /// | `conflicts_with = [a, b]`  | this field cannot be given together with the named fields                  |
 /// | `requires = a`             | giving this field obliges the named fields to be set too                   |
 ///
@@ -345,6 +345,9 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// a group is the set of fields that name it, and any two of them given at once
 /// is an error. `required_group` on the item or variant makes exactly one
 /// member mandatory, and it fails the build when no field joins the group.
+/// a group name written bare, as `group = mode`, is linked across the
+/// command's mentions for rename and go-to-definition. a quoted `"mode"` works
+/// too, unlinked.
 /// `conflicts_with` and `requires` name fields of the same command, bare as
 /// `a` or as a list `[a, b]`, which rust-analyzer completes, renames and
 /// follows to the field. a quoted `"a, b"` works too, with go-to-definition
@@ -355,11 +358,11 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// use pound::Parse;
 ///
 /// #[derive(Parse)]
-/// #[pound(required_group = "mode")]
+/// #[pound(required_group = mode)]
 /// struct Run {
-///     #[pound(long, group = "mode")]
+///     #[pound(long, group = mode)]
 ///     fetch:    bool,
-///     #[pound(long, group = "mode")]
+///     #[pound(long, group = mode)]
 ///     build:    bool,
 ///     #[pound(long, conflicts_with = quiet)]
 ///     verbose:  bool,
@@ -493,7 +496,7 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 /// | attribute        | meaning                                           |
 /// |------------------|---------------------------------------------------|
 /// | `name = "yml"`   | the spelling, in place of the kebab case one      |
-/// | `alias = "a, b"` | more spellings that select it, never listed       |
+/// | `alias = ["a", "b"]` | more spellings that select it, never listed  |
 /// | `hidden`         | accepted, but left out of help and completion     |
 ///
 /// `#[pound(ignore_case)]` on the enum accepts a value in any ASCII case, so
