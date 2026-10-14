@@ -125,7 +125,7 @@ enum Cmd {
         #[pound(short, long)]
         format: Option<Format>,
         /// copy to clipboard instead of printing (conflicts with --format)
-        #[pound(short, long, conflicts_with = "format")]
+        #[pound(short, long, conflicts_with = format)]
         clip:   bool,
     },
     /// list secrets in the active namespace
@@ -139,7 +139,7 @@ enum Cmd {
         #[pound(short, long)]
         format: Option<Format>,
         /// show values (hidden by default, needs --format to say how)
-        #[pound(long, requires = "format")]
+        #[pound(long, requires = format)]
         show:   bool,
     },
     /// delete a secret (also reachable as `delete`)

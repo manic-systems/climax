@@ -76,6 +76,7 @@ impl Emitter {
         let (m, sp) = (local("m"), local("spec"));
         let readers = self.readers(fields, &m, &sp);
         let updates = self.updates(command, &m, &sp, |field| quote! { self.#field });
+        let named = named_fields(command).map(|field| quote! { let _ = &self.#field; });
         let (update_m, update_spec) = (m.clone(), sp.clone());
 
         // avoid unused-param warnings when a command carries only a subcommand.
@@ -111,6 +112,7 @@ impl Emitter {
                     #update_m: &#root::Matches,
                 ) -> ::core::result::Result<(), #root::Error> {
                     let _ = (#update_spec, #update_m);
+                    #(#named)*
                     #updates
                     ::core::result::Result::Ok(())
                 }
@@ -345,8 +347,20 @@ impl Emitter {
             quote! { *#bound }
         });
 
+        let this = local("this");
+        let named = named_fields(command).map(|field| {
+            quote! {
+                let _ = |#this: &Self| match #this {
+                    Self::#vname { #field: _, .. } => {},
+                    #[allow(unreachable_patterns)]
+                    _ => {},
+                };
+            }
+        });
+
         quote! {
             (#idx, Self::#vname { #(#bindings,)* .. }) => {
+                #(#named)*
                 #bind
                 #updates
             },
@@ -1089,6 +1103,16 @@ fn index_pairs(pairs: &[(usize, usize)]) -> TokenStream {
 // pattern or an item reference, so generated names also carry a prefix.
 fn local(name: &str) -> Ident {
     Ident::new(&format!("__pound_{name}"), Span::mixed_site())
+}
+
+// the fields a `requires` or `conflicts_with` names, read back under the
+// user's own spans so the compiler and rust-analyzer resolve each one
+fn named_fields(command: &Command) -> impl Iterator<Item = &Ident> {
+    command
+        .fields
+        .args
+        .iter()
+        .flat_map(|arg| arg.requires.iter().chain(&arg.conflicts_with))
 }
 
 // a variant's field rebound under a name the user's own closures can't see or

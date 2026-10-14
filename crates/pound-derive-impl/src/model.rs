@@ -402,20 +402,37 @@ impl Command {
             .map(|(i, arg)| (arg.ident.to_string(), i))
             .collect::<HashMap<_, _>>();
 
-        let lookup = |key: &str, field: &str, by: &Arg| {
-            index.get(field).copied().ok_or_else(|| {
-                Error::new_at_span(
-                    by.ident.span(),
-                    format!("pound: {key}: no field named `{field}`"),
-                )
-            })
+        // a name matching no field at all is left to rustc, which reports it on
+        // the emitted field reference, so the expansion still holds the
+        // half-typed name rust-analyzer completes against
+        let lookup = |key: &str, field: &Ident| {
+            let name = field.to_string();
+            let other = fields
+                .flattened
+                .iter()
+                .map(|flat| &flat.ident)
+                .chain(fields.sub.iter().map(|sub| &sub.ident))
+                .any(|ident| *ident == name);
+
+            match index.get(&name) {
+                Some(&j) => Ok(Some(j)),
+                None if other => {
+                    Err(Error::new_at_span(
+                        field.span(),
+                        format!("pound: {key}: `{field}` is not an arg of this command"),
+                    ))
+                },
+                None => Ok(None),
+            }
         };
 
         let mut conflicts = Vec::new();
 
         for (i, arg) in args.iter().enumerate() {
             for field in &arg.conflicts_with {
-                let j = lookup("conflicts_with", field, arg)?;
+                let Some(j) = lookup("conflicts_with", field)? else {
+                    continue;
+                };
                 let pair = (i.min(j), i.max(j));
 
                 if i != j && !conflicts.contains(&pair) {
@@ -430,7 +447,9 @@ impl Command {
 
         for (i, arg) in args.iter().enumerate() {
             for field in &arg.requires {
-                let j = lookup("requires", field, arg)?;
+                let Some(j) = lookup("requires", field)? else {
+                    continue;
+                };
 
                 if i != j && !requires.contains(&(i, j)) {
                     requires.push((i, j));
@@ -960,8 +979,8 @@ pub struct Arg {
     pub display_order:   Option<usize>,
     pub aliases:         Vec<String>,
     pub short_aliases:   Vec<char>,
-    pub conflicts_with:  Vec<String>,
-    pub requires:        Vec<String>,
+    pub conflicts_with:  Vec<Ident>,
+    pub requires:        Vec<Ident>,
     pub hidden:          bool,
     pub hide_possible:   bool,
     pub hide_default:    bool,
