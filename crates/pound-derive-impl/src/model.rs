@@ -1063,7 +1063,8 @@ impl Arg {
         })
     }
 
-    // the `min_values`/`max_values` bounds, which only a `Vec` field can satisfy.
+    // the `min_values`/`max_values` bounds, which only a `Vec` field can
+    // satisfy.
     fn arity(
         a: &Pound,
         multi: bool,

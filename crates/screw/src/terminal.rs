@@ -20,7 +20,8 @@ pub fn terminal_width_or_default() -> usize {
 #[cfg(unix)]
 fn terminal_width_from_stderr() -> Option<usize> {
     let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
-    // SAFETY: ioctl writes a winsize into the valid out pointer when stderr is tty
+    // SAFETY: ioctl writes a winsize into the valid out pointer when stderr is
+    // tty
     let result = unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
     if result == 0 {
         // SAFETY: ioctl returned success, this is init
