@@ -12,6 +12,7 @@
 //! after the `--`.
 
 use core::{
+    error::Error,
     fmt::{
         self,
         Write as _,
@@ -50,7 +51,7 @@ impl fmt::Display for UnknownShell {
     }
 }
 
-impl core::error::Error for UnknownShell {}
+impl Error for UnknownShell {}
 
 impl FromStr for Shell {
     type Err = UnknownShell;
@@ -136,7 +137,9 @@ impl Shell {
                     out.push('\t');
                     out.push_str(help);
                 },
-                _ => out.push_str(value),
+                Self::Bash | Self::Fish | Self::Nu | Self::Elvish | Self::PowerShell => {
+                    out.push_str(value);
+                },
             }
             out.push('\n');
         }
@@ -181,7 +184,7 @@ fn json_string(text: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             _ if ch.is_control() => {
-                let _ = write!(out, "\\u{:04x}", u32::from(ch));
+                let _write_result = write!(out, "\\u{:04x}", u32::from(ch));
             },
             _ => out.push(ch),
         }

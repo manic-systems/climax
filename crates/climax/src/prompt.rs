@@ -62,8 +62,9 @@ impl SelectPrompt {
 
     #[must_use]
     pub fn option(mut self, label: impl Into<String>) -> Self {
-        let label = label.into();
-        self.items.push(SelectItem::new(label.clone(), label));
+        let label_text = label.into();
+        self.items
+            .push(SelectItem::new(label_text.clone(), label_text));
         self
     }
 
@@ -136,8 +137,9 @@ impl MultiSelectPrompt {
 
     #[must_use]
     pub fn option(mut self, label: impl Into<String>) -> Self {
-        let label = label.into();
-        self.items.push(SelectItem::new(label.clone(), label));
+        let label_text = label.into();
+        self.items
+            .push(SelectItem::new(label_text.clone(), label_text));
         self
     }
 
@@ -203,8 +205,9 @@ impl SearchPrompt {
 
     #[must_use]
     pub fn option(mut self, label: impl Into<String>) -> Self {
-        let label = label.into();
-        self.items.push(SelectItem::new(label.clone(), label));
+        let label_text = label.into();
+        self.items
+            .push(SelectItem::new(label_text.clone(), label_text));
         self
     }
 
@@ -331,8 +334,8 @@ impl TextPrompt {
 /// when input ends first, and [`Error::Interact`] when the terminal session
 /// fails.
 pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Result<Value> {
-    let widget = bang_core::ActionLayer::new(widget).with_actions(actions);
-    bang_screw::run_live_session(widget).map_err(Error::from)
+    let wrapped_widget = bang_core::ActionLayer::new(widget).with_actions(actions);
+    bang_screw::run_live_session(wrapped_widget).map_err(Error::from)
 }
 
 /// Drive a widget with already-decoded events. Useful for tests and examples.
@@ -366,8 +369,14 @@ pub fn replay_events(
 
 fn into_string(value: Value) -> Result<String> {
     match value {
-        Value::String(value) => Ok(value),
-        other => {
+        Value::String(string_value) => Ok(string_value),
+        other @ (Value::Null
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::Date(_)
+        | Value::List(_)
+        | Value::Object(_)
+        | _) => {
             Err(Error::UnexpectedValue {
                 expected: "string",
                 actual:   value_name(&other),

@@ -1,6 +1,5 @@
+use climax::status::message;
+
 fn main() -> climax::Result<()> {
-    climax::status::message("working")
-        .spinner()
-        .final_message("done")
-        .finish()
+    message("working").spinner().final_message("done").finish()
 }

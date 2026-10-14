@@ -3,6 +3,20 @@
 #[cfg(feature = "interactive")] use bang_core::Value;
 
 use crate::Result;
+#[cfg(feature = "interactive")]
+use crate::output::{
+    Format,
+    json,
+    print_value,
+    text,
+    write_value,
+};
+#[cfg(feature = "interactive")] use crate::prompt;
+#[cfg(feature = "render")]
+use crate::status::{
+    Status,
+    message as status_message,
+};
 
 /// # Errors
 ///
@@ -31,7 +45,7 @@ where
 #[derive(Clone, Debug)]
 pub struct Context {
     #[cfg(feature = "interactive")]
-    output_format: crate::output::Format,
+    output_format: Format,
 }
 
 impl Default for Context {
@@ -45,7 +59,7 @@ impl Context {
     pub const fn new() -> Self {
         Self {
             #[cfg(feature = "interactive")]
-            output_format:                                 crate::output::Format::Text,
+            output_format:                                 Format::Text,
         }
     }
 
@@ -57,8 +71,8 @@ impl Context {
 
     #[cfg(feature = "render")]
     #[must_use]
-    pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
-        crate::status::message(message)
+    pub fn status(&self, message: impl Into<String>) -> Status {
+        status_message(message)
     }
 
     #[cfg(feature = "interactive")]
@@ -71,19 +85,19 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn output_format(&self) -> crate::output::Format {
+    pub const fn output_format(&self) -> Format {
         self.output_format
     }
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn with_output_format(mut self, format: crate::output::Format) -> Self {
+    pub const fn with_output_format(mut self, format: Format) -> Self {
         self.output_format = format;
         self
     }
 
     #[cfg(feature = "interactive")]
-    pub const fn set_output_format(&mut self, format: crate::output::Format) {
+    pub const fn set_output_format(&mut self, format: Format) {
         self.output_format = format;
     }
 }
@@ -95,37 +109,37 @@ pub struct PromptContext;
 #[cfg(feature = "interactive")]
 impl PromptContext {
     #[must_use]
-    pub fn select(self, id: impl Into<String>) -> crate::prompt::SelectPrompt {
-        crate::prompt::select(id)
+    pub fn select(self, id: impl Into<String>) -> prompt::SelectPrompt {
+        prompt::select(id)
     }
 
     #[must_use]
-    pub fn multi_select(self, id: impl Into<String>) -> crate::prompt::MultiSelectPrompt {
-        crate::prompt::multi_select(id)
+    pub fn multi_select(self, id: impl Into<String>) -> prompt::MultiSelectPrompt {
+        prompt::multi_select(id)
     }
 
     #[must_use]
-    pub fn search(self, id: impl Into<String>) -> crate::prompt::SearchPrompt {
-        crate::prompt::search(id)
+    pub fn search(self, id: impl Into<String>) -> prompt::SearchPrompt {
+        prompt::search(id)
     }
 
     #[must_use]
-    pub fn text(self, prompt: impl Into<String>) -> crate::prompt::TextPrompt {
-        crate::prompt::text(prompt)
+    pub fn text(self, prompt: impl Into<String>) -> prompt::TextPrompt {
+        prompt::text(prompt)
     }
 }
 
 #[cfg(feature = "interactive")]
 #[derive(Clone, Copy, Debug)]
 pub struct OutputContext {
-    format: crate::output::Format,
+    format: Format,
 }
 
 #[cfg(feature = "interactive")]
 impl Default for OutputContext {
     fn default() -> Self {
         Self {
-            format: crate::output::Format::Text,
+            format: Format::Text,
         }
     }
 }
@@ -133,12 +147,12 @@ impl Default for OutputContext {
 #[cfg(feature = "interactive")]
 impl OutputContext {
     #[must_use]
-    pub const fn format(&self) -> crate::output::Format {
+    pub const fn format(&self) -> Format {
         self.format
     }
 
     #[must_use]
-    pub const fn with_format(mut self, format: crate::output::Format) -> Self {
+    pub const fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self
     }
@@ -147,42 +161,37 @@ impl OutputContext {
     ///
     /// fails with [`crate::Error::Draw`] when writing to `writer` fails.
     pub fn write_value(self, writer: impl Write, value: &Value) -> Result<()> {
-        crate::output::write_value(writer, value, self.format)
+        write_value(writer, value, self.format)
     }
 
     /// # Errors
     ///
     /// fails with [`crate::Error::Draw`] when writing to `writer` fails.
-    pub fn write_value_as(
-        self,
-        writer: impl Write,
-        value: &Value,
-        format: crate::output::Format,
-    ) -> Result<()> {
-        crate::output::write_value(writer, value, format)
+    pub fn write_value_as(self, writer: impl Write, value: &Value, format: Format) -> Result<()> {
+        write_value(writer, value, format)
     }
 
     /// # Errors
     ///
     /// fails with [`crate::Error::Draw`] when writing to stdout fails.
     pub fn print_value(self, value: &Value) -> Result<()> {
-        crate::output::print_value(value, self.format)
+        print_value(value, self.format)
     }
 
     /// # Errors
     ///
     /// fails with [`crate::Error::Draw`] when writing to stdout fails.
-    pub fn print_value_as(self, value: &Value, format: crate::output::Format) -> Result<()> {
-        crate::output::print_value(value, format)
+    pub fn print_value_as(self, value: &Value, format: Format) -> Result<()> {
+        print_value(value, format)
     }
 
     #[must_use]
     pub fn text(self, value: &Value) -> String {
-        crate::output::text(value)
+        text(value)
     }
 
     #[must_use]
     pub fn json(self, value: &Value) -> String {
-        crate::output::json(value)
+        json(value)
     }
 }
