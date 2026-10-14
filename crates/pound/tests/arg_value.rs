@@ -3,8 +3,8 @@
 #![cfg(feature = "derive")]
 
 use pound::{
-    ArgValue,
-    FromArg,
+    ArgValue as _,
+    FromArg as _,
     ValueEnum,
 };
 

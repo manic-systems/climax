@@ -5,8 +5,14 @@
 use alloc::borrow::Cow;
 use core::{
     convert::Infallible,
-    iter::Peekable,
+    iter::{
+        self,
+        Peekable,
+    },
+    mem,
+    ptr,
 };
+#[cfg(feature = "std")] use std::env;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
@@ -57,6 +63,10 @@ pub struct Matches<'a> {
 
 /// the command line an external subcommand took, the way `cargo foo` runs
 /// `cargo-foo`
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "the parse error stays private behind the unknown accessor"
+)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct External {
     /// the name it was called by
@@ -340,8 +350,8 @@ impl<'a> Matches<'a> {
     /// the name and words an external subcommand took, read from its matches
     #[must_use]
     pub fn external(&self) -> External {
-        let (name, args) = self.raws(0).split_first().unwrap_or((&"", &[]));
-        let name = (*name).to_owned();
+        let (raw_name, args) = self.raws(0).split_first().unwrap_or((&"", &[]));
+        let name = (*raw_name).to_owned();
         let unknown = self.unknown.as_ref().map_or_else(
             || {
                 ErrorKind::UnknownSubcommand {
@@ -600,7 +610,7 @@ impl Fallback {
 fn fallback(spec: &CommandSpec, i: usize) -> Option<Fallback> {
     #[cfg(feature = "std")]
     if let Some(var) = spec.args[i].env
-        && let Ok(value) = std::env::var(var)
+        && let Ok(value) = env::var(var)
     {
         return Some(Fallback {
             value: Cow::Owned(value),
@@ -658,8 +668,8 @@ fn env_readable(arg: &ArgSpec) -> Result<(), ErrorKind> {
     let Some(var) = arg.env else {
         return Ok(());
     };
-    match std::env::var(var) {
-        Err(std::env::VarError::NotUnicode(raw)) => {
+    match env::var(var) {
+        Err(env::VarError::NotUnicode(raw)) => {
             Err(ErrorKind::Value {
                 arg:   source_name(arg, Some(var)),
                 value: raw.to_string_lossy().into_owned(),
@@ -682,8 +692,9 @@ pub(crate) fn parse_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
-    let mut args = args.into_iter();
-    let mut it = (&mut args as &mut dyn Iterator<Item = &'a str>).peekable();
+    let mut input = args.into_iter();
+    let iterator: &mut dyn Iterator<Item = &'a str> = &mut input;
+    let mut it = iterator.peekable();
     let mut hits = Vec::new();
     parse_cmd::<Strict>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
 }
@@ -692,8 +703,9 @@ pub(crate) fn update_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<Matches<'a>, Error> {
-    let mut args = args.into_iter();
-    let mut it = (&mut args as &mut dyn Iterator<Item = &'a str>).peekable();
+    let mut input = args.into_iter();
+    let iterator: &mut dyn Iterator<Item = &'a str> = &mut input;
+    let mut it = iterator.peekable();
     let mut hits = Vec::new();
     parse_cmd::<Update>(&Command::root(spec), None, &mut it, &mut hits).map(|(matches, _)| matches)
 }
@@ -704,8 +716,9 @@ pub(crate) fn probe_spec<'a>(
     spec: &CommandSpec,
     args: impl IntoIterator<Item = &'a str>,
 ) -> (Matches<'a>, Next) {
-    let mut args = args.into_iter();
-    let mut it = (&mut args as &mut dyn Iterator<Item = &'a str>).peekable();
+    let mut input = args.into_iter();
+    let iterator: &mut dyn Iterator<Item = &'a str> = &mut input;
+    let mut it = iterator.peekable();
     let mut hits = Vec::new();
     let Ok(walked) = parse_cmd::<Lenient>(&Command::root(spec), None, &mut it, &mut hits);
     walked
@@ -1494,13 +1507,13 @@ fn count_values(arg: &ArgSpec, got: usize, fallback: Option<Fallback>) -> Result
     if got == 0
         && let Some(found) = fallback
     {
-        let got = arg.split(&found.value).count();
+        let fallback_count = arg.split(&found.value).count();
         return match arg.max_values {
-            Some(max) if got > max => {
+            Some(max) if fallback_count > max => {
                 Err(ErrorKind::TooManyValues {
                     arg: source_name(arg, found.env),
                     max,
-                    got,
+                    got: fallback_count,
                 })
             },
             _ => Ok(()),
@@ -1624,7 +1637,7 @@ fn exclusive_alone(spec: &CommandSpec, matches: &Matches) -> Result<bool, ErrorK
     };
     given
         .iter()
-        .find(|arg| !core::ptr::eq(**arg, *exclusive))
+        .find(|arg| !ptr::eq(**arg, *exclusive))
         .map_or(Ok(true), |other| {
             Err(ErrorKind::Exclusive {
                 arg:   exclusive.display_name(),
@@ -1809,7 +1822,7 @@ fn long_names<'s>(cmd: &'s Command<'_>) -> impl Iterator<Item = &'s str> {
 }
 
 fn sub_names(sub: &SubSpec) -> impl Iterator<Item = &str> {
-    core::iter::once(sub.name).chain(sub.aliases.iter().copied())
+    iter::once(sub.name).chain(sub.aliases.iter().copied())
 }
 
 fn closest_long(cmd: &Command<'_>, name: &str) -> Option<String> {
@@ -1840,7 +1853,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
             let substitute = prev[j] + usize::from(ca != cb);
             cur[j + 1] = substitute.min(prev[j + 1] + 1).min(cur[j] + 1);
         }
-        core::mem::swap(&mut prev, &mut cur);
+        mem::swap(&mut prev, &mut cur);
     }
     prev[width]
 }
@@ -1913,11 +1926,11 @@ mod tests {
         assert_eq!(matches.count(2), 2);
         assert!(matches.flag(0));
 
-        let matches = parse(&FLAT, &["-d/x", "name"]).unwrap();
-        assert_eq!(matches.raw(1), Some("/x"));
+        let attached = parse(&FLAT, &["-d/x", "name"]).unwrap();
+        assert_eq!(attached.raw(1), Some("/x"));
 
-        let matches = parse(&FLAT, &["--dir=/y", "name"]).unwrap();
-        assert_eq!(matches.raw(1), Some("/y"));
+        let long_form = parse(&FLAT, &["--dir=/y", "name"]).unwrap();
+        assert_eq!(long_form.raw(1), Some("/y"));
     }
 
     #[test]
@@ -1953,7 +1966,7 @@ mod tests {
             ArgSpec::new(Kind::Positional).value_name("name").required(),
         ];
         let tool = CommandSpec { args: ARGS, ..FLAT };
-        assert!(parse(&tool, &["--list"]).is_ok());
+        parse(&tool, &["--list"]).unwrap();
         assert!(matches!(
             parse(&tool, &["--list", "--force"]),
             Err(ErrorKind::Exclusive { .. })
@@ -1995,12 +2008,12 @@ mod tests {
             Err(ErrorKind::Unknown { closest, .. }) => {
                 assert_eq!(closest.as_deref(), Some("--force"));
             },
-            other => panic!("expected an unknown arg, got {other:?}"),
+            _ => panic!("expected an unknown argument"),
         }
         // too far off to be a typo
         match parse(&FLAT, &["--wibble"]) {
             Err(ErrorKind::Unknown { closest, .. }) => assert_eq!(closest, None),
-            other => panic!("expected an unknown arg, got {other:?}"),
+            _ => panic!("expected an unknown argument"),
         }
     }
 
@@ -2013,17 +2026,17 @@ mod tests {
         assert!(matches!(parse(&FLAT, &["-h"]), Err(ErrorKind::Help(_))));
         match parse(&FLAT, &["--version"]) {
             Err(ErrorKind::Version(version)) => assert_eq!(version, "flat 0.1.0"),
-            other => panic!("expected version, got {other:?}"),
+            _ => panic!("expected version"),
         }
 
         match parse(&HASHED, &["--version"]) {
             Err(ErrorKind::Version(version)) => assert_eq!(version, "flat 0.1.0 (abc123)"),
-            other => panic!("expected version, got {other:?}"),
+            _ => panic!("expected version"),
         }
 
         match parse(&HASH_ONLY, &["-V"]) {
             Err(ErrorKind::Version(version)) => assert_eq!(version, "flat (abc123)"),
-            other => panic!("expected version, got {other:?}"),
+            _ => panic!("expected version"),
         }
     }
 
@@ -2090,9 +2103,12 @@ mod tests {
             Some("info")
         );
         // a user value overrides the default
-        let matches = parse(&SPEC, &["--level", "debug"]).unwrap();
+        let debug_matches = parse(&SPEC, &["--level", "debug"]).unwrap();
         assert_eq!(
-            matches.optional::<String>(&SPEC, 0).unwrap().as_deref(),
+            debug_matches
+                .optional::<String>(&SPEC, 0)
+                .unwrap()
+                .as_deref(),
             Some("debug")
         );
     }
@@ -2179,8 +2195,8 @@ mod tests {
             parse(&OPT, &["--flake", "--fetch"]),
             Err(ErrorKind::Conflict { .. })
         ));
-        assert!(parse(&OPT, &["--flake"]).is_ok());
-        assert!(parse(&OPT, &[]).is_ok()); // not required, zero is fine
+        parse(&OPT, &["--flake"]).unwrap();
+        parse(&OPT, &[]).unwrap(); // not required, zero is fine
         assert!(matches!(
             parse(&REQ, &[]),
             Err(ErrorKind::MissingGroup { .. })
@@ -2196,8 +2212,8 @@ mod tests {
             .max_values(2)];
         const SPEC: CommandSpec = CommandSpec::new("c").args(ARGS);
 
-        assert!(parse(&SPEC, &["a"]).is_ok());
-        assert!(parse(&SPEC, &["a", "b"]).is_ok());
+        parse(&SPEC, &["a"]).unwrap();
+        parse(&SPEC, &["a", "b"]).unwrap();
         assert!(matches!(
             parse(&SPEC, &[]),
             Err(ErrorKind::TooFewValues { .. })
@@ -2216,9 +2232,9 @@ mod tests {
         ];
         const SPEC: CommandSpec = CommandSpec::new("r").args(ARGS).requires(&[(0, 1)]);
 
-        assert!(parse(&SPEC, &[]).is_ok());
-        assert!(parse(&SPEC, &["--format", "json"]).is_ok());
-        assert!(parse(&SPEC, &["--output", "f", "--format", "json"]).is_ok());
+        parse(&SPEC, &[]).unwrap();
+        parse(&SPEC, &["--format", "json"]).unwrap();
+        parse(&SPEC, &["--output", "f", "--format", "json"]).unwrap();
         assert!(matches!(
             parse(&SPEC, &["--output", "f"]),
             Err(ErrorKind::Requires { .. })
@@ -2251,7 +2267,7 @@ mod tests {
             sub_optional:   false,
             help_if_empty:  false,
         };
-        assert!(parse(&SPEC, &["--a"]).is_ok());
+        parse(&SPEC, &["--a"]).unwrap();
         assert!(matches!(
             parse(&SPEC, &["--a", "--b"]),
             Err(ErrorKind::Conflict { .. })
@@ -2358,9 +2374,10 @@ mod tests {
         assert_eq!(sub.raw(0), Some("serde"));
 
         // an unfilled required positional still wins the token
-        let matches = parse(&MIXED, &["p1", "add", "add", "serde", "https://x"]).unwrap();
-        assert_eq!(matches.raw(1), Some("add"));
-        assert!(matches.sub().is_some());
+        let filled_positionals =
+            parse(&MIXED, &["p1", "add", "add", "serde", "https://x"]).unwrap();
+        assert_eq!(filled_positionals.raw(1), Some("add"));
+        assert!(filled_positionals.sub().is_some());
 
         assert!(matches!(
             parse(&MIXED, &["p1", "a1", "nope"]),
@@ -2406,7 +2423,13 @@ mod tests {
         let text = help.to_string();
         assert!(text.contains(expected_add_usage()), "{text}");
 
-        let err = parse_spec(&ROOT, argv(&["--nope"])).unwrap_err();
-        assert!(err.usage.unwrap().to_string().starts_with("Usage: prog"));
+        let unknown_err = parse_spec(&ROOT, argv(&["--nope"])).unwrap_err();
+        assert!(
+            unknown_err
+                .usage
+                .unwrap()
+                .to_string()
+                .starts_with("Usage: prog")
+        );
     }
 }

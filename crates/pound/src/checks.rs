@@ -32,18 +32,18 @@ pub const fn default_allowed(
     let Some(values) = possible else {
         return true;
     };
-    let Some(delimiter) = delimiter else {
+    let Some(delimiter_char) = delimiter else {
         return answered(default, values);
     };
     let mut buf = [0; 4];
-    let delimiter = delimiter.encode_utf8(&mut buf).as_bytes();
+    let delimiter_bytes = delimiter_char.encode_utf8(&mut buf).as_bytes();
     let mut rest = default;
-    while let Some(at) = find(rest.as_bytes(), delimiter) {
+    while let Some(at) = find(rest.as_bytes(), delimiter_bytes) {
         let (value, tail) = rest.split_at(at);
         if !answered(value, values) {
             return false;
         }
-        rest = tail.split_at(delimiter.len()).1;
+        rest = tail.split_at(delimiter_bytes.len()).1;
     }
     answered(rest, values)
 }

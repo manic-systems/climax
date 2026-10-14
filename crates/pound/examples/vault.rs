@@ -9,7 +9,7 @@
 
 #![allow(dead_code, reason = "the demo just parses argv and prints the result")]
 
-use std::time::Duration;
+use core::time::Duration;
 
 use pound::{
     FromArg,
@@ -29,9 +29,9 @@ impl FromArg for Ttl {
             .find(|ch: char| !ch.is_ascii_digit())
             .unwrap_or(raw.len());
         let (num, unit) = raw.split_at(split);
-        let n: u64 = num
-            .parse()
-            .map_err(|_| ValueError::new(raw, "expected <number><s|m|h|d>"))?;
+        let n: u64 = num.parse().map_err(|parse_error| {
+            ValueError::new(raw, format!("expected <number><s|m|h|d> {parse_error}"))
+        })?;
         let secs = match unit {
             "" | "s" => n,
             "m" => n * 60,
@@ -250,6 +250,11 @@ struct Cli {
     cmd: Cmd,
 }
 
+#[expect(
+    clippy::print_stderr,
+    clippy::use_debug,
+    reason = "the example reports its parsed command for demonstration"
+)]
 fn main() {
     let cli = Cli::parse();
     if cli.verbose > 1 {

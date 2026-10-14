@@ -2,7 +2,10 @@
 
 //! the parse error type and early-exit signals
 
-use core::fmt;
+use core::{
+    error::Error as StdError,
+    fmt,
+};
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
@@ -124,7 +127,22 @@ impl ErrorKind {
             Self::Unknown { closest, .. } | Self::UnknownSubcommand { closest, .. } => {
                 closest.as_deref()
             },
-            _ => None,
+            Self::MissingValue(_)
+            | Self::MissingRequired(_)
+            | Self::UnexpectedPositional(_)
+            | Self::InvalidUtf8(_)
+            | Self::UnexpectedValue(_)
+            | Self::MissingSubcommand { .. }
+            | Self::Value { .. }
+            | Self::Conflict { .. }
+            | Self::Exclusive { .. }
+            | Self::Requires { .. }
+            | Self::TooFewValues { .. }
+            | Self::TooManyValues { .. }
+            | Self::MissingGroup { .. }
+            | Self::Help(_)
+            | Self::NoArguments(_)
+            | Self::Version(_) => None,
         }
     }
 }
@@ -202,8 +220,8 @@ impl Error {
         usage: impl FnOnce() -> (Usage, Option<&'static str>),
     ) -> Self {
         if self.usage.is_none() && !self.is_exit() {
-            let (usage, help_flag) = usage();
-            self.usage = Some(usage);
+            let (usage_line, help_flag) = usage();
+            self.usage = Some(usage_line);
             self.help_flag = help_flag;
         }
         self
@@ -216,7 +234,21 @@ impl Error {
         match &self.kind {
             ErrorKind::Help(help) | ErrorKind::NoArguments(help) => return help.render(term),
             ErrorKind::Version(text) => return text.clone(),
-            _ => {},
+            ErrorKind::Unknown { .. }
+            | ErrorKind::UnknownSubcommand { .. }
+            | ErrorKind::MissingValue(_)
+            | ErrorKind::MissingRequired(_)
+            | ErrorKind::UnexpectedPositional(_)
+            | ErrorKind::InvalidUtf8(_)
+            | ErrorKind::UnexpectedValue(_)
+            | ErrorKind::MissingSubcommand { .. }
+            | ErrorKind::Value { .. }
+            | ErrorKind::Conflict { .. }
+            | ErrorKind::Exclusive { .. }
+            | ErrorKind::Requires { .. }
+            | ErrorKind::TooFewValues { .. }
+            | ErrorKind::TooManyValues { .. }
+            | ErrorKind::MissingGroup { .. } => {},
         }
 
         let mut out = String::new();
@@ -251,20 +283,26 @@ impl Error {
     /// print and exit
     #[cfg(feature = "std")]
     pub fn exit(self) -> ! {
-        use std::io::Write as _;
+        use std::{
+            io::{
+                self,
+                Write as _,
+            },
+            process,
+        };
 
         let code = if self.is_exit() {
-            match writeln!(std::io::stdout(), "{}", self.render(Term::stdout())) {
+            match writeln!(io::stdout(), "{}", self.render(Term::stdout())) {
                 Ok(()) => 0,
                 // 128 + SIGPIPE, what a shell reports for a killed writer
-                Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => 141,
+                Err(err) if err.kind() == io::ErrorKind::BrokenPipe => 141,
                 Err(_) => 1,
             }
         } else {
-            let _ = writeln!(std::io::stderr(), "{}", self.render(Term::stderr()));
+            let _reason = writeln!(io::stderr(), "{}", self.render(Term::stderr()));
             2
         };
-        std::process::exit(code);
+        process::exit(code);
     }
 }
 
@@ -284,4 +322,4 @@ impl fmt::Display for Error {
     }
 }
 
-impl core::error::Error for Error {}
+impl StdError for Error {}

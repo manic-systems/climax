@@ -7,7 +7,6 @@ use pound::Parse;
 /// fetch urls to disk
 #[derive(Parse, Debug)]
 #[pound(name = "grab", version = "0.1.0")]
-#[allow(dead_code, reason = "demo just prints the parsed struct")]
 struct Grab {
     /// urls to fetch
     url:     Vec<String>,
@@ -32,7 +31,7 @@ struct Grab {
     jobs:    u32,
 }
 
-#[allow(
+#[expect(
     clippy::missing_const_for_fn,
     clippy::trivially_copy_pass_by_ref,
     reason = "validator hooks receive the parsed field by reference"
@@ -45,6 +44,11 @@ fn power_of_two(value: &u32) -> Result<(), &'static str> {
     }
 }
 
+#[expect(
+    clippy::print_stdout,
+    clippy::use_debug,
+    reason = "the example displays the parsed command"
+)]
 fn main() {
     let grab = Grab::parse();
     println!("{grab:?}");

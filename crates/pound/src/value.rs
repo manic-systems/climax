@@ -8,7 +8,30 @@
 //! you hand-write [`FromArg`] for anything exotic (hex colours, durations)
 //! without a coherence fight.
 
-use core::fmt;
+use core::{
+    fmt,
+    net::{
+        IpAddr,
+        Ipv4Addr,
+        Ipv6Addr,
+        SocketAddr,
+    },
+    num::{
+        NonZeroI8,
+        NonZeroI16,
+        NonZeroI32,
+        NonZeroI64,
+        NonZeroI128,
+        NonZeroIsize,
+        NonZeroU8,
+        NonZeroU16,
+        NonZeroU32,
+        NonZeroU64,
+        NonZeroU128,
+        NonZeroUsize,
+    },
+};
+#[cfg(feature = "std")] use std::path::PathBuf;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::spec::Hint;
@@ -271,20 +294,20 @@ from_str! {
     i8, i16, i32, i64, i128, isize,
     u8, u16, u32, u64, u128, usize,
     f32, f64,
-    core::num::NonZeroI8, core::num::NonZeroI16, core::num::NonZeroI32,
-    core::num::NonZeroI64, core::num::NonZeroI128, core::num::NonZeroIsize,
-    core::num::NonZeroU8, core::num::NonZeroU16, core::num::NonZeroU32,
-    core::num::NonZeroU64, core::num::NonZeroU128, core::num::NonZeroUsize,
-    core::net::IpAddr,
-    core::net::Ipv4Addr,
-    core::net::Ipv6Addr,
-    core::net::SocketAddr,
+    NonZeroI8, NonZeroI16, NonZeroI32,
+    NonZeroI64, NonZeroI128, NonZeroIsize,
+    NonZeroU8, NonZeroU16, NonZeroU32,
+    NonZeroU64, NonZeroU128, NonZeroUsize,
+    IpAddr,
+    Ipv4Addr,
+    Ipv6Addr,
+    SocketAddr,
 }
 
 // `PathBuf` lives in `std` (it wraps `OsString`), so its value impl is the one
 // scalar that cannot ride along in a `no_std` build.
 #[cfg(feature = "std")]
-impl FromArg for std::path::PathBuf {
+impl FromArg for PathBuf {
     const HINT: Hint = Hint::Path;
 
     fn from_arg(raw: &str) -> Result<Self, ValueError> {

@@ -2,8 +2,11 @@
 
 //! help and version rendering.
 
-use core::fmt;
 #[cfg(feature = "help")] use core::fmt::Write as _;
+use core::{
+    fmt,
+    iter,
+};
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 #[cfg(feature = "help")]
@@ -35,7 +38,7 @@ pub struct Help {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
     not(feature = "help"),
-    allow(dead_code, reason = "a usage line is all it renders")
+    expect(dead_code, reason = "a usage line is all it renders")
 )]
 enum Block {
     Text(String),
@@ -77,7 +80,10 @@ impl Help {
                     Block::Section {
                         rows, own: false, ..
                     } => Some(rows),
-                    _ => None,
+                    Block::Text(_)
+                    | Block::Closing(_)
+                    | Block::Usage(_)
+                    | Block::Section { .. } => None,
                 }
             })
             .flatten()
@@ -201,7 +207,7 @@ fn push_wrapped(out: &mut String, text: &str, indent: usize, width: Option<usize
 }
 
 fn pad(out: &mut String, columns: usize) {
-    out.extend(core::iter::repeat_n(' ', columns));
+    out.extend(iter::repeat_n(' ', columns));
 }
 
 /// a command's usage line, `Usage: grab [OPTION]... URL`
@@ -256,9 +262,9 @@ pub(crate) fn version_line(spec: &CommandSpec, long: bool) -> String {
     } else {
         spec.version
     };
-    let (first, more) = text
+    let (first, tail) = text
         .split_once('\n')
-        .map_or((text, None), |(head, tail)| (head, Some(tail)));
+        .map_or((text, None), |(head, remainder)| (head, Some(remainder)));
 
     let mut out = spec.name.to_owned();
     if !first.is_empty() {
@@ -270,9 +276,9 @@ pub(crate) fn version_line(spec: &CommandSpec, long: bool) -> String {
         out.push_str(hash);
         out.push(')');
     }
-    if long && let Some(more) = more {
+    if long && let Some(extra) = tail {
         out.push('\n');
-        out.push_str(more);
+        out.push_str(extra);
     }
     out
 }
@@ -407,9 +413,9 @@ fn help_text(arg: &ArgSpec, long: bool) -> String {
         }
         rendered.push_str("Possible values:");
         for choice in choices {
-            let _ = write!(rendered, "\n- {}", choice.name);
+            let _reason = write!(rendered, "\n- {}", choice.name);
             if !choice.help.is_empty() {
-                let _ = write!(rendered, ": {}", choice.help);
+                let _description_result = write!(rendered, ": {}", choice.help);
             }
         }
     }
@@ -421,7 +427,7 @@ fn push_tag(out: &mut String, tag: fmt::Arguments<'_>) {
     if !out.is_empty() {
         out.push(' ');
     }
-    let _ = write!(out, "[{tag}]");
+    let _reason = write!(out, "[{tag}]");
 }
 
 #[cfg(feature = "help")]
