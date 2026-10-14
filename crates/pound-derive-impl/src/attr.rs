@@ -107,6 +107,9 @@ pub(crate) struct Pound {
     pub global:          bool,
     pub hyphen_values:   bool,
     pub group:           Option<String>,
+    /// `group` and `required_group` names written bare, linked so rename and
+    /// go-to-definition reach every mention
+    pub group_refs:      Vec<Ident>,
     pub default:         Option<Text>,
     /// value an option takes when written with no `=value`
     pub default_missing: Option<String>,
@@ -211,7 +214,10 @@ impl Pound {
             "hide_env"        => self.hide_env        = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
             "allow_hyphen_values" => self.hyphen_values = bare(key, span, value.is_some())?,
-            "group"           => self.group           = Some(needed(key, span, value)?),
+            "group"           => {
+                self.group = Some(needed(key, span, value)?);
+                self.group_refs.extend(bare_ident(seg));
+            },
             "default"         => self.default         = Some(text(key, span, seg)?),
             "default_missing" => self.default_missing = Some(needed(key, span, value)?),
             "env"             => self.env             = Some(needed(key, span, value)?),
@@ -234,12 +240,15 @@ impl Pound {
             "validate"        => self.validate        = Some(callable(key, span, seg)?),
             "complete"        => self.complete        = Some(callable(key, span, seg)?),
             "hint"            => self.hint            = Some(ValueHint::new(&needed(key, span, value)?, seg.get(2).map_or(span, TokenTree::span))?),
-            "required_group"  => self.required_groups.push(needed(key, span, value)?),
+            "required_group"  => {
+                self.required_groups.push(needed(key, span, value)?);
+                self.group_refs.extend(bare_ident(seg));
+            },
             "conflicts_with"  => self.conflicts_with.extend(field_refs(key, span, seg)?),
             "requires"        => self.requires.extend(field_refs(key, span, seg)?),
-            "alias"           => self.aliases.extend(csv(&needed(key, span, value)?)),
+            "alias"           => self.aliases.extend(names(key, span, seg)?),
             "short_alias"     => {
-                for short in csv(&needed(key, span, value)?) {
+                for short in names(key, span, seg)? {
                     self.short_aliases.push(single_char(key, &short, span)?);
                 }
             },
@@ -749,6 +758,54 @@ fn field_ref(key: &str, tokens: &[TokenTree]) -> Result<Vec<Ident>, Error> {
             ))
         },
     }
+}
+
+fn bare_ident(seg: &[TokenTree]) -> Option<Ident> {
+    match seg {
+        [_, TokenTree::Punct(punct), TokenTree::Ident(ident)] if punct.as_char() == '=' => {
+            Some(ident.clone())
+        },
+        _ => None,
+    }
+}
+
+/// one quoted name, or several as `["a", "b"]`
+fn names(key: &str, span: Span, seg: &[TokenTree]) -> Result<Vec<String>, Error> {
+    let Some(value) = expr(seg) else {
+        return Err(Error::new_at_span(
+            span,
+            format!("pound: `{key}` needs a value"),
+        ));
+    };
+
+    let items = match value.as_slice() {
+        [TokenTree::Group(group)] if group.delimiter() == Delimiter::Bracket => {
+            group
+                .stream()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .split(|tok| matches!(tok, TokenTree::Punct(punct) if punct.as_char() == ','))
+                .filter(|item| !item.is_empty())
+                .map(<[TokenTree]>::to_vec)
+                .collect()
+        },
+        _ => vec![value],
+    };
+
+    items
+        .iter()
+        .map(|item| {
+            match item.as_slice() {
+                [lit] if !unquote(lit).contains(',') => Ok(unquote(lit)),
+                _ => {
+                    Err(Error::new_at_span(
+                        item.first().map_or(span, TokenTree::span),
+                        format!("pound: `{key}` takes one name, or a list as `[\"a\", \"b\"]`"),
+                    ))
+                },
+            }
+        })
+        .collect()
 }
 
 fn csv(list: &str) -> impl Iterator<Item = String> + '_ {

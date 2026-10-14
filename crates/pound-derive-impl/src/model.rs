@@ -5,6 +5,7 @@
 
 use core::{
     iter::once,
+    mem::take,
     str::FromStr as _,
 };
 use std::collections::HashMap;
@@ -115,12 +116,13 @@ impl Derive {
         match item {
             Item::Struct(shape) => {
                 let fields = CommandFields::new(&shape.fields, &shape.name)?;
-                let header = Header::new(&shape.attributes)?;
+                let mut header = Header::new(&shape.attributes)?;
                 let command = Command::new(
                     &shape.name,
                     shape.name.to_string(),
                     fields,
                     &header.required_groups,
+                    take(&mut header.group_refs),
                 )?;
 
                 Ok(Self::Struct {
@@ -197,6 +199,8 @@ pub struct Header {
     /// groups that need exactly one member set, which only a struct's command
     /// reads
     pub required_groups: Vec<String>,
+    /// moved into the command, which links them
+    pub group_refs:      Vec<Ident>,
     pub help_if_empty:   bool,
 }
 
@@ -211,6 +215,7 @@ impl Header {
             long_version:    item.long_version,
             prose:           Prose::new(attributes, item.before_help, item.after_help),
             required_groups: item.required_groups,
+            group_refs:      item.group_refs,
             help_if_empty:   item.help_if_empty,
         })
     }
@@ -281,6 +286,7 @@ impl Variant {
             format!("{owner}::{ident}"),
             fields,
             &vattr.required_groups,
+            vattr.group_refs,
         )?;
 
         Ok(Self {
@@ -346,13 +352,15 @@ impl Variant {
 /// groups and cross-references were checked
 pub struct Command {
     /// `Name` or `Name::Variant`, for the messages of the const asserts
-    pub owner:     String,
-    pub fields:    CommandFields,
-    pub groups:    Vec<Group>,
+    pub owner:         String,
+    pub fields:        CommandFields,
+    pub groups:        Vec<Group>,
+    /// bare `required_group` names, the args holding their own `group` ones
+    pub required_refs: Vec<Ident>,
     /// pairs of arg indices that cannot be set together, smaller index first
-    pub conflicts: Vec<(usize, usize)>,
+    pub conflicts:     Vec<(usize, usize)>,
     /// pairs where setting the first arg obliges the second
-    pub requires:  Vec<(usize, usize)>,
+    pub requires:      Vec<(usize, usize)>,
 }
 
 pub struct Group {
@@ -369,6 +377,7 @@ impl Command {
         owner: String,
         fields: CommandFields,
         required_groups: &[String],
+        required_refs: Vec<Ident>,
     ) -> Result<Self, Error> {
         let args = &fields.args;
 
@@ -479,6 +488,7 @@ impl Command {
             owner,
             fields,
             groups,
+            required_refs,
             conflicts,
             requires,
         })
@@ -998,6 +1008,7 @@ pub struct Arg {
     pub delimiter:       Option<char>,
     pub num_args:        Option<NumArgs>,
     pub group:           Option<String>,
+    pub group_refs:      Vec<Ident>,
     pub default:         Option<Text>,
     pub default_missing: Option<String>,
     pub env:             Option<String>,
@@ -1086,6 +1097,7 @@ impl Arg {
             delimiter: attr.delimiter,
             num_args: attr.num_args,
             group: attr.group,
+            group_refs: attr.group_refs,
             default: attr.default,
             default_missing: attr.default_missing,
             env: attr.env,

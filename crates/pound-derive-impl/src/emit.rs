@@ -545,6 +545,8 @@ impl Emitter {
 
         let unique_message = format!("pound: two args of `{owner}` answer to the same spelling");
 
+        let group_links = group_links(command);
+
         let group_asserts = command
             .groups
             .iter()
@@ -609,6 +611,7 @@ impl Emitter {
                 #sub_optional_call;
             const _: () = ::core::assert!(#root::checks::names_unique(&#cmd_id), #unique_message);
             #(#group_asserts)*
+            #group_links
             #selector_assert
             #exclusive_assert
             const _: () = ::core::assert!(
@@ -1152,6 +1155,34 @@ fn named_fields(command: &Command) -> impl Iterator<Item = &Ident> {
         .args
         .iter()
         .flat_map(|arg| arg.requires.iter().chain(&arg.conflicts_with))
+}
+
+// each bare group name declared once under its first mention's span and read
+// under the others', so rename and go-to-definition reach every mention
+fn group_links(command: &Command) -> TokenStream {
+    let mentions = command
+        .required_refs
+        .iter()
+        .chain(command.fields.args.iter().flat_map(|arg| &arg.group_refs))
+        .collect::<Vec<_>>();
+
+    let links = mentions.iter().enumerate().filter_map(|(at, first)| {
+        if mentions[..at].iter().any(|earlier| earlier == first) {
+            return None;
+        }
+
+        let rest = mentions[at + 1..].iter().filter(|later| *later == first);
+
+        Some(quote! {
+            const _: () = {
+                #[allow(non_camel_case_types, dead_code)]
+                struct #first;
+                #(let _ = #rest;)*
+            };
+        })
+    });
+
+    quote! { #(#links)* }
 }
 
 // a variant's field rebound under a name the user's own closures can't see or
