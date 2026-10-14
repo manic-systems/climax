@@ -231,6 +231,8 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// - a string literal, `default = "auto"`
 /// - a bare word, `default = auto`
+/// - a `ValueEnum` variant, `default = Format::Json`, which rust-analyzer
+///   completes and rustc checks against the field's type
 /// - a braced expression of type `&str`, `default = { SYSTEM_PROFILE }`, for a
 ///   constant that is also used elsewhere
 ///
@@ -280,15 +282,15 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// |-------------------------|---------------------------------------------------------------------------------|
 /// | `parse = F`             | read the raw `&str` with `F` in place of `FromArg`. it returns `Result<T, E>` for any `E: Display` |
 /// | `validate = F`          | check the parsed value with `F`. it takes `&T` and returns `Result<(), E>`      |
-/// | `min = "n"`             | the parsed value must be at least `n`                                           |
-/// | `max = "n"`             | the parsed value must be at most `n`                                            |
-/// | `max_len = "n"`         | the raw text may have at most `n` characters                                    |
-/// | `min_values = "n"`      | a `Vec` must receive at least `n` values, waived when a `default` or `env` fills it |
-/// | `max_values = "n"`      | a `Vec` may receive at most `n` values                                          |
+/// | `min = n`               | the parsed value must be at least `n`, quoted or not, as `min = -1`             |
+/// | `max = n`               | the parsed value must be at most `n`                                            |
+/// | `max_len = n`           | the raw text may have at most `n` characters                                    |
+/// | `min_values = n`        | a `Vec` must receive at least `n` values, waived when a `default` or `env` fills it |
+/// | `max_values = n`        | a `Vec` may receive at most `n` values                                          |
 /// | `delimiter = ','`       | a `Vec` splits each value at `,`, so `--features a,b` gives two. `env` and `default` split too |
-/// | `num_args = 2`          | one use of a `Vec` option takes 2 words, `--move a b`. `"1.."` takes words up to the next option, `"1..=3"` at most 3. not with `delimiter` |
+/// | `num_args = 2`          | one use of a `Vec` option takes 2 words, `--move a b`. `1..` takes words up to the next option, `1..=3` at most 3. not with `delimiter` |
 /// | `complete = F`          | list shell completion candidates with `F`, a `pound::complete::Completer`       |
-/// | `hint = path`           | complete the value as a file path, when its type does not say so itself         |
+/// | `hint = Path`           | complete the value as a file path, when its type does not say so itself. any `Hint` variant |
 ///
 /// `parse` and `validate` take a path or any callable expression, such as a
 /// closure or `str::parse::<NonZeroUsize>`. a string literal names a path.
@@ -312,13 +314,13 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///     jobs:     NonZeroUsize,
 ///     #[pound(long, parse = hex, validate = |n: &u32| if *n > 0 { Ok(()) } else { Err("zero") })]
 ///     mask:     u32,
-///     #[pound(long, min = "1", max = "10")]
+///     #[pound(long, min = 1, max = 10)]
 ///     level:    u8,
-///     #[pound(long, max_len = "8")]
+///     #[pound(long, max_len = 8)]
 ///     tag:      Option<String>,
 ///     #[pound(long, delimiter = ',')]
 ///     features: Vec<String>,
-///     #[pound(positional, min_values = "1", max_values = "3")]
+///     #[pound(positional, min_values = 1, max_values = 3)]
 ///     paths:    Vec<String>,
 /// }
 ///

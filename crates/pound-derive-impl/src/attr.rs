@@ -26,6 +26,9 @@ use venial::{
 pub enum Text {
     Lit(String),
     Expr(Vec<TokenTree>),
+    /// a value enum variant written as a path, `Format::Json`, read back
+    /// through the label its derive gives it
+    Value(Vec<TokenTree>),
 }
 
 impl Text {
@@ -33,6 +36,10 @@ impl Text {
         match self {
             Self::Lit(text) => quote! { #text },
             Self::Expr(tokens) => tokens.iter().cloned().collect(),
+            Self::Value(path) => {
+                let path = path.iter().cloned().collect::<TokenStream>();
+                quote! { #path.__pound_label() }
+            },
         }
     }
 }
@@ -197,7 +204,7 @@ impl Pound {
             "parse"           => self.parse           = Some(callable(key, span, seg)?),
             "validate"        => self.validate        = Some(callable(key, span, seg)?),
             "complete"        => self.complete        = Some(callable(key, span, seg)?),
-            "hint"            => self.hint            = Some(ValueHint::new(&needed(key, span, value)?, span)?),
+            "hint"            => self.hint            = Some(ValueHint::new(&needed(key, span, value)?, seg.get(2).map_or(span, TokenTree::span))?),
             "required_group"  => self.required_groups.push(needed(key, span, value)?),
             "conflicts_with"  => self.conflicts_with.extend(field_refs(key, span, seg)?),
             "requires"        => self.requires.extend(field_refs(key, span, seg)?),
@@ -370,6 +377,11 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
             [_] => None,
             [_, TokenTree::Punct(p), value] if p.as_char() == '=' => Some(unquote(value)),
             _ if EXPR_KEYS.contains(&key.as_str()) && expr(&seg).is_some() => None,
+            [_, TokenTree::Punct(p), rest @ ..]
+                if p.as_char() == '=' && SPLICED_KEYS.contains(&key.as_str()) =>
+            {
+                Some(rest.iter().map(unquote).collect())
+            },
             _ => {
                 return Err(Error::new_at_span(
                     ident.span(),
@@ -388,6 +400,10 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
     Ok(())
 }
 
+/// keys whose value may span tokens, `min = -1` or `num_args = 1..=3`, read as
+/// the text they spell
+const SPLICED_KEYS: &[&str] = &["min", "max", "num_args"];
+
 /// keys whose value is read as tokens rather than as a single literal
 const EXPR_KEYS: &[&str] = &[
     "version",
@@ -404,6 +420,16 @@ const EXPR_KEYS: &[&str] = &[
 fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
     let tokens = expr(seg)
         .ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))?;
+
+    let is_path = tokens.len() > 1
+        && tokens.iter().all(|tok| {
+            matches!(tok, TokenTree::Ident(_))
+                || matches!(tok, TokenTree::Punct(p) if p.as_char() == ':')
+        });
+
+    if is_path {
+        return Ok(Text::Value(tokens));
+    }
 
     let [tok] = tokens.as_slice() else {
         return Err(Error::new_at_span(span, braces_hint(key)));
@@ -450,7 +476,10 @@ fn is_constant_name(word: &str) -> bool {
 }
 
 fn braces_hint(key: &str) -> String {
-    format!("pound: `{key}` takes a literal, a bare word or a braced expression like `{{ CONST }}`")
+    format!(
+        "pound: `{key}` takes a literal, a bare word, a value enum variant like `Format::Json` or \
+         a braced expression like `{{ CONST }}`"
+    )
 }
 
 /// a string literal names a path, anything else is already the callable
@@ -502,16 +531,27 @@ fn bare(key: &str, span: Span, has_value: bool) -> Result<bool, Error> {
 }
 
 /// a `hint`, what a value names for shell completion
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ValueHint {
     Path,
+    /// a `pound::Hint` variant named as written, which rustc and
+    /// rust-analyzer resolve
+    Variant(Ident),
 }
 
 impl ValueHint {
     fn new(word: &str, span: Span) -> Result<Self, Error> {
         match word {
             "path" => Ok(Self::Path),
-            _ => Err(Error::new_at_span(span, "pound: `hint` takes `path`")),
+            _ if word.starts_with(|c: char| c.is_ascii_uppercase()) => {
+                Ok(Self::Variant(Ident::new(word, span)))
+            },
+            _ => {
+                Err(Error::new_at_span(
+                    span,
+                    "pound: `hint` takes `path` or a `pound::Hint` variant",
+                ))
+            },
         }
     }
 }

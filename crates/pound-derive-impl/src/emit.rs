@@ -434,13 +434,20 @@ impl Emitter {
                 }
             }
 
+            impl #name {
+                #[doc(hidden)]
+                pub const fn __pound_label(&self) -> &'static str {
+                    match *self {
+                        #(#spellings)*
+                    }
+                }
+            }
+
             impl #root::ArgValue for #name {
                 const ALL: &'static [Self] = &[ #(#variants),* ];
 
                 fn as_str(&self) -> &'static str {
-                    match *self {
-                        #(#spellings)*
-                    }
+                    self.__pound_label()
                 }
             }
         }
@@ -683,6 +690,11 @@ impl Emitter {
         let root = &self.root;
         let default = arg.default.as_ref()?;
 
+        if let Text::Value(path) = default {
+            let (inner, path) = (&arg.ty.inner, path.iter().cloned().collect::<TokenStream>());
+            return Some(quote! { const _: #inner = #path; });
+        }
+
         if !arg
             .conversion
             .as_ref()
@@ -701,7 +713,7 @@ impl Emitter {
                     arg.ident
                 )
             },
-            Text::Expr(_) => {
+            Text::Expr(_) | Text::Value(_) => {
                 format!(
                     "pound: the default is not one of the possible values for `{}`",
                     arg.ident
@@ -808,9 +820,10 @@ impl Emitter {
             e = quote! { #e.complete(#complete) };
         }
 
-        if let Some(hint) = arg.hint {
+        if let Some(hint) = &arg.hint {
             let hint = match hint {
                 ValueHint::Path => quote! { #root::Hint::Path },
+                ValueHint::Variant(variant) => quote! { #root::Hint::#variant },
             };
             e = quote! { #e.hint(#hint) };
         }
