@@ -339,10 +339,7 @@ impl Mdoc {
                     _ => {},
                 }
 
-                let shown = match margin {
-                    Some(width) => line[width..].trim_end(),
-                    None => line.trim(),
-                };
+                let shown = margin.map_or_else(|| line.trim(), |width| line[width..].trim_end());
                 if shown.starts_with(['.', '\'']) {
                     self.out.push_str("\\&");
                 }

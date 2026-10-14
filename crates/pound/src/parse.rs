@@ -327,16 +327,16 @@ impl<'a> Matches<'a> {
     pub fn external(&self) -> External {
         let (name, args) = self.raws(0).split_first().unwrap_or((&"", &[]));
         let name = (*name).to_owned();
-        let unknown = match &self.unknown {
-            Some(err) => (**err).clone(),
-            None => {
+        let unknown = self.unknown.as_ref().map_or_else(
+            || {
                 ErrorKind::UnknownSubcommand {
                     name:    name.clone(),
                     closest: None,
                 }
                 .into()
             },
-        };
+            |err| (**err).clone(),
+        );
         External {
             name,
             args: args.iter().map(|&s| s.to_owned()).collect(),
@@ -596,10 +596,10 @@ fn env_readable(a: &ArgSpec) -> Result<(), ErrorKind> {
 }
 
 fn source_name(a: &ArgSpec, env: Option<&str>) -> String {
-    match env {
-        Some(var) => format!("{} (from ${var})", a.display_name()),
-        None => a.display_name(),
-    }
+    env.map_or_else(
+        || a.display_name(),
+        |var| format!("{} (from ${var})", a.display_name()),
+    )
 }
 
 /// entrypoint. parse `args[1..]` against `spec`
@@ -1527,15 +1527,15 @@ fn exclusive_alone(spec: &CommandSpec, m: &Matches) -> Result<bool, ErrorKind> {
     let Some(exclusive) = given.iter().find(|a| a.exclusive) else {
         return Ok(false);
     };
-    match given.iter().find(|a| !core::ptr::eq(**a, *exclusive)) {
-        Some(other) => {
+    given
+        .iter()
+        .find(|a| !core::ptr::eq(**a, *exclusive))
+        .map_or(Ok(true), |other| {
             Err(ErrorKind::Exclusive {
                 arg:   exclusive.display_name(),
                 other: other.display_name(),
             })
-        },
-        None => Ok(true),
-    }
+        })
 }
 
 /// whether a subcommand was chosen here or inside a flattened struct
