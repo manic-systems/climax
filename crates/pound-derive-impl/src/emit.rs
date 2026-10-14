@@ -335,8 +335,15 @@ impl Emitter {
             .iter()
             .map(|arg| &arg.ident)
             .chain(fields.flattened.iter().map(|flat| &flat.ident))
-            .chain(fields.sub.iter().map(|sub| &sub.ident));
-        let updates = self.updates(command, sm, &sp, |field| quote! { *#field });
+            .chain(fields.sub.iter().map(|sub| &sub.ident))
+            .map(|field| {
+                let bound = bound(field);
+                quote! { #field: #bound }
+            });
+        let updates = self.updates(command, sm, &sp, |field| {
+            let bound = bound(field);
+            quote! { *#bound }
+        });
 
         quote! {
             (#idx, Self::#vname { #(#bindings,)* .. }) => {
@@ -1082,6 +1089,13 @@ fn index_pairs(pairs: &[(usize, usize)]) -> TokenStream {
 // pattern or an item reference, so generated names also carry a prefix.
 fn local(name: &str) -> Ident {
     Ident::new(&format!("__pound_{name}"), Span::mixed_site())
+}
+
+// a variant's field rebound under a name the user's own closures can't see or
+// shadow
+fn bound(field: &Ident) -> Ident {
+    let name = field.to_string();
+    local(&format!("field_{}", name.trim_start_matches("r#")))
 }
 
 fn generated(name: &str) -> Ident {
