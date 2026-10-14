@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use alloc::collections::BTreeMap;
 use std::{
-    collections::BTreeMap,
     fs,
     path::Path,
 };
@@ -68,9 +68,9 @@ pub struct FieldConfig {
 
 impl WidgetConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
-        let path = path.as_ref();
-        let source = fs::read_to_string(path)
-            .map_err(|error| format!("failed to read config {}: {error}", path.display()))?;
+        let config_path = path.as_ref();
+        let source = fs::read_to_string(config_path)
+            .map_err(|error| format!("failed to read config {}: {error}", config_path.display()))?;
         Self::parse(&source)
     }
 
@@ -395,12 +395,12 @@ fn finish_options(options: Vec<OptionEntry>) -> Result<FinishedOptions, String> 
     let mut items = Vec::new();
     let mut review_states = Vec::new();
     for (index, option) in options.into_iter().enumerate() {
-        let option = option.finish()?;
-        if option.selected {
+        let finished_option = option.finish()?;
+        if finished_option.selected {
             selected_indices.push(index);
         }
-        review_states.push(option.review_state);
-        items.push(option.item);
+        review_states.push(finished_option.review_state);
+        items.push(finished_option.item);
     }
     Ok(FinishedOptions {
         items,
@@ -414,9 +414,9 @@ fn finish_actions(
     review_list: bool,
 ) -> Result<(Vec<ActionBinding>, Vec<ReviewActionBinding>), String> {
     if review_list {
-        finish_review_actions(actions).map(|actions| (Vec::new(), actions))
+        finish_review_actions(actions).map(|finished_actions| (Vec::new(), finished_actions))
     } else {
-        finish_widget_actions(actions).map(|actions| (actions, Vec::new()))
+        finish_widget_actions(actions).map(|finished_actions| (finished_actions, Vec::new()))
     }
 }
 
@@ -424,18 +424,21 @@ fn finish_review_actions(actions: Vec<RawAction>) -> Result<Vec<ReviewActionBind
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        let action = action.finish_review()?;
-        if is_reserved_action_key(action.key()) {
+        let finished_action = action.finish_review()?;
+        if is_reserved_action_key(finished_action.key()) {
             return Err(format!(
                 "review action key '{}' is reserved by built-in review controls",
-                action.key()
+                finished_action.key()
             ));
         }
-        if seen.contains(&action.key()) {
-            return Err(format!("duplicate review action key '{}'", action.key()));
+        if seen.contains(&finished_action.key()) {
+            return Err(format!(
+                "duplicate review action key '{}'",
+                finished_action.key()
+            ));
         }
-        seen.push(action.key());
-        finished.push(action);
+        seen.push(finished_action.key());
+        finished.push(finished_action);
     }
     Ok(finished)
 }
@@ -444,15 +447,15 @@ fn finish_widget_actions(actions: Vec<RawAction>) -> Result<Vec<ActionBinding>, 
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        let action = action.finish_action()?;
-        if seen.contains(action.key_event()) {
+        let finished_action = action.finish_action()?;
+        if seen.contains(finished_action.key_event()) {
             return Err(format!(
                 "duplicate action key '{}'",
-                format_action_key_event(action.key_event())
+                format_action_key_event(finished_action.key_event())
             ));
         }
-        seen.push(action.key_event().clone());
-        finished.push(action);
+        seen.push(finished_action.key_event().clone());
+        finished.push(finished_action);
     }
     Ok(finished)
 }
@@ -461,27 +464,27 @@ pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
     let Some((key, name)) = value.split_once(':') else {
         return Err("action must use key:name syntax".to_owned());
     };
-    let key = parse_action_key_event(key)?;
+    let parsed_key = parse_action_key_event(key)?;
     if name.is_empty() {
         return Err("action name cannot be empty".to_owned());
     }
-    Ok(ActionBinding::new(key, name))
+    Ok(ActionBinding::new(parsed_key, name))
 }
 
 pub fn parse_review_action_binding(value: &str) -> Result<ReviewActionBinding, String> {
     let Some((key, name)) = value.split_once(':') else {
         return Err("review action must use key:name syntax".to_owned());
     };
-    let key = parse_action_key(key)?;
-    if is_reserved_action_key(key) {
+    let parsed_key = parse_action_key(key)?;
+    if is_reserved_action_key(parsed_key) {
         return Err(format!(
-            "review action key '{key}' is reserved by built-in review controls"
+            "review action key '{parsed_key}' is reserved by built-in review controls"
         ));
     }
     if name.is_empty() {
         return Err("review action name cannot be empty".to_owned());
     }
-    Ok(ReviewActionBinding::new(key, name))
+    Ok(ReviewActionBinding::new(parsed_key, name))
 }
 
 fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
@@ -490,8 +493,11 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
         .strip_prefix("ctrl-")
         .or_else(|| normalized.strip_prefix("control-"))
     {
-        let key = parse_control_action_key(key, value)?;
-        return Ok(KeyEvent::with_modifiers(Key::Char(key), Modifiers::CONTROL));
+        let control_key = parse_control_action_key(key, value)?;
+        return Ok(KeyEvent::with_modifiers(
+            Key::Char(control_key),
+            Modifiers::CONTROL,
+        ));
     }
 
     let key = match normalized.as_str() {
@@ -516,15 +522,15 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
 
 fn parse_control_action_key(key: &str, original: &str) -> Result<char, String> {
     let mut chars = key.chars();
-    let Some(key) = chars.next() else {
+    let Some(first_key) = chars.next() else {
         return Err("control action key cannot be empty".to_owned());
     };
-    if chars.next().is_some() || !key.is_ascii_alphabetic() {
+    if chars.next().is_some() || !first_key.is_ascii_alphabetic() {
         return Err(format!(
             "control action key '{original}' must use ctrl- plus one letter"
         ));
     }
-    Ok(key.to_ascii_lowercase())
+    Ok(first_key.to_ascii_lowercase())
 }
 
 fn parse_action_key(value: &str) -> Result<char, String> {
@@ -546,8 +552,12 @@ fn format_action_key_event(key: &KeyEvent) -> String {
             format!("ctrl-{value}")
         },
         (Key::Char(value), modifiers) if modifiers.bits() == 0 => value.to_string(),
-        (key, modifiers) if modifiers.bits() == 0 => format!("{key:?}").to_ascii_lowercase(),
-        (key, modifiers) => format!("{key:?}+{}", modifiers.bits()).to_ascii_lowercase(),
+        (key_value, modifiers) if modifiers.bits() == 0 => {
+            format!("{key_value:?}").to_ascii_lowercase()
+        },
+        (key_value, modifiers) => {
+            format!("{key_value:?}+{}", modifiers.bits()).to_ascii_lowercase()
+        },
     }
 }
 
@@ -582,11 +592,11 @@ const fn is_reserved_action_key(key: char) -> bool {
 
 fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
     Ok(match value {
-        toml::Value::String(value) => Value::String(value),
-        toml::Value::Integer(value) => Value::Number(Number::Integer(value)),
-        toml::Value::Float(value) => Value::Number(Number::Float(value)),
-        toml::Value::Boolean(value) => Value::Bool(value),
-        toml::Value::Datetime(value) => Value::String(value.to_string()),
+        toml::Value::String(string_value) => Value::String(string_value),
+        toml::Value::Integer(integer_value) => Value::Number(Number::Integer(integer_value)),
+        toml::Value::Float(float_value) => Value::Number(Number::Float(float_value)),
+        toml::Value::Boolean(boolean_value) => Value::Bool(boolean_value),
+        toml::Value::Datetime(datetime_value) => Value::String(datetime_value.to_string()),
         toml::Value::Array(values) => {
             Value::List(
                 values
@@ -599,7 +609,9 @@ fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
             Value::Object(
                 values
                     .into_iter()
-                    .map(|(key, value)| Ok((key, toml_value_to_bang(value)?)))
+                    .map(|(table_key, table_value)| {
+                        Ok((table_key, toml_value_to_bang(table_value)?))
+                    })
                     .collect::<Result<BTreeMap<_, _>, String>>()?,
             )
         },

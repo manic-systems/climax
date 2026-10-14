@@ -118,20 +118,20 @@ fn drive(
     if let Some(event) = size.initial_event() {
         let _reaction = session.handle(event);
     }
-    if let Some(size) = size.current() {
-        renderer.resize(size)?;
+    if let Some(current_size) = size.current() {
+        renderer.resize(current_size)?;
     }
     render_if_dirty(&mut session, renderer)?;
 
     loop {
-        if let Some(signal) = signals.poll_signal()? {
+        if let Some(signal) = signals.poll()? {
             return Ok(RunOutcome::Signalled(signal));
         }
 
         let read = match input.read(&mut buffer) {
             Ok(read) => read,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                if let Some(signal) = signals.poll_signal()? {
+                if let Some(signal) = signals.poll()? {
                     return Ok(RunOutcome::Signalled(signal));
                 }
                 continue;
@@ -147,7 +147,7 @@ fn drive(
             match zero_read {
                 ZeroRead::End => return Ok(outcome_from_status(session.status())),
                 ZeroRead::Timeout => {
-                    if let Some(signal) = signals.poll_signal()? {
+                    if let Some(signal) = signals.poll()? {
                         return Ok(RunOutcome::Signalled(signal));
                     }
                     if let Some(event) = size.poll_event()
@@ -169,19 +169,19 @@ fn drive(
 }
 
 trait SignalSource {
-    fn poll_signal(&mut self) -> io::Result<Option<i32>>;
+    fn poll(&mut self) -> io::Result<Option<i32>>;
 }
 
 struct NoSignals;
 
 impl SignalSource for NoSignals {
-    fn poll_signal(&mut self) -> io::Result<Option<i32>> {
+    fn poll(&mut self) -> io::Result<Option<i32>> {
         Ok(None)
     }
 }
 
 impl SignalSource for SignalGuard {
-    fn poll_signal(&mut self) -> io::Result<Option<i32>> {
+    fn poll(&mut self) -> io::Result<Option<i32>> {
         self.poll_signal()
     }
 }

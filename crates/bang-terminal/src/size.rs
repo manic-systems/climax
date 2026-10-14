@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::mem::MaybeUninit;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalSize {
     pub cols: u16,
@@ -13,15 +15,15 @@ pub fn terminal_size() -> Option<TerminalSize> {
 
 #[cfg(unix)]
 fn terminal_size_from_stderr() -> Option<TerminalSize> {
-    let mut size = std::mem::MaybeUninit::<libc::winsize>::zeroed();
+    let mut size = MaybeUninit::<libc::winsize>::zeroed();
     // SAFETY: writes winsize if stderr is a tty
     let result = unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
     if result != 0 {
         return None;
     }
     // SAFETY: successful return means initialisation
-    let size = unsafe { size.assume_init() };
-    terminal_size_from_parts(size.ws_col, size.ws_row)
+    let window_size = unsafe { size.assume_init() };
+    terminal_size_from_parts(window_size.ws_col, window_size.ws_row)
 }
 
 const fn terminal_size_from_parts(cols: u16, rows: u16) -> Option<TerminalSize> {

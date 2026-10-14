@@ -2,6 +2,8 @@
 
 //! command-line bridge
 
+extern crate alloc;
+
 mod config;
 
 use bang_core::{
@@ -18,6 +20,7 @@ use bang_core::{
         DatePicker,
         Form,
         MultiSelect,
+        ReviewActionBinding,
         ReviewList,
         SearchSelect,
         Select,
@@ -489,9 +492,7 @@ fn action_bindings(actions: Vec<String>) -> Result<Vec<ActionBinding>, String> {
     Ok(bindings)
 }
 
-fn review_action_bindings(
-    actions: Vec<String>,
-) -> Result<Vec<bang_core::widgets::ReviewActionBinding>, String> {
+fn review_action_bindings(actions: Vec<String>) -> Result<Vec<ReviewActionBinding>, String> {
     let mut seen = Vec::new();
     let mut bindings = Vec::new();
     for action in actions {
@@ -511,8 +512,12 @@ fn action_key_label(key: &bang_core::KeyEvent) -> String {
             format!("ctrl-{value}")
         },
         (bang_core::Key::Char(value), modifiers) if modifiers.bits() == 0 => value.to_string(),
-        (key, modifiers) if modifiers.bits() == 0 => format!("{key:?}").to_ascii_lowercase(),
-        (key, modifiers) => format!("{key:?}+{}", modifiers.bits()).to_ascii_lowercase(),
+        (key_value, modifiers) if modifiers.bits() == 0 => {
+            format!("{key_value:?}").to_ascii_lowercase()
+        },
+        (key_value, modifiers) => {
+            format!("{key_value:?}+{}", modifiers.bits()).to_ascii_lowercase()
+        },
     }
 }
 
@@ -521,11 +526,11 @@ fn run_widget(
     input_bytes: Option<String>,
     actions: Vec<ActionBinding>,
 ) -> Result<Value, String> {
-    let widget = ActionLayer::new(widget).with_actions(actions);
-    if let Some(input_bytes) = input_bytes {
-        run_replayed_session(widget, &input_bytes)
+    let layered_widget = ActionLayer::new(widget).with_actions(actions);
+    if let Some(replay_input) = input_bytes {
+        run_replayed_session(layered_widget, &replay_input)
     } else {
-        bang_screw::run_live_session(widget).map_err(|error| error.to_string())
+        bang_screw::run_live_session(layered_widget).map_err(|error| error.to_string())
     }
 }
 
@@ -592,11 +597,12 @@ fn push_utf8(out: &mut Vec<u8>, value: char) {
 }
 
 fn hex_byte(high: char, low: char) -> Result<u8, String> {
-    let high = high
+    let high_digit = high
         .to_digit(16)
         .ok_or_else(|| format!("invalid hex digit '{high}' in --input-bytes"))?;
-    let low = low
+    let low_digit = low
         .to_digit(16)
         .ok_or_else(|| format!("invalid hex digit '{low}' in --input-bytes"))?;
-    u8::try_from((high << 4) | low).map_err(|_| "hex byte out of range".to_owned())
+    u8::try_from((high_digit << 4) | low_digit)
+        .map_err(|conversion_error| format!("hex byte out of range: {conversion_error}"))
 }
