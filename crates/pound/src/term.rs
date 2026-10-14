@@ -68,14 +68,15 @@ impl Term {
     /// `NO_COLOR` outranks `CLICOLOR_FORCE`, which paints a pipe too
     #[cfg(feature = "std")]
     fn color(tty: bool) -> bool {
-        let var = |name| std::env::var_os(name).filter(|v| !v.is_empty());
+        let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
         if var("NO_COLOR").is_some() {
             return false;
         }
-        if var("CLICOLOR_FORCE").is_some_and(|v| v != "0") {
+        if var("CLICOLOR_FORCE").is_some_and(|value| value != "0") {
             return true;
         }
-        tty && var("TERM").is_none_or(|v| v != "dumb") && var("CLICOLOR").is_none_or(|v| v != "0")
+        tty && var("TERM").is_none_or(|value| value != "dumb")
+            && var("CLICOLOR").is_none_or(|value| value != "0")
     }
 
     pub(crate) const fn width(self) -> Option<usize> {

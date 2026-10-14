@@ -160,9 +160,9 @@ impl Pound {
         let key = name.as_str();
 
         match key {
-            "short" => self.short = Some(value.as_deref().map(|v| single_char(key, v, span)).transpose()?),
+            "short" => self.short = Some(value.as_deref().map(|short| single_char(key, short, span)).transpose()?),
             "negate" => {
-                self.negate = Some(value.map(|v| v.trim_start_matches('-').to_owned()));
+                self.negate = Some(value.map(|negate| negate.trim_start_matches('-').to_owned()));
             },
             "long"            => self.long            = Some(value),
             "version"         => self.version         = expr(seg),
@@ -375,10 +375,10 @@ fn apply_metas(out: &mut Pound, tokens: &[TokenTree]) -> Result<(), Error> {
 
         let value = match seg.as_slice() {
             [_] => None,
-            [_, TokenTree::Punct(p), value] if p.as_char() == '=' => Some(unquote(value)),
+            [_, TokenTree::Punct(punct), value] if punct.as_char() == '=' => Some(unquote(value)),
             _ if EXPR_KEYS.contains(&key.as_str()) && expr(&seg).is_some() => None,
-            [_, TokenTree::Punct(p), rest @ ..]
-                if p.as_char() == '=' && SPLICED_KEYS.contains(&key.as_str()) =>
+            [_, TokenTree::Punct(punct), rest @ ..]
+                if punct.as_char() == '=' && SPLICED_KEYS.contains(&key.as_str()) =>
             {
                 Some(rest.iter().map(unquote).collect())
             },
@@ -424,7 +424,7 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
     let is_path = tokens.len() > 1
         && tokens.iter().all(|tok| {
             matches!(tok, TokenTree::Ident(_))
-                || matches!(tok, TokenTree::Punct(p) if p.as_char() == ':')
+                || matches!(tok, TokenTree::Punct(punct) if punct.as_char() == ':')
         });
 
     if is_path {
@@ -436,8 +436,8 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
     };
 
     let tok = match tok {
-        TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
-            let mut inner = g.stream().into_iter();
+        TokenTree::Group(group) if group.delimiter() == Delimiter::None => {
+            let mut inner = group.stream().into_iter();
             match (inner.next(), inner.next()) {
                 (Some(only), None) => only,
                 _ => return Err(Error::new_at_span(span, braces_hint(key))),
@@ -457,11 +457,11 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
             ))
         },
         TokenTree::Literal(_) | TokenTree::Ident(_) => Ok(Text::Lit(unquote(&tok))),
-        TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => {
-            let inner = g.stream().into_iter().collect::<Vec<_>>();
+        TokenTree::Group(group) if group.delimiter() == Delimiter::Brace => {
+            let inner = group.stream().into_iter().collect::<Vec<_>>();
             let has_statements = inner
                 .iter()
-                .any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';'));
+                .any(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'));
             Ok(Text::Expr(if has_statements { vec![tok] } else { inner }))
         },
         _ => Err(Error::new_at_span(span, braces_hint(key))),
@@ -469,10 +469,10 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
 }
 
 fn is_constant_name(word: &str) -> bool {
-    word.chars().any(|c| c.is_ascii_uppercase())
+    word.chars().any(|ch| ch.is_ascii_uppercase())
         && word
             .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+            .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
 }
 
 fn braces_hint(key: &str) -> String {
@@ -510,9 +510,9 @@ fn callable(key: &str, span: Span, seg: &[TokenTree]) -> Result<TokenStream, Err
 /// a transparent group
 fn is_quoted(tok: &TokenTree) -> bool {
     match tok {
-        TokenTree::Literal(l) => l.to_string().starts_with('"'),
-        TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
-            let mut inner = g.stream().into_iter();
+        TokenTree::Literal(lit) => lit.to_string().starts_with('"'),
+        TokenTree::Group(group) if group.delimiter() == Delimiter::None => {
+            let mut inner = group.stream().into_iter();
             matches!((inner.next(), inner.next()), (Some(tok), None) if is_quoted(&tok))
         },
         _ => false,
@@ -543,7 +543,7 @@ impl ValueHint {
     fn new(word: &str, span: Span) -> Result<Self, Error> {
         match word {
             "path" => Ok(Self::Path),
-            _ if word.starts_with(|c: char| c.is_ascii_uppercase()) => {
+            _ if word.starts_with(|ch: char| ch.is_ascii_uppercase()) => {
                 Ok(Self::Variant(Ident::new(word, span)))
             },
             _ => {
@@ -602,7 +602,7 @@ fn single_char(key: &str, value: &str, span: Span) -> Result<char, Error> {
     let mut chars = value.chars();
 
     match (chars.next(), chars.next()) {
-        (Some(c), None) => Ok(c),
+        (Some(ch), None) => Ok(ch),
         _ => {
             Err(Error::new_at_span(
                 span,
@@ -616,7 +616,7 @@ fn single_char(key: &str, value: &str, span: Span) -> Result<char, Error> {
 /// asks for the inferred value.
 fn expr(seg: &[TokenTree]) -> Option<Vec<TokenTree>> {
     match seg.get(1) {
-        Some(TokenTree::Punct(p)) if p.as_char() == '=' => {
+        Some(TokenTree::Punct(punct)) if punct.as_char() == '=' => {
             let rest = &seg[2..];
             (!rest.is_empty()).then(|| rest.to_vec())
         },
@@ -660,8 +660,10 @@ fn field_ref(key: &str, tokens: &[TokenTree]) -> Result<Vec<Ident>, Error> {
                     let raw = name.strip_prefix("r#");
                     let plain = raw.unwrap_or(&name);
                     let mut chars = plain.chars();
-                    let valid = chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
-                        && chars.all(|c| c == '_' || c.is_alphanumeric());
+                    let valid = chars
+                        .next()
+                        .is_some_and(|ch| ch == '_' || ch.is_alphabetic())
+                        && chars.all(|ch| ch == '_' || ch.is_alphanumeric());
 
                     if !valid {
                         Err(Error::new_at_span(
@@ -685,10 +687,10 @@ fn field_ref(key: &str, tokens: &[TokenTree]) -> Result<Vec<Ident>, Error> {
     }
 }
 
-fn csv(v: &str) -> impl Iterator<Item = String> + '_ {
-    v.split(',')
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+fn csv(list: &str) -> impl Iterator<Item = String> + '_ {
+    list.split(',')
+        .map(|entry| entry.trim().to_owned())
+        .filter(|entry| !entry.is_empty())
 }
 
 fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
@@ -696,7 +698,8 @@ fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
     let mut cur = Vec::new();
 
     for (i, tok) in tokens.iter().enumerate() {
-        if matches!(tok, TokenTree::Punct(p) if p.as_char() == ',') && starts_meta(&tokens[i + 1..])
+        if matches!(tok, TokenTree::Punct(punct) if punct.as_char() == ',')
+            && starts_meta(&tokens[i + 1..])
         {
             if !cur.is_empty() {
                 segs.push(std::mem::take(&mut cur));
@@ -723,16 +726,18 @@ fn starts_meta(rest: &[TokenTree]) -> bool {
 
     let key = key.to_string();
 
-    if !key.starts_with(|c: char| c.is_ascii_lowercase()) {
+    if !key.starts_with(|ch: char| ch.is_ascii_lowercase()) {
         return false;
     }
 
     match after.first() {
         None => true,
-        Some(TokenTree::Punct(p)) if p.as_char() == '=' => {
+        Some(TokenTree::Punct(punct)) if punct.as_char() == '=' => {
             !matches!(after.get(1), Some(TokenTree::Punct(next)) if next.as_char() == '=')
         },
-        Some(TokenTree::Punct(p)) if p.as_char() == ',' => BARE_KEYS.contains(&key.as_str()),
+        Some(TokenTree::Punct(punct)) if punct.as_char() == ',' => {
+            BARE_KEYS.contains(&key.as_str())
+        },
         Some(_) => false,
     }
 }
@@ -760,9 +765,9 @@ const BARE_KEYS: &[&str] = &[
 
 fn unquote(tok: &TokenTree) -> String {
     let raw = match tok {
-        TokenTree::Literal(l) => l.to_string(),
-        TokenTree::Group(g) if g.delimiter() == Delimiter::None => {
-            return g
+        TokenTree::Literal(lit) => lit.to_string(),
+        TokenTree::Group(group) if group.delimiter() == Delimiter::None => {
+            return group
                 .stream()
                 .into_iter()
                 .next()

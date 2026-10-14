@@ -114,7 +114,8 @@ impl Request {
     /// named after `spec`.
     #[must_use]
     pub fn from_env(spec: &CommandSpec) -> Option<Result<Self, UnknownShell>> {
-        let shell = std::env::var_os("COMPLETE").filter(|v| !v.is_empty() && v != "0")?;
+        let shell =
+            std::env::var_os("COMPLETE").filter(|value| !value.is_empty() && value != "0")?;
         let shell = match shell.to_string_lossy().parse::<Shell>() {
             Ok(shell) => shell,
             Err(err) => return Some(Err(err)),

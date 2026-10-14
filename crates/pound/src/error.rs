@@ -133,11 +133,11 @@ impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unknown { arg, .. } => write!(f, "unrecognized argument '{arg}'"),
-            Self::MissingValue(a) => write!(f, "'{a}' needs a value"),
-            Self::MissingRequired(a) => write!(f, "missing required argument {a}"),
-            Self::UnexpectedPositional(v) => write!(f, "unexpected argument '{v}'"),
-            Self::InvalidUtf8(v) => write!(f, "argument '{v}' is not valid UTF-8"),
-            Self::UnexpectedValue(a) => write!(f, "'{a}' does not take a value"),
+            Self::MissingValue(arg) => write!(f, "'{arg}' needs a value"),
+            Self::MissingRequired(arg) => write!(f, "missing required argument {arg}"),
+            Self::UnexpectedPositional(value) => write!(f, "unexpected argument '{value}'"),
+            Self::InvalidUtf8(value) => write!(f, "argument '{value}' is not valid UTF-8"),
+            Self::UnexpectedValue(arg) => write!(f, "'{arg}' does not take a value"),
             Self::UnknownSubcommand { name, .. } => write!(f, "unknown subcommand '{name}'"),
             Self::MissingSubcommand { .. } => write!(f, "a subcommand is required"),
             Self::Value { arg, value, msg } => {

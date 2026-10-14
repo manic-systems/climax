@@ -122,23 +122,23 @@ impl<'s, 'a> Partial<'s, 'a> {
     /// a positional's value name, and the deepest command answers first.
     #[must_use]
     pub fn arg(&self, name: &str) -> Option<Given<'_, 'a>> {
-        let reaches = |a: &ArgSpec| {
+        let reaches = |arg: &ArgSpec| {
             match (name.strip_prefix("--"), name.strip_prefix('-')) {
-                (Some(long), _) => a.answers_long(long),
+                (Some(long), _) => arg.answers_long(long),
                 (None, Some(short)) => {
                     let mut chars = short.chars();
-                    matches!((chars.next(), chars.next()), (Some(c), None) if a.answers_short(c))
+                    matches!((chars.next(), chars.next()), (Some(ch), None) if arg.answers_short(ch))
                 },
-                (None, None) => a.is_positional() && a.value_name == name,
+                (None, None) => arg.is_positional() && arg.value_name == name,
             }
         };
 
-        let (arg, m, index) = self.matches.find_deepest(self.root.spec(), &reaches)?;
+        let (arg, matches, index) = self.matches.find_deepest(self.root.spec(), &reaches)?;
         Some(Given {
             arg,
-            values: m.raws(index),
-            count: m.count(index),
-            negated: m.negated(index),
+            values: matches.raws(index),
+            count: matches.count(index),
+            negated: matches.negated(index),
         })
     }
 }
@@ -220,7 +220,7 @@ mod tests {
     fn an_option_waiting_on_its_value_ends_the_words() {
         let partial = Partial::parse(&ROOT, ["open", "--nope", "--store"]);
         assert_eq!(partial.command().spec().name, "open");
-        assert!(matches!(partial.next(), Next::Value(a) if a.long == Some("store")));
+        assert!(matches!(partial.next(), Next::Value(arg) if arg.long == Some("store")));
     }
 
     #[test]
@@ -235,8 +235,14 @@ mod tests {
             panic!("expected the secret positional, got {:?}", partial.next());
         };
         assert_eq!(arg.value_name, "secret");
-        assert_eq!(partial.arg("--file").and_then(|f| f.last()), Some("x.nix"));
-        assert_eq!(partial.arg("--store").and_then(|s| s.last()), Some("s"));
+        assert_eq!(
+            partial.arg("--file").and_then(|file| file.last()),
+            Some("x.nix")
+        );
+        assert_eq!(
+            partial.arg("--store").and_then(|store| store.last()),
+            Some("s")
+        );
         assert!(partial.arg("--nope").is_none());
     }
 }

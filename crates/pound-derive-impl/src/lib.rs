@@ -65,7 +65,10 @@ pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
     };
     let emitter = Emitter::new(options);
     let keys = emitter.key_refs(&written_keys(&item));
-    let body = Derive::new(&item).map_or_else(|err| err.to_compile_error(), |d| emitter.derive(&d));
+    let body = Derive::new(&item).map_or_else(
+        |err| err.to_compile_error(),
+        |derive| emitter.derive(&derive),
+    );
 
     quote! { #keys #body }
 }
@@ -80,8 +83,10 @@ pub fn derive_value_enum(input: TokenStream2, options: &Options) -> TokenStream2
     };
     let emitter = Emitter::new(options);
     let keys = emitter.key_refs(&written_keys(&item));
-    let body =
-        ValueEnum::new(&item).map_or_else(|err| err.to_compile_error(), |v| emitter.value_enum(&v));
+    let body = ValueEnum::new(&item).map_or_else(
+        |err| err.to_compile_error(),
+        |value_enum| emitter.value_enum(&value_enum),
+    );
 
     quote! { #keys #body }
 }

@@ -70,8 +70,8 @@ pub trait FromArg: Sized {
     ///
     /// # Errors
     ///
-    /// fails with a [`ValueError`] when `s` is not a valid `Self`.
-    fn from_arg(s: &str) -> Result<Self, ValueError>;
+    /// fails with arg [`ValueError`] when `raw` is not arg valid `Self`.
+    fn from_arg(raw: &str) -> Result<Self, ValueError>;
 
     /// runtime view of [`Self::POSSIBLE`].
     #[must_use]
@@ -225,14 +225,14 @@ pub trait ArgValue: FromArg + 'static {
 }
 
 // `str` has no const `PartialEq`, so compare the bytes by hand.
-pub(crate) const fn const_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
+pub(crate) const fn const_eq(left: &str, right: &str) -> bool {
+    let (left_bytes, right_bytes) = (left.as_bytes(), right.as_bytes());
+    if left_bytes.len() != right_bytes.len() {
         return false;
     }
     let mut i = 0;
-    while i < a.len() {
-        if a[i] != b[i] {
+    while i < left_bytes.len() {
+        if left_bytes[i] != right_bytes[i] {
             return false;
         }
         i += 1;
@@ -256,9 +256,9 @@ pub(crate) const fn const_eq(a: &str, b: &str) -> bool {
 macro_rules! from_str {
     ($($t:ty),+ $(,)?) => {$(
         impl $crate::FromArg for $t {
-            fn from_arg(s: &str) -> ::core::result::Result<Self, $crate::ValueError> {
-                <$t as ::core::str::FromStr>::from_str(s)
-                    .map_err(|e| $crate::ValueError::new(s, e))
+            fn from_arg(raw: &str) -> ::core::result::Result<Self, $crate::ValueError> {
+                <$t as ::core::str::FromStr>::from_str(raw)
+                    .map_err(|error| $crate::ValueError::new(raw, error))
             }
         }
     )+};
@@ -287,7 +287,7 @@ from_str! {
 impl FromArg for std::path::PathBuf {
     const HINT: Hint = Hint::Path;
 
-    fn from_arg(s: &str) -> Result<Self, ValueError> {
-        Ok(Self::from(s))
+    fn from_arg(raw: &str) -> Result<Self, ValueError> {
+        Ok(Self::from(raw))
     }
 }

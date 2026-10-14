@@ -6,7 +6,15 @@
 use pound::Parse;
 
 struct spec;
+#[expect(
+    clippy::min_ident_chars,
+    reason = "named after the derive's generated locals"
+)]
 struct m;
+#[expect(
+    clippy::min_ident_chars,
+    reason = "named after the derive's generated locals"
+)]
 struct s;
 struct value;
 

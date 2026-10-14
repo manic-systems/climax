@@ -152,11 +152,11 @@ impl SubTarget {
 
     /// each spliced enum reads its own level of `Matches`, so the selected
     /// command's matches get wrapped once per enum it was spliced through
-    fn store<'a>(self, m: &mut Matches<'a>, selected: Matches<'a>) {
+    fn store<'a>(self, matches: &mut Matches<'a>, selected: Matches<'a>) {
         let owner = self
             .path
             .iter()
-            .fold(m, |owner, &i| &mut owner.flattened[i]);
+            .fold(matches, |owner, &i| &mut owner.flattened[i]);
         let mut sub = (self.index, Box::new(selected));
         for (i, wrapper) in self.wrappers.into_iter().rev() {
             let mut shell = Matches::new(wrapper.spec);
@@ -283,11 +283,16 @@ impl<'a> Matches<'a> {
         if slot.count > 0 {
             return Ok(true);
         }
-        let word = |s: &str| {
-            match s {
+        let word = |raw: &str| {
+            match raw {
                 "1" | "true" | "yes" => Ok(true),
                 "" | "0" | "false" | "no" => Ok(false),
-                _ => Err(ValueError::new(s, "expected 1, true, yes, 0, false or no")),
+                _ => {
+                    Err(ValueError::new(
+                        raw,
+                        "expected 1, true, yes, 0, false or no",
+                    ))
+                },
             }
         };
         parse_fallback(spec, i, &word).unwrap_or(Ok(false))
@@ -318,7 +323,7 @@ impl<'a> Matches<'a> {
     /// chosen subcommand index and its matches, if one ran
     #[must_use]
     pub fn sub(&self) -> Option<(usize, &Self)> {
-        self.sub.as_ref().map(|(i, m)| (*i, m.as_ref()))
+        self.sub.as_ref().map(|(i, sub)| (*i, sub.as_ref()))
     }
 
     /// check the subcommand selected among `spec`'s as a fresh parse would,
@@ -349,7 +354,7 @@ impl<'a> Matches<'a> {
         );
         External {
             name,
-            args: args.iter().map(|&s| s.to_owned()).collect(),
+            args: args.iter().map(|&arg| arg.to_owned()).collect(),
             unknown,
         }
     }
@@ -413,8 +418,8 @@ impl<'a> Matches<'a> {
         i: usize,
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<T, Error> {
-        if let Some(s) = self.raw(i) {
-            return parse_with(spec, i, s, None, &convert);
+        if let Some(raw) = self.raw(i) {
+            return parse_with(spec, i, raw, None, &convert);
         }
         parse_fallback(spec, i, &convert)
             .unwrap_or_else(|| Err(ErrorKind::MissingRequired(spec.args[i].display_name()).into()))
@@ -433,8 +438,8 @@ impl<'a> Matches<'a> {
         i: usize,
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Option<T>, Error> {
-        if let Some(s) = self.raw(i) {
-            return Ok(Some(parse_with(spec, i, s, None, &convert)?));
+        if let Some(raw) = self.raw(i) {
+            return Ok(Some(parse_with(spec, i, raw, None, &convert)?));
         }
         parse_fallback(spec, i, &convert).transpose()
     }
@@ -454,8 +459,8 @@ impl<'a> Matches<'a> {
         i: usize,
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Option<Option<T>>, Error> {
-        if let Some(s) = self.raw(i) {
-            return Ok(Some(Some(parse_with(spec, i, s, None, &convert)?)));
+        if let Some(raw) = self.raw(i) {
+            return Ok(Some(Some(parse_with(spec, i, raw, None, &convert)?)));
         }
         if self.slots[i].count > 0 {
             return Ok(Some(None));
@@ -514,9 +519,9 @@ impl<'a> Matches<'a> {
         i: usize,
         convert: impl Fn(&str) -> Result<T, ValueError>,
     ) -> Result<Option<Sourced<T>>, Error> {
-        if let Some(s) = self.raw(i) {
+        if let Some(raw) = self.raw(i) {
             return Ok(Some(Sourced {
-                value:  parse_with(spec, i, s, None, &convert)?,
+                value:  parse_with(spec, i, raw, None, &convert)?,
                 source: Source::CommandLine,
             }));
         }
@@ -546,7 +551,7 @@ impl<'a> Matches<'a> {
         if !raws.is_empty() {
             return raws
                 .iter()
-                .map(|&s| parse_with(spec, i, s, None, &convert))
+                .map(|&raw| parse_with(spec, i, raw, None, &convert))
                 .collect();
         }
         let Some(found) = fallback(spec, i) else {
@@ -554,7 +559,7 @@ impl<'a> Matches<'a> {
         };
         spec.args[i]
             .split(&found.value)
-            .map(|s| parse_with(spec, i, s, found.env, &convert))
+            .map(|raw| parse_with(spec, i, raw, found.env, &convert))
             .collect()
     }
 
@@ -615,31 +620,31 @@ fn parse_fallback<T>(
     i: usize,
     convert: &impl Fn(&str) -> Result<T, ValueError>,
 ) -> Option<Result<T, Error>> {
-    fallback(spec, i).map(|f| parse_with(spec, i, &f.value, f.env, convert))
+    fallback(spec, i).map(|found| parse_with(spec, i, &found.value, found.env, convert))
 }
 
 fn parse_with<T>(
     spec: &CommandSpec,
     i: usize,
-    s: &str,
+    raw: &str,
     env: Option<&str>,
     convert: &impl Fn(&str) -> Result<T, ValueError>,
 ) -> Result<T, Error> {
-    convert(s).map_err(|e| {
-        let mut msg = e.msg;
+    convert(raw).map_err(|error| {
+        let mut msg = error.msg;
         let listed = spec.args[i]
             .possible
             .unwrap_or_default()
             .iter()
-            .filter(|c| !c.hidden)
-            .map(|c| c.name)
+            .filter(|choice| !choice.hidden)
+            .map(|choice| choice.name)
             .collect::<Vec<_>>();
         if !listed.is_empty() {
             msg = format!("{msg} (possible values: {})", listed.join(", "));
         }
         ErrorKind::Value {
             arg: source_name(&spec.args[i], env),
-            value: e.value,
+            value: error.value,
             msg,
         }
         .into()
@@ -649,14 +654,14 @@ fn parse_with<T>(
 /// an arg left off the line reads its env var, which [`fallback`] would skip
 /// in silence when it holds no UTF-8
 #[cfg(feature = "std")]
-fn env_readable(a: &ArgSpec) -> Result<(), ErrorKind> {
-    let Some(var) = a.env else {
+fn env_readable(arg: &ArgSpec) -> Result<(), ErrorKind> {
+    let Some(var) = arg.env else {
         return Ok(());
     };
     match std::env::var(var) {
         Err(std::env::VarError::NotUnicode(raw)) => {
             Err(ErrorKind::Value {
-                arg:   source_name(a, Some(var)),
+                arg:   source_name(arg, Some(var)),
                 value: raw.to_string_lossy().into_owned(),
                 msg:   "not valid UTF-8".to_owned(),
             })
@@ -665,10 +670,10 @@ fn env_readable(a: &ArgSpec) -> Result<(), ErrorKind> {
     }
 }
 
-fn source_name(a: &ArgSpec, env: Option<&str>) -> String {
+fn source_name(arg: &ArgSpec, env: Option<&str>) -> String {
     env.map_or_else(
-        || a.display_name(),
-        |var| format!("{} (from ${var})", a.display_name()),
+        || arg.display_name(),
+        |var| format!("{} (from ${var})", arg.display_name()),
     )
 }
 
@@ -716,7 +721,7 @@ trait Mode {
     /// when the words ran out goes in `awaiting`.
     fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Self::Error>;
 
-    fn finish(cmd: &Command<'_>, m: &Matches<'_>, empty: bool) -> Result<(), Self::Error>;
+    fn finish(cmd: &Command<'_>, matches: &Matches<'_>, empty: bool) -> Result<(), Self::Error>;
 
     fn locate(cmd: &Command<'_>, err: Self::Error) -> Self::Error;
 
@@ -733,16 +738,16 @@ impl Mode for Strict {
     fn halt(halt: Halt, _: &mut Option<&'static ArgSpec>) -> Result<(), Error> {
         match halt {
             Halt::Error(err) => Err(err),
-            Halt::NeedsValue(a) => Err(ErrorKind::MissingValue(a.display_name()).into()),
+            Halt::NeedsValue(arg) => Err(ErrorKind::MissingValue(arg.display_name()).into()),
             Halt::TakesMore(_) => Ok(()),
         }
     }
 
-    fn finish(cmd: &Command<'_>, m: &Matches<'_>, empty: bool) -> Result<(), Error> {
+    fn finish(cmd: &Command<'_>, matches: &Matches<'_>, empty: bool) -> Result<(), Error> {
         if empty && cmd.spec().help_if_empty {
             return Err(ErrorKind::NoArguments(help::render(cmd, false)).into());
         }
-        Ok(finalise(cmd, m, Self::DEMANDS)?)
+        Ok(finalise(cmd, matches, Self::DEMANDS)?)
     }
 
     fn locate(cmd: &Command<'_>, err: Error) -> Error {
@@ -765,8 +770,8 @@ impl Mode for Update {
         Strict::halt(halt, awaiting)
     }
 
-    fn finish(cmd: &Command<'_>, m: &Matches<'_>, _: bool) -> Result<(), Error> {
-        Ok(finalise(cmd, m, Self::DEMANDS)?)
+    fn finish(cmd: &Command<'_>, matches: &Matches<'_>, _: bool) -> Result<(), Error> {
+        Ok(finalise(cmd, matches, Self::DEMANDS)?)
     }
 
     fn locate(cmd: &Command<'_>, err: Error) -> Error {
@@ -816,7 +821,7 @@ fn parse_cmd<'a, M: Mode>(
     it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(Matches<'a>, Next), M::Error> {
-    walk_cmd::<M>(cmd, lead, it, hits).map_err(|e| M::locate(cmd, e))
+    walk_cmd::<M>(cmd, lead, it, hits).map_err(|error| M::locate(cmd, error))
 }
 
 enum Step<'a> {
@@ -832,7 +837,7 @@ struct Walk<'w, 'a> {
     cursor:          usize,
     only_positional: bool,
     demands:         Demands,
-    m:               Matches<'a>,
+    matches:         Matches<'a>,
 }
 
 fn walk_cmd<'a, M: Mode>(
@@ -853,11 +858,14 @@ fn walk_cmd<'a, M: Mode>(
     let mut walk = Walk {
         cmd,
         targets: &targets,
-        positionals: targets.iter().filter(|t| t.arg.is_positional()).collect(),
+        positionals: targets
+            .iter()
+            .filter(|target| target.arg.is_positional())
+            .collect(),
         cursor: 0,
         only_positional: false,
         demands: M::DEMANDS,
-        m: Matches::new(cmd.spec()),
+        matches: Matches::new(cmd.spec()),
     };
     let mut awaiting = None;
     let mut empty = lead.is_none();
@@ -884,9 +892,9 @@ fn walk_cmd<'a, M: Mode>(
 
     // must run before finalise so owned globals count toward required/group
     // checks
-    apply_global_hits(&targets, cmd.globals().len(), &mut walk.m, hits);
-    M::finish(cmd, &walk.m, empty)?;
-    Ok((walk.m, next))
+    apply_global_hits(&targets, cmd.globals().len(), &mut walk.matches, hits);
+    M::finish(cmd, &walk.matches, empty)?;
+    Ok((walk.matches, next))
 }
 
 impl<'a> Walk<'_, 'a> {
@@ -902,7 +910,7 @@ impl<'a> Walk<'_, 'a> {
             self.only_positional = true;
         } else if let Some(long) = tok.strip_prefix("--") {
             self.long(tok, long, it, hits)?;
-        } else if let Some(rest) = tok.strip_prefix('-').filter(|r| !r.is_empty()) {
+        } else if let Some(rest) = tok.strip_prefix('-').filter(|tail| !tail.is_empty()) {
             self.short(tok, rest, it, hits)?;
         } else if tok == "help" && self.cmd.help_command().is_some() && self.sub_open() {
             return Ok(Step::Help);
@@ -922,24 +930,26 @@ impl<'a> Walk<'_, 'a> {
         hits: &mut Vec<GlobalHit<'a>>,
     ) -> Result<(), Halt> {
         let (name, inline) = match long.split_once('=') {
-            Some((n, v)) => (n, Some(v)),
+            Some((key, value)) => (key, Some(value)),
             None => (long, None),
         };
         if let Some(sig) = builtin_long(self.cmd, name) {
             return Err(sig.into());
         }
 
-        if let Some(target) = self
+        if let Some(target) = self.targets.iter().find(|candidate| {
+            candidate.arg.answers_long(name) && candidate.arg.negate != Some(name)
+        }) {
+            apply_named(&mut self.matches, target, inline, it)?;
+        } else if let Some(target) = self
             .targets
             .iter()
-            .find(|t| t.arg.answers_long(name) && t.arg.negate != Some(name))
+            .find(|candidate| candidate.arg.negate == Some(name))
         {
-            apply_named(&mut self.m, target, inline, it)?;
-        } else if let Some(target) = self.targets.iter().find(|t| t.arg.negate == Some(name)) {
-            apply_negation(target_slot_mut(&mut self.m, target), name, inline)?;
-        } else if let Some((index, g)) = find_global_long(self.cmd.globals(), name) {
-            if g.negate != Some(name) {
-                record_global(index, g, inline, it, hits)?;
+            apply_negation(target_slot_mut(&mut self.matches, target), name, inline)?;
+        } else if let Some((index, global)) = find_global_long(self.cmd.globals(), name) {
+            if global.negate != Some(name) {
+                record_global(index, global, inline, it, hits)?;
             } else if inline.is_some() {
                 return Err(ErrorKind::UnexpectedValue(format!("--{name}")).into());
             } else {
@@ -974,9 +984,9 @@ impl<'a> Walk<'_, 'a> {
         let arg_for = |ch| {
             targets
                 .iter()
-                .find(|t| t.arg.answers_short(ch))
-                .map(|t| t.arg)
-                .or_else(|| find_global_short(cmd.globals(), ch).map(|(_, g)| g))
+                .find(|target| target.arg.answers_short(ch))
+                .map(|target| target.arg)
+                .or_else(|| find_global_short(cmd.globals(), ch).map(|(_, global)| global))
         };
         let known = |ch| arg_for(ch).is_some() || builtin(ch).is_some();
         let cluster_known = || {
@@ -996,7 +1006,15 @@ impl<'a> Walk<'_, 'a> {
             known(first)
         };
         if options {
-            shorts(targets, &mut self.m, rest, it, cmd.globals(), hits, builtin)
+            shorts(
+                targets,
+                &mut self.matches,
+                rest,
+                it,
+                cmd.globals(),
+                hits,
+                builtin,
+            )
         } else if first.is_ascii_digit() || first == '.' || hyphen_value {
             // a negative number is a value, not a flag
             Ok(self.positional(tok)?)
@@ -1019,8 +1037,8 @@ impl<'a> Walk<'_, 'a> {
             let err = unknown_subcommand(self.cmd.spec(), name).into();
             sub_m.unknown = Some(Box::new(self.cmd.locate(err)));
         }
-        self.m.selected = sub_m.selected.take().or(Some(child));
-        target.store(&mut self.m, sub_m);
+        self.matches.selected = sub_m.selected.take().or(Some(child));
+        target.store(&mut self.matches, sub_m);
         Ok(next)
     }
 
@@ -1046,7 +1064,7 @@ impl<'a> Walk<'_, 'a> {
             subcommands: shown.spec().has_subs(),
             options:     false,
         };
-        self.m.selected = named;
+        self.matches.selected = named;
         Ok(next)
     }
 
@@ -1071,23 +1089,24 @@ impl<'a> Walk<'_, 'a> {
     /// filled, unless requirements are waived, and never past a variadic one,
     /// which stays greedy so its tail can fill
     fn sub_open(&self) -> bool {
-        let next = self.positionals.get(self.cursor).map(|t| t.arg);
+        let next = self.positionals.get(self.cursor).map(|target| target.arg);
         let pending = self
             .positionals
             .iter()
             .skip(self.cursor)
-            .any(|t| t.arg.required);
+            .any(|target| target.arg.required);
         self.cmd.spec().has_subs()
-            && !next.is_some_and(|a| a.multi || a.kind == Kind::Trailing)
+            && !next.is_some_and(|arg| arg.multi || arg.kind == Kind::Trailing)
             && (self.demands == Demands::Waived || !pending)
     }
 
     fn takes_hyphen_value(&self) -> bool {
-        next_positional(&self.positionals, self.cursor).is_some_and(|t| t.arg.hyphen_values)
+        next_positional(&self.positionals, self.cursor)
+            .is_some_and(|target| target.arg.hyphen_values)
     }
 
     fn positional(&mut self, tok: &'a str) -> Result<(), ErrorKind> {
-        if positional(&mut self.m, &self.positionals, &mut self.cursor, tok)? {
+        if positional(&mut self.matches, &self.positionals, &mut self.cursor, tok)? {
             self.only_positional = true;
         }
         Ok(())
@@ -1098,7 +1117,7 @@ impl<'a> Walk<'_, 'a> {
             return Next::Value(arg);
         }
         Next::Word {
-            positional:  next_positional(&self.positionals, self.cursor).map(|t| t.arg),
+            positional:  next_positional(&self.positionals, self.cursor).map(|target| target.arg),
             subcommands: !self.only_positional && self.sub_open(),
             options:     !self.only_positional,
         }
@@ -1109,7 +1128,9 @@ fn unknown_subcommand(spec: &CommandSpec, tok: &str) -> ErrorKind {
     ErrorKind::UnknownSubcommand {
         name:    tok.to_owned(),
         closest: closest(
-            spec.subcommands().filter(|s| !s.hidden).flat_map(sub_names),
+            spec.subcommands()
+                .filter(|sub| !sub.hidden)
+                .flat_map(sub_names),
             tok,
         ),
     }
@@ -1124,64 +1145,64 @@ fn next_positional<'t>(positionals: &[&'t ArgTarget], cursor: usize) -> Option<&
             positionals
                 .last()
                 .copied()
-                .filter(|t| t.arg.multi || t.arg.kind == Kind::Trailing)
+                .filter(|target| target.arg.multi || target.arg.kind == Kind::Trailing)
         },
     }
 }
 
 /// apply a long option
 fn apply_named<'a>(
-    m: &mut Matches<'a>,
+    matches: &mut Matches<'a>,
     target: &ArgTarget,
     inline: Option<&'a str>,
     it: &mut Words<'_, 'a>,
 ) -> Result<(), Halt> {
-    let a = target.arg;
-    let slot = target_slot_mut(m, target);
-    match a.kind {
+    let arg = target.arg;
+    let slot = target_slot_mut(matches, target);
+    match arg.kind {
         Kind::Flag => {
             if inline.is_some() {
-                return Err(ErrorKind::UnexpectedValue(a.display_name()).into());
+                return Err(ErrorKind::UnexpectedValue(arg.display_name()).into());
             }
             slot.count = 1;
             slot.negated = false;
         },
         Kind::Count => {
             if inline.is_some() {
-                return Err(ErrorKind::UnexpectedValue(a.display_name()).into());
+                return Err(ErrorKind::UnexpectedValue(arg.display_name()).into());
             }
             slot.count += 1;
         },
         Kind::Opt => {
             let value = match inline {
-                Some(v) => Some(v),
-                None => detached_value(a, it)?,
+                Some(attached) => Some(attached),
+                None => detached_value(arg, it)?,
             };
-            use_option(a, slot, value, it)?;
+            use_option(arg, slot, value, it)?;
         },
-        Kind::Positional | Kind::Trailing => return Err(unknown(a.display_name()).into()),
+        Kind::Positional | Kind::Trailing => return Err(unknown(arg.display_name()).into()),
     }
     Ok(())
 }
 
 fn use_option<'a>(
-    a: &'static ArgSpec,
+    arg: &'static ArgSpec,
     slot: &mut Slot<'a>,
     value: Option<&'a str>,
     it: &mut Words<'_, 'a>,
 ) -> Result<(), Halt> {
     let Some(first) = value else {
-        push_bare(a, slot);
+        push_bare(arg, slot);
         return Ok(());
     };
-    push_value(a, slot, first);
-    more_values(a, it, |more| push_value(a, slot, more))
+    push_value(arg, slot, first);
+    more_values(arg, it, |more| push_value(arg, slot, more))
 }
 
 /// apply a cluster of short args
 fn shorts<'a>(
     targets: &[ArgTarget],
-    m: &mut Matches<'a>,
+    matches: &mut Matches<'a>,
     cluster: &'a str,
     it: &mut Words<'_, 'a>,
     globals: &[&'static ArgSpec],
@@ -1192,26 +1213,29 @@ fn shorts<'a>(
         if let Some(sig) = builtin(ch) {
             return Err(sig.into());
         }
-        if let Some(target) = targets.iter().find(|t| t.arg.answers_short(ch)) {
-            let a = target.arg;
-            let slot = target_slot_mut(m, target);
-            match a.kind {
+        if let Some(target) = targets
+            .iter()
+            .find(|candidate| candidate.arg.answers_short(ch))
+        {
+            let arg = target.arg;
+            let slot = target_slot_mut(matches, target);
+            match arg.kind {
                 Kind::Flag => {
                     slot.count = 1;
                     slot.negated = false;
                 },
                 Kind::Count => slot.count += 1,
                 Kind::Opt => {
-                    let value = cluster_value(cluster, off, ch, it, a)?;
-                    use_option(a, slot, value, it)?;
+                    let value = cluster_value(cluster, off, ch, it, arg)?;
+                    use_option(arg, slot, value, it)?;
                     return Ok(()); // option swallowed the cluster tail
                 },
                 Kind::Positional | Kind::Trailing => {
                     return Err(unknown(format!("-{ch}")).into());
                 },
             }
-        } else if let Some((index, g)) = find_global_short(globals, ch) {
-            match g.kind {
+        } else if let Some((index, global)) = find_global_short(globals, ch) {
+            match global.kind {
                 Kind::Flag | Kind::Count => {
                     hits.push(GlobalHit {
                         index,
@@ -1220,8 +1244,8 @@ fn shorts<'a>(
                     });
                 },
                 Kind::Opt => {
-                    let value = cluster_value(cluster, off, ch, it, g)?;
-                    record_values(index, g, value, it, hits)?;
+                    let value = cluster_value(cluster, off, ch, it, global)?;
+                    record_values(index, global, value, it, hits)?;
                     return Ok(());
                 },
                 Kind::Positional | Kind::Trailing => {
@@ -1241,11 +1265,11 @@ fn cluster_value<'a>(
     off: usize,
     ch: char,
     it: &mut Words<'_, 'a>,
-    a: &'static ArgSpec,
+    arg: &'static ArgSpec,
 ) -> Result<Option<&'a str>, Halt> {
     let rest = &cluster[off + ch.len_utf8()..];
     if rest.is_empty() {
-        detached_value(a, it)
+        detached_value(arg, it)
     } else {
         Ok(Some(rest))
     }
@@ -1254,31 +1278,31 @@ fn cluster_value<'a>(
 /// the value for an option written without an attached one. an option that
 /// declares `default_missing` takes that instead of eating the next token.
 fn detached_value<'a>(
-    a: &'static ArgSpec,
+    arg: &'static ArgSpec,
     it: &mut Words<'_, 'a>,
 ) -> Result<Option<&'a str>, Halt> {
-    if let Some(missing) = a.default_missing {
+    if let Some(missing) = arg.default_missing {
         return Ok(Some(missing));
     }
-    if a.optional_value {
+    if arg.optional_value {
         return Ok(None);
     }
-    it.next().map(Some).ok_or(Halt::NeedsValue(a))
+    it.next().map(Some).ok_or(Halt::NeedsValue(arg))
 }
 
 fn more_values<'a>(
-    a: &'static ArgSpec,
+    arg: &'static ArgSpec,
     it: &mut Words<'_, 'a>,
     mut each: impl FnMut(&'a str),
 ) -> Result<(), Halt> {
-    let Some(arity) = a.words_per_use() else {
+    let Some(arity) = arg.words_per_use() else {
         return Ok(());
     };
 
     let mut taken = 1;
     while arity.max().is_none_or(|max| taken < max) {
         let Some(word) =
-            it.next_if(|word| *word != "--" && (a.hyphen_values || !looks_like_option(word)))
+            it.next_if(|word| *word != "--" && (arg.hyphen_values || !looks_like_option(word)))
         else {
             break;
         };
@@ -1289,12 +1313,12 @@ fn more_values<'a>(
     let min = arity.min();
     let open = arity.max().is_none_or(|max| taken < max);
     match it.peek() {
-        None if taken >= min && open => Err(Halt::TakesMore(a)),
+        None if taken >= min && open => Err(Halt::TakesMore(arg)),
         _ if taken >= min => Ok(()),
-        None => Err(Halt::NeedsValue(a)),
+        None => Err(Halt::NeedsValue(arg)),
         Some(_) => {
             Err(ErrorKind::TooFewValues {
-                arg: a.display_name(),
+                arg: arg.display_name(),
                 min,
                 got: taken,
             }
@@ -1311,7 +1335,7 @@ fn looks_like_option(word: &str) -> bool {
 
 fn record_values<'a>(
     index: usize,
-    g: &'static ArgSpec,
+    global: &'static ArgSpec,
     value: Option<&'a str>,
     it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
@@ -1327,21 +1351,21 @@ fn record_values<'a>(
     if value.is_none() {
         return Ok(());
     }
-    more_values(g, it, |word| record(Some(word)))
+    more_values(global, it, |word| record(Some(word)))
 }
 
-fn push_bare(a: &ArgSpec, slot: &mut Slot<'_>) {
-    if !a.multi {
+fn push_bare(arg: &ArgSpec, slot: &mut Slot<'_>) {
+    if !arg.multi {
         slot.values.clear();
     }
     slot.count += 1;
 }
 
-fn push_value<'a>(a: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
-    if !a.multi {
+fn push_value<'a>(arg: &ArgSpec, slot: &mut Slot<'a>, value: &'a str) {
+    if !arg.multi {
         slot.values.clear(); // last wins for single-valued opts
     }
-    slot.values.extend(a.split(value));
+    slot.values.extend(arg.split(value));
     slot.count += 1;
 }
 
@@ -1352,7 +1376,7 @@ fn find_global_long(globals: &[&'static ArgSpec], name: &str) -> Option<(usize, 
         .copied()
         .enumerate()
         .rev()
-        .find(|(_, a)| a.answers_long(name))
+        .find(|(_, arg)| arg.answers_long(name))
 }
 
 /// switch a flag back off, so the last spelling on the line wins
@@ -1371,20 +1395,20 @@ fn find_global_short(globals: &[&'static ArgSpec], ch: char) -> Option<(usize, &
         .copied()
         .enumerate()
         .rev()
-        .find(|(_, a)| a.answers_short(ch))
+        .find(|(_, arg)| arg.answers_short(ch))
 }
 
 fn record_global<'a>(
     index: usize,
-    g: &'static ArgSpec,
+    global: &'static ArgSpec,
     inline: Option<&'a str>,
     it: &mut Words<'_, 'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) -> Result<(), Halt> {
-    match g.kind {
+    match global.kind {
         Kind::Flag | Kind::Count => {
             if inline.is_some() {
-                return Err(ErrorKind::UnexpectedValue(g.display_name()).into());
+                return Err(ErrorKind::UnexpectedValue(global.display_name()).into());
             }
             hits.push(GlobalHit {
                 index,
@@ -1394,12 +1418,12 @@ fn record_global<'a>(
         },
         Kind::Opt => {
             let value = match inline {
-                Some(v) => Some(v),
-                None => detached_value(g, it)?,
+                Some(attached) => Some(attached),
+                None => detached_value(global, it)?,
             };
-            record_values(index, g, value, it, hits)?;
+            record_values(index, global, value, it, hits)?;
         },
-        Kind::Positional | Kind::Trailing => return Err(unknown(g.display_name()).into()),
+        Kind::Positional | Kind::Trailing => return Err(unknown(global.display_name()).into()),
     }
     Ok(())
 }
@@ -1409,29 +1433,30 @@ fn record_global<'a>(
 fn apply_global_hits<'a>(
     targets: &[ArgTarget],
     inherited: usize,
-    m: &mut Matches<'a>,
+    matches: &mut Matches<'a>,
     hits: &mut Vec<GlobalHit<'a>>,
 ) {
-    hits.retain(|h| {
-        let Some(target) = h
-            .index
-            .checked_sub(inherited)
-            .and_then(|own| targets.iter().filter(|t| t.arg.global).nth(own))
-        else {
+    hits.retain(|hit| {
+        let Some(target) = hit.index.checked_sub(inherited).and_then(|own| {
+            targets
+                .iter()
+                .filter(|candidate| candidate.arg.global)
+                .nth(own)
+        }) else {
             return true;
         };
-        let a = target.arg;
-        let slot = target_slot_mut(m, target);
-        match a.kind {
+        let arg = target.arg;
+        let slot = target_slot_mut(matches, target);
+        match arg.kind {
             Kind::Flag => {
-                slot.count = u32::from(!h.negated);
-                slot.negated = h.negated;
+                slot.count = u32::from(!hit.negated);
+                slot.negated = hit.negated;
             },
             Kind::Count => slot.count += 1,
             Kind::Opt => {
-                match h.value {
-                    Some(v) => push_value(a, slot, v),
-                    None => push_bare(a, slot),
+                match hit.value {
+                    Some(value) => push_value(arg, slot, value),
+                    None => push_bare(arg, slot),
                 }
             },
             Kind::Positional | Kind::Trailing => {},
@@ -1443,7 +1468,7 @@ fn apply_global_hits<'a>(
 /// assign a bare token to the next positional, or a trailing/variadic sink,
 /// returning whether a trailing arg took it and so owns the rest of the line
 fn positional<'a>(
-    m: &mut Matches<'a>,
+    matches: &mut Matches<'a>,
     positionals: &[&ArgTarget],
     cursor: &mut usize,
     tok: &'a str,
@@ -1452,28 +1477,28 @@ fn positional<'a>(
         return Err(ErrorKind::UnexpectedPositional(tok.to_owned()));
     };
 
-    let a = target.arg;
-    let slot = target_slot_mut(m, target);
-    slot.values.extend(a.split(tok));
+    let arg = target.arg;
+    let slot = target_slot_mut(matches, target);
+    slot.values.extend(arg.split(tok));
     slot.count += 1;
     // single positional advances the cursor, a variadic one keeps eating
-    if !(a.multi || a.kind == Kind::Trailing) {
+    if !(arg.multi || arg.kind == Kind::Trailing) {
         *cursor += 1;
     }
-    Ok(a.kind == Kind::Trailing)
+    Ok(arg.kind == Kind::Trailing)
 }
 
 /// enforce a list arg's arity. an absent arg with a fallback is held only to
 /// `max_values`, by the values its delimiter splits the fallback into.
-fn count_values(a: &ArgSpec, got: usize, fallback: Option<Fallback>) -> Result<(), ErrorKind> {
+fn count_values(arg: &ArgSpec, got: usize, fallback: Option<Fallback>) -> Result<(), ErrorKind> {
     if got == 0
         && let Some(found) = fallback
     {
-        let got = a.split(&found.value).count();
-        return match a.max_values {
+        let got = arg.split(&found.value).count();
+        return match arg.max_values {
             Some(max) if got > max => {
                 Err(ErrorKind::TooManyValues {
-                    arg: source_name(a, found.env),
+                    arg: source_name(arg, found.env),
                     max,
                     got,
                 })
@@ -1481,20 +1506,20 @@ fn count_values(a: &ArgSpec, got: usize, fallback: Option<Fallback>) -> Result<(
             _ => Ok(()),
         };
     }
-    if let Some(min) = a.min_values
+    if let Some(min) = arg.min_values
         && got < min
     {
         return Err(ErrorKind::TooFewValues {
-            arg: a.display_name(),
+            arg: arg.display_name(),
             min,
             got,
         });
     }
-    if let Some(max) = a.max_values
+    if let Some(max) = arg.max_values
         && got > max
     {
         return Err(ErrorKind::TooManyValues {
-            arg: a.display_name(),
+            arg: arg.display_name(),
             max,
             got,
         });
@@ -1504,8 +1529,8 @@ fn count_values(a: &ArgSpec, got: usize, fallback: Option<Fallback>) -> Result<(
 
 /// whether an arg will have a value by the time it is read, counting an env
 /// var only when it is actually set
-fn supplied(spec: &CommandSpec, m: &Matches, i: usize) -> bool {
-    m.slots[i].count > 0 || !m.slots[i].values.is_empty() || fallback(spec, i).is_some()
+fn supplied(spec: &CommandSpec, matches: &Matches, i: usize) -> bool {
+    matches.slots[i].count > 0 || !matches.slots[i].values.is_empty() || fallback(spec, i).is_some()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1516,16 +1541,16 @@ enum Demands {
 
 /// enforce `required` and group constraints. defaults resolve when a value is
 /// read, so a defaulted arg never counts as missing here.
-fn finalise(cmd: &Command<'_>, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
+fn finalise(cmd: &Command<'_>, matches: &Matches, demands: Demands) -> Result<(), ErrorKind> {
     let spec = cmd.spec();
-    let owed = if exclusive_alone(spec, m)? {
+    let owed = if exclusive_alone(spec, matches)? {
         Demands::Waived
     } else {
         demands
     };
-    finalise_args(spec, m, owed)?;
-    finalise_groups(spec, m, owed)?;
-    let missing = spec.has_subs() && !selected_command(m) && !spec.subcommand_optional();
+    finalise_args(spec, matches, owed)?;
+    finalise_groups(spec, matches, owed)?;
+    let missing = spec.has_subs() && !selected_command(matches) && !spec.subcommand_optional();
     if missing && owed == Demands::Checked {
         return Err(ErrorKind::MissingSubcommand {
             help: Some(help::render(cmd, false)),
@@ -1534,8 +1559,8 @@ fn finalise(cmd: &Command<'_>, m: &Matches, demands: Demands) -> Result<(), Erro
     Ok(())
 }
 
-fn demand_selected(spec: &'static CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
-    let Some((index, chosen)) = m.sub() else {
+fn demand_selected(spec: &'static CommandSpec, matches: &Matches) -> Result<(), ErrorKind> {
+    let Some((index, chosen)) = matches.sub() else {
         return Ok(());
     };
     let sub = &spec.subs[index];
@@ -1550,15 +1575,15 @@ fn demand_selected(spec: &'static CommandSpec, m: &Matches) -> Result<(), ErrorK
 
 /// [`finalise`] with every demand checked, down through the subcommands this
 /// line selected, for a command that had not been parsed before
-fn demand(spec: &'static CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
-    let owed = if exclusive_alone(spec, m)? {
+fn demand(spec: &'static CommandSpec, matches: &Matches) -> Result<(), ErrorKind> {
+    let owed = if exclusive_alone(spec, matches)? {
         Demands::Waived
     } else {
         Demands::Checked
     };
-    finalise_args(spec, m, owed)?;
-    finalise_groups(spec, m, owed)?;
-    let Some((selector, selected)) = selector_matches(spec, m) else {
+    finalise_args(spec, matches, owed)?;
+    finalise_groups(spec, matches, owed)?;
+    let Some((selector, selected)) = selector_matches(spec, matches) else {
         return Ok(());
     };
     match selected.sub() {
@@ -1572,34 +1597,34 @@ fn demand(spec: &'static CommandSpec, m: &Matches) -> Result<(), ErrorKind> {
 /// it, which may sit inside a flattened struct
 fn selector_matches<'m, 'a>(
     spec: &'static CommandSpec,
-    m: &'m Matches<'a>,
+    matches: &'m Matches<'a>,
 ) -> Option<(&'static CommandSpec, &'m Matches<'a>)> {
     if !spec.subs.is_empty() {
-        return Some((spec, m));
+        return Some((spec, matches));
     }
     spec.flattened
         .iter()
-        .zip(&m.flattened)
+        .zip(&matches.flattened)
         .find_map(|(inner, inner_m)| selector_matches(inner, inner_m))
 }
 
 /// whether an exclusive arg was given, alone. given with another arg, it is
 /// an error.
-fn exclusive_alone(spec: &CommandSpec, m: &Matches) -> Result<bool, ErrorKind> {
+fn exclusive_alone(spec: &CommandSpec, matches: &Matches) -> Result<bool, ErrorKind> {
     let mut given = Vec::new();
     spec.visit(&mut Vec::new(), &mut |path, index, arg| {
-        let owner = path.iter().fold(m, |owner, &i| &owner.flattened[i]);
+        let owner = path.iter().fold(matches, |owner, &i| &owner.flattened[i]);
         if owner.slots[index].count > 0 || owner.slots[index].negated {
             given.push(arg);
         }
     });
 
-    let Some(exclusive) = given.iter().find(|a| a.exclusive) else {
+    let Some(exclusive) = given.iter().find(|arg| arg.exclusive) else {
         return Ok(false);
     };
     given
         .iter()
-        .find(|a| !core::ptr::eq(**a, *exclusive))
+        .find(|arg| !core::ptr::eq(**arg, *exclusive))
         .map_or(Ok(true), |other| {
             Err(ErrorKind::Exclusive {
                 arg:   exclusive.display_name(),
@@ -1609,42 +1634,42 @@ fn exclusive_alone(spec: &CommandSpec, m: &Matches) -> Result<bool, ErrorKind> {
 }
 
 /// whether a subcommand was chosen here or inside a flattened struct
-fn selected_command(m: &Matches) -> bool {
-    m.sub.is_some() || m.flattened.iter().any(selected_command)
+fn selected_command(matches: &Matches) -> bool {
+    matches.sub.is_some() || matches.flattened.iter().any(selected_command)
 }
 
-fn finalise_args(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
-    for (i, a) in spec.args.iter().enumerate() {
+fn finalise_args(spec: &CommandSpec, matches: &Matches, demands: Demands) -> Result<(), ErrorKind> {
+    for (i, arg) in spec.args.iter().enumerate() {
         #[cfg(feature = "std")]
-        if !m.given(i) && m.slots[i].values.is_empty() {
-            env_readable(a)?;
+        if !matches.given(i) && matches.slots[i].values.is_empty() {
+            env_readable(arg)?;
         }
-        if !supplied(spec, m, i) && a.required && demands == Demands::Checked {
-            return Err(ErrorKind::MissingRequired(a.display_name()));
+        if !supplied(spec, matches, i) && arg.required && demands == Demands::Checked {
+            return Err(ErrorKind::MissingRequired(arg.display_name()));
         }
-        count_values(a, m.slots[i].values.len(), fallback(spec, i))?;
+        count_values(arg, matches.slots[i].values.len(), fallback(spec, i))?;
     }
 
-    for &(a, b) in spec.requires {
-        if m.slots[a].count > 0 && !supplied(spec, m, b) {
+    for &(arg, needs) in spec.requires {
+        if matches.slots[arg].count > 0 && !supplied(spec, matches, needs) {
             return Err(ErrorKind::Requires {
-                arg:   spec.args[a].display_name(),
-                needs: spec.args[b].display_name(),
+                arg:   spec.args[arg].display_name(),
+                needs: spec.args[needs].display_name(),
             });
         }
     }
 
-    for &(a, b) in spec.conflicts {
-        if m.slots[a].count > 0 && m.slots[b].count > 0 {
+    for &(first, second) in spec.conflicts {
+        if matches.slots[first].count > 0 && matches.slots[second].count > 0 {
             return Err(ErrorKind::Conflict {
                 group:  String::new(),
-                first:  spec.args[a].display_name(),
-                second: spec.args[b].display_name(),
+                first:  spec.args[first].display_name(),
+                second: spec.args[second].display_name(),
             });
         }
     }
 
-    for (inner, inner_matches) in spec.flattened.iter().zip(&m.flattened) {
+    for (inner, inner_matches) in spec.flattened.iter().zip(&matches.flattened) {
         finalise_args(inner, inner_matches, demands)?;
     }
 
@@ -1653,13 +1678,17 @@ fn finalise_args(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<()
 
 /// a group spans every flattened struct at a command level, so each name is
 /// checked once against all its members, required if any declaration says so
-fn finalise_groups(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<(), ErrorKind> {
+fn finalise_groups(
+    spec: &CommandSpec,
+    matches: &Matches,
+    demands: Demands,
+) -> Result<(), ErrorKind> {
     for (name, required) in command_groups(spec) {
-        let members = group_members(spec, m, name);
+        let members = group_members(spec, matches, name);
         let set: Vec<String> = members
             .iter()
             .filter(|(_, slot)| slot.count > 0)
-            .map(|(a, _)| a.display_name())
+            .map(|(arg, _)| arg.display_name())
             .collect();
         if set.len() > 1 {
             return Err(ErrorKind::Conflict {
@@ -1671,7 +1700,7 @@ fn finalise_groups(spec: &CommandSpec, m: &Matches, demands: Demands) -> Result<
         if set.is_empty() && required && demands == Demands::Checked {
             let options = members
                 .iter()
-                .map(|(a, _)| a.display_name())
+                .map(|(arg, _)| arg.display_name())
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(ErrorKind::MissingGroup {
@@ -1705,24 +1734,24 @@ fn command_groups(spec: &CommandSpec) -> Vec<(&'static str, bool)> {
 /// slots
 fn group_members<'m, 'a>(
     spec: &CommandSpec,
-    m: &'m Matches<'a>,
+    matches: &'m Matches<'a>,
     group: &str,
 ) -> Vec<(&'static ArgSpec, &'m Slot<'a>)> {
     let mut members = Vec::new();
     spec.visit(&mut Vec::new(), &mut |path, index, arg| {
         if arg.group == Some(group) {
-            let owner = path.iter().fold(m, |owner, &i| &owner.flattened[i]);
+            let owner = path.iter().fold(matches, |owner, &i| &owner.flattened[i]);
             members.push((arg, &owner.slots[index]));
         }
     });
     members
 }
 
-fn target_slot_mut<'m, 'a>(m: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mut Slot<'a> {
+fn target_slot_mut<'m, 'a>(matches: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mut Slot<'a> {
     let owner = target
         .path
         .iter()
-        .fold(m, |owner, &i| &mut owner.flattened[i]);
+        .fold(matches, |owner, &i| &mut owner.flattened[i]);
     &mut owner.slots[target.index]
 }
 
@@ -1768,19 +1797,19 @@ fn long_names<'s>(cmd: &'s Command<'_>) -> impl Iterator<Item = &'s str> {
     let version = spec.has_version_info() && !claims_long(&own, globals, "version");
     own.into_iter()
         .chain(globals.iter().copied())
-        .filter(|a| !a.hidden)
-        .flat_map(|a| {
-            a.long
+        .filter(|arg| !arg.hidden)
+        .flat_map(|arg| {
+            arg.long
                 .into_iter()
-                .chain(a.negate)
-                .chain(a.aliases.iter().copied())
+                .chain(arg.negate)
+                .chain(arg.aliases.iter().copied())
         })
         .chain(help.then_some("help"))
         .chain(version.then_some("version"))
 }
 
-fn sub_names(s: &SubSpec) -> impl Iterator<Item = &str> {
-    core::iter::once(s.name).chain(s.aliases.iter().copied())
+fn sub_names(sub: &SubSpec) -> impl Iterator<Item = &str> {
+    core::iter::once(sub.name).chain(sub.aliases.iter().copied())
 }
 
 fn closest_long(cmd: &Command<'_>, name: &str) -> Option<String> {
@@ -1801,13 +1830,13 @@ fn closest<'s>(candidates: impl Iterator<Item = &'s str>, target: &str) -> Optio
     best.map(|(_, candidate)| candidate.to_owned())
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
-    let width = b.chars().count();
+fn edit_distance(left: &str, right: &str) -> usize {
+    let width = right.chars().count();
     let mut prev: Vec<usize> = (0..=width).collect();
     let mut cur = vec![0; width + 1];
-    for (i, ca) in a.chars().enumerate() {
+    for (i, ca) in left.chars().enumerate() {
         cur[0] = i + 1;
-        for (j, cb) in b.chars().enumerate() {
+        for (j, cb) in right.chars().enumerate() {
             let substitute = prev[j] + usize::from(ca != cb);
             cur[j + 1] = substitute.min(prev[j + 1] + 1).min(cur[j] + 1);
         }
@@ -1824,8 +1853,8 @@ mod tests {
         SubSpec,
     };
 
-    fn argv<'a>(a: &[&'a str]) -> Vec<&'a str> {
-        a.to_vec()
+    fn argv<'a>(args: &[&'a str]) -> Vec<&'a str> {
+        args.to_vec()
     }
 
     // flat command: flags, an option (long+short), a count, a required
@@ -1861,47 +1890,47 @@ mod tests {
         help_if_empty:  false,
     };
 
-    fn parse<'a>(spec: &CommandSpec, a: &[&'a str]) -> Result<Matches<'a>, ErrorKind> {
-        parse_spec(spec, argv(a)).map_err(|e| e.kind)
+    fn parse<'a>(spec: &CommandSpec, args: &[&'a str]) -> Result<Matches<'a>, ErrorKind> {
+        parse_spec(spec, argv(args)).map_err(|error| error.kind)
     }
 
     #[test]
     fn longs_shorts_counts_positionals() {
-        let m = parse(&FLAT, &[
+        let matches = parse(&FLAT, &[
             "--force", "--dir", "/x", "-vv", "alpha", "beta", "gamma",
         ])
         .unwrap();
-        assert!(m.flag(0));
-        assert_eq!(m.raw(1), Some("/x"));
-        assert_eq!(m.count(2), 2);
-        assert_eq!(m.raw(3), Some("alpha"));
-        assert_eq!(m.raws(4), ["beta", "gamma"]);
+        assert!(matches.flag(0));
+        assert_eq!(matches.raw(1), Some("/x"));
+        assert_eq!(matches.count(2), 2);
+        assert_eq!(matches.raw(3), Some("alpha"));
+        assert_eq!(matches.raws(4), ["beta", "gamma"]);
     }
 
     #[test]
     fn short_cluster_and_attached_value() {
-        let m = parse(&FLAT, &["-vvf", "name"]).unwrap();
-        assert_eq!(m.count(2), 2);
-        assert!(m.flag(0));
+        let matches = parse(&FLAT, &["-vvf", "name"]).unwrap();
+        assert_eq!(matches.count(2), 2);
+        assert!(matches.flag(0));
 
-        let m = parse(&FLAT, &["-d/x", "name"]).unwrap();
-        assert_eq!(m.raw(1), Some("/x"));
+        let matches = parse(&FLAT, &["-d/x", "name"]).unwrap();
+        assert_eq!(matches.raw(1), Some("/x"));
 
-        let m = parse(&FLAT, &["--dir=/y", "name"]).unwrap();
-        assert_eq!(m.raw(1), Some("/y"));
+        let matches = parse(&FLAT, &["--dir=/y", "name"]).unwrap();
+        assert_eq!(matches.raw(1), Some("/y"));
     }
 
     #[test]
     fn last_wins_for_single_option() {
-        let m = parse(&FLAT, &["--dir", "/a", "--dir", "/b", "name"]).unwrap();
-        assert_eq!(m.raw(1), Some("/b"));
+        let matches = parse(&FLAT, &["--dir", "/a", "--dir", "/b", "name"]).unwrap();
+        assert_eq!(matches.raw(1), Some("/b"));
     }
 
     #[test]
     fn double_dash_forces_positionals() {
-        let m = parse(&FLAT, &["--", "--weird", "-x"]).unwrap();
-        assert_eq!(m.raw(3), Some("--weird"));
-        assert_eq!(m.raws(4), ["-x"]);
+        let matches = parse(&FLAT, &["--", "--weird", "-x"]).unwrap();
+        assert_eq!(matches.raw(3), Some("--weird"));
+        assert_eq!(matches.raws(4), ["-x"]);
     }
 
     #[test]
@@ -1911,9 +1940,9 @@ mod tests {
             ArgSpec::new(Kind::Trailing).value_name("cmd"),
         ];
         let wrap = CommandSpec { args: ARGS, ..FLAT };
-        let m = parse(&wrap, &["--force", "ls", "-la", "--force"]).unwrap();
-        assert!(m.flag(0));
-        assert_eq!(m.raws(1), ["ls", "-la", "--force"]);
+        let matches = parse(&wrap, &["--force", "ls", "-la", "--force"]).unwrap();
+        assert!(matches.flag(0));
+        assert_eq!(matches.raws(1), ["ls", "-la", "--force"]);
     }
 
     #[test]
@@ -1983,17 +2012,17 @@ mod tests {
         assert!(matches!(parse(&FLAT, &["--help"]), Err(ErrorKind::Help(_))));
         assert!(matches!(parse(&FLAT, &["-h"]), Err(ErrorKind::Help(_))));
         match parse(&FLAT, &["--version"]) {
-            Err(ErrorKind::Version(v)) => assert_eq!(v, "flat 0.1.0"),
+            Err(ErrorKind::Version(version)) => assert_eq!(version, "flat 0.1.0"),
             other => panic!("expected version, got {other:?}"),
         }
 
         match parse(&HASHED, &["--version"]) {
-            Err(ErrorKind::Version(v)) => assert_eq!(v, "flat 0.1.0 (abc123)"),
+            Err(ErrorKind::Version(version)) => assert_eq!(version, "flat 0.1.0 (abc123)"),
             other => panic!("expected version, got {other:?}"),
         }
 
         match parse(&HASH_ONLY, &["-V"]) {
-            Err(ErrorKind::Version(v)) => assert_eq!(v, "flat (abc123)"),
+            Err(ErrorKind::Version(version)) => assert_eq!(version, "flat (abc123)"),
             other => panic!("expected version, got {other:?}"),
         }
     }
@@ -2017,7 +2046,7 @@ mod tests {
     fn a_bad_env_value_names_its_variable() {
         const ARGS: &[ArgSpec] = &[ArgSpec::new(Kind::Opt).long("path").env("PATH")];
         const SPEC: CommandSpec = CommandSpec::new("e").args(ARGS);
-        let reject = |s: &str| Err::<u8, _>(ValueError::new(s, "bad"));
+        let reject = |raw: &str| Err::<u8, _>(ValueError::new(raw, "bad"));
         let arg_of = |args: &[&str]| {
             match parse(&SPEC, args).unwrap().required_map(&SPEC, 0, reject) {
                 Err(Error {
@@ -2055,15 +2084,15 @@ mod tests {
             help_if_empty:  false,
         };
         // unset: the reader falls back to the default
-        let m = parse(&SPEC, &[]).unwrap();
+        let matches = parse(&SPEC, &[]).unwrap();
         assert_eq!(
-            m.optional::<String>(&SPEC, 0).unwrap().as_deref(),
+            matches.optional::<String>(&SPEC, 0).unwrap().as_deref(),
             Some("info")
         );
         // a user value overrides the default
-        let m = parse(&SPEC, &["--level", "debug"]).unwrap();
+        let matches = parse(&SPEC, &["--level", "debug"]).unwrap();
         assert_eq!(
-            m.optional::<String>(&SPEC, 0).unwrap().as_deref(),
+            matches.optional::<String>(&SPEC, 0).unwrap().as_deref(),
             Some("debug")
         );
     }
@@ -2106,9 +2135,9 @@ mod tests {
         ];
         const SPEC: CommandSpec = CommandSpec::new("o").args(ARGS);
 
-        let m = parse(&SPEC, &["--color", "x.txt"]).unwrap();
-        assert_eq!(m.raw(0), Some("always"));
-        assert_eq!(m.raw(1), Some("x.txt"));
+        let matches = parse(&SPEC, &["--color", "x.txt"]).unwrap();
+        assert_eq!(matches.raw(0), Some("always"));
+        assert_eq!(matches.raw(1), Some("x.txt"));
 
         assert_eq!(
             parse(&SPEC, &["--color=never"]).unwrap().raw(0),
@@ -2288,8 +2317,8 @@ mod tests {
 
     #[test]
     fn subcommands() {
-        let m = parse(&ROOT, &["add", "serde", "https://x", "--force"]).unwrap();
-        let (idx, sub) = m.sub().expect("a subcommand");
+        let matches = parse(&ROOT, &["add", "serde", "https://x", "--force"]).unwrap();
+        let (idx, sub) = matches.sub().expect("a subcommand");
         assert_eq!(idx, 0);
         assert_eq!(sub.raw(0), Some("serde"));
         assert_eq!(sub.raw(1), Some("https://x"));
@@ -2321,17 +2350,17 @@ mod tests {
 
     #[test]
     fn subcommand_after_parent_positionals() {
-        let m = parse(&MIXED, &["p1", "a1", "add", "serde", "https://x"]).unwrap();
-        assert_eq!(m.raw(0), Some("p1"));
-        assert_eq!(m.raw(1), Some("a1"));
-        let (idx, sub) = m.sub().expect("a subcommand");
+        let matches = parse(&MIXED, &["p1", "a1", "add", "serde", "https://x"]).unwrap();
+        assert_eq!(matches.raw(0), Some("p1"));
+        assert_eq!(matches.raw(1), Some("a1"));
+        let (idx, sub) = matches.sub().expect("a subcommand");
         assert_eq!(idx, 0);
         assert_eq!(sub.raw(0), Some("serde"));
 
         // an unfilled required positional still wins the token
-        let m = parse(&MIXED, &["p1", "add", "add", "serde", "https://x"]).unwrap();
-        assert_eq!(m.raw(1), Some("add"));
-        assert!(m.sub().is_some());
+        let matches = parse(&MIXED, &["p1", "add", "add", "serde", "https://x"]).unwrap();
+        assert_eq!(matches.raw(1), Some("add"));
+        assert!(matches.sub().is_some());
 
         assert!(matches!(
             parse(&MIXED, &["p1", "a1", "nope"]),
@@ -2352,8 +2381,8 @@ mod tests {
         const SUBS: &[SubSpec] = &[ROOT_SUBS[0], SubSpec::external()];
         let root = CommandSpec { subs: SUBS, ..ROOT };
 
-        let m = parse(&root, &["frob", "--force", "x"]).unwrap();
-        let (index, ext) = m.sub().unwrap();
+        let matches = parse(&root, &["frob", "--force", "x"]).unwrap();
+        let (index, ext) = matches.sub().unwrap();
         assert_eq!(index, 1);
         assert_eq!(ext.raws(0), ["frob", "--force", "x"]);
         assert_eq!(

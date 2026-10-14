@@ -130,36 +130,39 @@ impl<'m> Manual<'m> {
         let switches = self
             .options
             .iter()
-            .filter(|a| matches!(a.kind, Kind::Flag | Kind::Count))
+            .filter(|arg| matches!(arg.kind, Kind::Flag | Kind::Count))
             .collect::<Vec<_>>();
-        let bundle = switches.iter().filter_map(|a| a.short).collect::<String>();
+        let bundle = switches
+            .iter()
+            .filter_map(|arg| arg.short)
+            .collect::<String>();
         if !bundle.is_empty() {
             page.line(format_args!("Op Fl {}", Word(&bundle)));
         }
-        for a in switches.iter().filter(|a| a.short.is_none()) {
-            page.line(format_args!("Op {}", Flag(a)));
+        for arg in switches.iter().filter(|arg| arg.short.is_none()) {
+            page.line(format_args!("Op {}", Flag(arg)));
         }
 
-        for a in self.options.iter().filter(|a| a.kind == Kind::Opt) {
-            let op = if a.required { "" } else { "Op " };
-            if a.value_may_be_left_out() {
+        for arg in self.options.iter().filter(|arg| arg.kind == Kind::Opt) {
+            let op = if arg.required { "" } else { "Op " };
+            if arg.value_may_be_left_out() {
                 let attached = Attached {
-                    arg:  a,
-                    long: a.short.is_none(),
+                    arg,
+                    long: arg.short.is_none(),
                 };
-                page.line(format_args!("{op}{}{attached}", Flag(a)));
+                page.line(format_args!("{op}{}{attached}", Flag(arg)));
             } else {
-                page.line(format_args!("{op}{} {}", Flag(a), Values(a)));
+                page.line(format_args!("{op}{} {}", Flag(arg), Values(arg)));
             }
         }
-        for a in &self.positionals {
-            let dots = if a.multi || a.kind == Kind::Trailing {
+        for arg in &self.positionals {
+            let dots = if arg.multi || arg.kind == Kind::Trailing {
                 " ..."
             } else {
                 ""
             };
-            let op = if a.required { "" } else { "Op " };
-            page.line(format_args!("{op}Ar {}{dots}", Meta(a)));
+            let op = if arg.required { "" } else { "Op " };
+            page.line(format_args!("{op}Ar {}{dots}", Meta(arg)));
         }
         if self.cmd.spec().has_subs() {
             let op = if self.cmd.spec().subcommand_optional() {
@@ -185,18 +188,18 @@ impl<'m> Manual<'m> {
         if !self.positionals.is_empty() {
             page.paragraph();
             page.text("The arguments are as follows:");
-            page.list(&self.positionals, |page, a| {
-                page.line(format_args!("It Ar {}", Meta(a)));
-                page.describe(a);
+            page.list(&self.positionals, |page, arg| {
+                page.line(format_args!("It Ar {}", Meta(arg)));
+                page.describe(arg);
             });
         }
 
         if !self.options.is_empty() {
             page.paragraph();
             page.text("The options are as follows:");
-            page.list(&self.options, |page, a| {
-                page.line(format_args!("It {}", Item(a)));
-                page.describe(a);
+            page.list(&self.options, |page, arg| {
+                page.line(format_args!("It {}", Item(arg)));
+                page.describe(arg);
             });
         }
 
@@ -254,18 +257,18 @@ impl<'m> Manual<'m> {
             .options
             .iter()
             .chain(self.positionals.iter().copied())
-            .filter_map(|a| Some((a.env.filter(|_| !a.hide_env)?, a)))
+            .filter_map(|arg| Some((arg.env.filter(|_| !arg.hide_env)?, arg)))
             .collect::<Vec<_>>();
         if env.is_empty() {
             return;
         }
 
         page.line("Sh ENVIRONMENT");
-        page.list(env, |page, (var, a)| {
+        page.list(env, |page, (var, arg)| {
             page.line(format_args!("It Ev {}", Word(var)));
             page.text("Default for");
-            match (a.long, a.short) {
-                _ if a.is_positional() => page.line(format_args!("Ar {} .", Meta(a))),
+            match (arg.long, arg.short) {
+                _ if arg.is_positional() => page.line(format_args!("Ar {} .", Meta(arg))),
                 (Some(long), _) => page.line(format_args!("Fl \\-{} .", Word(long))),
                 (None, Some(short)) => {
                     page.line(format_args!(
@@ -273,7 +276,7 @@ impl<'m> Manual<'m> {
                         Word(short.encode_utf8(&mut [0; 4]))
                     ));
                 },
-                (None, None) => page.line(format_args!("Ar {} .", Meta(a))),
+                (None, None) => page.line(format_args!("Ar {} .", Meta(arg))),
             }
         });
     }
@@ -319,8 +322,8 @@ impl Mdoc {
             .join("\n");
         let paragraphs = flat
             .split("\n\n")
-            .map(|p| p.trim_matches('\n'))
-            .filter(|p| !p.is_empty());
+            .map(|chunk| chunk.trim_matches('\n'))
+            .filter(|chunk| !chunk.is_empty());
         for (nth, paragraph) in paragraphs.enumerate() {
             let lines = paragraph.lines().collect::<Vec<_>>();
             let mut margin = None;
@@ -360,16 +363,16 @@ impl Mdoc {
         self.line("El");
     }
 
-    fn describe(&mut self, a: &ArgSpec) {
-        self.text(a.long_help.unwrap_or(a.help));
-        let choices = a
+    fn describe(&mut self, arg: &ArgSpec) {
+        self.text(arg.long_help.unwrap_or(arg.help));
+        let choices = arg
             .possible
-            .filter(|_| !a.hide_possible)
+            .filter(|_| !arg.hide_possible)
             .unwrap_or_default()
             .iter()
-            .filter(|c| !c.hidden)
+            .filter(|choice| !choice.hidden)
             .collect::<Vec<_>>();
-        if choices.iter().any(|c| !c.help.is_empty()) {
+        if choices.iter().any(|choice| !choice.help.is_empty()) {
             self.line("Pp");
             self.text("One of");
             self.list(&choices, |page, choice| {
@@ -384,9 +387,9 @@ impl Mdoc {
                 self.line(format_args!("Cm {}{punct}", Word(choice.name)));
             }
         }
-        if let Some(default) = a
+        if let Some(default) = arg
             .default
-            .filter(|_| a.kind != Kind::Flag && !a.hide_default)
+            .filter(|_| arg.kind != Kind::Flag && !arg.hide_default)
         {
             self.line("Pp");
             self.text("Defaults to");
@@ -412,11 +415,11 @@ impl fmt::Display for Word<'_> {
         } else if delimiter || word.len() <= 3 && word.starts_with(char::is_uppercase) {
             f.write_str("\\&")?;
         }
-        for c in word.chars() {
-            match c {
+        for ch in word.chars() {
+            match ch {
                 '\\' => f.write_str("\\e")?,
                 '"' => f.write_str("\\(dq")?,
-                c => f.write_char(c)?,
+                _ => f.write_char(ch)?,
             }
         }
         if quoted {
@@ -471,11 +474,11 @@ struct Flag<'a>(&'a ArgSpec);
 
 impl fmt::Display for Flag<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let a = self.0;
-        match (a.short, a.long) {
-            (Some(c), _) => write!(f, "Fl {}", Word(c.encode_utf8(&mut [0; 4]))),
+        let arg = self.0;
+        match (arg.short, arg.long) {
+            (Some(short), _) => write!(f, "Fl {}", Word(short.encode_utf8(&mut [0; 4]))),
             (None, Some(long)) => write!(f, "Fl \\-{}", Word(long)),
-            (None, None) => write!(f, "Ar {}", Meta(a)),
+            (None, None) => write!(f, "Ar {}", Meta(arg)),
         }
     }
 }
@@ -490,26 +493,26 @@ impl fmt::Display for Item<'_> {
             Long(&'s str),
         }
 
-        let a = self.0;
-        let shorts = a.short.map(Spelling::Short);
-        let longs = a.long.into_iter().chain(a.negate).map(Spelling::Long);
+        let arg = self.0;
+        let shorts = arg.short.map(Spelling::Short);
+        let longs = arg.long.into_iter().chain(arg.negate).map(Spelling::Long);
         for (i, spelling) in shorts.into_iter().chain(longs).enumerate() {
             if i > 0 {
                 f.write_str(" , ")?;
             }
             match spelling {
-                Spelling::Short(c) => write!(f, "Fl {}", Word(c.encode_utf8(&mut [0; 4])))?,
+                Spelling::Short(short) => write!(f, "Fl {}", Word(short.encode_utf8(&mut [0; 4])))?,
                 Spelling::Long(long) => write!(f, "Fl \\-{}", Word(long))?,
             }
-            match (a.kind, spelling) {
-                (Kind::Opt, _) if a.value_may_be_left_out() => {
+            match (arg.kind, spelling) {
+                (Kind::Opt, _) if arg.value_may_be_left_out() => {
                     let long = matches!(spelling, Spelling::Long(_));
-                    write!(f, "{}", Attached { arg: a, long })?;
+                    write!(f, "{}", Attached { arg, long })?;
                 },
-                (Kind::Opt, Spelling::Long(_)) if a.words_per_use().is_none() => {
-                    write!(f, " Ns = Ns Ar {}", Meta(a))?;
+                (Kind::Opt, Spelling::Long(_)) if arg.words_per_use().is_none() => {
+                    write!(f, " Ns = Ns Ar {}", Meta(arg))?;
                 },
-                (Kind::Opt, _) => write!(f, " {}", Values(a))?,
+                (Kind::Opt, _) => write!(f, " {}", Values(arg))?,
                 _ => {},
             }
         }

@@ -65,7 +65,7 @@ fn walk(cmd: &Command<'_>, depth: usize) {
     };
     println!("{pad}{}{version}  {}", spec.name, spec.about);
 
-    for arg in spec.arguments().filter(|a| !a.hidden) {
+    for arg in spec.arguments().filter(|arg| !arg.hidden) {
         println!("{pad}  {}", row(arg));
     }
     for arg in cmd.inherited() {
@@ -75,38 +75,38 @@ fn walk(cmd: &Command<'_>, depth: usize) {
         println!("{pad}  {}  [implicit]", row(&arg));
     }
 
-    for sub in cmd.subcommands().filter(|s| !s.hidden()) {
+    for sub in cmd.subcommands().filter(|child| !child.hidden()) {
         walk(&sub, depth + 1);
     }
 }
 
 /// a single arg's specification
 /// should capture the switches and values it may take, etc
-fn row(a: &ArgSpec) -> String {
-    if a.is_positional() {
-        let dots = if a.multi { "..." } else { "" };
-        return format!("{}{dots}  {}", metavar(a), a.help);
+fn row(arg: &ArgSpec) -> String {
+    if arg.is_positional() {
+        let dots = if arg.multi { "..." } else { "" };
+        return format!("{}{dots}  {}", metavar(arg), arg.help);
     }
-    let value = if a.takes_value() {
-        format!(" <{}>", metavar(a))
+    let value = if arg.takes_value() {
+        format!(" <{}>", metavar(arg))
     } else {
         String::new()
     };
-    let switch = match (a.short, a.long) {
-        (Some(s), Some(l)) => format!("-{s}, --{l}{value}"),
-        (Some(s), None) => format!("-{s}{value}"),
-        (None, Some(l)) => format!("--{l}{value}"),
-        (None, None) => metavar(a),
+    let switch = match (arg.short, arg.long) {
+        (Some(short), Some(long)) => format!("-{short}, --{long}{value}"),
+        (Some(short), None) => format!("-{short}{value}"),
+        (None, Some(long)) => format!("--{long}{value}"),
+        (None, None) => metavar(arg),
     };
-    format!("{switch}  {}", a.help)
+    format!("{switch}  {}", arg.help)
 }
 
 /// placeholder for an arg's value
-fn metavar(a: &ArgSpec) -> String {
-    let name = if a.value_name.is_empty() {
-        a.long.unwrap_or("arg")
+fn metavar(arg: &ArgSpec) -> String {
+    let name = if arg.value_name.is_empty() {
+        arg.long.unwrap_or("arg")
     } else {
-        a.value_name
+        arg.value_name
     };
     name.to_uppercase()
 }

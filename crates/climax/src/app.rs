@@ -6,26 +6,26 @@ use crate::Result;
 
 /// # Errors
 ///
-/// fails with whatever `f` returns.
+/// fails with whatever `main` returns.
 #[cfg(feature = "parse")]
-pub fn run<C, F>(f: F) -> Result<()>
+pub fn run<C, F>(main: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
     #[cfg(feature = "complete")]
     caress::handle(C::SPEC);
-    run_with(C::parse(), f)
+    run_with(C::parse(), main)
 }
 
 /// # Errors
 ///
-/// fails with whatever `f` returns.
-pub fn run_with<C, F>(command: C, f: F) -> Result<()>
+/// fails with whatever `main` returns.
+pub fn run_with<C, F>(command: C, main: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
-    f(Context::new(), command)
+    main(Context::new(), command)
 }
 
 #[derive(Clone, Debug)]

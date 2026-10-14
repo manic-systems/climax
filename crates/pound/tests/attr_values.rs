@@ -38,7 +38,7 @@ struct Args {
     pairs:     u32,
     #[pound(long, parse = <Wrap<u8, u16>>::raw, default = "2")]
     qualified: u32,
-    #[pound(long, parse = |s: &str| if s < "5" { even(s) } else { Err("late") }, validate = |n: &u32| if *n > 0 { Ok(()) } else { Err("zero") })]
+    #[pound(long, parse = |raw: &str| if raw < "5" { even(raw) } else { Err("late") }, validate = |n: &u32| if *n > 0 { Ok(()) } else { Err("zero") })]
     compared:  Option<u32>,
     #[pound(long, default = { SYSTEM_PROFILE })]
     profile:   String,
@@ -49,7 +49,7 @@ struct Args {
 }
 
 fn parse(args: &[&str]) -> Result<Args, pound::ErrorKind> {
-    Args::try_parse_from(args.iter().copied()).map_err(|e| e.kind)
+    Args::try_parse_from(args.iter().copied()).map_err(|error| error.kind)
 }
 
 #[test]

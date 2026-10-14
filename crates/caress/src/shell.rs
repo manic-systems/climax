@@ -97,7 +97,7 @@ impl Shell {
     pub fn script(self, program: &str) -> String {
         let ident = program
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
             .collect::<String>();
         let template = match self {
             Self::Bash => BASH,
@@ -163,27 +163,27 @@ fn nu_json(completions: &Completions) -> String {
     let records = completions
         .candidates
         .iter()
-        .map(|c| {
+        .map(|candidate| {
             format!(
                 "{{\"value\":{},\"description\":{}}}",
-                json_string(&c.value),
-                json_string(c.help.lines().next().unwrap_or_default())
+                json_string(&candidate.value),
+                json_string(candidate.help.lines().next().unwrap_or_default())
             )
         })
         .collect::<Vec<_>>();
     format!("[{}]", records.join(","))
 }
 
-fn json_string(s: &str) -> String {
+fn json_string(text: &str) -> String {
     let mut out = String::from('"');
-    for c in s.chars() {
-        match c {
+    for ch in text.chars() {
+        match ch {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
-            c if c.is_control() => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
+            _ if ch.is_control() => {
+                let _ = write!(out, "\\u{:04x}", u32::from(ch));
             },
-            c => out.push(c),
+            _ => out.push(ch),
         }
     }
     out.push('"');
