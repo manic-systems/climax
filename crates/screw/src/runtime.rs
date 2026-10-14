@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::{
     io::{
         self,
@@ -12,10 +13,7 @@ use std::{
         self,
         JoinHandle,
     },
-    time::{
-        Duration,
-        Instant,
-    },
+    time::Instant,
 };
 
 use crate::{
@@ -97,12 +95,18 @@ where
         self.dirty = true;
     }
 
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn draw_now(&mut self, now: Instant) -> io::Result<RenderStats> {
         self.dirty = false;
         self.last_draw = Some(now);
         self.renderer.draw(&self.root)
     }
 
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written to or flushed through the writer.
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<RenderStats>> {
         if !self.should_draw(now) {
             return Ok(None);
@@ -272,6 +276,9 @@ impl<W> AutoRuntime<W>
 where
     W: Write + Send + 'static,
 {
+    /// # Errors
+    ///
+    /// fails as the live or plain runtime underneath fails.
     pub fn mark_dirty(&self) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.mark_dirty(),
@@ -279,6 +286,9 @@ where
         }
     }
 
+    /// # Errors
+    ///
+    /// fails as the live or plain runtime underneath fails.
     pub fn resize(&mut self, width: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize(width),
@@ -289,6 +299,9 @@ where
         }
     }
 
+    /// # Errors
+    ///
+    /// fails as the live or plain runtime underneath fails.
     pub fn finish(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish(),
@@ -296,6 +309,9 @@ where
         }
     }
 
+    /// # Errors
+    ///
+    /// fails as the live or plain runtime underneath fails.
     pub fn finish_with(self, final_widget: WidgetRef) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish_with(final_widget),
@@ -303,6 +319,9 @@ where
         }
     }
 
+    /// # Errors
+    ///
+    /// fails as the live or plain runtime underneath fails.
     pub fn finish_cleared(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish_cleared(),
@@ -328,30 +347,37 @@ where
         self.width = Some(width);
     }
 
+    /// # Errors
+    ///
+    /// fails when the final frame cannot be written or flushed.
     pub fn finish(self) -> io::Result<W> {
         self.finish_mode(FinishMode::Current)
     }
 
+    /// # Errors
+    ///
+    /// fails when the final frame cannot be written or flushed.
     pub fn finish_with(self, final_widget: WidgetRef) -> io::Result<W> {
         self.finish_mode(FinishMode::With(final_widget))
     }
 
+    /// # Errors
+    ///
+    /// fails when the final frame cannot be written or flushed.
     pub fn finish_cleared(self) -> io::Result<W> {
         self.finish_mode(FinishMode::Clear)
     }
 
     fn finish_mode(mut self, finish_mode: FinishMode) -> io::Result<W> {
-        if matches!(finish_mode, FinishMode::Clear) {
-            self.writer.flush()?;
-            return Ok(self.writer);
-        }
-
-        let mut surface = Surface::new();
         let root = match finish_mode {
+            FinishMode::Clear => {
+                self.writer.flush()?;
+                return Ok(self.writer);
+            },
             FinishMode::Current => self.final_widget.unwrap_or(self.root),
             FinishMode::With(final_widget) => final_widget,
-            FinishMode::Clear => unreachable!("clear finish returned before rendering"),
         };
+        let mut surface = Surface::new();
         root.render(
             &RenderCtx {
                 frame: 0,
@@ -388,7 +414,7 @@ where
                         return finish_runtime(runtime, FinishMode::Current);
                     },
                     Err(RecvTimeoutError::Timeout) => {
-                        let _ = runtime.tick(Instant::now())?;
+                        runtime.tick(Instant::now())?;
                     },
                 }
 
@@ -402,7 +428,7 @@ where
                         },
                     }
                 }
-                let _ = runtime.tick(Instant::now())?;
+                runtime.tick(Instant::now())?;
             }
         });
 
@@ -416,48 +442,82 @@ where
         self.handle.clone()
     }
 
+    /// # Errors
+    ///
+    /// fails with [`io::ErrorKind::BrokenPipe`] when the runtime thread has
+    /// already stopped.
     pub fn mark_dirty(&self) -> io::Result<()> {
         self.handle.mark_dirty()
     }
 
+    /// # Errors
+    ///
+    /// fails with [`io::ErrorKind::BrokenPipe`] when the runtime thread has
+    /// already stopped.
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.handle.resize(width)
     }
 
+    /// # Errors
+    ///
+    /// fails when the runtime thread has stopped, panicked or could not write
+    /// the final frame.
     pub fn finish(mut self) -> io::Result<W> {
         self.handle
             .send(RuntimeCommand::Finish(FinishMode::Current))?;
         self.join()
     }
 
+    /// # Errors
+    ///
+    /// fails when the runtime thread has stopped, panicked or could not write
+    /// the final frame.
     pub fn finish_with(mut self, final_widget: WidgetRef) -> io::Result<W> {
         self.handle
             .send(RuntimeCommand::Finish(FinishMode::With(final_widget)))?;
         self.join()
     }
 
+    /// # Errors
+    ///
+    /// fails when the runtime thread has stopped, panicked or could not write
+    /// the final frame.
     pub fn finish_cleared(mut self) -> io::Result<W> {
         self.handle
             .send(RuntimeCommand::Finish(FinishMode::Clear))?;
         self.join()
     }
 
+    #[expect(clippy::expect_used, reason = "only the consuming finish methods join")]
     fn join(&mut self) -> io::Result<W> {
         let thread = self
             .thread
             .take()
             .expect("live runtime thread is joined at most once");
-        thread
-            .join()
-            .map_err(|_| io::Error::other("runtime thread panicked"))?
+        thread.join().map_err(|payload| {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string payload");
+            io::Error::other(format!("runtime thread panicked: {message}"))
+        })?
     }
 }
 
 impl RuntimeHandle {
+    /// # Errors
+    ///
+    /// fails with [`io::ErrorKind::BrokenPipe`] when the runtime thread has
+    /// already stopped.
     pub fn mark_dirty(&self) -> io::Result<()> {
         self.send(RuntimeCommand::Dirty)
     }
 
+    /// # Errors
+    ///
+    /// fails with [`io::ErrorKind::BrokenPipe`] when the runtime thread has
+    /// already stopped.
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.send(RuntimeCommand::Resize(width))
     }
@@ -475,11 +535,12 @@ impl RuntimeHandle {
 impl<W> Drop for LiveRuntime<W> {
     fn drop(&mut self) {
         if self.thread.is_some() {
-            let _ = self
-                .handle
-                .send(RuntimeCommand::Finish(FinishMode::Current));
+            drop(
+                self.handle
+                    .send(RuntimeCommand::Finish(FinishMode::Current)),
+            );
             if let Some(thread) = self.thread.take() {
-                let _ = thread.join();
+                drop(thread.join());
             }
         }
     }
@@ -531,6 +592,5 @@ fn wants_frame_tick(interest: TickInterest, elapsed: Duration, frame_interval: D
 }
 
 fn fps_interval(fps: u16) -> Duration {
-    let fps = u64::from(fps.max(1));
-    Duration::from_nanos(1_000_000_000 / fps)
+    Duration::from_nanos(1_000_000_000 / u64::from(fps.max(1)))
 }

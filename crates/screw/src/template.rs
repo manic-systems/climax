@@ -1,6 +1,9 @@
-use std::{
+use alloc::sync::Arc;
+use core::{
     error::Error,
     fmt,
+    iter::Peekable,
+    mem,
 };
 
 use crate::{
@@ -36,29 +39,34 @@ impl fmt::Display for TemplateError {
 
 impl Error for TemplateError {}
 
+/// # Errors
+///
+/// fails when `source` has an unmatched `}`, an empty or unclosed slot, or
+/// names a slot missing from `slots`.
 pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, TemplateError> {
-    let mut rows = vec![Vec::new()];
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
     let mut text = String::new();
     let mut chars = source.chars().peekable();
 
     while let Some(ch) = chars.next() {
         match ch {
             '\n' => {
-                flush_text(&mut rows, &mut text);
-                rows.push(Vec::new());
+                flush_text(&mut row, &mut text);
+                rows.push(mem::take(&mut row));
             },
             '{' if chars.peek() == Some(&'{') => {
-                let _ = chars.next();
+                chars.next();
                 text.push('{');
             },
             '{' => {
-                flush_text(&mut rows, &mut text);
+                flush_text(&mut row, &mut text);
                 let name = parse_slot_name(&mut chars)?;
                 let slot = find_slot(slots, &name)?;
-                current_row_mut(&mut rows).push(slot);
+                row.push(slot);
             },
             '}' if chars.peek() == Some(&'}') => {
-                let _ = chars.next();
+                chars.next();
                 text.push('}');
             },
             '}' => return Err(TemplateError::UnmatchedCloseBrace),
@@ -66,16 +74,17 @@ pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, Temp
         }
     }
 
-    flush_text(&mut rows, &mut text);
+    flush_text(&mut row, &mut text);
+    rows.push(row);
     Ok(Stack::new(
         rows.into_iter()
-            .map(|row| widget(Line::new(row)))
+            .map(|cells| widget(Line::new(cells)))
             .collect::<Vec<_>>(),
     ))
 }
 
 fn parse_slot_name(
-    chars: &mut std::iter::Peekable<impl Iterator<Item = char>>,
+    chars: &mut Peekable<impl Iterator<Item = char>>,
 ) -> Result<String, TemplateError> {
     let mut name = String::new();
     for ch in chars.by_ref() {
@@ -94,17 +103,12 @@ fn find_slot(slots: &[(&str, WidgetRef)], name: &str) -> Result<WidgetRef, Templ
     slots
         .iter()
         .rev()
-        .find_map(|(slot_name, slot)| (*slot_name == name).then(|| slot.clone()))
+        .find_map(|(slot_name, slot)| (*slot_name == name).then(|| Arc::clone(slot)))
         .ok_or_else(|| TemplateError::MissingSlot(name.to_owned()))
 }
 
-fn flush_text(rows: &mut Vec<Vec<WidgetRef>>, text: &mut String) {
+fn flush_text(row: &mut Vec<WidgetRef>, text: &mut String) {
     if !text.is_empty() {
-        current_row_mut(rows).push(widget(Text::new(std::mem::take(text))));
+        row.push(widget(Text::new(mem::take(text))));
     }
-}
-
-fn current_row_mut(rows: &mut [Vec<WidgetRef>]) -> &mut Vec<WidgetRef> {
-    rows.last_mut()
-        .expect("template parser always keeps a current row")
 }

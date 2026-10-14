@@ -1,11 +1,14 @@
+extern crate alloc;
+
+use alloc::sync::Arc;
+use core::time::Duration;
 use std::{
     io,
     sync::{
-        Arc,
         Mutex,
+        PoisonError,
     },
     thread,
-    time::Duration,
 };
 
 use screw::{
@@ -57,13 +60,13 @@ impl SelectedList {
     }
 
     fn select(&self, selected: usize) {
-        *self.selected.lock().expect("selected-list mutex poisoned") = selected;
+        *self.selected.lock().unwrap_or_else(PoisonError::into_inner) = selected;
     }
 }
 
 impl Widget for SelectedList {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let selected = *self.selected.lock().expect("selected-list mutex poisoned");
+        let selected = *self.selected.lock().unwrap_or_else(PoisonError::into_inner);
         List::new(self.rows.clone())
             .height(4)
             .selected(selected)
@@ -84,13 +87,13 @@ impl Calendar {
     }
 
     fn select(&self, day: usize) {
-        *self.selected.lock().expect("calendar mutex poisoned") = day;
+        *self.selected.lock().unwrap_or_else(PoisonError::into_inner) = day;
     }
 }
 
 impl Widget for Calendar {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let selected = *self.selected.lock().expect("calendar mutex poisoned");
+        let selected = *self.selected.lock().unwrap_or_else(PoisonError::into_inner);
         let rows = [["20", "21", "22", "23", "24", "25", "26"], [
             "27", "28", "29", "30", "31", "  ", "  ",
         ]]
@@ -128,13 +131,13 @@ impl DraftInput {
     }
 
     fn set(&self, value: &str) {
-        *self.value.lock().expect("draft-input mutex poisoned") = value.to_string();
+        value.clone_into(&mut self.value.lock().unwrap_or_else(PoisonError::into_inner));
     }
 }
 
 impl Widget for DraftInput {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let value = self.value.lock().expect("draft-input mutex poisoned");
+        let value = self.value.lock().unwrap_or_else(PoisonError::into_inner);
         TextInput::new("filter: ", value.as_str())
             .cursor(value.chars().count())
             .roles(Role::Prompt, Role::Normal)
@@ -165,7 +168,7 @@ impl Gallery {
                 .case(
                     Phase::Busy,
                     widget(
-                        Looping::new(["⠁", "⠂", "⠄", "⠂"])
+                        Looping::new(["\u{2801}", "\u{2802}", "\u{2804}", "\u{2802}"])
                             .style(Style::default().fg(Color::Yellow).bold()),
                     ),
                 )
@@ -194,7 +197,10 @@ impl Gallery {
             widget(Arc::clone(&phase)),
             widget(Text::new(" screw differential gallery")),
         ]));
-        #[allow(clippy::literal_string_with_formatting_args)]
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "screw! fills its slots by name"
+        )]
         let root = screw!(
             "{status}\n{logs}\n{progress}\n{list}\n{calendar}\n{input}",
             status = status,
@@ -276,7 +282,7 @@ impl Gallery {
 
 fn main() -> io::Result<()> {
     let gallery = Gallery::new();
-    let runtime = Runtime::stderr_auto(gallery.root.clone())
+    let runtime = Runtime::stderr_auto(Arc::clone(&gallery.root))
         .fps(12)
         .final_widget(Gallery::final_summary())
         .start();

@@ -1,8 +1,10 @@
+extern crate alloc;
+
+use alloc::sync::Arc;
+use core::time::Duration;
 use std::{
     io,
-    sync::Arc,
     thread,
-    time::Duration,
 };
 
 use screw::{
