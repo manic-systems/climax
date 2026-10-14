@@ -367,6 +367,26 @@ impl Emitter {
         }
     }
 
+    /// a reference to `pound::attr::<key>` for each key written, under the
+    /// key's own span
+    pub fn key_refs(&self, keys: &[Ident]) -> TokenStream {
+        let root = &self.root;
+
+        if keys.is_empty() {
+            return TokenStream::new();
+        }
+
+        // a value path, so rustc reports an unknown key at the key itself, the
+        // one token here carrying the user's span
+        let uses = keys.iter().map(|key| quote! { let _ = #root::attr::#key; });
+
+        quote! {
+            const _: () = {
+                #(#uses)*
+            };
+        }
+    }
+
     pub fn value_enum(&self, value_enum: &ValueEnum) -> TokenStream {
         let root = &self.root;
         let name = &value_enum.ident;

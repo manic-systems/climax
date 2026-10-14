@@ -105,6 +105,7 @@ mod alloc_prelude {
     };
 }
 
+pub mod attr;
 #[doc(hidden)] pub mod checks;
 pub mod complete;
 mod error;
