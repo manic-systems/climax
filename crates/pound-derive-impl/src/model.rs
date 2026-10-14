@@ -978,7 +978,7 @@ pub struct Arg {
 impl Arg {
     fn new(field: &NamedField, ty: FieldType, a: Pound) -> Result<Self, Error> {
         let ident = &field.name;
-        let fname = ident.to_string();
+        let fname = ident.to_string().trim_start_matches("r#").to_owned();
         let kind = ArgKind::new(&a, &ty, ident)?;
 
         // long/short only for named kinds, defaulting a long name when neither
