@@ -812,7 +812,8 @@ fn walk_cmd<'a, M: Mode>(
         }
     };
 
-    // must run before finalise so owned globals count toward required/group checks
+    // must run before finalise so owned globals count toward required/group
+    // checks
     apply_global_hits(&targets, cmd.globals().len(), &mut walk.m, hits);
     M::finish(cmd, &walk.m, empty)?;
     Ok((walk.m, next))

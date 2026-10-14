@@ -635,8 +635,9 @@ impl Emitter {
         quote! { #(#args,)* #(#flattened,)* #sub }
     }
 
-    // a const assertion that a declared default is one of its type's values. only
-    // a `FromArg` conversion exposes a value list, so a custom parser gets none.
+    // a const assertion that a declared default is one of its type's values.
+    // only a `FromArg` conversion exposes a value list, so a custom parser
+    // gets none.
     fn default_assert(&self, arg: &Arg) -> Option<TokenStream> {
         let root = &self.root;
         let default = arg.default.as_ref()?;
