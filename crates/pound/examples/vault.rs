@@ -24,12 +24,14 @@ use pound::{
 struct Ttl(Duration);
 
 impl FromArg for Ttl {
-    fn from_arg(s: &str) -> Result<Self, ValueError> {
-        let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
-        let (num, unit) = s.split_at(split);
+    fn from_arg(raw: &str) -> Result<Self, ValueError> {
+        let split = raw
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(raw.len());
+        let (num, unit) = raw.split_at(split);
         let n: u64 = num
             .parse()
-            .map_err(|_| ValueError::new(s, "expected <number><s|m|h|d>"))?;
+            .map_err(|_| ValueError::new(raw, "expected <number><s|m|h|d>"))?;
         let secs = match unit {
             "" | "s" => n,
             "m" => n * 60,
@@ -37,7 +39,7 @@ impl FromArg for Ttl {
             "d" => n * 86_400,
             other => {
                 return Err(ValueError::new(
-                    s,
+                    raw,
                     format!("unknown unit '{other}', use s/m/h/d"),
                 ));
             },

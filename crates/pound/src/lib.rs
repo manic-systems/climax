@@ -206,7 +206,7 @@ pub trait Parse: Sized {
         let matches = parse::update_spec(Self::SPEC, args)?;
         let mut next = self.clone();
         next.update_from_matches(Self::SPEC, &matches)
-            .map_err(|e| matches.locate(Self::SPEC, e))?;
+            .map_err(|error| matches.locate(Self::SPEC, error))?;
         *self = next;
         Ok(())
     }
@@ -313,7 +313,7 @@ fn parse_as<'a, T: Parse>(
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<T, Error> {
     let matches = parse::parse_spec(spec, args)?;
-    T::from_matches(T::SPEC, &matches).map_err(|e| matches.locate(spec, e))
+    T::from_matches(T::SPEC, &matches).map_err(|error| matches.locate(spec, error))
 }
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.

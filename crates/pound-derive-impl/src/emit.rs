@@ -73,11 +73,11 @@ impl Emitter {
         let head = self.header(header);
         let cmd_id = generated("CMD");
         let consts = self.command_consts(command, &head, "", &cmd_id);
-        let (m, sp) = (local("m"), local("spec"));
-        let readers = self.readers(fields, &m, &sp);
-        let updates = self.updates(command, &m, &sp, |field| quote! { self.#field });
+        let (matches, sp) = (local("m"), local("spec"));
+        let readers = self.readers(fields, &matches, &sp);
+        let updates = self.updates(command, &matches, &sp, |field| quote! { self.#field });
         let named = named_fields(command).map(|field| quote! { let _ = &self.#field; });
-        let (update_m, update_spec) = (m.clone(), sp.clone());
+        let (update_m, update_spec) = (matches.clone(), sp.clone());
 
         // avoid unused-param warnings when a command carries only a subcommand.
         let spec_param = if fields.args.is_empty() {
@@ -90,7 +90,7 @@ impl Emitter {
             if fields.args.is_empty() && fields.flattened.is_empty() && fields.sub.is_none() {
                 local("_m")
             } else {
-                m
+                matches
             };
 
         quote! {
@@ -132,16 +132,16 @@ impl Emitter {
             .map(|(idx, variant)| self.variant(idx, variant, &sm, &spec_ident))
             .collect::<Vec<_>>();
 
-        let sub_consts = built.iter().map(|v| &v.consts);
-        let sub_specs = built.iter().map(|v| &v.spec);
-        let arms = built.iter().map(|v| &v.arm);
-        let update_arms = built.iter().map(|v| &v.update_arm);
+        let sub_consts = built.iter().map(|variant| &variant.consts);
+        let sub_specs = built.iter().map(|variant| &variant.spec);
+        let arms = built.iter().map(|variant| &variant.arm);
+        let update_arms = built.iter().map(|variant| &variant.update_arm);
         let picked = local("picked");
 
         let reading = built
             .iter()
             .enumerate()
-            .filter(|(_, v)| v.reads_spec)
+            .filter(|(_, variant)| variant.reads_spec)
             .map(|(idx, _)| idx)
             .collect::<Vec<_>>();
 
@@ -392,27 +392,27 @@ impl Emitter {
         let name = &value_enum.ident;
 
         let ignore_case = value_enum.ignore_case.then(|| quote!(.ignore_case()));
-        let choices = value_enum.variants.iter().map(|v| {
-            let (label, aliases) = (&v.label, &v.aliases);
-            let help = self.help_lit(&v.help);
-            let hidden = v.hidden.then(|| quote!(.hidden()));
+        let choices = value_enum.variants.iter().map(|variant| {
+            let (label, aliases) = (&variant.label, &variant.aliases);
+            let help = self.help_lit(&variant.help);
+            let hidden = variant.hidden.then(|| quote!(.hidden()));
             quote! {
                 #root::Choice::new(#label).aliases(&[ #(#aliases),* ]).help(#help) #hidden #ignore_case
             }
         });
 
-        let arms = value_enum.variants.iter().enumerate().map(|(i, v)| {
-            let vname = &v.ident;
+        let arms = value_enum.variants.iter().enumerate().map(|(i, variant)| {
+            let vname = &variant.ident;
             quote! { ::core::option::Option::Some(#i) => ::core::result::Result::Ok(Self::#vname), }
         });
 
-        let spellings = value_enum.variants.iter().map(|v| {
-            let (vname, label) = (&v.ident, &v.label);
+        let spellings = value_enum.variants.iter().map(|variant| {
+            let (vname, label) = (&variant.ident, &variant.label);
             quote! { Self::#vname => #label, }
         });
 
-        let variants = value_enum.variants.iter().map(|v| {
-            let vname = &v.ident;
+        let variants = value_enum.variants.iter().map(|variant| {
+            let vname = &variant.ident;
             quote! { Self::#vname }
         });
 
@@ -640,11 +640,11 @@ impl Emitter {
         }
     }
 
-    fn readers(&self, fields: &CommandFields, m: &Ident, spec: &Ident) -> TokenStream {
+    fn readers(&self, fields: &CommandFields, matches: &Ident, spec: &Ident) -> TokenStream {
         let root = &self.root;
 
         let args = fields.args.iter().enumerate().map(|(i, arg)| {
-            let (field, value) = (&arg.ident, self.read(arg, i, m, spec));
+            let (field, value) = (&arg.ident, self.read(arg, i, matches, spec));
             quote! { #field: #value }
         });
 
@@ -654,7 +654,7 @@ impl Emitter {
             quote! {
                 #ident: <#ty as #root::Parse>::from_matches(
                     <#ty as #root::Parse>::SPEC,
-                    #root::Matches::flattened(#m, #i),
+                    #root::Matches::flattened(#matches, #i),
                 )?
             }
         });
@@ -663,11 +663,11 @@ impl Emitter {
             let (ident, ty) = (&sub.ident, &sub.ty);
 
             let build =
-                quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #m)? };
+                quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #matches)? };
 
             if sub.optional {
                 quote! {
-                    #ident: if #root::Matches::sub(#m).is_some() {
+                    #ident: if #root::Matches::sub(#matches).is_some() {
                         ::core::option::Option::Some(#build)
                     } else {
                         ::core::option::Option::None
@@ -721,7 +721,7 @@ impl Emitter {
 
         let delimiter = arg.delimiter.map_or_else(
             || quote!(::core::option::Option::None),
-            |d| quote!(::core::option::Option::Some(#d)),
+            |sep| quote!(::core::option::Option::Some(#sep)),
         );
 
         Some(quote! {
@@ -749,39 +749,39 @@ impl Emitter {
 
         let spellings = Self::spelling_calls(arg);
         let counts = self.count_calls(arg);
-        let mut e = quote! { #root::ArgSpec::new(#kind) #spellings #counts };
+        let mut spec = quote! { #root::ArgSpec::new(#kind) #spellings #counts };
 
         if arg.required {
-            e = quote! { #e.required() };
+            spec = quote! { #spec.required() };
         }
 
-        if let Some(g) = &arg.group {
-            e = quote! { #e.group(#g) };
+        if let Some(group) = &arg.group {
+            spec = quote! { #spec.group(#group) };
         }
 
-        if let Some(d) = &arg.default {
-            let d = d.tokens();
-            e = quote! { #e.default(#d) };
+        if let Some(default) = &arg.default {
+            let tokens = default.tokens();
+            spec = quote! { #spec.default(#tokens) };
         }
 
         if let Some(dm) = &arg.default_missing {
-            e = quote! { #e.default_missing(#dm) };
+            spec = quote! { #spec.default_missing(#dm) };
         }
 
         if let Some(ev) = &arg.env {
-            e = quote! { #e.env(#ev) };
+            spec = quote! { #spec.env(#ev) };
         }
 
-        if let Some(h) = arg.heading.as_ref().filter(|_| self.help) {
-            e = quote! { #e.heading(#h) };
+        if let Some(heading) = arg.heading.as_ref().filter(|_| self.help) {
+            spec = quote! { #spec.heading(#heading) };
         }
 
         if let Some(n) = arg.display_order {
-            e = quote! { #e.display_order(#n) };
+            spec = quote! { #spec.display_order(#n) };
         }
 
         let vn = &arg.value_name;
-        e = quote! { #e.value_name(#vn) };
+        spec = quote! { #spec.value_name(#vn) };
 
         if arg
             .conversion
@@ -789,8 +789,8 @@ impl Emitter {
             .is_some_and(Conversion::reads_from_arg)
         {
             let inner = &arg.ty.inner;
-            e = quote! {
-                #e.possible_opt(<#inner as #root::FromArg>::POSSIBLE)
+            spec = quote! {
+                #spec.possible_opt(<#inner as #root::FromArg>::POSSIBLE)
                     .hint(<#inner as #root::FromArg>::HINT)
             };
         }
@@ -804,18 +804,18 @@ impl Emitter {
         ]
         .into_iter()
         .filter_map(|(set, call)| set.then_some(call));
-        e = quote! { #e #(#hide)* };
+        spec = quote! { #spec #(#hide)* };
 
         if arg.global {
-            e = quote! { #e.global() };
+            spec = quote! { #spec.global() };
         }
 
         if arg.exclusive {
-            e = quote! { #e.exclusive() };
+            spec = quote! { #spec.exclusive() };
         }
 
         if let Some(complete) = &arg.complete {
-            e = quote! { #e.complete(#complete) };
+            spec = quote! { #spec.complete(#complete) };
         }
 
         if let Some(hint) = &arg.hint {
@@ -823,16 +823,16 @@ impl Emitter {
                 ValueHint::Path => quote! { #root::Hint::Path },
                 ValueHint::Variant(variant) => quote! { #root::Hint::#variant },
             };
-            e = quote! { #e.hint(#hint) };
+            spec = quote! { #spec.hint(#hint) };
         }
 
         if let Some(lh) = &arg.long_help {
             let lh = self.help_lit(lh);
-            e = quote! { #e.long_help(#lh) };
+            spec = quote! { #spec.long_help(#lh) };
         }
 
         let help = self.help_lit(&arg.help);
-        quote! { #e.help(#help) }
+        quote! { #spec.help(#help) }
     }
 
     fn spelling_calls(arg: &Arg) -> TokenStream {
@@ -853,7 +853,7 @@ impl Emitter {
         let optional = (arg.ty.shape == Shape::OptOpt).then(|| quote! { .optional_value() });
         let min_values = arg.min_values.map(|n| quote! { .min_values(#n) });
         let max_values = arg.max_values.map(|n| quote! { .max_values(#n) });
-        let delimiter = arg.delimiter.map(|d| quote! { .delimiter(#d) });
+        let delimiter = arg.delimiter.map(|sep| quote! { .delimiter(#sep) });
         let per_use = arg.num_args.map(|NumArgs { min, max }| {
             let arity = match max {
                 Some(limit) if limit == min => quote! { #root::Arity::exactly(#min) },
@@ -866,48 +866,48 @@ impl Emitter {
         quote! { #multi #optional #min_values #max_values #delimiter #per_use }
     }
 
-    fn read(&self, arg: &Arg, i: usize, m: &Ident, spec: &Ident) -> TokenStream {
+    fn read(&self, arg: &Arg, i: usize, matches: &Ident, spec: &Ident) -> TokenStream {
         let inner = &arg.ty.inner;
 
         match (arg.kind, &arg.conversion) {
-            (ArgKind::Flag, _) if arg.ty.sourced => quote! { #m.switch_sourced(#spec, #i)? },
-            (ArgKind::Flag, _) => quote! { #m.switch(#spec, #i)? },
+            (ArgKind::Flag, _) if arg.ty.sourced => quote! { #matches.switch_sourced(#spec, #i)? },
+            (ArgKind::Flag, _) => quote! { #matches.switch(#spec, #i)? },
             (ArgKind::Count, _) => {
                 let ty = &arg.ty.full;
-                quote! { #m.count(#i) as #ty }
+                quote! { #matches.count(#i) as #ty }
             },
             (_, Some(conversion)) => {
                 let convert = self.conversion_closure(conversion, inner);
                 match arg.ty.shape {
                     Shape::One if arg.ty.sourced => {
-                        quote! { #m.required_sourced_map::<#inner>(#spec, #i, #convert)? }
+                        quote! { #matches.required_sourced_map::<#inner>(#spec, #i, #convert)? }
                     },
                     Shape::Opt if arg.ty.sourced => {
-                        quote! { #m.optional_sourced_map::<#inner>(#spec, #i, #convert)? }
+                        quote! { #matches.optional_sourced_map::<#inner>(#spec, #i, #convert)? }
                     },
                     Shape::Bool | Shape::One => {
-                        quote! { #m.required_map::<#inner>(#spec, #i, #convert)? }
+                        quote! { #matches.required_map::<#inner>(#spec, #i, #convert)? }
                     },
-                    Shape::Opt => quote! { #m.optional_map::<#inner>(#spec, #i, #convert)? },
-                    Shape::Many => quote! { #m.many_map::<#inner>(#spec, #i, #convert)? },
+                    Shape::Opt => quote! { #matches.optional_map::<#inner>(#spec, #i, #convert)? },
+                    Shape::Many => quote! { #matches.many_map::<#inner>(#spec, #i, #convert)? },
                     Shape::OptMany => {
-                        quote! { #m.optional_many_map::<#inner>(#spec, #i, #convert)? }
+                        quote! { #matches.optional_many_map::<#inner>(#spec, #i, #convert)? }
                     },
                     Shape::OptOpt => {
-                        quote! { #m.optional_value_map::<#inner>(#spec, #i, #convert)? }
+                        quote! { #matches.optional_value_map::<#inner>(#spec, #i, #convert)? }
                     },
                 }
             },
             (_, None) => {
                 match arg.ty.shape {
-                    Shape::Bool | Shape::One => quote! { #m.required::<#inner>(#spec, #i)? },
-                    Shape::Opt => quote! { #m.optional::<#inner>(#spec, #i)? },
-                    Shape::Many => quote! { #m.many::<#inner>(#spec, #i)? },
-                    Shape::OptMany => quote! { #m.optional_many::<#inner>(#spec, #i)? },
+                    Shape::Bool | Shape::One => quote! { #matches.required::<#inner>(#spec, #i)? },
+                    Shape::Opt => quote! { #matches.optional::<#inner>(#spec, #i)? },
+                    Shape::Many => quote! { #matches.many::<#inner>(#spec, #i)? },
+                    Shape::OptMany => quote! { #matches.optional_many::<#inner>(#spec, #i)? },
                     Shape::OptOpt => {
                         let root = &self.root;
                         let from_arg = quote! { <#inner as #root::FromArg>::from_arg };
-                        quote! { #m.optional_value_map::<#inner>(#spec, #i, #from_arg)? }
+                        quote! { #matches.optional_value_map::<#inner>(#spec, #i, #from_arg)? }
                     },
                 }
             },
@@ -917,7 +917,7 @@ impl Emitter {
     fn updates(
         &self,
         command: &Command,
-        m: &Ident,
+        matches: &Ident,
         spec: &Ident,
         place: impl Fn(&Ident) -> TokenStream,
     ) -> TokenStream {
@@ -927,7 +927,7 @@ impl Emitter {
         // an arg given on the line clears the others it shares a group or a
         // conflict with, which read back as if never given
         let args = fields.args.iter().enumerate().map(|(i, arg)| {
-            let (field, value) = (place(&arg.ident), self.read(arg, i, m, spec));
+            let (field, value) = (place(&arg.ident), self.read(arg, i, matches, spec));
             let rivals = fields
                 .args
                 .iter()
@@ -939,7 +939,7 @@ impl Emitter {
                 })
                 .map(|(j, _)| j);
             quote! {
-                if #root::Matches::given(#m, #i) #(|| #root::Matches::given(#m, #rivals))* {
+                if #root::Matches::given(#matches, #i) #(|| #root::Matches::given(#matches, #rivals))* {
                     #field = #value;
                 }
             }
@@ -951,7 +951,7 @@ impl Emitter {
                 <#ty as #root::Parse>::update_from_matches(
                     &mut #field,
                     <#ty as #root::Parse>::SPEC,
-                    #root::Matches::flattened(#m, #i),
+                    #root::Matches::flattened(#matches, #i),
                 )?;
             }
         });
@@ -960,18 +960,18 @@ impl Emitter {
             let (field, ty) = (place(&sub.ident), &sub.ty);
             let existing = local("existing");
             let update = quote! {
-                <#ty as #root::Parse>::update_from_matches(#existing, <#ty as #root::Parse>::SPEC, #m)?
+                <#ty as #root::Parse>::update_from_matches(#existing, <#ty as #root::Parse>::SPEC, #matches)?
             };
             let build =
-                quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #m)? };
+                quote! { <#ty as #root::Parse>::from_matches(<#ty as #root::Parse>::SPEC, #matches)? };
 
             if sub.optional {
                 quote! {
-                    if #root::Matches::sub(#m).is_some() {
+                    if #root::Matches::sub(#matches).is_some() {
                         if let ::core::option::Option::Some(#existing) = &mut #field {
                             #update;
                         } else {
-                            #root::Matches::demand_sub(#m, <#ty as #root::Parse>::SPEC)?;
+                            #root::Matches::demand_sub(#matches, <#ty as #root::Parse>::SPEC)?;
                             #field = ::core::option::Option::Some(#build);
                         }
                     }
@@ -1010,8 +1010,10 @@ impl Emitter {
                 (
                     quote! { <#inner as #root::FromArg>::from_arg(#sv)? },
                     max_len.as_ref().map(|max| self.max_len_check(max)),
-                    min.as_deref().map(|v| self.bound_check(inner, "min", v)),
-                    max.as_deref().map(|v| self.bound_check(inner, "max", v)),
+                    min.as_deref()
+                        .map(|bound| self.bound_check(inner, "min", bound)),
+                    max.as_deref()
+                        .map(|bound| self.bound_check(inner, "max", bound)),
                     validate.as_ref(),
                 )
             },
@@ -1115,9 +1117,9 @@ impl Emitter {
 
     // bake the help string only when the wrapping crate asks for help text,
     // otherwise emit "".
-    fn help_lit(&self, s: &str) -> TokenStream {
+    fn help_lit(&self, help: &str) -> TokenStream {
         if self.help {
-            quote! { #s }
+            quote! { #help }
         } else {
             quote! { "" }
         }
@@ -1126,7 +1128,7 @@ impl Emitter {
 
 // the `&[(usize, usize)]` token list for a set of index pairs.
 fn index_pairs(pairs: &[(usize, usize)]) -> TokenStream {
-    let items = pairs.iter().map(|(a, b)| quote! { (#a, #b) });
+    let items = pairs.iter().map(|(left, right)| quote! { (#left, #right) });
     quote! { &[ #(#items),* ] }
 }
 

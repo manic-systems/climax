@@ -8,6 +8,10 @@ use pound::Parse;
 
 #[derive(Debug, Parse)]
 #[pound(name = "paths")]
+#[expect(
+    clippy::min_ident_chars,
+    reason = "the fields are placeholders, only their type paths are under test"
+)]
 struct Args {
     #[pound(long)]
     a: ::core::option::Option<u8>,

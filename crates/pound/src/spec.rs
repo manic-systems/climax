@@ -503,7 +503,7 @@ impl ArgSpec {
 
     pub(crate) fn split<'w>(&self, word: &'w str) -> impl Iterator<Item = &'w str> {
         let delimiter = self.delimiter.filter(|_| self.multi);
-        word.split(move |c| Some(c) == delimiter)
+        word.split(move |ch| Some(ch) == delimiter)
     }
 
     /// the placeholder usage and errors show for this arg's value, the
@@ -935,20 +935,20 @@ impl CommandSpec {
         }
     }
 
-    /// call `f` on each arg in declaration order, with the flattened indices
-    /// leading to the spec that owns it and its index there
+    /// call `visitor` on each arg in declaration order, with the flattened
+    /// indices leading to the spec that owns it and its index there
     pub(crate) fn visit(
         &self,
         path: &mut Vec<usize>,
-        f: &mut impl FnMut(&[usize], usize, &'static ArgSpec),
+        visitor: &mut impl FnMut(&[usize], usize, &'static ArgSpec),
     ) {
         let args: &'static [ArgSpec] = self.args;
         for position in 0..self.order_len() {
             match self.order_entry(position) {
-                ArgumentOrder::Direct(i) => f(path, i, &args[i]),
+                ArgumentOrder::Direct(i) => visitor(path, i, &args[i]),
                 ArgumentOrder::Flattened(i) => {
                     path.push(i);
-                    self.flattened[i].visit(path, f);
+                    self.flattened[i].visit(path, visitor);
                     path.pop();
                 },
             }
@@ -959,7 +959,7 @@ impl CommandSpec {
     #[must_use]
     pub fn find_sub(&self, name: &str) -> Option<&'static SubSpec> {
         self.subcommands()
-            .find(|s| !s.external && (s.name == name || s.aliases.contains(&name)))
+            .find(|sub| !sub.external && (sub.name == name || sub.aliases.contains(&name)))
     }
 }
 
@@ -1021,7 +1021,7 @@ impl<'s> Command<'s> {
 
     pub(crate) fn child(&self, sub: &'static SubSpec) -> Command<'static> {
         let mut globals = self.globals.clone();
-        globals.extend(self.spec.arguments().filter(|a| a.global));
+        globals.extend(self.spec.arguments().filter(|arg| arg.global));
         let mut path = self.path.clone();
         path.push(self.spec.name);
 
@@ -1054,17 +1054,17 @@ impl<'s> Command<'s> {
         self.spec
             .arguments()
             .chain(globals)
-            .find(|a| a.answers_long(name))
+            .find(|arg| arg.answers_long(name))
     }
 
     /// the arg `-c` reaches here, by the same precedence as [`Self::long`]
     #[must_use]
-    pub fn short(&self, c: char) -> Option<&'static ArgSpec> {
+    pub fn short(&self, ch: char) -> Option<&'static ArgSpec> {
         let globals = self.globals.iter().rev().copied();
         self.spec
             .arguments()
             .chain(globals)
-            .find(|a| a.answers_short(c))
+            .find(|arg| arg.answers_short(ch))
     }
 
     /// the visible flags and options declared on this command, in the order
@@ -1074,15 +1074,15 @@ impl<'s> Command<'s> {
         let options = self
             .spec
             .arguments()
-            .filter(|a| !a.hidden && !a.is_positional());
-        in_display_order(options, |a| a.display_order)
+            .filter(|arg| !arg.hidden && !arg.is_positional());
+        in_display_order(options, |arg| arg.display_order)
     }
 
     /// the visible positionals, in the order they fill
     pub fn positionals(&self) -> impl Iterator<Item = &'static ArgSpec> {
         self.spec
             .arguments()
-            .filter(|a| !a.hidden && a.is_positional())
+            .filter(|arg| !arg.hidden && arg.is_positional())
     }
 
     /// the inherited globals still reachable here, hidden ones left out and
@@ -1094,12 +1094,12 @@ impl<'s> Command<'s> {
         globals
             .iter()
             .enumerate()
-            .filter(|(_, a)| !a.hidden)
+            .filter(|(_, arg)| !arg.hidden)
             .filter_map(|(i, &&global)| {
                 let nearer = &globals[i + 1..];
                 let mut shown = global;
-                shown.short = shown.short.filter(|&c| !claims_short(&own, nearer, c));
-                shown.long = shown.long.filter(|l| !claims_long(&own, nearer, l));
+                shown.short = shown.short.filter(|&ch| !claims_short(&own, nearer, ch));
+                shown.long = shown.long.filter(|long| !claims_long(&own, nearer, long));
                 shown.negate = shown.negate.filter(|n| !claims_long(&own, nearer, n));
                 if shown.long.is_none() {
                     shown.long = shown.negate.take();
@@ -1119,14 +1119,14 @@ impl<'s> Command<'s> {
         let builtin = |short, long, help| {
             let free_short = !claims_short(&own, &self.globals, short);
             let free_long = !claims_long(&own, &self.globals, long);
-            let mut a = ArgSpec::new(Kind::Flag).help(help);
+            let mut arg = ArgSpec::new(Kind::Flag).help(help);
             if free_short {
-                a = a.short(short);
+                arg = arg.short(short);
             }
             if free_long {
-                a = a.long(long);
+                arg = arg.long(long);
             }
-            (free_short || free_long).then_some(a)
+            (free_short || free_long).then_some(arg)
         };
 
         let version = self
@@ -1148,7 +1148,7 @@ impl<'s> Command<'s> {
         let taken = self
             .spec
             .subcommands()
-            .any(|s| s.external || s.name == "help" || s.aliases.contains(&"help"));
+            .any(|sub| sub.external || sub.name == "help" || sub.aliases.contains(&"help"));
         (self.spec.has_subs() && !taken).then_some(&HELP_COMMAND)
     }
 
@@ -1203,9 +1203,11 @@ fn in_display_order<T: Copy>(
 
 /// whether `--name` reaches one of a command's own args or a global it inherits
 pub(crate) fn claims_long(own: &[&ArgSpec], globals: &[&ArgSpec], name: &str) -> bool {
-    own.iter().chain(globals).any(|a| a.answers_long(name))
+    own.iter().chain(globals).any(|arg| arg.answers_long(name))
 }
 
 pub(crate) fn claims_short(own: &[&ArgSpec], globals: &[&ArgSpec], short: char) -> bool {
-    own.iter().chain(globals).any(|a| a.answers_short(short))
+    own.iter()
+        .chain(globals)
+        .any(|arg| arg.answers_short(short))
 }

@@ -104,7 +104,10 @@ impl<'t> Cursor<'t> {
 
         if options && let Some(long) = typed.strip_prefix("--") {
             if let Some((name, value)) = long.split_once('=')
-                && let Some(arg) = partial.command().long(name).filter(|a| a.kind == Kind::Opt)
+                && let Some(arg) = partial
+                    .command()
+                    .long(name)
+                    .filter(|opt| opt.kind == Kind::Opt)
             {
                 let lead = &typed[..typed.len() - value.len()];
                 return Self::Value {
@@ -116,10 +119,10 @@ impl<'t> Cursor<'t> {
             return Self::Option { prefix: typed };
         }
         if options && let Some(cluster) = typed.strip_prefix('-') {
-            for (at, c) in cluster.char_indices() {
-                match partial.command().short(c) {
+            for (at, short) in cluster.char_indices() {
+                match partial.command().short(short) {
                     Some(arg) if arg.kind == Kind::Opt => {
-                        let (lead, prefix) = typed.split_at(1 + at + c.len_utf8());
+                        let (lead, prefix) = typed.split_at(1 + at + short.len_utf8());
                         return Self::Value { arg, lead, prefix };
                     },
                     Some(_) => {},
@@ -175,14 +178,14 @@ impl Completions {
         let fold = arg.complete.is_none()
             && arg
                 .possible
-                .is_some_and(|choices| choices.iter().any(|c| c.ignore_case));
+                .is_some_and(|choices| choices.iter().any(|choice| choice.ignore_case));
         let found = match (arg.complete, arg.possible) {
             (Some(complete), _) => complete(partial, prefix),
             (None, Some(possible)) => {
                 possible
                     .iter()
-                    .filter(|c| !c.hidden)
-                    .map(|c| Candidate::new(c.name).help(c.help))
+                    .filter(|choice| !choice.hidden)
+                    .map(|choice| Candidate::new(choice.name).help(choice.help))
                     .collect()
             },
             (None, None) if arg.hint == Hint::Path && lead.is_empty() => {
@@ -242,7 +245,7 @@ impl Completions {
             let longs = arg.long.into_iter().chain(arg.negate);
             for spelling in longs
                 .map(|long| format!("--{long}"))
-                .chain(arg.short.map(|c| format!("-{c}")))
+                .chain(arg.short.map(|short| format!("-{short}")))
             {
                 self.offer(Candidate::new(spelling).help(arg.help), prefix);
             }
@@ -250,7 +253,7 @@ impl Completions {
     }
 
     fn subcommands(&mut self, command: &Command<'_>, prefix: &str) {
-        for sub in command.subcommands().filter(|s| !s.hidden()) {
+        for sub in command.subcommands().filter(|child| !child.hidden()) {
             let spec = sub.spec();
             self.offer(Candidate::new(spec.name).help(spec.about), prefix);
         }

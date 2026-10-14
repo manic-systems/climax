@@ -112,33 +112,37 @@ pub enum Derive {
 impl Derive {
     pub fn new(item: &Item) -> Result<Self, Error> {
         match item {
-            Item::Struct(s) => {
-                let fields = CommandFields::new(&s.fields, &s.name)?;
-                let header = Header::new(&s.attributes)?;
-                let command =
-                    Command::new(&s.name, s.name.to_string(), fields, &header.required_groups)?;
+            Item::Struct(shape) => {
+                let fields = CommandFields::new(&shape.fields, &shape.name)?;
+                let header = Header::new(&shape.attributes)?;
+                let command = Command::new(
+                    &shape.name,
+                    shape.name.to_string(),
+                    fields,
+                    &header.required_groups,
+                )?;
 
                 Ok(Self::Struct {
-                    ident: s.name.clone(),
+                    ident: shape.name.clone(),
                     header,
                     command: Box::new(command),
                 })
             },
-            Item::Enum(e) => {
-                if e.variants.is_empty() {
+            Item::Enum(shape) => {
+                if shape.variants.is_empty() {
                     return Err(Error::new_at_span(
-                        e.name.span(),
+                        shape.name.span(),
                         "pound: a command enum needs at least one variant",
                     ));
                 }
-                let header = Header::new(&e.attributes)?;
-                let variants = e
+                let header = Header::new(&shape.attributes)?;
+                let variants = shape
                     .variants
                     .items()
-                    .map(|variant| Variant::new(&e.name, variant))
+                    .map(|variant| Variant::new(&shape.name, variant))
                     .collect::<Result<_, _>>()?;
                 Ok(Self::Enum {
-                    ident: e.name.clone(),
+                    ident: shape.name.clone(),
                     header,
                     variants,
                 })
@@ -309,7 +313,7 @@ impl Variant {
         let path = ty.tokens.iter().all(|tok| {
             match tok {
                 TokenTree::Ident(_) => true,
-                TokenTree::Punct(p) => p.as_char() == ':',
+                TokenTree::Punct(punct) => punct.as_char() == ':',
                 _ => false,
             }
         });
@@ -661,7 +665,7 @@ impl FieldType {
     }
 
     fn strip_path(toks: &[TokenTree], known: impl Fn(&[&str]) -> bool) -> Option<TokenStream> {
-        let is_colon = |tok: Option<&TokenTree>| matches!(tok, Some(TokenTree::Punct(p)) if p.as_char() == ':');
+        let is_colon = |tok: Option<&TokenTree>| matches!(tok, Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
 
         let mut at = if is_colon(toks.first()) && is_colon(toks.get(1)) {
             2
@@ -684,8 +688,10 @@ impl FieldType {
 
         let known = known(&path.iter().map(String::as_str).collect::<Vec<_>>());
 
-        let open_ok = matches!(toks.get(at), Some(TokenTree::Punct(p)) if p.as_char() == '<');
-        let close_ok = matches!(toks.last(), Some(TokenTree::Punct(p)) if p.as_char() == '>');
+        let open_ok =
+            matches!(toks.get(at), Some(TokenTree::Punct(punct)) if punct.as_char() == '<');
+        let close_ok =
+            matches!(toks.last(), Some(TokenTree::Punct(punct)) if punct.as_char() == '>');
 
         if known && open_ok && close_ok && toks.len() >= at + 3 {
             Some(toks[at + 1..toks.len() - 1].iter().cloned().collect())
@@ -705,10 +711,14 @@ pub enum ArgKind {
 }
 
 impl ArgKind {
-    fn new(a: &Pound, ty: &FieldType, ident: &Ident) -> Result<Self, Error> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one guard per attribute conflict, read top to bottom"
+    )]
+    fn new(attr: &Pound, ty: &FieldType, ident: &Ident) -> Result<Self, Error> {
         let (shape, sourced) = (ty.shape, ty.sourced);
         let shape_count =
-            usize::from(a.positional) + usize::from(a.trailing) + usize::from(a.count);
+            usize::from(attr.positional) + usize::from(attr.trailing) + usize::from(attr.count);
 
         if shape_count > 1 {
             return Err(Error::new_at_span(
@@ -724,21 +734,21 @@ impl ArgKind {
             ));
         }
 
-        if (a.positional || a.trailing) && a.is_named() {
+        if (attr.positional || attr.trailing) && attr.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: positional fields cannot have short or long names",
             ));
         }
 
-        if a.trailing && !shape.is_many() {
+        if attr.trailing && !shape.is_many() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(trailing)] needs a `Vec` or `Option<Vec>` field",
             ));
         }
 
-        if a.delimiter.is_some() && (!shape.is_many() || a.trailing) {
+        if attr.delimiter.is_some() && (!shape.is_many() || attr.trailing) {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(delimiter)] needs a `Vec` or `Option<Vec>` field that is not \
@@ -746,7 +756,7 @@ impl ArgKind {
             ));
         }
 
-        if a.min_values.is_some() && shape == Shape::OptMany {
+        if attr.min_values.is_some() && shape == Shape::OptMany {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(min_values)] needs a `Vec` field, an `Option<Vec>` is `None` when \
@@ -754,14 +764,14 @@ impl ArgKind {
             ));
         }
 
-        if a.num_args.is_some() && !shape.is_many() {
+        if attr.num_args.is_some() && !shape.is_many() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(num_args)] needs a `Vec` or `Option<Vec>` field",
             ));
         }
 
-        if a.num_args.is_some() && a.delimiter.is_some() {
+        if attr.num_args.is_some() && attr.delimiter.is_some() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(num_args)] counts words and #[pound(delimiter)] splits them, pick \
@@ -769,7 +779,9 @@ impl ArgKind {
             ));
         }
 
-        if shape == Shape::OptOpt && (!a.is_named() || a.count || a.default_missing.is_some()) {
+        if shape == Shape::OptOpt
+            && (!attr.is_named() || attr.count || attr.default_missing.is_some())
+        {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: an `Option<Option<T>>` field needs a value option without \
@@ -777,7 +789,7 @@ impl ArgKind {
             ));
         }
 
-        if sourced && (!matches!(shape, Shape::Bool | Shape::One | Shape::Opt) || a.count) {
+        if sourced && (!matches!(shape, Shape::Bool | Shape::One | Shape::Opt) || attr.count) {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: `Sourced<T>` holds one value, as `Sourced<T>`, `Option<Sourced<T>>` or a \
@@ -785,7 +797,7 @@ impl ArgKind {
             ));
         }
 
-        if a.count && shape != Shape::One {
+        if attr.count && shape != Shape::One {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(count)] needs a scalar field",
@@ -794,17 +806,17 @@ impl ArgKind {
 
         let kind = if shape == Shape::Bool {
             Self::Flag
-        } else if a.count {
+        } else if attr.count {
             Self::Count
-        } else if a.trailing {
+        } else if attr.trailing {
             Self::Trailing
-        } else if a.is_named() {
+        } else if attr.is_named() {
             Self::Opt
         } else {
             Self::Positional
         };
 
-        let aliased = !a.aliases.is_empty() || !a.short_aliases.is_empty();
+        let aliased = !attr.aliases.is_empty() || !attr.short_aliases.is_empty();
         if aliased && !kind.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
@@ -812,7 +824,7 @@ impl ArgKind {
             ));
         }
 
-        if kind == Self::Count && (a.default.is_some() || a.env.is_some()) {
+        if kind == Self::Count && (attr.default.is_some() || attr.env.is_some()) {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: counted fields cannot use a fallback",
@@ -822,8 +834,8 @@ impl ArgKind {
         Ok(kind)
     }
 
-    fn check(self, a: &Pound, ident: &Ident) -> Result<(), Error> {
-        if a.display_order.is_some() && !self.is_named() {
+    fn check(self, attr: &Pound, ident: &Ident) -> Result<(), Error> {
+        if attr.display_order.is_some() && !self.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(display_order)] needs a flag or option, positionals are listed in \
@@ -831,14 +843,14 @@ impl ArgKind {
             ));
         }
 
-        if a.hyphen_values && !matches!(self, Self::Opt | Self::Positional) {
+        if attr.hyphen_values && !matches!(self, Self::Opt | Self::Positional) {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(allow_hyphen_values)] needs an option or a positional",
             ));
         }
 
-        if a.heading.is_some() && !self.is_named() {
+        if attr.heading.is_some() && !self.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(heading)] needs a flag or option, positionals are listed under \
@@ -846,14 +858,14 @@ impl ArgKind {
             ));
         }
 
-        if a.num_args.is_some() && (self != Self::Opt || a.default_missing.is_some()) {
+        if attr.num_args.is_some() && (self != Self::Opt || attr.default_missing.is_some()) {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(num_args)] needs an option without `default_missing`",
             ));
         }
 
-        if a.default_missing.is_some() && self != Self::Opt {
+        if attr.default_missing.is_some() && self != Self::Opt {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(default_missing)] needs a value option (short/long)",
@@ -862,13 +874,13 @@ impl ArgKind {
 
         if !self.takes_value()
             && let Some(name) = [
-                ("min", a.min.is_some()),
-                ("max", a.max.is_some()),
-                ("max_len", a.max_len.is_some()),
-                ("parse", a.parse.is_some()),
-                ("validate", a.validate.is_some()),
-                ("complete", a.complete.is_some()),
-                ("hint", a.hint.is_some()),
+                ("min", attr.min.is_some()),
+                ("max", attr.max.is_some()),
+                ("max_len", attr.max_len.is_some()),
+                ("parse", attr.parse.is_some()),
+                ("validate", attr.validate.is_some()),
+                ("complete", attr.complete.is_some()),
+                ("hint", attr.hint.is_some()),
             ]
             .into_iter()
             .find_map(|(name, present)| present.then_some(name))
@@ -907,9 +919,9 @@ pub enum Conversion {
 }
 
 impl Conversion {
-    fn new(a: &Pound, ident: &Ident) -> Result<Self, Error> {
-        if let Some(parse) = &a.parse {
-            if a.min.is_some() || a.max.is_some() || a.max_len.is_some() {
+    fn new(attr: &Pound, ident: &Ident) -> Result<Self, Error> {
+        if let Some(parse) = &attr.parse {
+            if attr.min.is_some() || attr.max.is_some() || attr.max_len.is_some() {
                 return Err(Error::new_at_span(
                     ident.span(),
                     "pound: #[pound(parse = \"...\")] cannot be combined with min, max, or \
@@ -919,15 +931,19 @@ impl Conversion {
 
             return Ok(Self::CustomParse {
                 parse:    parse.clone(),
-                validate: a.validate.clone(),
+                validate: attr.validate.clone(),
             });
         }
 
-        if a.min.is_some() || a.max.is_some() || a.max_len.is_some() || a.validate.is_some() {
+        if attr.min.is_some()
+            || attr.max.is_some()
+            || attr.max_len.is_some()
+            || attr.validate.is_some()
+        {
             return Ok(Self::CheckedFromArg {
-                min:      a.min.clone(),
-                max:      a.max.clone(),
-                max_len:  a
+                min:      attr.min.clone(),
+                max:      attr.max.clone(),
+                max_len:  attr
                     .max_len
                     .as_deref()
                     .map(|text| {
@@ -936,7 +952,7 @@ impl Conversion {
                         })
                     })
                     .transpose()?,
-                validate: a.validate.clone(),
+                validate: attr.validate.clone(),
             });
         }
 
@@ -992,22 +1008,22 @@ pub struct Arg {
 }
 
 impl Arg {
-    fn new(field: &NamedField, ty: FieldType, a: Pound) -> Result<Self, Error> {
+    fn new(field: &NamedField, ty: FieldType, attr: Pound) -> Result<Self, Error> {
         let ident = &field.name;
         let fname = ident.to_string().trim_start_matches("r#").to_owned();
-        let kind = ArgKind::new(&a, &ty, ident)?;
+        let kind = ArgKind::new(&attr, &ty, ident)?;
 
         // long/short only for named kinds, defaulting a long name when neither
         // given.
         let (mut long, mut short) = (None, None);
 
         if kind.is_named() {
-            if let Some(l) = &a.long {
-                long = Some(l.clone().unwrap_or_else(|| fname.replace('_', "-")));
+            if let Some(given) = &attr.long {
+                long = Some(given.clone().unwrap_or_else(|| fname.replace('_', "-")));
             }
 
-            if let Some(s) = &a.short {
-                short = Some(s.unwrap_or_else(|| fname.chars().next().unwrap_or('?')));
+            if let Some(given) = &attr.short {
+                short = Some(given.unwrap_or_else(|| fname.chars().next().unwrap_or('?')));
             }
 
             if long.is_none() && short.is_none() {
@@ -1015,30 +1031,30 @@ impl Arg {
             }
         }
 
-        let doc = a.help.clone().unwrap_or_else(|| doc(&field.attributes));
+        let doc = attr.help.clone().unwrap_or_else(|| doc(&field.attributes));
         let summary = summary(&doc);
 
-        let help = if a.help.is_some() {
+        let help = if attr.help.is_some() {
             summary
         } else {
             short_help(&doc)
         }
         .to_owned();
 
-        let long_help = a
+        let long_help = attr
             .long_help
             .clone()
             .or_else(|| (summary != doc).then(|| doc.clone()));
 
-        kind.check(&a, ident)?;
-        let (min_values, max_values) = Self::arity(&a, ty.shape.is_many(), ident)?;
-        let negate = Self::negation(&a, kind, long.as_deref(), ident)?;
+        kind.check(&attr, ident)?;
+        let (min_values, max_values) = Self::arity(&attr, ty.shape.is_many(), ident)?;
+        let negate = Self::negation(&attr, kind, long.as_deref(), ident)?;
 
-        let required = kind.takes_value() && ty.shape == Shape::One && a.default.is_none();
+        let required = kind.takes_value() && ty.shape == Shape::One && attr.default.is_none();
 
         let conversion = kind
             .takes_value()
-            .then(|| Conversion::new(&a, ident))
+            .then(|| Conversion::new(&attr, ident))
             .transpose()?;
 
         Ok(Self {
@@ -1050,31 +1066,31 @@ impl Arg {
             required,
             min_values,
             max_values,
-            delimiter: a.delimiter,
-            num_args: a.num_args,
-            group: a.group,
-            default: a.default,
-            default_missing: a.default_missing,
-            env: a.env,
+            delimiter: attr.delimiter,
+            num_args: attr.num_args,
+            group: attr.group,
+            default: attr.default,
+            default_missing: attr.default_missing,
+            env: attr.env,
             negate,
-            value_name: a.value_name.unwrap_or(fname),
+            value_name: attr.value_name.unwrap_or(fname),
             help,
             long_help,
-            heading: a.heading,
-            display_order: a.display_order,
-            aliases: a.aliases,
-            short_aliases: a.short_aliases,
-            conflicts_with: a.conflicts_with,
-            requires: a.requires,
-            hidden: a.hidden,
-            hide_possible: a.hide_possible,
-            hide_default: a.hide_default,
-            hide_env: a.hide_env,
-            hyphen_values: a.hyphen_values,
-            global: a.global,
-            exclusive: a.exclusive,
-            complete: a.complete,
-            hint: a.hint,
+            heading: attr.heading,
+            display_order: attr.display_order,
+            aliases: attr.aliases,
+            short_aliases: attr.short_aliases,
+            conflicts_with: attr.conflicts_with,
+            requires: attr.requires,
+            hidden: attr.hidden,
+            hide_possible: attr.hide_possible,
+            hide_default: attr.hide_default,
+            hide_env: attr.hide_env,
+            hyphen_values: attr.hyphen_values,
+            global: attr.global,
+            exclusive: attr.exclusive,
+            complete: attr.complete,
+            hint: attr.hint,
             conversion,
         })
     }
@@ -1082,7 +1098,7 @@ impl Arg {
     // the `min_values`/`max_values` bounds, which only a `Vec` field can
     // satisfy.
     fn arity(
-        a: &Pound,
+        attr: &Pound,
         multi: bool,
         ident: &Ident,
     ) -> Result<(Option<usize>, Option<usize>), Error> {
@@ -1106,8 +1122,8 @@ impl Arg {
             }
         };
 
-        let min = read("min_values", a.min_values.as_ref())?;
-        let max = read("max_values", a.max_values.as_ref())?;
+        let min = read("min_values", attr.min_values.as_ref())?;
+        let max = read("max_values", attr.max_values.as_ref())?;
 
         if let (Some(min), Some(max)) = (min, max)
             && min > max
@@ -1122,12 +1138,12 @@ impl Arg {
     }
 
     fn negation(
-        a: &Pound,
+        attr: &Pound,
         kind: ArgKind,
         long: Option<&str>,
         ident: &Ident,
     ) -> Result<Option<String>, Error> {
-        let Some(spelling) = &a.negate else {
+        let Some(spelling) = &attr.negate else {
             return Ok(None);
         };
 
@@ -1147,7 +1163,7 @@ impl Arg {
 
         let spelling = spelling.clone().unwrap_or_else(|| format!("no-{name}"));
 
-        if spelling == name || a.aliases.contains(&spelling) {
+        if spelling == name || attr.aliases.contains(&spelling) {
             return Err(Error::new_at_span(
                 ident.span(),
                 format!("pound: negation `{spelling}` is also a positive spelling"),
@@ -1183,11 +1199,11 @@ impl ValueVariant {
 
 impl ValueEnum {
     pub fn new(item: &Item) -> Result<Self, Error> {
-        let Item::Enum(e) = item else {
+        let Item::Enum(shape) = item else {
             return Err(Error::new("pound: ValueEnum can only derive on an enum"));
         };
 
-        let item = pound(&e.attributes)?;
+        let item = pound(&shape.attributes)?;
         item.allow_only(&["ignore_case"])?;
         let same = |left: &str, right: &str| {
             if item.ignore_case {
@@ -1199,7 +1215,7 @@ impl ValueEnum {
 
         let mut variants = Vec::<ValueVariant>::new();
 
-        for variant in e.variants.items() {
+        for variant in shape.variants.items() {
             if !matches!(variant.fields, Fields::Unit) {
                 return Err(Error::new_at_span(
                     variant.name.span(),
@@ -1241,7 +1257,7 @@ impl ValueEnum {
         }
 
         Ok(Self {
-            ident: e.name.clone(),
+            ident: shape.name.clone(),
             variants,
             ignore_case: item.ignore_case,
         })

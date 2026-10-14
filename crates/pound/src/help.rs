@@ -278,14 +278,14 @@ pub(crate) fn version_line(spec: &CommandSpec, long: bool) -> String {
 }
 
 #[cfg(feature = "help")]
-fn usage_positional(a: &ArgSpec) -> String {
-    let meta = a.metavar();
-    let dots = if a.multi || a.kind == Kind::Trailing {
+fn usage_positional(arg: &ArgSpec) -> String {
+    let meta = arg.metavar();
+    let dots = if arg.multi || arg.kind == Kind::Trailing {
         "..."
     } else {
         ""
     };
-    if a.required {
+    if arg.required {
         format!("{meta}{dots}")
     } else {
         format!("[{meta}]{dots}")
@@ -294,19 +294,19 @@ fn usage_positional(a: &ArgSpec) -> String {
 
 /// the `=VALUE` tail of a long option, bracketed when the value may be omitted
 #[cfg(feature = "help")]
-fn value_suffix(a: &ArgSpec) -> String {
-    let meta = a.metavar();
-    match several(a) {
+fn value_suffix(arg: &ArgSpec) -> String {
+    let meta = arg.metavar();
+    match several(arg) {
         Some(words) => format!(" {words}"),
-        None if a.value_may_be_left_out() => format!("[={meta}]"),
+        None if arg.value_may_be_left_out() => format!("[={meta}]"),
         None => format!("={meta}"),
     }
 }
 
 #[cfg(feature = "help")]
-fn several(a: &ArgSpec) -> Option<String> {
-    let arity = a.words_per_use()?;
-    let meta = a.metavar();
+fn several(arg: &ArgSpec) -> Option<String> {
+    let arity = arg.words_per_use()?;
+    let meta = arg.metavar();
     let mut words = vec![meta.as_str(); arity.min()].join(" ");
     if arity.max() != Some(arity.min()) {
         words.push_str("...");
@@ -317,8 +317,8 @@ fn several(a: &ArgSpec) -> Option<String> {
 /// the long spelling, folding a `no-` negation into the `--[no-]name` form and
 /// listing any other negation as a second spelling
 #[cfg(feature = "help")]
-fn long_form(a: &ArgSpec, long: &str) -> Vec<Span> {
-    match a.negate {
+fn long_form(arg: &ArgSpec, long: &str) -> Vec<Span> {
+    match arg.negate {
         Some(negate) if negate.strip_prefix("no-") == Some(long) => {
             vec![Span::literal(format!("--[no-]{long}"))]
         },
@@ -334,99 +334,99 @@ fn long_form(a: &ArgSpec, long: &str) -> Vec<Span> {
 }
 
 #[cfg(feature = "help")]
-fn invocation(a: &ArgSpec) -> Vec<Span> {
-    let takes_value = a.kind == Kind::Opt;
+fn invocation(arg: &ArgSpec) -> Vec<Span> {
+    let takes_value = arg.kind == Kind::Opt;
     let mut spans = Vec::new();
-    match (a.short, a.long) {
-        (Some(c), Some(l)) => {
-            spans.push(Span::literal(format!("-{c}")));
+    match (arg.short, arg.long) {
+        (Some(short), Some(long)) => {
+            spans.push(Span::literal(format!("-{short}")));
             spans.push(Span::plain(", "));
-            spans.extend(long_form(a, l));
+            spans.extend(long_form(arg, long));
             if takes_value {
-                spans.push(Span::plain(value_suffix(a)));
+                spans.push(Span::plain(value_suffix(arg)));
             }
         },
-        (Some(c), None) => {
-            spans.push(Span::literal(format!("-{c}")));
-            if let Some(words) = several(a) {
+        (Some(short), None) => {
+            spans.push(Span::literal(format!("-{short}")));
+            if let Some(words) = several(arg) {
                 spans.push(Span::plain(format!(" {words}")));
-            } else if takes_value && a.value_may_be_left_out() {
-                spans.push(Span::plain(format!(" [{}]", a.metavar())));
+            } else if takes_value && arg.value_may_be_left_out() {
+                spans.push(Span::plain(format!(" [{}]", arg.metavar())));
             } else if takes_value {
-                spans.push(Span::plain(format!(" {}", a.metavar())));
+                spans.push(Span::plain(format!(" {}", arg.metavar())));
             }
         },
-        (None, Some(l)) => {
+        (None, Some(long)) => {
             spans.push(Span::plain("    "));
-            spans.extend(long_form(a, l));
+            spans.extend(long_form(arg, long));
             if takes_value {
-                spans.push(Span::plain(value_suffix(a)));
+                spans.push(Span::plain(value_suffix(arg)));
             }
         },
-        (None, None) => spans.push(Span::plain(a.metavar())),
+        (None, None) => spans.push(Span::plain(arg.metavar())),
     }
     spans
 }
 
 #[cfg(feature = "help")]
-fn help_text(a: &ArgSpec, long: bool) -> String {
+fn help_text(arg: &ArgSpec, long: bool) -> String {
     let text = if long {
-        a.long_help.unwrap_or(a.help)
+        arg.long_help.unwrap_or(arg.help)
     } else {
-        a.help
+        arg.help
     };
-    let choices = a
+    let choices = arg
         .possible
-        .filter(|_| !a.hide_possible)
+        .filter(|_| !arg.hide_possible)
         .unwrap_or_default()
         .iter()
-        .filter(|c| !c.hidden)
+        .filter(|choice| !choice.hidden)
         .collect::<Vec<_>>();
-    let listed = long && choices.iter().any(|c| !c.help.is_empty());
+    let listed = long && choices.iter().any(|choice| !choice.help.is_empty());
 
-    let mut s = text.to_owned();
+    let mut rendered = text.to_owned();
     if !choices.is_empty() && !listed {
-        let names = choices.iter().map(|c| c.name).collect::<Vec<_>>();
+        let names = choices.iter().map(|choice| choice.name).collect::<Vec<_>>();
         push_tag(
-            &mut s,
+            &mut rendered,
             format_args!("possible values: {}", names.join(", ")),
         );
     }
-    let takes_value = matches!(a.kind, Kind::Opt | Kind::Positional | Kind::Trailing);
-    if takes_value && let Some(default) = a.default.filter(|_| !a.hide_default) {
-        push_tag(&mut s, format_args!("default: {default}"));
+    let takes_value = matches!(arg.kind, Kind::Opt | Kind::Positional | Kind::Trailing);
+    if takes_value && let Some(default) = arg.default.filter(|_| !arg.hide_default) {
+        push_tag(&mut rendered, format_args!("default: {default}"));
     }
     #[cfg(feature = "std")]
-    if let Some(env) = a.env.filter(|_| !a.hide_env) {
-        push_tag(&mut s, format_args!("env: {env}"));
+    if let Some(env) = arg.env.filter(|_| !arg.hide_env) {
+        push_tag(&mut rendered, format_args!("env: {env}"));
     }
 
     if listed {
-        if !s.is_empty() {
-            s.push_str("\n\n");
+        if !rendered.is_empty() {
+            rendered.push_str("\n\n");
         }
-        s.push_str("Possible values:");
+        rendered.push_str("Possible values:");
         for choice in choices {
-            let _ = write!(s, "\n- {}", choice.name);
+            let _ = write!(rendered, "\n- {}", choice.name);
             if !choice.help.is_empty() {
-                let _ = write!(s, ": {}", choice.help);
+                let _ = write!(rendered, ": {}", choice.help);
             }
         }
     }
-    s
+    rendered
 }
 
 #[cfg(feature = "help")]
-fn push_tag(s: &mut String, tag: fmt::Arguments<'_>) {
-    if !s.is_empty() {
-        s.push(' ');
+fn push_tag(out: &mut String, tag: fmt::Arguments<'_>) {
+    if !out.is_empty() {
+        out.push(' ');
     }
-    let _ = write!(s, "[{tag}]");
+    let _ = write!(out, "[{tag}]");
 }
 
 #[cfg(feature = "help")]
 pub(crate) fn usage_line(cmd: &Command<'_>) -> Usage {
-    let visible_args: Vec<&ArgSpec> = cmd.spec().arguments().filter(|a| !a.hidden).collect();
+    let visible_args: Vec<&ArgSpec> = cmd.spec().arguments().filter(|arg| !arg.hidden).collect();
     usage(cmd, &visible_args, !cmd.inherited().is_empty())
 }
 
@@ -434,14 +434,14 @@ pub(crate) fn usage_line(cmd: &Command<'_>) -> Usage {
 fn usage(cmd: &Command<'_>, visible_args: &[&ArgSpec], has_globals: bool) -> Usage {
     let spec = cmd.spec();
     let mut args = String::new();
-    if has_globals || visible_args.iter().any(|a| !a.is_positional()) {
+    if has_globals || visible_args.iter().any(|arg| !arg.is_positional()) {
         args.push_str(" [OPTION]...");
     }
-    for a in visible_args.iter().filter(|a| a.is_positional()) {
+    for arg in visible_args.iter().filter(|arg| arg.is_positional()) {
         args.push(' ');
-        args.push_str(&usage_positional(a));
+        args.push_str(&usage_positional(arg));
     }
-    if spec.subcommands().any(|s| !s.hidden || s.external) {
+    if spec.subcommands().any(|sub| !sub.hidden || sub.external) {
         args.push_str(command_placeholder(spec));
     }
     let mut line = program(cmd);
@@ -471,14 +471,14 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
         blocks.push(Block::Text(about.to_owned()));
     }
 
-    let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|a| !a.hidden).collect();
+    let visible_args: Vec<&ArgSpec> = spec.arguments().filter(|arg| !arg.hidden).collect();
     let globals = cmd
         .inherited()
         .iter()
-        .map(|a| {
+        .map(|arg| {
             Row {
-                left: invocation(a),
-                help: help_text(a, long),
+                left: invocation(arg),
+                help: help_text(arg, long),
             }
         })
         .collect::<Vec<_>>();
@@ -486,11 +486,11 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
 
     let mut commands = spec
         .subcommands()
-        .filter(|s| !s.hidden)
-        .map(|s| {
+        .filter(|sub| !sub.hidden)
+        .map(|sub| {
             Row {
-                left: vec![Span::literal(s.name)],
-                help: s.about.to_owned(),
+                left: vec![Span::literal(sub.name)],
+                help: sub.about.to_owned(),
             }
         })
         .collect::<Vec<_>>();
@@ -510,11 +510,11 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
 
     let positionals = visible_args
         .iter()
-        .filter(|a| a.is_positional())
-        .map(|&a| {
+        .filter(|arg| arg.is_positional())
+        .map(|&arg| {
             Row {
-                left: vec![Span::plain(usage_positional(a))],
-                help: help_text(a, long),
+                left: vec![Span::plain(usage_positional(arg))],
+                help: help_text(arg, long),
             }
         })
         .collect::<Vec<_>>();
@@ -527,21 +527,21 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
     }
 
     let mut sections = vec![("Options", vec![])];
-    for a in cmd.own_options() {
-        let heading = a.heading.unwrap_or("Options");
+    for arg in cmd.own_options() {
+        let heading = arg.heading.unwrap_or("Options");
         let row = Row {
-            left: invocation(a),
-            help: help_text(a, long),
+            left: invocation(arg),
+            help: help_text(arg, long),
         };
         match sections.iter_mut().find(|(name, _)| *name == heading) {
             Some((_, rows)) => rows.push(row),
             None => sections.push((heading, vec![row])),
         }
     }
-    sections[0].1.extend(cmd.builtins().iter().map(|a| {
+    sections[0].1.extend(cmd.builtins().iter().map(|arg| {
         Row {
-            left: invocation(a),
-            help: a.help.to_owned(),
+            left: invocation(arg),
+            help: arg.help.to_owned(),
         }
     }));
     sections.push(("Global options", globals));
