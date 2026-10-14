@@ -335,18 +335,19 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | attribute                  | meaning                                                                    |
 /// |----------------------------|----------------------------------------------------------------------------|
 /// | `group = "g"`              | at most one member of group `g` may be given                               |
-/// | `conflicts_with = "a, b"`  | this field cannot be given together with the named fields                  |
-/// | `requires = "a, b"`        | giving this field obliges the named fields to be set too                   |
+/// | `conflicts_with = [a, b]`  | this field cannot be given together with the named fields                  |
+/// | `requires = a`             | giving this field obliges the named fields to be set too                   |
 ///
 /// ### groups
 ///
 /// a group is the set of fields that name it, and any two of them given at once
 /// is an error. `required_group` on the item or variant makes exactly one
 /// member mandatory, and it fails the build when no field joins the group.
-/// `conflicts_with` and `requires` take the Rust field names of the same
-/// command, which may be separated by commas. they look at what was given on
-/// the command line. `conflicts_with` is symmetric, so naming it on one side is
-/// enough. `requires` is one way.
+/// `conflicts_with` and `requires` name fields of the same command, bare as
+/// `a` or as a list `[a, b]`, which rust-analyzer completes, renames and
+/// follows to the field. a quoted `"a, b"` works too, with go-to-definition
+/// only. they look at what was given on the command line. `conflicts_with` is
+/// symmetric, so naming it on one side is enough. `requires` is one way.
 ///
 /// ```
 /// use pound::Parse;
@@ -358,11 +359,11 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///     fetch:    bool,
 ///     #[pound(long, group = "mode")]
 ///     build:    bool,
-///     #[pound(long, conflicts_with = "quiet")]
+///     #[pound(long, conflicts_with = quiet)]
 ///     verbose:  bool,
 ///     #[pound(long)]
 ///     quiet:    bool,
-///     #[pound(long, requires = "user")]
+///     #[pound(long, requires = user)]
 ///     password: Option<String>,
 ///     #[pound(long)]
 ///     user:     Option<String>,

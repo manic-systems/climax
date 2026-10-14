@@ -114,10 +114,10 @@ pub struct Pound {
     pub hint:            Option<ValueHint>,
     /// item-level: groups that must have exactly one member set
     pub required_groups: Vec<String>,
-    /// field-level: names of fields this one cannot be combined with
-    pub conflicts_with:  Vec<String>,
-    /// field-level: names of fields this one obliges when set
-    pub requires:        Vec<String>,
+    /// field-level: fields this one cannot be combined with
+    pub conflicts_with:  Vec<Ident>,
+    /// field-level: fields this one obliges when set
+    pub requires:        Vec<Ident>,
     /// extra long names (fields) or command names (variants) that also match
     pub aliases:         Vec<String>,
     pub short_aliases:   Vec<char>,
@@ -197,8 +197,8 @@ impl Pound {
             "complete"        => self.complete        = Some(callable(key, span, seg)?),
             "hint"            => self.hint            = Some(ValueHint::new(&needed(key, span, value)?, span)?),
             "required_group"  => self.required_groups.push(needed(key, span, value)?),
-            "conflicts_with"  => self.conflicts_with.extend(csv(&needed(key, span, value)?)),
-            "requires"        => self.requires.extend(csv(&needed(key, span, value)?)),
+            "conflicts_with"  => self.conflicts_with.extend(field_refs(key, span, seg)?),
+            "requires"        => self.requires.extend(field_refs(key, span, seg)?),
             "alias"           => self.aliases.extend(csv(&needed(key, span, value)?)),
             "short_alias"     => {
                 for short in csv(&needed(key, span, value)?) {
@@ -521,6 +521,67 @@ fn expr(seg: &[TokenTree]) -> Option<Vec<TokenTree>> {
             (!rest.is_empty()).then(|| rest.to_vec())
         },
         _ => None,
+    }
+}
+
+/// the fields a `requires` or `conflicts_with` names, written bare as `a`, as
+/// a list `[a, b]`, or quoted as `"a, b"`
+fn field_refs(key: &str, span: Span, seg: &[TokenTree]) -> Result<Vec<Ident>, Error> {
+    let Some(value) = expr(seg) else {
+        return Err(Error::new_at_span(
+            span,
+            format!("pound: `{key}` needs a value"),
+        ));
+    };
+
+    match value.as_slice() {
+        [TokenTree::Group(group)] if group.delimiter() == Delimiter::Bracket => {
+            let inner = group.stream().into_iter().collect::<Vec<_>>();
+
+            split_commas(&inner)
+                .iter()
+                .map(|item| field_ref(key, item))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|nested| nested.into_iter().flatten().collect())
+        },
+        _ => field_ref(key, &value),
+    }
+}
+
+fn field_ref(key: &str, tokens: &[TokenTree]) -> Result<Vec<Ident>, Error> {
+    match tokens {
+        [TokenTree::Ident(ident)] => Ok(vec![ident.clone()]),
+        [TokenTree::Group(group)] if group.delimiter() == Delimiter::None => {
+            field_ref(key, &group.stream().into_iter().collect::<Vec<_>>())
+        },
+        [lit @ TokenTree::Literal(_)] if is_quoted(lit) => {
+            csv(&unquote(lit))
+                .map(|name| {
+                    let raw = name.strip_prefix("r#");
+                    let plain = raw.unwrap_or(&name);
+                    let mut chars = plain.chars();
+                    let valid = chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
+                        && chars.all(|c| c == '_' || c.is_alphanumeric());
+
+                    if !valid {
+                        Err(Error::new_at_span(
+                            lit.span(),
+                            format!("pound: {key}: `{name}` is not a field name"),
+                        ))
+                    } else if raw.is_some() {
+                        Ok(Ident::new_raw(plain, lit.span()))
+                    } else {
+                        Ok(Ident::new(plain, lit.span()))
+                    }
+                })
+                .collect()
+        },
+        _ => {
+            Err(Error::new_at_span(
+                tokens.first().map_or_else(Span::call_site, TokenTree::span),
+                format!("pound: `{key}` takes a field name or a list of them"),
+            ))
+        },
     }
 }
 
