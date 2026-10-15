@@ -1157,8 +1157,8 @@ fn named_fields(command: &Command) -> impl Iterator<Item = &Ident> {
         .flat_map(|arg| arg.requires.iter().chain(&arg.conflicts_with))
 }
 
-// each bare group name declared once under its first mention's span and read
-// under the others', so rename and go-to-definition reach every mention
+// each bare group name bound once as a local under its first mention's span and
+// read under the others', so rename and go-to-definition reach every mention
 fn group_links(command: &Command) -> TokenStream {
     let mentions = command
         .required_refs
@@ -1175,8 +1175,8 @@ fn group_links(command: &Command) -> TokenStream {
 
         Some(quote! {
             const _: () = {
-                #[allow(non_camel_case_types, dead_code)]
-                struct #first;
+                #[allow(non_snake_case, unused_variables)]
+                let #first = ();
                 #(let _ = #rest;)*
             };
         })
