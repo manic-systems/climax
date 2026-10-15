@@ -62,6 +62,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "long",
     "positional",
     "trailing",
+    "last",
     "count",
     "hidden",
     "global",
@@ -729,6 +730,7 @@ pub enum ArgKind {
     Opt,
     Positional,
     Trailing,
+    Last,
 }
 
 impl ArgKind {
@@ -738,24 +740,26 @@ impl ArgKind {
     )]
     fn new(attr: &Pound, ty: &FieldType, ident: &Ident) -> Result<Self, Error> {
         let (shape, sourced) = (ty.shape, ty.sourced);
-        let shape_count =
-            usize::from(attr.positional) + usize::from(attr.trailing) + usize::from(attr.count);
+        let shape_count = usize::from(attr.positional)
+            + usize::from(attr.trailing)
+            + usize::from(attr.last)
+            + usize::from(attr.count);
 
         if shape_count > 1 {
             return Err(Error::new_at_span(
                 ident.span(),
-                "pound: positional, trailing, and count are mutually exclusive",
+                "pound: positional, trailing, last, and count are mutually exclusive",
             ));
         }
 
         if shape == Shape::Bool && shape_count > 0 {
             return Err(Error::new_at_span(
                 ident.span(),
-                "pound: bool fields cannot be positional, trailing, or counted",
+                "pound: bool fields cannot be positional, trailing, last, or counted",
             ));
         }
 
-        if (attr.positional || attr.trailing) && attr.is_named() {
+        if (attr.positional || attr.trailing || attr.last) && attr.is_named() {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: positional fields cannot have short or long names",
@@ -769,11 +773,18 @@ impl ArgKind {
             ));
         }
 
-        if attr.delimiter.is_some() && (!shape.is_many() || attr.trailing) {
+        if attr.last && !shape.is_many() {
+            return Err(Error::new_at_span(
+                ident.span(),
+                "pound: #[pound(last)] needs a `Vec` or `Option<Vec>` field",
+            ));
+        }
+
+        if attr.delimiter.is_some() && (!shape.is_many() || attr.trailing || attr.last) {
             return Err(Error::new_at_span(
                 ident.span(),
                 "pound: #[pound(delimiter)] needs a `Vec` or `Option<Vec>` field that is not \
-                 trailing",
+                 trailing or last",
             ));
         }
 
@@ -831,6 +842,8 @@ impl ArgKind {
             Self::Count
         } else if attr.trailing {
             Self::Trailing
+        } else if attr.last {
+            Self::Last
         } else if attr.is_named() {
             Self::Opt
         } else {
@@ -920,7 +933,10 @@ impl ArgKind {
     }
 
     pub const fn takes_value(self) -> bool {
-        matches!(self, Self::Opt | Self::Positional | Self::Trailing)
+        matches!(
+            self,
+            Self::Opt | Self::Positional | Self::Trailing | Self::Last
+        )
     }
 }
 

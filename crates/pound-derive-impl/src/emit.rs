@@ -754,6 +754,7 @@ impl Emitter {
             ArgKind::Opt => quote! { #root::Kind::Opt },
             ArgKind::Positional => quote! { #root::Kind::Positional },
             ArgKind::Trailing => quote! { #root::Kind::Trailing },
+            ArgKind::Last => quote! { #root::Kind::Last },
         };
 
         let spellings = Self::spelling_calls(arg);

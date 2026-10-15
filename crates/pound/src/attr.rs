@@ -44,6 +44,9 @@ pub struct positional;
 /// collect the rest of the line, flags too
 pub struct trailing;
 
+/// collect everything after `--`, which a bare word never reaches
+pub struct last;
+
 /// count repeats of a flag into an integer
 pub struct count;
 

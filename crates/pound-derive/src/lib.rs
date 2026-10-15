@@ -33,6 +33,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `Sourced<T>` or `Option<Sourced<T>>`  | the value and its `pound::Source`, typed, from `env`, or the `default`. `Sourced<bool>` is a flag |
 /// | integer with `count`                   | `-vvv` or `--verbose --verbose` counted                  |
 /// | `Vec<T>` with `trailing`               | everything after `--` or after its first value           |
+/// | `Vec<T>` with `last`                   | everything after `--`, which a bare word never reaches   |
 /// | `T` or `Option<T>` with `subcommand`   | the subcommand tree held by a [`Parse`] enum             |
 /// | `T` with `flatten`                     | another [`Parse`] struct's args, embedded at this level  |
 ///
@@ -181,6 +182,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `short`              | `-n`, the field name's first letter. `short = 'x'` picks the letter                            |
 /// | `positional`         | a positional, which is already what a field with neither `short` nor `long` is                 |
 /// | `trailing`           | collect the rest of the line, flags too, from `--` or its first value. must be last positional |
+/// | `last`               | collect everything after `--`. a bare word before it is an error, not a value, and subcommands stay reachable |
 /// | `count`              | count repeats of a flag into an integer. it takes no `default` or `env`                        |
 /// | `alias = ["a", "b"]` | extra long names for a flag or option, one as `"a"`                                            |
 /// | `short_alias = ['x', 'y']` | extra short names for a flag or option, one as `'x'`                                   |
@@ -189,8 +191,9 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `exclusive`          | the only arg allowed when given, and lifts requirements. every other field must be optional    |
 /// | `allow_hyphen_values` | a positional takes `-x` when no option answers to it, and a `num_args` option keeps reading past words like `-x` |
 ///
-/// `positional`, `trailing` and `count` exclude each other. a positional takes
-/// no names or aliases, `trailing` needs a `Vec`, and `count` needs a scalar.
+/// `positional`, `trailing`, `last` and `count` exclude each other. a
+/// positional takes no names or aliases, `trailing` and `last` need a `Vec`,
+/// and `count` needs a scalar.
 /// a positional or subcommand may not follow a variadic or trailing positional,
 /// and the derive rejects that at compile time.
 ///

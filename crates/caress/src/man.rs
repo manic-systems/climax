@@ -156,6 +156,10 @@ impl<'m> Manual<'m> {
             }
         }
         for arg in &self.positionals {
+            if arg.kind == Kind::Last {
+                page.line(format_args!("Op Fl - Ar {} ...", Meta(arg)));
+                continue;
+            }
             let dots = if arg.multi || arg.kind == Kind::Trailing {
                 " ..."
             } else {

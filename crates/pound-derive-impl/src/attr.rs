@@ -86,6 +86,7 @@ pub(crate) struct Pound {
     pub long:            Option<Spelling<String>>,
     pub positional:      bool,
     pub trailing:        bool,
+    pub last:            bool,
     pub count:           bool,
     /// field delegates to its type's subcommand tree
     pub subcommand:      bool,
@@ -202,6 +203,7 @@ impl Pound {
             "long_version"    => self.long_version    = expr(seg),
             "positional"      => self.positional      = bare(key, span, value.is_some())?,
             "trailing"        => self.trailing        = bare(key, span, value.is_some())?,
+            "last"            => self.last            = bare(key, span, value.is_some())?,
             "count"           => self.count           = bare(key, span, value.is_some())?,
             "subcommand"      => self.subcommand      = bare(key, span, value.is_some())?,
             "flatten"         => self.flatten         = bare(key, span, value.is_some())?,
@@ -870,6 +872,7 @@ const BARE_KEYS: &[&str] = &[
     "negate",
     "positional",
     "trailing",
+    "last",
     "count",
     "subcommand",
     "flatten",

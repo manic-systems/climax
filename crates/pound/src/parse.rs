@@ -847,8 +847,10 @@ struct Walk<'w, 'a> {
     cmd:             &'w Command<'w>,
     targets:         &'w [ArgTarget],
     positionals:     Vec<&'w ArgTarget>,
+    last:            Option<&'w ArgTarget>,
     cursor:          usize,
     only_positional: bool,
+    separated:       bool,
     demands:         Demands,
     matches:         Matches<'a>,
 }
@@ -873,10 +875,12 @@ fn walk_cmd<'a, M: Mode>(
         targets: &targets,
         positionals: targets
             .iter()
-            .filter(|target| target.arg.is_positional())
+            .filter(|target| target.arg.is_positional() && target.arg.kind != Kind::Last)
             .collect(),
+        last: targets.iter().find(|target| target.arg.kind == Kind::Last),
         cursor: 0,
         only_positional: false,
+        separated: false,
         demands: M::DEMANDS,
         matches: Matches::new(cmd.spec()),
     };
@@ -921,6 +925,7 @@ impl<'a> Walk<'_, 'a> {
             self.positional(tok)?;
         } else if tok == "--" {
             self.only_positional = true;
+            self.separated = true;
         } else if let Some(long) = tok.strip_prefix("--") {
             self.long(tok, long, it, hits)?;
         } else if let Some(rest) = tok.strip_prefix('-').filter(|tail| !tail.is_empty()) {
@@ -1119,6 +1124,14 @@ impl<'a> Walk<'_, 'a> {
     }
 
     fn positional(&mut self, tok: &'a str) -> Result<(), ErrorKind> {
+        if self.separated
+            && let Some(last) = self.last
+        {
+            let slot = target_slot_mut(&mut self.matches, last);
+            slot.values.push(tok);
+            slot.count += 1;
+            return Ok(());
+        }
         if positional(&mut self.matches, &self.positionals, &mut self.cursor, tok)? {
             self.only_positional = true;
         }
@@ -1130,7 +1143,11 @@ impl<'a> Walk<'_, 'a> {
             return Next::Value(arg);
         }
         Next::Word {
-            positional:  next_positional(&self.positionals, self.cursor).map(|target| target.arg),
+            positional:  self
+                .last
+                .filter(|_| self.separated)
+                .or_else(|| next_positional(&self.positionals, self.cursor))
+                .map(|target| target.arg),
             subcommands: !self.only_positional && self.sub_open(),
             options:     !self.only_positional,
         }
@@ -1193,7 +1210,9 @@ fn apply_named<'a>(
             };
             use_option(arg, slot, value, it)?;
         },
-        Kind::Positional | Kind::Trailing => return Err(unknown(arg.display_name()).into()),
+        Kind::Positional | Kind::Trailing | Kind::Last => {
+            return Err(unknown(arg.display_name()).into());
+        },
     }
     Ok(())
 }
@@ -1243,7 +1262,7 @@ fn shorts<'a>(
                     use_option(arg, slot, value, it)?;
                     return Ok(()); // option swallowed the cluster tail
                 },
-                Kind::Positional | Kind::Trailing => {
+                Kind::Positional | Kind::Trailing | Kind::Last => {
                     return Err(unknown(format!("-{ch}")).into());
                 },
             }
@@ -1261,7 +1280,7 @@ fn shorts<'a>(
                     record_values(index, global, value, it, hits)?;
                     return Ok(());
                 },
-                Kind::Positional | Kind::Trailing => {
+                Kind::Positional | Kind::Trailing | Kind::Last => {
                     return Err(unknown(format!("-{ch}")).into());
                 },
             }
@@ -1436,7 +1455,9 @@ fn record_global<'a>(
             };
             record_values(index, global, value, it, hits)?;
         },
-        Kind::Positional | Kind::Trailing => return Err(unknown(global.display_name()).into()),
+        Kind::Positional | Kind::Trailing | Kind::Last => {
+            return Err(unknown(global.display_name()).into());
+        },
     }
     Ok(())
 }
@@ -1472,7 +1493,7 @@ fn apply_global_hits<'a>(
                     None => push_bare(arg, slot),
                 }
             },
-            Kind::Positional | Kind::Trailing => {},
+            Kind::Positional | Kind::Trailing | Kind::Last => {},
         }
         false
     });

@@ -228,7 +228,8 @@ const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
 #[must_use]
 pub const fn positionals_reachable(spec: &CommandSpec) -> bool {
     let mut scan = PositionalScan {
-        greedy:            false,
+        greedy:            Greedy::No,
+        last:              false,
         previous_required: None,
         dispatchable:      true,
     };
@@ -236,9 +237,17 @@ pub const fn positionals_reachable(spec: &CommandSpec) -> bool {
 }
 
 struct PositionalScan {
-    greedy:            bool,
+    greedy:            Greedy,
+    last:              bool,
     previous_required: Option<bool>,
     dispatchable:      bool,
+}
+
+/// a trailing positional swallows `--` too, so `last` cannot follow it
+enum Greedy {
+    No,
+    Variadic,
+    Trailing,
 }
 
 /// walk positionals in declaration order, false once one follows a greedy one
@@ -248,12 +257,21 @@ const fn scan_positionals(spec: &CommandSpec, scan: &mut PositionalScan) -> bool
         match spec.order_entry(position) {
             ArgumentOrder::Direct(i) => {
                 let arg = &spec.args[i];
-                if arg.is_positional() {
-                    if scan.greedy {
+                if matches!(arg.kind, Kind::Last) {
+                    if matches!(scan.greedy, Greedy::Trailing) || scan.last {
+                        return false;
+                    }
+                    scan.last = true;
+                } else if arg.is_positional() {
+                    if !matches!(scan.greedy, Greedy::No) || scan.last {
                         return false;
                     }
                     if arg.multi || matches!(arg.kind, Kind::Trailing) {
-                        scan.greedy = true;
+                        scan.greedy = if matches!(arg.kind, Kind::Trailing) {
+                            Greedy::Trailing
+                        } else {
+                            Greedy::Variadic
+                        };
                         scan.dispatchable =
                             !arg.required && matches!(scan.previous_required, Some(false));
                     }

@@ -286,6 +286,9 @@ pub(crate) fn version_line(spec: &CommandSpec, long: bool) -> String {
 #[cfg(feature = "help")]
 fn usage_positional(arg: &ArgSpec) -> String {
     let meta = arg.metavar();
+    if arg.kind == Kind::Last {
+        return format!("[-- {meta}...]");
+    }
     let dots = if arg.multi || arg.kind == Kind::Trailing {
         "..."
     } else {
@@ -398,7 +401,10 @@ fn help_text(arg: &ArgSpec, long: bool) -> String {
             format_args!("possible values: {}", names.join(", ")),
         );
     }
-    let takes_value = matches!(arg.kind, Kind::Opt | Kind::Positional | Kind::Trailing);
+    let takes_value = matches!(
+        arg.kind,
+        Kind::Opt | Kind::Positional | Kind::Trailing | Kind::Last
+    );
     if takes_value && let Some(default) = arg.default.filter(|_| !arg.hide_default) {
         push_tag(&mut rendered, format_args!("default: {default}"));
     }

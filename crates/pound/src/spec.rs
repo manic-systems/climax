@@ -52,6 +52,8 @@ pub enum Kind {
     Positional,
     /// the rest of the line, from `--` or its own first value on
     Trailing,
+    /// the rest of the line after `--`, which a bare word never reaches
+    Last,
 }
 
 /// what an arg's value names, so a shell completing it knows what to list
@@ -448,7 +450,7 @@ impl ArgSpec {
     /// true for kinds matched by position rather than by name
     #[must_use]
     pub const fn is_positional(&self) -> bool {
-        matches!(self.kind, Kind::Positional | Kind::Trailing)
+        matches!(self.kind, Kind::Positional | Kind::Trailing | Kind::Last)
     }
 
     /// whether `--name` reaches this arg, as its long name, an alias, or its
