@@ -24,6 +24,7 @@ use crate::{
     help,
     spec::{
         ArgSpec,
+        Arity,
         Command,
         CommandSpec,
         Kind,
@@ -179,8 +180,11 @@ impl SubTarget {
 
 enum Halt {
     Error(Error),
-    /// the words ran out where this arg wanted its value
-    NeedsValue(&'static ArgSpec),
+    /// the words ran out where this arg wanted a value, after `got` of them
+    NeedsValue {
+        arg: &'static ArgSpec,
+        got: usize,
+    },
     /// the words ran out where this arg had its values but could take more,
     /// which is only news to a completion
     TakesMore(&'static ArgSpec),
@@ -751,7 +755,19 @@ impl Mode for Strict {
     fn halt(halt: Halt, _: &mut Option<&'static ArgSpec>) -> Result<(), Error> {
         match halt {
             Halt::Error(err) => Err(err),
-            Halt::NeedsValue(arg) => Err(ErrorKind::MissingValue(arg.display_name()).into()),
+            Halt::NeedsValue { arg, got } => {
+                let min = arg.words_per_use().map_or(1, Arity::min);
+                if min > 1 {
+                    Err(ErrorKind::TooFewValues {
+                        arg: arg.display_name(),
+                        min,
+                        got,
+                    }
+                    .into())
+                } else {
+                    Err(ErrorKind::MissingValue(arg.display_name()).into())
+                }
+            },
             Halt::TakesMore(_) => Ok(()),
         }
     }
@@ -806,7 +822,7 @@ impl Mode for Lenient {
     const DEMANDS: Demands = Demands::Checked;
 
     fn halt(halt: Halt, awaiting: &mut Option<&'static ArgSpec>) -> Result<(), Infallible> {
-        if let Halt::NeedsValue(arg) | Halt::TakesMore(arg) = halt {
+        if let Halt::NeedsValue { arg, .. } | Halt::TakesMore(arg) = halt {
             *awaiting = Some(arg);
         }
         Ok(())
@@ -1319,7 +1335,7 @@ fn detached_value<'a>(
     if arg.optional_value {
         return Ok(None);
     }
-    it.next().map(Some).ok_or(Halt::NeedsValue(arg))
+    it.next().map(Some).ok_or(Halt::NeedsValue { arg, got: 0 })
 }
 
 fn more_values<'a>(
@@ -1347,7 +1363,7 @@ fn more_values<'a>(
     match it.peek() {
         None if taken >= min && open => Err(Halt::TakesMore(arg)),
         _ if taken >= min => Ok(()),
-        None => Err(Halt::NeedsValue(arg)),
+        None => Err(Halt::NeedsValue { arg, got: taken }),
         Some(_) => {
             Err(ErrorKind::TooFewValues {
                 arg: arg.display_name(),
