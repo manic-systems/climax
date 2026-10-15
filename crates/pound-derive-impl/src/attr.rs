@@ -9,6 +9,7 @@ use core::{
 
 use proc_macro2::{
     Delimiter,
+    Group,
     Ident,
     Span,
     TokenStream,
@@ -709,9 +710,7 @@ fn field_refs(key: &str, span: Span, seg: &[TokenTree]) -> Result<Vec<Ident>, Er
 
     match value.as_slice() {
         [TokenTree::Group(group)] if group.delimiter() == Delimiter::Bracket => {
-            let inner = group.stream().into_iter().collect::<Vec<_>>();
-
-            split_commas(&inner)
+            list_items(group)
                 .iter()
                 .map(|item| field_ref(key, item))
                 .collect::<Result<Vec<_>, _>>()
@@ -779,16 +778,7 @@ fn names(key: &str, span: Span, seg: &[TokenTree]) -> Result<Vec<String>, Error>
     };
 
     let items = match value.as_slice() {
-        [TokenTree::Group(group)] if group.delimiter() == Delimiter::Bracket => {
-            group
-                .stream()
-                .into_iter()
-                .collect::<Vec<_>>()
-                .split(|tok| matches!(tok, TokenTree::Punct(punct) if punct.as_char() == ','))
-                .filter(|item| !item.is_empty())
-                .map(<[TokenTree]>::to_vec)
-                .collect()
-        },
+        [TokenTree::Group(group)] if group.delimiter() == Delimiter::Bracket => list_items(group),
         _ => vec![value],
     };
 
@@ -812,6 +802,17 @@ fn csv(list: &str) -> impl Iterator<Item = String> + '_ {
     list.split(',')
         .map(|entry| entry.trim().to_owned())
         .filter(|entry| !entry.is_empty())
+}
+
+fn list_items(group: &Group) -> Vec<Vec<TokenTree>> {
+    group
+        .stream()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .split(|tok| matches!(tok, TokenTree::Punct(punct) if punct.as_char() == ','))
+        .filter(|item| !item.is_empty())
+        .map(<[TokenTree]>::to_vec)
+        .collect()
 }
 
 fn split_commas(tokens: &[TokenTree]) -> Vec<Vec<TokenTree>> {
