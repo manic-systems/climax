@@ -2,6 +2,17 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.5.1
+
+### Changed
+
+- A bare group name, as `group = mode`, now highlights as a variable in rust-analyzer, where it used to highlight as a type.
+- The `pound::attr` docs that rust-analyzer shows on hover open with a one-line summary followed by an example.
+
+### Fixed
+
+- `requires` and `conflicts_with` accept a list of three or more fields. A list such as `[a, b, c]` failed to compile.
+
 ## 0.5.0
 
 ### Added
