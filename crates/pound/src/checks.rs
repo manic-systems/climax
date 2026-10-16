@@ -228,19 +228,17 @@ const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
 #[must_use]
 pub const fn positionals_reachable(spec: &CommandSpec) -> bool {
     let mut scan = PositionalScan {
-        greedy:            Greedy::No,
-        last:              false,
-        previous_required: None,
-        dispatchable:      true,
+        greedy:       Greedy::No,
+        last:         false,
+        dispatchable: true,
     };
     scan_positionals(spec, &mut scan) && (scan.dispatchable || !spec.has_subs())
 }
 
 struct PositionalScan {
-    greedy:            Greedy,
-    last:              bool,
-    previous_required: Option<bool>,
-    dispatchable:      bool,
+    greedy:       Greedy,
+    last:         bool,
+    dispatchable: bool,
 }
 
 /// a trailing positional swallows `--` too, so `last` cannot follow it
@@ -272,10 +270,10 @@ const fn scan_positionals(spec: &CommandSpec, scan: &mut PositionalScan) -> bool
                         } else {
                             Greedy::Variadic
                         };
-                        scan.dispatchable =
-                            !arg.required && matches!(scan.previous_required, Some(false));
+                        // a subcommand can still claim the first word while
+                        // the variadic is empty, unless it is required
+                        scan.dispatchable = !arg.required;
                     }
-                    scan.previous_required = Some(arg.required);
                 }
             },
             ArgumentOrder::Flattened(i) => {
