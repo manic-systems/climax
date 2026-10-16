@@ -24,7 +24,7 @@ jobs:
       contents: write
       id-token: write
     needs: ci
-    uses: manic-systems/workflows/.github/workflows/rust-release.yml@23a06db817dba5ff9dee828279eb3070f405d9e1 # v2.3.1
+    uses: manic-systems/workflows/.github/workflows/rust-release.yml@4d2d4a73ac933d23f00fb7a17dd39569f8e1c1dc # v2.3.2
     with:
       stage: prepare
       tag-prefix: pound-v
@@ -41,7 +41,7 @@ jobs:
       id-token: write
     needs: prepare-pound
     if: ${{ needs.prepare-pound.result == 'success' && needs.prepare-pound.outputs.skip != 'true' }}
-    uses: manic-systems/workflows/.github/workflows/rust-release.yml@23a06db817dba5ff9dee828279eb3070f405d9e1 # v2.3.1
+    uses: manic-systems/workflows/.github/workflows/rust-release.yml@4d2d4a73ac933d23f00fb7a17dd39569f8e1c1dc # v2.3.2
     with:
       stage: publish
       version: ${{ needs.prepare-pound.outputs.version }}
@@ -54,7 +54,7 @@ jobs:
       contents: write
       id-token: write
     needs: ci
-    uses: manic-systems/workflows/.github/workflows/rust-release.yml@23a06db817dba5ff9dee828279eb3070f405d9e1 # v2.3.1
+    uses: manic-systems/workflows/.github/workflows/rust-release.yml@4d2d4a73ac933d23f00fb7a17dd39569f8e1c1dc # v2.3.2
     with:
       stage: prepare
       tag-prefix: caress-v
@@ -72,7 +72,7 @@ jobs:
       && needs.prepare-caress.result == 'success'
       && needs.prepare-caress.outputs.skip != 'true'
       && needs.publish-pound.result != 'failure' }}
-    uses: manic-systems/workflows/.github/workflows/rust-release.yml@23a06db817dba5ff9dee828279eb3070f405d9e1 # v2.3.1
+    uses: manic-systems/workflows/.github/workflows/rust-release.yml@4d2d4a73ac933d23f00fb7a17dd39569f8e1c1dc # v2.3.2
     with:
       stage: publish
       version: ${{ needs.prepare-caress.outputs.version }}
