@@ -1120,17 +1120,20 @@ impl<'a> Walk<'_, 'a> {
     }
 
     /// a bare token names a subcommand only once every required positional is
-    /// filled, unless requirements are waived, and never past a variadic one,
-    /// which stays greedy so its tail can fill
+    /// filled, unless requirements are waived, and never once a variadic one
+    /// has started, which then stays greedy so its tail can fill
     fn sub_open(&self) -> bool {
-        let next = self.positionals.get(self.cursor).map(|target| target.arg);
+        let variadic_started = self.positionals.get(self.cursor).is_some_and(|target| {
+            (target.arg.multi || target.arg.kind == Kind::Trailing)
+                && target_slot(&self.matches, target).count > 0
+        });
         let pending = self
             .positionals
             .iter()
             .skip(self.cursor)
             .any(|target| target.arg.required);
         self.cmd.spec().has_subs()
-            && !next.is_some_and(|arg| arg.multi || arg.kind == Kind::Trailing)
+            && !variadic_started
             && (self.demands == Demands::Waived || !pending)
     }
 
@@ -1795,6 +1798,14 @@ fn group_members<'m, 'a>(
         }
     });
     members
+}
+
+fn target_slot<'m, 'a>(matches: &'m Matches<'a>, target: &ArgTarget) -> &'m Slot<'a> {
+    let owner = target
+        .path
+        .iter()
+        .fold(matches, |owner, &i| &owner.flattened[i]);
+    &owner.slots[target.index]
 }
 
 fn target_slot_mut<'m, 'a>(matches: &'m mut Matches<'a>, target: &ArgTarget) -> &'m mut Slot<'a> {
