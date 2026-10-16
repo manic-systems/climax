@@ -1,6 +1,6 @@
 [package]
 name                 = "pound"
-version              = "0.5.1"
+version              = "0.5.2"
 description          = "low footprint, derive-first CLI parser"
 keywords             = [ "cli", "args", "argparse", "derive", "command-line" ]
 categories           = [ "command-line-interface" ]
@@ -18,7 +18,7 @@ derive  = [ "dep:pound-derive" ]
 unicode = [ "dep:unicode-width" ]
 
 [dependencies]
-pound-derive = { version = "=0.5.1", path = "../pound-derive", optional = true }
+pound-derive = { version = "=0.5.2", path = "../pound-derive", optional = true }
 unicode-width = { version = "0.2.2", optional = true, default-features = false }
 
 [[example]]

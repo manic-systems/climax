@@ -2,6 +2,16 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.5.2
+
+### Added
+
+- `last`, a positional kind that only takes the words after `--`, as in `tack run app -- --verbose`. It may follow a variadic positional, and help shows it as `[-- META...]`.
+
+### Changed
+
+- An option taking several words per use, as `num_args = 2`, reports how many it got when the line runs out, where it used to report a missing value.
+
 ## 0.5.1
 
 ### Changed

@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "caress"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "pound",
 ]
@@ -98,7 +98,7 @@ checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "pound"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "pound-derive",
  "unicode-width",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "pound-derive"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "pound",
  "pound-derive-impl",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "pound-derive-impl"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "proc-macro2",
  "quote",

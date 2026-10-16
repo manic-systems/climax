@@ -1,6 +1,6 @@
 [package]
 name                 = "caress"
-version              = "0.2.0"
+version              = "0.2.1"
 description          = "shell completions and man pages for pound commands"
 keywords             = [ "cli", "completion", "manpage", "mdoc", "pound" ]
 categories           = [ "command-line-interface" ]
@@ -11,7 +11,7 @@ license.workspace    = true
 repository.workspace = true
 
 [dependencies]
-pound = { version = "0.5.0", path = "../pound", default-features = false, features = [ "std" ] }
+pound = { version = "0.5.2", path = "../pound", default-features = false, features = [ "std" ] }
 
 [dev-dependencies]
 pound = { path = "../pound" }
