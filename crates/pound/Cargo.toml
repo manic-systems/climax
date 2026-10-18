@@ -18,8 +18,8 @@ derive  = [ "dep:pound-derive" ]
 unicode = [ "dep:unicode-width" ]
 
 [dependencies]
-pound-derive = { version = "=0.5.2", path = "../pound-derive", optional = true }
-unicode-width = { version = "0.2.2", optional = true, default-features = false }
+pound-derive  = { workspace = true, optional = true }
+unicode-width = { workspace = true, optional = true }
 
 [[example]]
 name              = "grab"

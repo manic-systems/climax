@@ -27,17 +27,13 @@ name              = "status"
 required-features = [ "render" ]
 
 [dependencies]
-bang-core = { path = "../bang-core", version = "0.0.1", optional = true }
-bang-screw = { path = "../bang-screw", version = "0.0.1", optional = true }
-bang-screw-pty = { path = "../bang-screw-pty", version = "0.0.1", optional = true }
-bang-terminal = { path = "../bang-terminal", version = "0.0.1", optional = true }
-caress = { path = "../caress", version = "0.2.1", optional = true }
-pound = { path = "../pound", version = "0.5.2", optional = true, default-features = false, features = [
-	"std",
-	"help",
-	"unicode",
-] }
-screw = { path = "../screw", version = "0.0.1", optional = true }
+bang-core      = { workspace = true, optional = true }
+bang-screw     = { workspace = true, optional = true }
+bang-screw-pty = { workspace = true, optional = true }
+bang-terminal  = { workspace = true, optional = true }
+caress         = { workspace = true, optional = true }
+pound          = { workspace = true, optional = true, features = [ "std", "help", "unicode" ] }
+screw          = { workspace = true, optional = true }
 
 [lints.clippy]
 cargo       = { level = "warn", priority = -1 }

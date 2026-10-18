@@ -11,10 +11,10 @@ license.workspace    = true
 repository.workspace = true
 
 [dependencies]
-pound = { version = "0.5.2", path = "../pound", default-features = false, features = [ "std" ] }
+pound = { workspace = true, features = [ "std" ] }
 
 [dev-dependencies]
-pound = { path = "../pound" }
+pound = { workspace = true, default-features = true }
 
 [[example]]
 name = "keyring"

@@ -11,7 +11,7 @@ readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
-screw = { path = "../screw", version = "0.0.1" }
+screw.workspace = true
 
 [lints]
 workspace = true

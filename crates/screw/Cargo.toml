@@ -10,8 +10,8 @@ keywords    = [ "terminal", "cli", "tui", "renderer", "animation" ]
 categories  = [ "command-line-interface", "command-line-utilities" ]
 
 [dependencies]
-libc          = "0.2"
-unicode-width = "0.2.2"
+libc.workspace = true
+unicode-width  = { workspace = true, default-features = true }
 
 [lints]
 workspace = true
