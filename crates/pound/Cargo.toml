@@ -11,11 +11,12 @@ license.workspace    = true
 repository.workspace = true
 
 [features]
-default = [ "std", "help", "derive" ]
+default = [ "std", "help", "derive", "color" ]
 std     = [  ]
 help    = [ "pound-derive?/help" ]
 derive  = [ "dep:pound-derive" ]
 unicode = [ "dep:unicode-width" ]
+color   = [  ]
 
 [dependencies]
 pound-derive  = { workspace = true, optional = true }

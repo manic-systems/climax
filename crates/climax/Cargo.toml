@@ -32,7 +32,7 @@ bang-screw     = { workspace = true, optional = true }
 bang-screw-pty = { workspace = true, optional = true }
 bang-terminal  = { workspace = true, optional = true }
 caress         = { workspace = true, optional = true }
-pound          = { workspace = true, optional = true, features = [ "std", "help", "unicode" ] }
+pound          = { workspace = true, optional = true, features = [ "std", "help", "unicode", "color" ] }
 screw          = { workspace = true, optional = true }
 
 [lints.clippy]

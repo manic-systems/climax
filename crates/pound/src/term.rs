@@ -101,6 +101,7 @@ pub(crate) enum Paint {
     Tip,
 }
 
+#[cfg(feature = "color")]
 impl Paint {
     const fn escape(self) -> Option<&'static str> {
         match self {
@@ -143,15 +144,19 @@ impl Span {
         Term::columns(&self.text)
     }
 
+    #[cfg_attr(
+        not(feature = "color"),
+        expect(unused_variables, reason = "spans paint without a term")
+    )]
     pub(crate) fn write(&self, out: &mut String, term: Term) {
-        match self.paint.escape().filter(|_| term.color) {
-            Some(escape) => {
-                out.push_str(escape);
-                out.push_str(&self.text);
-                out.push_str("\x1b[0m");
-            },
-            None => out.push_str(&self.text),
+        #[cfg(feature = "color")]
+        if let Some(escape) = self.paint.escape().filter(|_| term.color) {
+            out.push_str(escape);
+            out.push_str(&self.text);
+            out.push_str("\x1b[0m");
+            return;
         }
+        out.push_str(&self.text);
     }
 }
 
