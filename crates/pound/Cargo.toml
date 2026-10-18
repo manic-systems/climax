@@ -34,5 +34,9 @@ required-features = [ "std", "derive" ]
 name              = "introspect"
 required-features = [ "std", "derive" ]
 
+[[example]]
+name              = "paint"
+required-features = [ "std", "derive", "help", "color" ]
+
 [lints]
 workspace = true
