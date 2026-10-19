@@ -3,6 +3,11 @@
 //! walk a program's `CommandSpec`
 //! this demonstrates how a manpage/completions/etc generator might work
 
+#![expect(
+    clippy::print_stdout,
+    reason = "the example prints each command specification"
+)]
+
 use pound::{
     Parse,
     spec::{
@@ -53,10 +58,6 @@ fn main() {
 
 /// print one command then recurse
 /// `Command` carries the inherited globals down
-#[expect(
-    clippy::print_stdout,
-    reason = "the example prints each command specification"
-)]
 fn walk(cmd: &Command<'_>, depth: usize) {
     let spec = cmd.spec();
     let pad = "  ".repeat(depth);

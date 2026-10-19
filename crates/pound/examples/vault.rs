@@ -8,6 +8,11 @@
 //! run `cargo run --example vault -- --help`
 
 #![expect(dead_code, reason = "the demo just parses argv and prints the result")]
+#![expect(
+    clippy::print_stderr,
+    clippy::use_debug,
+    reason = "the example reports its parsed command for demonstration"
+)]
 
 use core::time::Duration;
 
@@ -250,11 +255,6 @@ struct Cli {
     cmd: Cmd,
 }
 
-#[expect(
-    clippy::print_stderr,
-    clippy::use_debug,
-    reason = "the example reports its parsed command for demonstration"
-)]
 fn main() {
     let cli = Cli::parse();
     if cli.verbose > 1 {

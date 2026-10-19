@@ -2,6 +2,12 @@
 
 //! a tiny demo command, run `cargo run --example grab -- --help`.
 
+#![expect(
+    clippy::print_stdout,
+    clippy::use_debug,
+    reason = "the example displays the parsed command"
+)]
+
 use pound::Parse;
 
 /// fetch urls to disk
@@ -44,11 +50,6 @@ fn power_of_two(value: &u32) -> Result<(), &'static str> {
     }
 }
 
-#[expect(
-    clippy::print_stdout,
-    clippy::use_debug,
-    reason = "the example displays the parsed command"
-)]
 fn main() {
     let grab = Grab::parse();
     println!("{grab:?}");
