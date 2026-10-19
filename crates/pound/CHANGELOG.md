@@ -2,6 +2,17 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.5.3
+
+### Added
+
+- `color`, a default feature that paints help and errors. Without it they render plain on any terminal.
+
+### Changed
+
+- A command with subcommands may end in an optional variadic or trailing positional, as `[files...]` or `<target> [files...]`. A subcommand claims the first word while the variadic is still empty, so with `[a] [b...]`, `cmd x build` now runs `build` where it used to put `build` in `b`. Pass `-- build` to keep it a value.
+- A variadic or trailing positional beside a required or `#[pound(external)]` subcommand fails to compile, since one of the two could never be reached.
+
 ## 0.5.2
 
 ### Added
