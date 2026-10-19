@@ -591,8 +591,8 @@ impl Emitter {
         };
 
         let positional_message = format!(
-            "pound: `{owner}` has a positional or subcommand after a variadic or trailing \
-             positional"
+            "pound: `{owner}` has a variadic or trailing positional that leaves a positional, a \
+             subcommand, or itself unreachable"
         );
 
         quote! {

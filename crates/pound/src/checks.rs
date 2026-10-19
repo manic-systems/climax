@@ -223,8 +223,8 @@ const fn command_claimants(subs: &[SubSpec], name: &str) -> usize {
     count
 }
 
-/// whether no positional or subcommand is stuck behind a variadic or trailing
-/// positional. the derive asserts this.
+/// whether a variadic or trailing positional leaves every positional and
+/// subcommand reachable, itself included. the derive asserts this.
 #[must_use]
 pub const fn positionals_reachable(spec: &CommandSpec) -> bool {
     let mut scan = PositionalScan {
@@ -232,7 +232,18 @@ pub const fn positionals_reachable(spec: &CommandSpec) -> bool {
         last:         false,
         dispatchable: true,
     };
-    scan_positionals(spec, &mut scan) && (scan.dispatchable || !spec.has_subs())
+    if !scan_positionals(spec, &mut scan) {
+        return false;
+    }
+
+    // its first word closes dispatch, so a required subcommand starves it
+    // and an external one never sees a word
+    match spec.selector() {
+        Some(owner) if !matches!(scan.greedy, Greedy::No) => {
+            scan.dispatchable && owner.sub_optional && externals(owner.subs) == 0
+        },
+        _ => true,
+    }
 }
 
 struct PositionalScan {
