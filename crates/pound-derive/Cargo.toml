@@ -21,7 +21,7 @@ proc-macro = true
 pound-derive-impl.workspace = true
 
 [dev-dependencies]
-pound = { workspace = true, default-features = true }
+pound = { path = "../pound" }
 
 [lints]
 workspace = true
