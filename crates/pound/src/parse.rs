@@ -1338,7 +1338,9 @@ fn detached_value<'a>(
     if arg.optional_value {
         return Ok(None);
     }
-    it.next().map(Some).ok_or(Halt::NeedsValue { arg, got: 0 })
+    it.next_if(|word| arg.hyphen_values || !looks_like_option(word))
+        .map(Some)
+        .ok_or(Halt::NeedsValue { arg, got: 0 })
 }
 
 fn more_values<'a>(

@@ -191,7 +191,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// | `subcommand`         | the field holds the command's subcommand tree. use `Option<T>` when one is not required        |
 /// | `flatten`            | embed another `Parse` struct's args at this level. it takes no other attribute                 |
 /// | `exclusive`          | the only arg allowed when given, and lifts requirements. every other field must be optional    |
-/// | `allow_hyphen_values` | a positional takes `-x` when no option answers to it, and a `num_args` option keeps reading past words like `-x` |
+/// | `allow_hyphen_values` | a positional takes `-x` when no option answers to it, and an option takes `-x` as its value |
 ///
 /// `positional`, `trailing`, `last` and `count` exclude each other. a
 /// positional takes no names or aliases, `trailing` and `last` need a `Vec`,

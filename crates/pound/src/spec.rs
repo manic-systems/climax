@@ -225,7 +225,7 @@ pub struct ArgSpec {
     /// help and man pages leave out the env var
     pub hide_env:        bool,
     /// takes a value that starts with a dash, as a positional when no option
-    /// answers to the word, or as a word after a multi-word option's first
+    /// answers to the word, or as an option's value
     pub hyphen_values:   bool,
     /// also accepted by every subcommand below this command
     pub global:          bool,
