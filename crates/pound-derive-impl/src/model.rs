@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use proc_macro2::{
     Ident,
+    Span,
     TokenStream,
     TokenTree,
 };
@@ -608,6 +609,8 @@ pub struct FieldType {
     pub sourced: bool,
     /// the field's type as written
     pub full:    TokenStream,
+    /// where an error about `inner` points
+    pub span:    Span,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -662,11 +665,18 @@ impl FieldType {
             shape
         };
 
+        let span = value
+            .clone()
+            .into_iter()
+            .next()
+            .map_or_else(Span::call_site, |token| token.span());
+
         Self {
             shape: resolved_shape,
             inner: value,
             sourced,
             full,
+            span,
         }
     }
 
@@ -999,9 +1009,9 @@ impl Conversion {
         Ok(Self::FromArg)
     }
 
-    /// whether the value goes through `FromArg`, which is what exposes a
-    /// choice type's possible values. a custom parser may target a type
-    /// without `FromArg`
+    /// whether the value goes through `FromArg` or its `FromStr` fallback,
+    /// which is what exposes a choice type's possible values. a custom parser
+    /// may target a type with neither
     pub const fn reads_from_arg(&self) -> bool {
         matches!(self, Self::FromArg | Self::CheckedFromArg { .. })
     }

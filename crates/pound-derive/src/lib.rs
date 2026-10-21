@@ -39,7 +39,9 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// `T` is anything that implements `pound::FromArg`, which covers the
 /// primitives, `String`, `PathBuf`, the `NonZero` integers and every
-/// `#[derive(ValueEnum)]` type. `parse` swaps in any other conversion.
+/// `#[derive(ValueEnum)]` type. any other `FromStr` type, such as
+/// `regex::Regex`, is read through `FromStr`. `parse` swaps in any other
+/// conversion.
 /// a field with a `default` is never required. a `bool` is a flag whatever
 /// attributes it carries, so it needs neither `short` nor `long`.
 ///
@@ -297,7 +299,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// `parse` and `validate` take a path or any callable expression, such as a
 /// closure or `str::parse::<NonZeroUsize>`. a string literal names a path.
-/// `min` and `max` bounds are read through the field's own `FromArg`, so they
+/// `min` and `max` bounds are read the same way as the field's value, so they
 /// suit numbers. they cannot be combined with `parse`, where `validate` does
 /// the same job. the checks apply to a value from `env` or `default` as well as
 /// to one typed on the command line.

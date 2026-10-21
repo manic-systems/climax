@@ -8,7 +8,10 @@ use proc_macro2::{
     Span,
     TokenStream,
 };
-use quote::quote;
+use quote::{
+    quote,
+    quote_spanned,
+};
 
 use crate::{
     Options,
@@ -27,6 +30,7 @@ use crate::{
         Conversion,
         Derive,
         ExternalField,
+        FieldType,
         Header,
         Prose,
         Shape,
@@ -711,7 +715,6 @@ impl Emitter {
         }
 
         let tokens = default.tokens();
-        let inner = &arg.ty.inner;
 
         let message = match default {
             Text::Lit(text) => {
@@ -732,13 +735,14 @@ impl Emitter {
             || quote!(::core::option::Option::None),
             |sep| quote!(::core::option::Option::Some(#sep)),
         );
+        let possible = self.infer(&arg.ty, "POSSIBLE");
 
         Some(quote! {
             const _: () = ::core::assert!(
                 #root::checks::default_allowed(
                     #tokens,
                     #delimiter,
-                    <#inner as #root::FromArg>::POSSIBLE,
+                    #possible,
                 ),
                 #message
             );
@@ -798,11 +802,8 @@ impl Emitter {
             .as_ref()
             .is_some_and(Conversion::reads_from_arg)
         {
-            let inner = &arg.ty.inner;
-            spec = quote! {
-                #spec.possible_opt(<#inner as #root::FromArg>::POSSIBLE)
-                    .hint(<#inner as #root::FromArg>::HINT)
-            };
+            let (possible, hint) = (self.infer(&arg.ty, "POSSIBLE"), self.infer(&arg.ty, "HINT"));
+            spec = quote! { #spec.possible_opt(#possible).hint(#hint) };
         }
 
         let hide = [
@@ -879,15 +880,15 @@ impl Emitter {
     fn read(&self, arg: &Arg, i: usize, matches: &Ident, spec: &Ident) -> TokenStream {
         let inner = &arg.ty.inner;
 
-        match (arg.kind, &arg.conversion) {
-            (ArgKind::Flag, _) if arg.ty.sourced => quote! { #matches.switch_sourced(#spec, #i)? },
-            (ArgKind::Flag, _) => quote! { #matches.switch(#spec, #i)? },
-            (ArgKind::Count, _) => {
+        match &arg.conversion {
+            None if arg.kind == ArgKind::Count => {
                 let ty = &arg.ty.full;
                 quote! { #matches.count(#i) as #ty }
             },
-            (_, Some(conversion)) => {
-                let convert = self.conversion_closure(conversion, inner);
+            None if arg.ty.sourced => quote! { #matches.switch_sourced(#spec, #i)? },
+            None => quote! { #matches.switch(#spec, #i)? },
+            Some(conversion) => {
+                let convert = self.conversion_closure(conversion, &arg.ty);
                 match arg.ty.shape {
                     Shape::One if arg.ty.sourced => {
                         quote! { #matches.required_sourced_map::<#inner>(#spec, #i, #convert)? }
@@ -905,19 +906,6 @@ impl Emitter {
                     },
                     Shape::OptOpt => {
                         quote! { #matches.optional_value_map::<#inner>(#spec, #i, #convert)? }
-                    },
-                }
-            },
-            (_, None) => {
-                match arg.ty.shape {
-                    Shape::Bool | Shape::One => quote! { #matches.required::<#inner>(#spec, #i)? },
-                    Shape::Opt => quote! { #matches.optional::<#inner>(#spec, #i)? },
-                    Shape::Many => quote! { #matches.many::<#inner>(#spec, #i)? },
-                    Shape::OptMany => quote! { #matches.optional_many::<#inner>(#spec, #i)? },
-                    Shape::OptOpt => {
-                        let root = &self.root;
-                        let from_arg = quote! { <#inner as #root::FromArg>::from_arg };
-                        quote! { #matches.optional_value_map::<#inner>(#spec, #i, #from_arg)? }
                     },
                 }
             },
@@ -997,20 +985,13 @@ impl Emitter {
         quote! { #(#args)* #(#flattened)* #sub }
     }
 
-    fn conversion_closure(&self, conversion: &Conversion, inner: &TokenStream) -> TokenStream {
-        let root = &self.root;
+    fn conversion_closure(&self, conversion: &Conversion, ty: &FieldType) -> TokenStream {
+        let (root, inner) = (&self.root, &ty.inner);
         let (sv, val, fail) = (local("s"), local("value"), local("msg"));
+        let from_arg = self.infer(ty, "from_arg");
 
         let (parse, max_len, min, max, validate) = match conversion {
-            Conversion::FromArg => {
-                (
-                    quote! { <#inner as #root::FromArg>::from_arg(#sv)? },
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-            },
+            Conversion::FromArg => (quote! { (#from_arg)(#sv)? }, None, None, None, None),
             Conversion::CheckedFromArg {
                 min,
                 max,
@@ -1018,12 +999,12 @@ impl Emitter {
                 validate,
             } => {
                 (
-                    quote! { <#inner as #root::FromArg>::from_arg(#sv)? },
+                    quote! { (#from_arg)(#sv)? },
                     max_len.as_ref().map(|bound| self.max_len_check(bound)),
                     min.as_deref()
-                        .map(|bound| self.bound_check(inner, "min", bound)),
+                        .map(|bound| self.bound_check(ty, "min", bound)),
                     max.as_deref()
-                        .map(|bound| self.bound_check(inner, "max", bound)),
+                        .map(|bound| self.bound_check(ty, "max", bound)),
                     validate.as_ref(),
                 )
             },
@@ -1060,6 +1041,18 @@ impl Emitter {
         }
     }
 
+    // `ViaFromStr` has to be in scope for `Infer` to fall back to it, and a
+    // field whose type has `FromArg` never touches the import
+    fn infer(&self, ty: &FieldType, name: &str) -> TokenStream {
+        let (root, inner) = (&self.root, &ty.inner);
+        let item = Ident::new(name, ty.span);
+
+        quote_spanned! {ty.span=> {
+            use #root::ViaFromStr as _;
+            #root::Infer::<#inner>::#item
+        }}
+    }
+
     fn max_len_check(&self, max: &TokenStream) -> TokenStream {
         let root = &self.root;
         let sv = local("s");
@@ -1074,7 +1067,7 @@ impl Emitter {
         }
     }
 
-    fn bound_check(&self, inner: &TokenStream, kind: &str, value: &str) -> TokenStream {
+    fn bound_check(&self, ty: &FieldType, kind: &str, value: &str) -> TokenStream {
         let root = &self.root;
         let op = if kind == "min" { quote!(<) } else { quote!(>) };
 
@@ -1091,9 +1084,10 @@ impl Emitter {
         };
 
         let (sv, val, bnd) = (local("s"), local("value"), local("bound"));
+        let from_arg = self.infer(ty, "from_arg");
 
         quote! {
-            let #bnd = <#inner as #root::FromArg>::from_arg(#value)
+            let #bnd = (#from_arg)(#value)
                 .map_err(|_| #root::ValueError::new(#sv, #invalid))?;
             if #val #op #bnd {
                 return ::core::result::Result::Err(#root::ValueError::new(#sv, #msg));

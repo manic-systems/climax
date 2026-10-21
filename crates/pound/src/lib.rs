@@ -163,9 +163,11 @@ pub use value::{
     ArgValue,
     Choice,
     FromArg,
+    Infer,
     Source,
     Sourced,
     ValueError,
+    ViaFromStr,
 };
 
 /// the trait the derive targets

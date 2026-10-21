@@ -6,10 +6,12 @@
 //! any type that already has `FromStr` (uuids, ip addrs). instead std scalars
 //! are wired up here, [`from_str!`] opts a `FromStr` type in with one line, and
 //! you hand-write [`FromArg`] for anything exotic (hex colours, durations)
-//! without a coherence fight.
+//! without a coherence fight. the derive falls back to [`FromStr`] for a field
+//! type without [`FromArg`].
 
 use core::{
     fmt,
+    marker::PhantomData,
     net::{
         IpAddr,
         Ipv4Addr,
@@ -30,6 +32,7 @@ use core::{
         NonZeroU128,
         NonZeroUsize,
     },
+    str::FromStr,
 };
 #[cfg(feature = "std")] use std::path::PathBuf;
 
@@ -245,6 +248,46 @@ pub trait ArgValue: FromArg + 'static {
 
     /// the word [`FromArg::from_arg`] accepts for this value
     fn as_str(&self) -> &'static str;
+}
+
+/// prefers [`FromArg`] over [`ViaFromStr`] by path resolution.
+#[doc(hidden)]
+pub struct Infer<T>(PhantomData<T>);
+
+impl<T: FromArg> Infer<T> {
+    pub const HINT: Hint = T::HINT;
+    pub const POSSIBLE: Option<&'static [Choice]> = T::POSSIBLE;
+
+    /// # Errors
+    ///
+    /// fails when `raw` is not a valid `T`.
+    #[expect(
+        clippy::same_name_method,
+        reason = "shadowing `ViaFromStr` is the point"
+    )]
+    pub fn from_arg(raw: &str) -> Result<T, ValueError> {
+        T::from_arg(raw)
+    }
+}
+
+#[doc(hidden)]
+pub trait ViaFromStr<T> {
+    const HINT: Hint = Hint::Unknown;
+    const POSSIBLE: Option<&'static [Choice]> = None;
+
+    /// # Errors
+    ///
+    /// fails when `raw` is not a valid `T`.
+    fn from_arg(raw: &str) -> Result<T, ValueError>;
+}
+
+impl<T: FromStr> ViaFromStr<T> for Infer<T>
+where
+    T::Err: fmt::Display,
+{
+    fn from_arg(raw: &str) -> Result<T, ValueError> {
+        T::from_str(raw).map_err(|error| ValueError::new(raw, error))
+    }
 }
 
 // `str` has no const `PartialEq`, so compare the bytes by hand.
