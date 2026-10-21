@@ -2,6 +2,20 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.6.0
+
+### Added
+
+- A field type that implements `FromStr` but not `FromArg` parses with no annotation, so `regex::Regex` or `semver::Version` needs neither `parse =` nor a newtype.
+- A braced `default` takes any `Display` expression, as `default = { EDIT_COUNT }` with `const EDIT_COUNT: usize = 3`. It is rendered when read, so the field's parser has to accept that text back.
+
+### Changed
+
+- An option written as `--name VALUE` refuses a value that looks like a flag, as `-v` or `--`, and reports it as missing. Numbers like `-5`, a lone `-` and `--name=-v` still pass, and `allow_hyphen_values` lets the field take anything.
+- A `requires` error names every missing arg at once, as `--tags-from requires --tag, --repo`.
+- `ArgSpec::default` is a `DefaultValue`, either static text or a function that renders it. Read it through `DefaultValue::text`.
+- A braced `default` is no longer checked against a `ValueEnum`'s values at build time. A literal or a `Format::Json` path still is.
+
 ## 0.5.3
 
 ### Added
