@@ -153,6 +153,7 @@ pub use spec::{
     Arity,
     Command,
     CommandSpec,
+    DefaultValue,
     GroupSpec,
     Hint,
     Kind,

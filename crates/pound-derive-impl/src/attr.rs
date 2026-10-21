@@ -24,8 +24,7 @@ use venial::{
     Item,
 };
 
-/// a `&'static str` attribute value, written as a literal or as a constant
-/// expression
+/// a `default` value, written as a literal, a path or a braced expression
 #[derive(Clone)]
 pub enum Text {
     Lit(String),
@@ -469,9 +468,8 @@ const EXPR_KEYS: &[&str] = &[
     "complete",
 ];
 
-/// a `default` is a literal, a bare word, or a braced constant expression of
-/// type `&str`. a lone `{ CONST }` loses its braces, which would trip
-/// `unused_braces` in the deriving crate
+/// a `default` is a literal, a bare word, or a braced expression of any
+/// `Display` type. a lone expression drops its braces for `unused_braces`
 fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
     let tokens = expr(seg)
         .ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))?;

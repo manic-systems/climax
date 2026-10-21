@@ -695,16 +695,19 @@ impl Emitter {
 
     // a const assertion that a declared default is one of its type's values.
     // only a `FromArg` conversion exposes a value list, so a custom parser
-    // gets none.
+    // gets none, and a braced default only exists once rendered at runtime.
     fn default_assert(&self, arg: &Arg) -> Option<TokenStream> {
         let root = &self.root;
-        let default = arg.default.as_ref()?;
 
-        if let Text::Value(path) = default {
-            let (inner, value_tokens) =
-                (&arg.ty.inner, path.iter().cloned().collect::<TokenStream>());
-            return Some(quote! { const _: #inner = #value_tokens; });
-        }
+        let text = match arg.default.as_ref()? {
+            Text::Lit(text) => text,
+            Text::Expr(_) => return None,
+            Text::Value(path) => {
+                let (inner, value_tokens) =
+                    (&arg.ty.inner, path.iter().cloned().collect::<TokenStream>());
+                return Some(quote! { const _: #inner = #value_tokens; });
+            },
+        };
 
         if !arg
             .conversion
@@ -714,22 +717,10 @@ impl Emitter {
             return None;
         }
 
-        let tokens = default.tokens();
-
-        let message = match default {
-            Text::Lit(text) => {
-                format!(
-                    "pound: default \"{text}\" is not one of the possible values for `{}`",
-                    arg.ident
-                )
-            },
-            Text::Expr(_) | Text::Value(_) => {
-                format!(
-                    "pound: the default is not one of the possible values for `{}`",
-                    arg.ident
-                )
-            },
-        };
+        let message = format!(
+            "pound: default \"{text}\" is not one of the possible values for `{}`",
+            arg.ident
+        );
 
         let delimiter = arg.delimiter.map_or_else(
             || quote!(::core::option::Option::None),
@@ -740,7 +731,7 @@ impl Emitter {
         Some(quote! {
             const _: () = ::core::assert!(
                 #root::checks::default_allowed(
-                    #tokens,
+                    #text,
                     #delimiter,
                     #possible,
                 ),
@@ -773,9 +764,17 @@ impl Emitter {
             spec = quote! { #spec.group(#group) };
         }
 
-        if let Some(default) = &arg.default {
-            let tokens = default.tokens();
-            spec = quote! { #spec.default(#tokens) };
+        match &arg.default {
+            Some(Text::Expr(expr)) => {
+                spec = quote! {
+                    #spec.default_display(|| #root::DefaultValue::render(#(#expr)*))
+                };
+            },
+            Some(default @ (Text::Lit(_) | Text::Value(_))) => {
+                let tokens = default.tokens();
+                spec = quote! { #spec.default(#tokens) };
+            },
+            None => {},
         }
 
         if let Some(dm) = &arg.default_missing {

@@ -621,9 +621,9 @@ fn fallback(spec: &CommandSpec, i: usize) -> Option<Fallback> {
             env:   Some(var),
         });
     }
-    spec.args[i].default.map(|value| {
+    spec.args[i].default.map(|default| {
         Fallback {
-            value: Cow::Borrowed(value),
+            value: default.text(),
             env:   None,
         }
     })

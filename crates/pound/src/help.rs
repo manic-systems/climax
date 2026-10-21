@@ -406,7 +406,7 @@ fn help_text(arg: &ArgSpec, long: bool) -> String {
         Kind::Opt | Kind::Positional | Kind::Trailing | Kind::Last
     );
     if takes_value && let Some(default) = arg.default.filter(|_| !arg.hide_default) {
-        push_tag(&mut rendered, format_args!("default: {default}"));
+        push_tag(&mut rendered, format_args!("default: {}", default.text()));
     }
     #[cfg(feature = "std")]
     if let Some(env) = arg.env.filter(|_| !arg.hide_env) {

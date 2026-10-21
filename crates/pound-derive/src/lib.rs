@@ -238,14 +238,15 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// - a bare word, `default = auto`
 /// - a `ValueEnum` variant, `default = Format::Json`, which rust-analyzer
 ///   completes and rustc checks against the field's type
-/// - a braced expression of type `&str`, `default = { SYSTEM_PROFILE }`, for a
-///   constant that is also used elsewhere
+/// - a braced expression of any `Display` type, `default = { EDIT_COUNT }`, for
+///   a constant that is also used elsewhere. it is rendered when read, so the
+///   field's parser has to accept that text back
 ///
-/// when the field is a `ValueEnum`, a `default` that is not one of its values
-/// fails the build. an `env` or `default` value on a `bool` turns the flag on
-/// for `1`, `true` or `yes` and off for `0`, `false`, `no` or nothing, and any
-/// other word is an error. `default_missing` needs an option and `negate`
-/// needs a `bool` with a long name, and the negation may not equal the
+/// when the field is a `ValueEnum`, a literal `default` that is not one of its
+/// values fails the build. an `env` or `default` value on a `bool` turns the
+/// flag on for `1`, `true` or `yes` and off for `0`, `false`, `no` or nothing,
+/// and any other word is an error. `default_missing` needs an option and
+/// `negate` needs a `bool` with a long name, and the negation may not equal the
 /// positive spelling or one of its aliases.
 ///
 /// a value that comes from `env` and fails to parse is reported with its

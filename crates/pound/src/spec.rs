@@ -25,7 +25,11 @@
 //!
 //! the spec types are `#[non_exhaustive]` for forward compatibility
 
-use alloc::vec::IntoIter;
+use alloc::{
+    borrow::Cow,
+    vec::IntoIter,
+};
+use core::fmt;
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
 use crate::{
@@ -127,6 +131,32 @@ impl Arity {
     }
 }
 
+/// an arg's default, parsed like a value typed on the line
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum DefaultValue {
+    Text(&'static str),
+    /// rendered when read, for a typed constant whose `Display` the field's
+    /// parser accepts back
+    Display(fn() -> String),
+}
+
+impl DefaultValue {
+    /// the text the parser reads and help shows
+    #[must_use]
+    pub fn text(&self) -> Cow<'static, str> {
+        match self {
+            Self::Text(text) => Cow::Borrowed(text),
+            Self::Display(render) => Cow::Owned(render()),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn render(value: impl fmt::Display) -> String {
+        value.to_string()
+    }
+}
+
 /// one argument's full description
 #[expect(
     clippy::struct_excessive_bools,
@@ -161,7 +191,7 @@ pub struct ArgSpec {
     /// the mutual-exclusion group this arg belongs to, see [`GroupSpec`]
     pub group:           Option<&'static str>,
     /// the value used when the arg is not given and no env var supplies one
-    pub default:         Option<&'static str>,
+    pub default:         Option<DefaultValue>,
     /// value a [`Kind::Opt`] takes when given with no `=value`, which also
     /// stops it consuming the following token
     pub default_missing: Option<&'static str>,
@@ -316,7 +346,14 @@ impl ArgSpec {
 
     #[must_use]
     pub const fn default(mut self, default: &'static str) -> Self {
-        self.default = Some(default);
+        self.default = Some(DefaultValue::Text(default));
+        self
+    }
+
+    /// a default rendered when read, see [`DefaultValue::Display`]
+    #[must_use]
+    pub const fn default_display(mut self, render: fn() -> String) -> Self {
+        self.default = Some(DefaultValue::Display(render));
         self
     }
 

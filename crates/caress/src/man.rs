@@ -397,7 +397,7 @@ impl Mdoc {
         {
             self.line("Pp");
             self.text("Defaults to");
-            self.line(format_args!("Ql {} .", Word(default)));
+            self.line(format_args!("Ql {} .", Word(&default.text())));
         }
     }
 }
