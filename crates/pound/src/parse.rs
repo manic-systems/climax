@@ -1703,13 +1703,22 @@ fn finalise_args(spec: &CommandSpec, matches: &Matches, demands: Demands) -> Res
         count_values(arg, matches.slots[i].values.len(), fallback(spec, i))?;
     }
 
-    for &(arg, needs) in spec.requires {
-        if matches.slots[arg].count > 0 && !supplied(spec, matches, needs) {
-            return Err(ErrorKind::Requires {
-                arg:   spec.args[arg].display_name(),
-                needs: spec.args[needs].display_name(),
-            });
-        }
+    let unmet = |&&(arg, needs): &&(usize, usize)| {
+        matches.slots[arg].count > 0 && !supplied(spec, matches, needs)
+    };
+
+    if let Some(&(arg, _)) = spec.requires.iter().find(unmet) {
+        let needs = spec
+            .requires
+            .iter()
+            .filter(|pair| pair.0 == arg && unmet(pair))
+            .map(|&(_, needs)| spec.args[needs].display_name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ErrorKind::Requires {
+            arg: spec.args[arg].display_name(),
+            needs,
+        });
     }
 
     for &(first, second) in spec.conflicts {

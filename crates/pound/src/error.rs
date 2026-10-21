@@ -82,7 +82,7 @@ pub enum ErrorKind {
     Requires {
         /// the argument that was set
         arg:   String,
-        /// the argument it obliges, which was absent
+        /// every argument it obliges that was absent, comma separated
         needs: String,
     },
     /// a list arg got fewer values than it accepts
