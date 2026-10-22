@@ -178,19 +178,23 @@ where
 {
     match parsed {
         Ok(command) => finish(&run_with(command, f)),
-        Err(error) => parse_completion(&error),
+        Err(error) => parse_completion(&error, pound::Term::stdout(), pound::Term::stderr()),
     }
 }
 
 #[cfg(feature = "parse")]
-pub(crate) fn parse_completion(error: &pound::Error) -> Completion {
+pub(crate) fn parse_completion(
+    error: &pound::Error,
+    stdout: pound::Term,
+    stderr: pound::Term,
+) -> Completion {
     if error.is_exit() {
-        Completion::output(error.render(pound::Term::stdout()))
+        Completion::output(error.render(stdout))
     } else {
         Completion {
             code:    2,
             stream:  Some(CompletionStream::Stderr),
-            message: Some(error.render(pound::Term::stderr())),
+            message: Some(error.render(stderr)),
         }
     }
 }
@@ -1286,9 +1290,12 @@ mod tests {
     fn lifecycle_distinguishes_early_exit_parse_and_application_errors() {
         use pound::Parse as _;
 
-        let help = complete::<(), _>(
-            Err(Demo::try_parse_from(["--help"]).err().unwrap()),
-            |_, ()| unreachable!(),
+        let plain = pound::Term::plain();
+
+        let help = parse_completion(
+            &Demo::try_parse_from(["--help"]).err().unwrap(),
+            plain,
+            plain,
         );
         assert_eq!(help.code, 0);
         assert_eq!(help.stream, Some(CompletionStream::Stdout));
@@ -1298,9 +1305,10 @@ mod tests {
                 .is_some_and(|text| text.contains("Usage: demo"))
         );
 
-        let parse = complete::<(), _>(
-            Err(Demo::try_parse_from(["--watc"]).err().unwrap()),
-            |_, ()| unreachable!(),
+        let parse = parse_completion(
+            &Demo::try_parse_from(["--watc"]).err().unwrap(),
+            plain,
+            plain,
         );
         assert_eq!(parse.code, 2);
         assert_eq!(parse.stream, Some(CompletionStream::Stderr));
@@ -1313,6 +1321,13 @@ mod tests {
             "got {:?}",
             parse.message
         );
+
+        let colored = parse_completion(
+            &Demo::try_parse_from(["--watc"]).err().unwrap(),
+            plain,
+            pound::Term::new(None, true),
+        );
+        assert!(colored.message.is_some_and(|text| text.contains("\x1b[")));
 
         let application = complete(Ok(()), |_, ()| Err(crate::Error::message("boom")));
         assert_eq!(application.code, 1);
