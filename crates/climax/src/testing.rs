@@ -12,24 +12,38 @@
 //! `interactive`, and [`run`] needs `interactive` and `parse`. leftover script
 //! input fails the run, see [`Script`].
 
+use alloc::sync::Arc;
+#[cfg(feature = "interactive")] use core::iter;
+#[cfg(feature = "interactive")] use std::panic;
 use std::{
     io,
     sync::{
-        Arc,
         Mutex,
         PoisonError,
     },
 };
 
 #[cfg(feature = "interactive")]
+use bang::advanced::{
+    Event,
+    Key,
+    KeyEvent,
+    scripted_interaction,
+};
+
+#[cfg(all(feature = "interactive", feature = "parse"))]
+use crate::app::parse_completion;
+#[cfg(feature = "interactive")]
 use crate::{
     Context,
     Result,
     app::{
+        Completion,
         CompletionStream,
         execute,
         finish,
     },
+    terminal::TerminalCapabilities,
 };
 
 /// cloneable in-memory `Write + Send + 'static` sink
@@ -108,7 +122,7 @@ pub struct Outcome {
 /// ```
 #[cfg(feature = "interactive")]
 #[derive(Clone, Debug, Default)]
-pub struct Script(Vec<Vec<bang::advanced::Event>>);
+pub struct Script(Vec<Vec<Event>>);
 
 #[cfg(feature = "interactive")]
 impl Script {
@@ -150,17 +164,17 @@ impl Script {
     /// not leak in
     #[must_use]
     pub fn multi_select_nth(self, indices: impl IntoIterator<Item = usize>) -> Self {
-        let mut indices: Vec<usize> = indices.into_iter().collect();
-        indices.sort_unstable();
-        indices.dedup();
-        let mut keys = vec![bang::advanced::Key::Home, bang::advanced::Key::Char('n')];
+        let mut sorted: Vec<usize> = indices.into_iter().collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let mut keys = vec![Key::Home, Key::Char('n')];
         let mut row = 0;
-        for index in indices {
-            keys.extend(vec![bang::advanced::Key::Down; index - row]);
-            keys.push(bang::advanced::Key::Char(' '));
+        for index in sorted {
+            keys.extend(vec![Key::Down; index - row]);
+            keys.push(Key::Char(' '));
             row = index;
         }
-        keys.push(bang::advanced::Key::Enter);
+        keys.push(Key::Enter);
         self.keys(keys)
     }
 
@@ -197,10 +211,18 @@ impl Script {
                 Key::PageDown
             }
         };
-        let years = (0..months.unsigned_abs() / 12)
-            .map(|_| Event::Key(KeyEvent::with_modifiers(page(), Modifiers::SHIFT)));
-        let rest = (0..months.unsigned_abs() % 12).map(|_| Event::Key(KeyEvent::new(page())));
-        let days = (1..to.day).map(|_| Event::Key(KeyEvent::new(Key::Right)));
+        let years = iter::repeat_n(
+            Event::Key(KeyEvent::with_modifiers(page(), Modifiers::SHIFT)),
+            usize::try_from(months.unsigned_abs() / 12).unwrap_or(usize::MAX),
+        );
+        let rest = iter::repeat_n(
+            Event::Key(KeyEvent::new(page())),
+            usize::try_from(months.unsigned_abs() % 12).unwrap_or(usize::MAX),
+        );
+        let days = iter::repeat_n(
+            Event::Key(KeyEvent::new(Key::Right)),
+            usize::from(to.day.saturating_sub(1)),
+        );
         let mut events: Vec<Event> = years.chain(rest).collect();
         events.push(Event::Key(KeyEvent::new(Key::Home)));
         events.extend(days);
@@ -221,12 +243,12 @@ impl Script {
         let mut typed = 0;
         for attempt in attempts {
             if typed > 0 {
-                keys.push(bang::advanced::Key::End);
-                keys.extend(vec![bang::advanced::Key::Backspace; typed]);
+                keys.push(Key::End);
+                keys.extend(vec![Key::Backspace; typed]);
             }
             typed = unicode_segmentation::UnicodeSegmentation::graphemes(attempt, true).count();
-            keys.extend(attempt.chars().map(bang::advanced::Key::Char));
-            keys.push(bang::advanced::Key::Enter);
+            keys.extend(attempt.chars().map(Key::Char));
+            keys.push(Key::Enter);
         }
         self.keys(keys)
     }
@@ -234,28 +256,28 @@ impl Script {
     /// answers any prompt by submitting its current value, such as a default
     #[must_use]
     pub fn enter(self) -> Self {
-        self.keys([bang::advanced::Key::Enter])
+        self.keys([Key::Enter])
     }
 
     /// leaves a prompt with Esc, resolving to `PromptOutcome::Leave`
     #[must_use]
     pub fn esc(self) -> Self {
-        self.keys([bang::advanced::Key::Esc])
+        self.keys([Key::Esc])
     }
 
     /// answers a confirm prompt with `y` or `n`, which it takes without Enter
     #[must_use]
     pub fn confirm(self, answer: bool) -> Self {
-        self.keys([bang::advanced::Key::Char(if answer { 'y' } else { 'n' })])
+        self.keys([Key::Char(if answer { 'y' } else { 'n' })])
     }
 
     /// answers one prompt with exactly these key presses, for anything the
     /// other methods miss
     #[must_use]
-    pub fn keys(mut self, keys: impl IntoIterator<Item = bang::advanced::Key>) -> Self {
+    pub fn keys(mut self, keys: impl IntoIterator<Item = Key>) -> Self {
         self.0.push(
             keys.into_iter()
-                .map(|key| bang::advanced::Event::Key(bang::advanced::KeyEvent::new(key)))
+                .map(|key| Event::Key(KeyEvent::new(key)))
                 .collect(),
         );
         self
@@ -265,23 +287,27 @@ impl Script {
     /// `Context::with_interaction`
     #[must_use]
     pub fn into_interaction(self) -> bang::Interaction {
-        bang::advanced::scripted_interaction(self.0)
+        scripted_interaction(self.0)
     }
 }
 
 #[cfg(feature = "interactive")]
+#[expect(
+    clippy::expect_used,
+    reason = "a fresh context is idle, so capability and writer changes apply"
+)]
 fn context(script: Script, stdout: &Capture, stderr: &Capture) -> Context {
-    let context = Context::new()
+    let idle = Context::new()
         .with_interaction(script.into_interaction())
-        .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
-            false, false, false,
-        ))
+        .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
         .expect("capabilities apply to an idle context");
     #[cfg(feature = "render")]
-    let context = context
+    let ready = idle
         .with_transient_writer(stderr.clone())
         .expect("the transient writer applies to an idle context");
-    context
+    #[cfg(not(feature = "render"))]
+    let ready = idle;
+    ready
         .with_output_writer(stdout.clone())
         .with_diagnostic_writer(stderr.clone())
 }
@@ -290,33 +316,40 @@ fn context(script: Script, stdout: &Capture, stderr: &Capture) -> Context {
 fn outcome(
     stdout: &Capture,
     stderr: &Capture,
-    completion: crate::app::Completion,
+    completion: Completion,
     error: Option<crate::Error>,
 ) -> Outcome {
     let (exit_code, report) = completion.into_parts();
-    #[cfg_attr(not(feature = "parse"), expect(unused_mut))]
-    let mut stdout = stdout.text();
-    let mut stderr = stderr.text();
+    #[cfg_attr(
+        not(feature = "parse"),
+        expect(unused_mut, reason = "only parse writes help to stdout")
+    )]
+    let mut stdout_text = stdout.text();
+    let mut stderr_text = stderr.text();
     if let Some((stream, message)) = report {
         let target = match stream {
             #[cfg(feature = "parse")]
-            CompletionStream::Stdout => &mut stdout,
-            CompletionStream::Stderr => &mut stderr,
+            CompletionStream::Stdout => &mut stdout_text,
+            CompletionStream::Stderr => &mut stderr_text,
         };
         target.push_str(&message);
         target.push('\n');
     }
     Outcome {
         exit_code,
-        stdout,
-        stderr,
+        stdout: stdout_text,
+        stderr: stderr_text,
         error,
     }
 }
 
 #[cfg(feature = "interactive")]
+#[expect(
+    clippy::panic,
+    reason = "an unconsumed script fails the test that owns it"
+)]
 fn guarded<T>(run: impl FnOnce() -> T) -> T {
-    let payload = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+    let payload = match panic::catch_unwind(panic::AssertUnwindSafe(run)) {
         Ok(value) => return value,
         Err(payload) => payload,
     };
@@ -324,10 +357,12 @@ fn guarded<T>(run: impl FnOnce() -> T) -> T {
         .downcast_ref::<String>()
         .map(String::as_str)
         .or_else(|| payload.downcast_ref::<&str>().copied());
-    match text.and_then(|text| text.strip_prefix("scripted interaction dropped with ")) {
-        Some(detail) => panic!("the testing script was not fully consumed, it had {detail}"),
-        None => std::panic::resume_unwind(payload),
-    }
+    let Some(detail) =
+        text.and_then(|dropped| dropped.strip_prefix("scripted interaction dropped with "))
+    else {
+        panic::resume_unwind(payload)
+    };
+    panic!("the testing script was not fully consumed, it had {detail}")
 }
 
 /// runs an application without arguments like `climax::main_with`, with
@@ -352,13 +387,17 @@ fn guarded<T>(run: impl FnOnce() -> T) -> T {
 /// assert!(outcome.stderr.contains("deploying to eu"));
 /// ```
 #[cfg(feature = "interactive")]
-pub fn run_with<F>(script: Script, f: F) -> Outcome
+pub fn run_with<F>(script: Script, application: F) -> Outcome
 where
     F: FnOnce(Context) -> Result<()>,
 {
     let stdout = Capture::default();
     let stderr = Capture::default();
-    let result = guarded(|| execute(context(script, &stdout, &stderr), (), |cx, ()| f(cx)));
+    let result = guarded(|| {
+        execute(context(script, &stdout, &stderr), (), |cx, ()| {
+            application(cx)
+        })
+    });
     let completion = finish(&result);
     outcome(&stdout, &stderr, completion, result.err())
 }
@@ -399,26 +438,27 @@ where
 /// # }
 /// ```
 #[cfg(all(feature = "interactive", feature = "parse"))]
-pub fn run<C, F, A>(args: A, script: Script, f: F) -> Outcome
+pub fn run<C, F, A>(args: A, script: Script, application: F) -> Outcome
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
     A: IntoIterator,
     A::Item: AsRef<str>,
 {
-    let args: Vec<A::Item> = args.into_iter().collect();
+    let collected: Vec<A::Item> = args.into_iter().collect();
     let stdout = Capture::default();
     let stderr = Capture::default();
     let (result, completion) = guarded(|| {
-        match C::try_parse_from(args.iter().map(AsRef::as_ref)) {
+        match C::try_parse_from(collected.iter().map(AsRef::as_ref)) {
             Ok(command) => {
-                let result = execute(context(script, &stdout, &stderr), command, f);
+                let result = execute(context(script, &stdout, &stderr), command, application);
                 let completion = finish(&result);
                 (result, completion)
             },
             Err(error) => {
                 drop(script.into_interaction());
-                let completion = crate::app::parse_completion(&error);
+                let plain = pound::Term::plain();
+                let completion = parse_completion(&error, plain, plain);
                 (Err(crate::Error::from(error)), completion)
             },
         }
