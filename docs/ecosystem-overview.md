@@ -77,10 +77,13 @@ Climax's Pound and Screw edges are direct optional dependencies enabled by its
 `interactive`, and Climax does not reach through Bang to name its
 implementation crates. The `climax-derive` edge is optional under `derive`.
 Each component is re-exported whole as `climax::pound`, `climax::screw`, and
-`climax::bang`, `climax::caress` follows `complete`, and `climax::serde` follows
-`structured`. Every workspace edge,
-including dev-dependencies, is pinned exactly (`=x.y.z`) and a test enforces it,
-so one `climax` release names one tested set of component versions.
+`climax::bang`, and `climax::caress` follows `complete` and `climax::serde` follows `structured`. Every edge to a
+climax-family crate, including dev-dependencies, is pinned exactly (`=x.y.z`)
+and a test enforces it, so one `climax` release names one tested set of `bang`
+and `screw` versions. `pound` and `caress` release on their own and are
+required at the compatible range `climax` was tested against. The one
+exception among workspace edges is `climax-derive` on `pound-derive-impl`, a
+caret requirement that resolves to the version `pound` pins exactly.
 
 The exact internal edges may evolve, but the product rule is stable.
 
@@ -147,7 +150,7 @@ with no default features and with each of `complete`, `derive`, `interactive`,
 `climax` alone, and standalone `pound`, `screw` and `bang`. The
 `climax-with-components` fixture passes values built through direct `pound`,
 `screw` and `bang` dependencies into `climax`, which proves the versions unify.
-`crates/climax/tests/workspace_pins.rs` checks the exact pins.
+`crates/climax/tests/workspace_pins.rs` checks the exact pins of the climax family.
 
 ## Bang and Climax integration
 

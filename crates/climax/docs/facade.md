@@ -319,13 +319,16 @@ climax::screw   (render)       climax::serde  (structured, with serde's derive f
 climax::caress  (complete)
 ```
 
-Every dependency between workspace crates is pinned exactly (`=x.y.z`) in
+Every dependency on a climax-family crate is pinned exactly (`=x.y.z`) in
 `[workspace.dependencies]`, including dev-dependencies, and a test in
 `crates/climax/tests/workspace_pins.rs` fails on any edge that is not. A
-`climax` release therefore names one tested set of `pound`, `bang`, and `screw`
-versions, and `bang` cannot resolve against a `screw` it was not built with. An
-application that also depends on a component directly stays on the same
-version. `pound`, `bang`, and `screw` remain fully usable without `climax`.
+`climax` release therefore names one tested set of `bang` and `screw`
+versions, and `bang` cannot resolve against a `screw` it was not built with.
+`pound` and `caress` release on their own, so `climax` requires them at the
+compatible range it was tested against. `climax-derive` requires
+`pound-derive-impl` at a caret range, so the version `pound` pins decides it and
+a `pound` patch release needs no `climax` release. `pound`, `bang`, and `screw` remain
+fully usable without `climax`.
 
 ## Parse derive detail
 

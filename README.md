@@ -13,7 +13,9 @@ This workspace contains five user-facing Rust libraries.
 Each component is useful on its own. Applications that want the integrated path
 can depend on `climax` alone, which re-exports each component whole behind the
 feature that enables it. Exact version pins keep one `climax` release on one
-tested set of component versions.
+tested set of `bang` and `screw` versions, and `pound` is held to the
+compatible range `climax` was tested against. `climax-derive` takes its
+`pound-derive-impl` from whatever `pound` pins.
 
 With the default `complete` feature, `climax::main` and `climax::try_run`
 answer shell completion for bash, zsh, fish, nu, elvish and PowerShell before
