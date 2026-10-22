@@ -75,9 +75,8 @@ cx.output()
 elsewhere, `Silent` prints nothing and suits a `--quiet` flag. every status shares one renderer,
 and a prompt suspends them while it holds the terminal
 
-```text
-climax::pound   (parse)        climax::bang   (interactive)
-climax::screw   (render)       climax::serde  (structured, with serde's derive feature)
+```rust,ignore
+let value = cx.status("scanning").spinner().during(|| scan())?;
 ```
 
 Every dependency between workspace crates is pinned exactly (`=x.y.z`) in
