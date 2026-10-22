@@ -35,6 +35,8 @@ climax-derive = { workspace = true, optional = true }
 pound = { workspace = true, optional = true, features = [
 	"std",
 	"help",
+	"unicode",
+	"color",
 ] }
 screw = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = [ "derive" ] }

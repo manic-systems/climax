@@ -491,7 +491,8 @@ where
         },
         Err(error) => {
             drop(script.into_interaction());
-            let completion = crate::app::parse_completion(&error);
+            let plain = pound::Term::plain();
+            let completion = crate::app::parse_completion(&error, plain, plain);
             (Err(crate::Error::from(error)), completion)
         },
     });
