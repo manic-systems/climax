@@ -59,21 +59,15 @@ use crate::{
 /// [`crate::Error::signal`]. [`crate::Error::with_exit_code`] overrides any
 /// code
 ///
-/// The crate docs list the full exit-code mapping. [`main_with`] reports the
-/// same way for an application that takes no arguments.
-///
-/// A typed prompt the user cancels resolves to `PromptOutcome::Leave` so the
-/// handler decides what leaving means. A signal delivered during a live prompt
-/// instead surfaces as an error that carries the signal. Exit 130 without a
-/// signal comes from `Context::with_terminal_application` or a direct
-/// `bang` dependency that builds a cancelled error.
+/// with `complete`, a shell completion request is answered and exits before
+/// parsing
 #[cfg(feature = "parse")]
 pub fn main<C, F>(application: F) -> ExitCode
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    complete(C::try_parse(), f).report()
+    complete(parse_env::<C>(), application).report()
 }
 
 /// runs an application that takes no arguments and reports its process outcome
@@ -89,21 +83,26 @@ where
 ///     })
 /// }
 /// ```
-pub fn main_with<F>(f: F) -> ExitCode
+pub fn main_with<F>(application: F) -> ExitCode
 where
     F: FnOnce(Context) -> Result<()>,
 {
-    finish(&run_with((), |context, ()| f(context))).report()
+    finish(&run_with((), |context, ()| application(context))).report()
 }
 
-/// Run a parsed application without handling output or process exit status.
+/// runs a parsed application without handling output or process exit status
+///
+/// # Errors
+///
+/// fails with the parse error when the arguments are invalid or help was
+/// requested, and otherwise with whatever the application returns
 #[cfg(feature = "parse")]
 pub fn try_run<C, F>(application: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    run_with(C::try_parse()?, f)
+    run_with(parse_env::<C>()?, application)
 }
 
 /// runs an application from supplied arguments without handling process output
@@ -137,7 +136,7 @@ where
     execute(Context::new(), command, application)
 }
 
-pub(crate) fn execute<C, F>(context: Context, command: C, f: F) -> Result<()>
+pub(crate) fn execute<C, F>(context: Context, command: C, application: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
@@ -172,12 +171,19 @@ where
 }
 
 #[cfg(feature = "parse")]
+fn parse_env<C: pound::Parse>() -> result::Result<C, pound::Error> {
+    #[cfg(feature = "complete")]
+    caress::handle(C::SPEC);
+    C::try_parse()
+}
+
+#[cfg(feature = "parse")]
 fn complete<C, F>(parsed: result::Result<C, pound::Error>, application: F) -> Completion
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
     match parsed {
-        Ok(command) => finish(&run_with(command, f)),
+        Ok(command) => finish(&run_with(command, application)),
         Err(error) => parse_completion(&error, pound::Term::stdout(), pound::Term::stderr()),
     }
 }
@@ -202,7 +208,7 @@ pub(crate) fn parse_completion(
 pub(crate) fn finish(result: &Result<()>) -> Completion {
     match result {
         Ok(()) => Completion::success(),
-        Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
+        Err(error) if error.kind() == ErrorKind::Cancelled => {
             let code = error.exit_code().unwrap_or_else(|| cancelled_code(error));
             if error.related_errors().is_empty() {
                 Completion::cancelled(code)
@@ -267,6 +273,10 @@ impl Completion {
         (self.code, self.stream.zip(self.message))
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "a completion with a stream always carries its message"
+    )]
     fn report(self) -> ExitCode {
         let Some(stream) = self.stream else {
             return ExitCode::from(self.code);
@@ -679,6 +689,11 @@ impl Context {
     /// knows better
     ///
     /// the interaction driver is rederived unless one was injected
+    ///
+    /// # Errors
+    ///
+    /// fails when the status coordinator cannot switch to the resulting status
+    /// mode
     pub fn set_terminal_capabilities(&mut self, capabilities: TerminalCapabilities) -> Result<()> {
         self.terminal.set_capabilities(capabilities);
         // an injected interaction belongs to the caller, so detection leaves it
@@ -729,6 +744,8 @@ impl Context {
     )]
     /// overrides how statuses present, see
     /// [`StatusMode`](crate::terminal::StatusMode)
+    ///
+    /// # Errors
     ///
     /// fails when the status coordinator cannot apply the resulting mode
     pub fn set_status_mode(&mut self, mode: StatusMode) -> Result<()> {
@@ -840,6 +857,10 @@ impl Context {
     }
 
     /// builder form of [`Self::set_terminal_capabilities`]
+    ///
+    /// # Errors
+    ///
+    /// fails as [`Self::set_terminal_capabilities`] does
     pub fn with_terminal_capabilities(
         mut self,
         capabilities: TerminalCapabilities,
@@ -867,10 +888,10 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
-        let interaction = match self.prompt_summaries {
-            Some(summaries) => self.interaction.clone().with_summaries(summaries),
-            None => self.interaction.clone(),
-        };
+        let interaction = self.prompt_summaries.map_or_else(
+            || self.interaction.clone(),
+            |summaries| self.interaction.clone().with_summaries(summaries),
+        );
         #[cfg(feature = "render")]
         {
             guarded_interaction(interaction, &self.transient)
@@ -1098,35 +1119,35 @@ mod tests {
     #[cfg(feature = "render")]
     #[test]
     fn auto_status_off_a_terminal_prints_plain_lines_and_silent_stays_explicit() {
-        let run = |mode: Option<crate::terminal::StatusMode>, fail: bool| {
+        let run = |requested: Option<StatusMode>, fail: bool| {
             let capture = Capture::default();
             let mut context = Context::new()
-                .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
-                    false, false, false,
-                ))
+                .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
                 .unwrap()
                 .with_transient_writer(capture.clone())
                 .unwrap();
-            if let Some(mode) = mode {
+            if let Some(mode) = requested {
                 context.set_status_mode(mode).unwrap();
             }
-            let _ = context
-                .status("working")
-                .final_message("done")
-                .failure_message("failed")
-                .during(|| {
-                    if fail {
-                        Err(crate::Error::message("x"))
-                    } else {
-                        Ok(())
-                    }
-                });
+            drop(
+                context
+                    .status("working")
+                    .final_message("done")
+                    .failure_message("failed")
+                    .during(|| {
+                        if fail {
+                            Err(crate::Error::message("x"))
+                        } else {
+                            Ok(())
+                        }
+                    }),
+            );
             capture.text()
         };
         assert_eq!(run(None, false), "done\n");
         assert_eq!(run(None, true), "failed\n");
-        assert_eq!(run(Some(crate::terminal::StatusMode::Silent), false), "");
-        assert_eq!(run(Some(crate::terminal::StatusMode::Silent), true), "");
+        assert_eq!(run(Some(StatusMode::Silent), false), "");
+        assert_eq!(run(Some(StatusMode::Silent), true), "");
     }
 
     #[cfg(all(feature = "interactive", feature = "render"))]

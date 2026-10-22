@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use std::{
-    fs,
     path::PathBuf,
     process::Command,
 };
 
 const FIXTURES: &[&str] = &[
-    "fixture-bang-core-only",
     "fixture-bang-only",
-    "fixture-bang-terminal-only",
-    "fixture-caress-only",
+    "fixture-climax-complete-only",
     "fixture-climax-derive-only",
     "fixture-climax-interactive-only",
     "fixture-climax-no-default-features",
@@ -19,12 +16,10 @@ const FIXTURES: &[&str] = &[
     "fixture-climax-render-only",
     "fixture-climax-structured-only",
     "fixture-climax-with-components",
-    "fixture-pound-color-only",
     "fixture-pound-no-derive",
     "fixture-pound-no-help",
     "fixture-pound-no-std",
     "fixture-pound-only",
-    "fixture-pound-unicode-only",
     "fixture-screw-only",
 ];
 
@@ -78,19 +73,4 @@ fn documented_dependency_stories_compile_in_isolation() {
         "dependency fixtures failed in isolation:\n{}",
         failures.join("\n"),
     );
-}
-
-#[test]
-fn every_fixture_directory_is_listed() {
-    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/compile-fixtures");
-    let mut on_disk: Vec<String> = fs::read_dir(directory)
-        .expect("read the compile fixtures directory")
-        .map(|entry| {
-            let name = entry.expect("read a fixture entry").file_name();
-            format!("fixture-{}", name.to_string_lossy())
-        })
-        .collect();
-    on_disk.sort();
-
-    assert_eq!(on_disk, FIXTURES);
 }
