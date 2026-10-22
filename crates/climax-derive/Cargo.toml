@@ -16,8 +16,6 @@ proc-macro = true
 
 [dependencies]
 pound-derive-impl.workspace = true
-proc-macro2                 = "1"
-quote                       = "1"
 
 [lints]
 workspace = true
