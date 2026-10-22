@@ -2,17 +2,26 @@
 
 ## max your CLI.
 
-This workspace contains four user-facing Rust libraries.
+This workspace contains five user-facing Rust libraries.
 
 - `pound` parses arguments, derive first.
 - `screw` renders the terminal from retained frames.
 - `bang` asks typed interactive prompts.
-- `climax` is an application facade that composes the other three.
+- `climax` is an application facade that composes `pound`, `screw` and `bang`.
+- `caress` answers shell completion and renders completion scripts and man pages.
 
 Each component is useful on its own. Applications that want the integrated path
 can depend on `climax` alone, which re-exports each component whole behind the
 feature that enables it. Exact version pins keep one `climax` release on one
 tested set of component versions.
+
+With the default `complete` feature, `climax::main` and `climax::try_run`
+answer shell completion for bash, zsh, fish, nu, elvish and PowerShell before
+they parse anything. `climax::install` renders the completion scripts and mdoc
+man pages a package installs beside the binary. Every TAB runs the program, so
+link it statically for the fastest completion, with
+`RUSTFLAGS='-C target-feature=+crt-static'` or `pkgsStatic` in nix, which
+spares each TAB the dynamic loader's third of a millisecond.
 
 ## Platforms and Rust version
 
@@ -126,8 +135,8 @@ session stays ignored. Any other cancellation that reaches `main` exits 130.
 `Context` prompts return `climax::PromptOutcome`, and `climax` also re-exports
 `Configurable`, the prompt config types, and the review types. The components
 themselves are reachable as `climax::pound` under `parse`, `climax::bang` under
-`interactive`, `climax::screw` under `render`, and `climax::serde` under
-`structured`, so an application needs no direct dependency on any of them.
+`interactive`, `climax::screw` under `render`, `climax::caress` under `complete`,
+and `climax::serde` under `structured`, so an application needs no direct dependency on any of them.
 
 The `derive` feature, on by default, provides `#[derive(climax::Parse)]` and
 `#[derive(climax::ValueEnum)]` with expansion rooted at `::climax::pound`. With

@@ -316,6 +316,7 @@ each component crate whole behind its feature.
 ```text
 climax::pound   (parse)        climax::bang   (interactive)
 climax::screw   (render)       climax::serde  (structured, with serde's derive feature)
+climax::caress  (complete)
 ```
 
 Every dependency between workspace crates is pinned exactly (`=x.y.z`) in

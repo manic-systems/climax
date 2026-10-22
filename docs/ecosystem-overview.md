@@ -77,7 +77,8 @@ Climax's Pound and Screw edges are direct optional dependencies enabled by its
 `interactive`, and Climax does not reach through Bang to name its
 implementation crates. The `climax-derive` edge is optional under `derive`.
 Each component is re-exported whole as `climax::pound`, `climax::screw`, and
-`climax::bang`, and `climax::serde` follows `structured`. Every workspace edge,
+`climax::bang`, `climax::caress` follows `complete`, and `climax::serde` follows
+`structured`. Every workspace edge,
 including dev-dependencies, is pinned exactly (`=x.y.z`) and a test enforces it,
 so one `climax` release names one tested set of component versions.
 
@@ -141,8 +142,8 @@ enough. `#[derive(pound::Parse)]` with a direct `pound` dependency expands to
 
 Each dependency fixture under `tests/compile-fixtures` is built and tested on
 its own by `crates/climax/tests/dependency_fixtures.rs`. They cover `climax`
-with no default features and with each of `derive`, `interactive`, `parse`,
-`render` and `structured` alone, `climax-only`, which builds an application from
+with no default features and with each of `complete`, `derive`, `interactive`,
+`parse`, `render` and `structured` alone, `climax-only`, which builds an application from
 `climax` alone, and standalone `pound`, `screw` and `bang`. The
 `climax-with-components` fixture passes values built through direct `pound`,
 `screw` and `bang` dependencies into `climax`, which proves the versions unify.

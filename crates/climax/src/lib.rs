@@ -5,7 +5,8 @@
 //! The crate root and [`prelude`] contain the ordinary application workflow.
 //! Each component is also re-exported whole behind the feature that enables
 //! it, as `climax::pound` under `parse`, `climax::bang` under `interactive`,
-//! `climax::screw` under `render`, and `climax::serde` under `structured`. An
+//! `climax::screw` under `render`, `climax::caress` under `complete`, and
+//! `climax::serde` under `structured`. An
 //! application needs no direct dependency on any of them, and the versions it
 //! sees are the ones `climax` was tested against.
 //!
@@ -41,6 +42,9 @@
 mod app;
 /// The application error type and its categories.
 pub mod error;
+/// What a package installs beside the binary, completion scripts and man pages.
+#[cfg(feature = "complete")]
+pub mod install;
 pub mod output;
 pub mod prelude;
 mod sync;
@@ -104,6 +108,7 @@ pub use climax_derive::{
 };
 #[cfg(all(feature = "derive", feature = "structured"))]
 pub use climax_derive::serde;
+#[cfg(feature = "complete")] pub use caress;
 #[cfg(feature = "parse")] pub use pound;
 #[cfg(feature = "render")] pub use screw;
 /// The `serde` crate, for applications that depend on `climax` alone.

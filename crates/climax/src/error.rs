@@ -211,6 +211,13 @@ impl Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[cfg(feature = "parse")]
+        if self.kind == ErrorKind::Parse
+            && let Some(parse) = self.source.as_deref().and_then(|source| source.downcast_ref::<pound::Error>())
+        {
+            let report = parse.render(pound::Term::plain());
+            return f.write_str(report.strip_prefix("error: ").unwrap_or(&report));
+        }
         f.write_str(&self.message)?;
         let texts = self.chain_texts();
         if !texts.is_empty() {

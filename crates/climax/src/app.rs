@@ -19,6 +19,10 @@ use crate::Result;
 /// unless related errors are attached, in which case those are printed.
 /// [`crate::Error::with_exit_code`] replaces the code for any error kind.
 ///
+/// With the `complete` feature a shell completion request, signalled by the
+/// `COMPLETE` environment variable, is answered and exits before anything is
+/// parsed.
+///
 /// The crate docs list the full exit-code mapping. [`main_with`] reports the
 /// same way for an application that takes no arguments.
 ///
@@ -33,7 +37,7 @@ where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    complete(C::try_parse(), f).report()
+    complete(parse_env::<C>(), f).report()
 }
 
 /// Run an application that takes no arguments and report its process outcome.
@@ -60,13 +64,16 @@ where
 }
 
 /// Run a parsed application without handling output or process exit status.
+///
+/// With the `complete` feature a shell completion request answers and exits the
+/// process, as `main` does.
 #[cfg(feature = "parse")]
 pub fn try_run<C, F>(f: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    run_with(C::try_parse()?, f)
+    run_with(parse_env::<C>()?, f)
 }
 
 /// Run an application from supplied arguments without handling process output.
@@ -123,6 +130,13 @@ where
             Err(error)
         },
     }
+}
+
+#[cfg(feature = "parse")]
+fn parse_env<C: pound::Parse>() -> std::result::Result<C, pound::Error> {
+    #[cfg(feature = "complete")]
+    caress::handle(C::SPEC);
+    C::try_parse()
 }
 
 #[cfg(feature = "parse")]

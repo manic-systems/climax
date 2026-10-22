@@ -4,6 +4,7 @@ use std::{path::PathBuf, process::Command};
 
 const FIXTURES: &[&str] = &[
     "fixture-bang-only",
+    "fixture-climax-complete-only",
     "fixture-climax-derive-only",
     "fixture-climax-interactive-only",
     "fixture-climax-no-default-features",

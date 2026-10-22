@@ -67,6 +67,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bang",
+ "caress",
  "climax-derive",
  "libc",
  "pound",
@@ -107,6 +108,13 @@ name = "fixture-bang-only"
 version = "0.0.0"
 dependencies = [
  "bang",
+]
+
+[[package]]
+name = "fixture-climax-complete-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
 ]
 
 [[package]]
