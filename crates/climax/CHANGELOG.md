@@ -6,23 +6,30 @@ the argument parser has its own changelog in `crates/pound/CHANGELOG.md`
 
 ## [0.1.0] - Unreleased
 
-the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-terminal`, `bang-run`) releases at one version, 0.0.1 was an early cut. `pound` and `caress` release on their own
+the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-terminal`, `bang-run`) releases at one version, 0.0.1 was an early cut
 
 ### Added
 
 #### climax
 
-- application facade that re-exports each component whole, `climax::pound` under `parse`, `climax::bang` under `interactive`, `climax::screw` under `render`, `climax::caress` under `complete` and `climax::serde` under `structured`
-- exact pins between the climax family crates, `pound` and `caress` at the caret range climax was tested against and `climax-derive` taking `pound-derive-impl` at a caret range, and the dev edge from `pound-derive` to `pound` is path-only
-- `main` reports and returns an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
-- `try_run`, `try_run_from` and `run_with` skip the reporting
-- typed prompts on `Context` returning `PromptOutcome`, with the config types and review types re-exported
-- structured output through `Context::output` with `result`, `stream` and `notice`, and `Context::diagnostic` for a second handle
-- `Context::status` coordinator, `Status::during`, `Status::widget` and `StatusMode`
-- terminal policy through `TerminalCapabilities`, `InteractionMode` and `StatusMode`, and `with_terminal`, `with_terminal_application` and `with_*_writer` to redirect channels
-- `climax::Error` with `ErrorKind`, `signal()` and `related_errors()`, plus `Error::application` and `application_context`
-- `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]` through `derive`
-- `complete` feature answers shell completion in `main` and `try_run`, and `climax::install` renders completion scripts and man pages
+- `climax` is an application facade. An application needs it as its only dependency, since each component is re-exported whole behind the feature that enables it, as `climax::pound` under `parse`, `climax::bang` under `interactive`, `climax::screw` under `render`, `climax::caress` under `complete` and `climax::serde` under `structured`. Every workspace dependency is pinned to an exact version, so one `climax` release names one tested set of component versions.
+- `climax::main` runs a `pound::Parse` command and returns a `std::process::ExitCode`. Help and version go to stdout with status 0, parse failures go to stderr with status 2 and application failures go to stderr with status 1. A cancellation exits 130, or 128 plus the signal number when a signal interrupted a live prompt. `try_run` and `try_run_from` skip the reporting for embedding and tests, and `run_with` starts from a command you already built.
+- Typed prompts on `Context`, namely `select`, `multi_select`, `search`, `review`, `text`, `password`, `confirm`, `date` and `number::<T>`. Each returns `PromptOutcome::Submit` with the user's own type or `PromptOutcome::Leave` when cancelled. The prompt config types, `Configurable`, `ReviewOutcome`, `ReviewExit`, `ReviewState` and `Reviewed` are re-exported at the crate root and in the prelude.
+- Structured output through `Context::output`. `result(&value).text(...).emit()` registers one finite result, holds it until the handler succeeds, prints the text projection for people and serialises the value with serde in JSON mode. `stream` writes values as they arrive, using JSON Lines in JSON mode. `notice` writes human-only context to the transient channel and is suppressed in JSON mode. `Context::diagnostic` gives a second handle that defaults to stderr. These need the `structured` feature for serialisation.
+- A status coordinator behind `Context::status`. Every status shares one renderer, so several animations compose, and prompts suspend them while holding the terminal. `Status::during` runs scoped work and prints `final_message` on success and `failure_message` on error, unwind or an early drop. `Status::widget` draws a `screw::WidgetRef` in the live region. `StatusMode` selects auto, plain, live or silent presentation. `Auto` animates on a terminal and prints one plain line per finished status otherwise, and `Silent` stays an explicit choice for a `--quiet` flag.
+- Terminal policy through `Context`. `TerminalCapabilities`, `InteractionMode` and `StatusMode` decide whether prompts and animation run. `with_terminal` moves prompts and status to one read-write handle such as `/dev/tty`, `with_terminal_application` hands out the terminal for a full-screen program, and `with_output_writer`, `with_diagnostic_writer` and `with_transient_writer` redirect each channel. Setters that may need to tear down live presentation return `Result`.
+- `climax::Error` reports a stable `ErrorKind` through `kind()`, keeps dependency errors as opaque sources, carries the interrupting signal in `signal()` and attaches cleanup failures as `related_errors()`. `Error::application` and `Error::application_context` wrap your own errors.
+- `climax-derive` provides `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]` through the default `derive` feature, with expansion rooted at `::climax::pound`. Together with `structured` it provides `#[climax::serde(Serialize, Deserialize)]`, an attribute that derives serde's traits rooted at `::climax::serde`, adds `#[serde(crate = "::climax::serde")]` and keeps the item and its other attributes. It takes plain derive names, rejects an empty list and must come before other derives that share serde's helper attributes. Without `derive`, `#[climax::serde(..)]` does not exist and fails with `expected attribute, found module`, so serde derives reached through climax need `#[serde(crate = "climax::serde")]`.
+- A `climax::Error` of kind `Parse` prints as pound's full report when returned from `fn main`, with the usage line and the hint toward help, where it printed only the message.
+- `climax::main` exits 141, as pound's `Error::exit` does, when writing help or version output fails because stdout is a closed pipe. Other write failures exit 1.
+- A `complete` feature, on by default, makes `climax::main` and `climax::try_run` answer shell completion for bash, zsh, fish, nu, elvish and PowerShell through `caress` before they parse. `climax::install` renders the completion scripts and mdoc man pages a package installs beside the binary.
+- `climax::main_with` runs a handler that takes no arguments and reports its result with the same output and exit codes as `climax::main`.
+- `Error::cancelled()` builds a cancellation that `main` and `main_with` report like a cancelled prompt, silently with exit 130. `Error::with_exit_code(code)` and `Error::exit_code()` choose the exit code for an error of any kind, and a code of 0 is stored as 1 so an error never exits successfully. The full exit-code mapping is listed in the crate docs and the README.
+- `climax::ResultExt`, imported by name and kept out of the prelude so it cannot collide with `anyhow::Context`, adds `.context(message)` and `.app_err()` to any `Result` whose error is a `Send + Sync` `std::error::Error`, turning it into an application error that keeps the original as its source. `Box<dyn std::error::Error + Send + Sync>` converts into `Error` with `?`.
+- An optional `anyhow` feature, off by default, adds `impl From<anyhow::Error> for climax::Error`. The anyhow error and its context chain are kept as the source, so `?` works on anyhow results inside a climax handler.
+- `climax::testing` runs an application in-process with the reporting and exit codes of `main`. `testing::run(args, script, handler)` and `testing::run_with(script, handler)` return an `Outcome` with `exit_code`, `stdout`, `stderr` and the error. `Script` answers prompts one method per prompt (`select_nth`, `multi_select_nth`, `text`, `text_attempts`, `date`, `confirm`, `enter`, `esc`, `keys`) and fails the run when input is left over. `Capture` is a cloneable `Write + Send` buffer for tests that build their own `Context`.
+- `Context::with_prompt_summaries` and `set_prompt_summaries` choose whether prompts leave a summary line. The choice lives on the context, so it applies after `with_terminal`, a capability change or a mode change rebuilds the interaction driver.
+- A `structured` feature for serde-backed results and JSON output. All six features (`complete`, `derive`, `parse`, `render`, `interactive` and `structured`) are on by default and work alone.
 
 #### bang
 
@@ -34,13 +41,10 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `ReviewPromptWithActions` once a review gains its first action
 - `bang::Error` with `ErrorKind`, and a signal during a prompt returns `Interrupted` without re-raising
 - `bang::advanced`, `bang::terminal` and `bang::screw`
-- `bang-core` gains `Reaction::Action`, `Event::UnknownEscape`, `Key::Function`, `Key::Insert`, `SessionReaction`, `TextInput::with_mask`, `Date::unix_days`, `ReviewList::with_exit_output` and `with_leave_output`
-- word movement and deletion in `TextInput`
-- named errors with remedies, and escape sequences and bidi controls stripped from summaries
+- `bang-core` gains `Reaction::Action`, `Event::UnknownEscape`, `Key::Function`, `SessionReaction`, `TextInput::with_mask`, `Date::unix_days`, `ReviewList::with_exit_output` and `with_leave_output`
 
 #### screw
 
-- a widget panic is reported once and `finish()` returns only `a widget panicked on the render thread`
 - text laid out per grapheme cluster, tabs to eight columns, `width`, `truncate`, `pad` and `Align` agree with `Surface::write`
 - `Table` with `header`, `aligns`, `gap`, `flexible` and `overflow`
 - `Span`, `Spans`, and `Style` gains `italic`, `underline` and `strikethrough`
@@ -56,14 +60,10 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 
 - `ScreenGuard` with `ScreenOptions`, `TerminalEvents`, `TerminalPoll` and `RawModeOptions`
 - `CleanupFailures`, `CleanupFailure` and `CleanupStage` report each failed restore step
-- xterm function keys and `Insert` decode, invalid UTF-8 is reported at once and a double escape decodes
-- Ctrl keys decode for NUL and 0x1C to 0x1F
-- handlers install with `SA_RESTART`, `SIGWINCH` wakes resize at once with a 100ms poll as fallback
-- an ambiguous escape resolves 50ms after its first byte
 
 #### bang-run
 
-- unknown config keys, duplicate form field names, empty names and labels and malformed dates are rejected
+- duplicate form field names are rejected
 - exit 2 for usage or configuration errors, 130 for cancellation, 128 plus the signal number, 141 on a closed pipe and 1 otherwise
 
 ### Changed
@@ -76,7 +76,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - **Breaking** `write_value`, `print_value`, `text` and `json` are removed for `cx.output().result(&value).text(..).emit()`
 - **Breaking** `climax::bang` is the `bang` crate, and the prelude no longer re-exports `bang_core` and `screw` items, use `climax::bang::advanced` and `climax::screw`
 - **Breaking** `pty-overlay` and `climax::overlay` are removed
-- **Breaking** `interactive` no longer implies `render`, `structured` is in the defaults and `climax::prompt` is removed
+- **Breaking** `interactive` no longer implies `render`, and `parse` and `structured` are in the defaults
 - **Breaking** `Context` is not `Send`, `Sync` or `Clone`, its setters take `&mut self` and `Context::new` is not `const`
 - **Breaking** `climax::app` is private, use `climax::Context`
 - **Breaking** `Status::new` is removed, use `cx.status(..)`
@@ -93,16 +93,11 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 
 #### bang-core
 
-- `Form::push_field` and `with_field` panic on a repeated name, and a widget that offers nothing is refused
-- `Form` delivers ticks to every field
-- `ReviewList` refuses custom keys that collide with built-ins
-- action help shows on the key help line
-- `format_output` writes non-finite floats as `NaN`, `Infinity` and `-Infinity`, strings in JSON and plain in text, and an empty list prints nothing in text
-- `DatePicker` header alignment, and `Date` parsing saturates beyond `i32` days
+- `Form::push_field` and `with_field` panic on a repeated name
 - `ReviewList::selected_index` returns `None` when every row is removed
 - **Breaking** the View layer is removed, widgets draw through `screw::Widget`
 - **Breaking** `Session::handle` returns `SessionReaction`
-- **Breaking** `Event`, `Reaction`, `Key`, `SessionReaction`, `SessionStatus`, `FocusTarget`, `OutputFormat` and `ReviewState` are `#[non_exhaustive]`
+- **Breaking** `Event`, `Reaction` and `Key` are `#[non_exhaustive]`
 - **Breaking** `ReviewAction`, and `with_prompt` on `Select`, `MultiSelect` and `ReviewList` are removed, `with_action_output` becomes `with_exit_output` and `with_leave_output`, `cursor_char_index` becomes `cursor_grapheme_index`
 
 #### bang-terminal

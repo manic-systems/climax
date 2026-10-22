@@ -60,3 +60,14 @@ fn the_prelude_carries_what_a_manual_from_arg_impl_needs() {
     let listen = Listen::try_parse_from(["--port", "8080"]).unwrap();
     assert_eq!(listen.port, Port(8080));
 }
+
+#[test]
+fn a_returned_parse_error_debugs_as_its_report() {
+    let error = climax::try_run_from(["--nope"], |_context, _args: Args| Ok(())).unwrap_err();
+    let report = format!("{error:?}");
+    assert!(
+        report.starts_with("unrecognized argument '--nope'"),
+        "got {report}"
+    );
+    assert!(report.contains("Usage:"), "got {report}");
+}

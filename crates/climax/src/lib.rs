@@ -2,29 +2,13 @@
 
 //! climax: application facade over `pound`, `screw` and `bang`.
 //!
-//! The crate root and [`prelude`] contain the ordinary application workflow.
-//! Each component is also re-exported whole behind the feature that enables
-//! it, as `climax::pound` under `parse`, `climax::bang` under `interactive`,
-//! `climax::screw` under `render`, and `climax::serde` under `structured`. An
-//! application needs no direct dependency on any of them, and the versions it
-//! sees are the ones `climax` was tested against.
-//!
-//! The prompt builders on [`Context`] return the prompt types, which are
-//! re-exported at the root next to their config types, `PromptOutcome` and
-//! the review types, so a signature such as `fn ask(cx: &Context) ->
-//! SelectPrompt<String>` needs no path through `climax::bang`.
-//!
-//! The `derive` feature provides `#[derive(climax::Parse)]` and
-//! `#[derive(climax::ValueEnum)]`, whose expansion refers to
-//! `::climax::pound`. With `structured` as well, `#[climax::serde(Serialize)]`
-//! derives serde's traits rooted at `::climax::serde` for the same reason.
-//! The attribute needs both features. With `structured` alone, `climax::serde`
-//! is only the crate, and the attribute fails with `expected attribute, found
-//! module`.
-//!
-//! `main` and [`main_with`] report errors and choose the process exit code,
-//! and [`ResultExt`], imported by name, adds `.context("reading the count")` to
-//! foreign `Result`s. The exit-code mapping is listed below.
+//! the crate root and [`prelude`] hold the ordinary application workflow. each
+//! component is also re-exported whole behind the feature that enables it, as
+//! `climax::pound` under `parse`, `climax::bang` under `interactive`,
+//! `climax::screw` under `render`, `climax::caress` under `complete` and
+//! `climax::serde` under `structured`. an application needs no direct
+//! dependency on any of them, and the versions it sees are the ones `climax`
+//! was tested against
 
 #![cfg_attr(
     all(
@@ -43,7 +27,9 @@ extern crate alloc;
 mod app;
 /// the application error type and its categories
 pub mod error;
-#[cfg(feature = "complete")] pub mod install;
+/// what a package installs beside the binary, completion scripts and man pages
+#[cfg(feature = "complete")]
+pub mod install;
 pub mod output;
 pub mod prelude;
 mod sync;
@@ -104,6 +90,7 @@ pub use bang::{
     TextConfig,
     TextPrompt,
 };
+#[cfg(feature = "complete")] pub use caress;
 #[cfg(all(feature = "derive", feature = "structured"))]
 pub use climax_derive::serde;
 #[cfg(feature = "derive")]

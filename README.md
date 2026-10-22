@@ -2,17 +2,26 @@
 
 ## max your CLI.
 
-This workspace contains four user-facing Rust libraries.
+five libraries, each usable on its own
 
-- `pound` parses arguments, derive first.
-- `screw` renders the terminal from retained frames.
-- `bang` asks typed interactive prompts.
-- `climax` is an application facade that composes the other three.
+- `pound` parses arguments, derive first
+- `screw` renders the terminal from retained frames
+- `bang` asks typed interactive prompts
+- `climax` is the application facade over `pound`, `screw` and `bang`
+- `caress` answers shell completion and renders completion scripts and man pages
 
 Each component is useful on its own. Applications that want the integrated path
 can depend on `climax` alone, which re-exports each component whole behind the
 feature that enables it. Exact version pins keep one `climax` release on one
 tested set of component versions.
+
+With the default `complete` feature, `climax::main` and `climax::try_run`
+answer shell completion for bash, zsh, fish, nu, elvish and PowerShell before
+they parse anything. `climax::install` renders the completion scripts and mdoc
+man pages a package installs beside the binary. Every TAB runs the program, so
+link it statically for the fastest completion, with
+`RUSTFLAGS='-C target-feature=+crt-static'` or `pkgsStatic` in nix, which
+spares each TAB the dynamic loader's third of a millisecond.
 
 ## Platforms and Rust version
 
@@ -84,36 +93,8 @@ fn main() -> std::process::ExitCode {
 a cancelled prompt resolves to `PromptOutcome::Leave`, and `or_cancel` turns that into a
 `Cancelled` error that exits 130
 
-fn main() -> std::process::ExitCode {
-    climax::main_with(|cx| match cx.text("Name").interact()? {
-        PromptOutcome::Submit(name) => cx.output().result(&name).text(|name| name.clone()).emit(),
-        PromptOutcome::Leave => cx.output().result(&"anonymous").text(|name| *name).emit(),
-    })
-}
-```
-
-`confirm` accepts `y` and `n` as immediate answers and highlights No unless
-`default(true)` says otherwise. A submitted prompt leaves a dimmed one-line
-summary in the scrollback, such as `Deploy now? › no`, and leaving leaves
-nothing. A prompt's `summary(false)` turns it off for that prompt, and
-`bang::Interaction::with_summaries(false)` turns it off for every prompt on that
-driver. `NO_COLOR` removes the dimming. A signal during a prompt restores the
-terminal and surfaces as a `Cancelled` error whose `Error::signal()` holds the
-signal number, and `climax::main` exits with 128 plus that number. The process
-is never killed by the signal itself, and a signal the host ignored before the
-session stays ignored. Any other cancellation that reaches `main` exits 130.
-
-`Context` prompts return `climax::PromptOutcome`, and `climax` also re-exports
-`Configurable`, the prompt config types, and the review types. The components
-themselves are reachable as `climax::pound` under `parse`, `climax::bang` under
-`interactive`, `climax::screw` under `render`, and `climax::serde` under
-`structured`, so an application needs no direct dependency on any of them.
-
-The `derive` feature, on by default, provides `#[derive(climax::Parse)]` and
-`#[derive(climax::ValueEnum)]` with expansion rooted at `::climax::pound`. With
-`structured` it also provides `#[climax::serde(Serialize, Deserialize)]`, which
-derives serde's traits rooted at `climax::serde` and keeps the item and its
-other attributes. Put it above any other derive.
+with `derive`, a struct deriving `climax::Parse` is the command, and `climax::main` parses,
+runs the handler and picks the exit code
 
 ```rust
 use climax::prelude::*;
