@@ -4,7 +4,10 @@
 
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{
+        Path,
+        PathBuf,
+    },
 };
 
 use toml::{
@@ -80,7 +83,10 @@ fn workspace_dependencies_on_workspace_crates_are_exact_pins() {
         .expect("workspace dependencies");
 
     let mut failures = Vec::new();
-    for (name, _) in crates.iter().filter(|(name, _)| CLIMAX_FAMILY.contains(&name.as_str())) {
+    for (name, _) in crates
+        .iter()
+        .filter(|(name, _)| CLIMAX_FAMILY.contains(&name.as_str()))
+    {
         let Some(entry) = shared.get(name) else {
             continue;
         };
@@ -130,9 +136,7 @@ fn workspace_dependencies_on_workspace_crates_are_exact_pins() {
                         .is_some_and(|version| !version.starts_with('='))
                         && entry.get("workspace").is_none();
                     if !caret {
-                        failures.push(format!(
-                            "{package} must require {name} at a caret range"
-                        ));
+                        failures.push(format!("{package} must require {name} at a caret range"));
                     }
                     continue;
                 }

@@ -2,19 +2,41 @@
 
 #![cfg(test)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
 };
 
-use bang::advanced::{
-    Event, Reaction, Value, Widget, WidgetContext, WidgetId,
+use bang::{
+    advanced::{
+        Event,
+        Reaction,
+        Value,
+        Widget,
+        WidgetContext,
+        WidgetId,
+    },
+    screw::{
+        RenderCtx,
+        Style,
+        Surface,
+        TickInterest,
+        Widget as ScreenWidget,
+    },
 };
-use bang::screw::{RenderCtx, Style, Surface, TickInterest, Widget as ScreenWidget};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -47,9 +69,11 @@ impl Widget for Countdown {
                     Reaction::Changed
                 }
             },
-            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | _ => {
-                Reaction::Ignored
-            },
+            Event::Key(_)
+            | Event::Paste(_)
+            | Event::UnknownEscape(_)
+            | Event::Resize { .. }
+            | _ => Reaction::Ignored,
         }
     }
 }
@@ -82,8 +106,8 @@ fn a_widget_that_wants_ticks_gets_them_without_input() {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

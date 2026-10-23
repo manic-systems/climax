@@ -1,24 +1,49 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use alloc::{collections::VecDeque, rc::Rc};
-use core::{any::Any, cell::RefCell, fmt};
+use alloc::{
+    collections::VecDeque,
+    rc::Rc,
+};
+use core::{
+    any::Any,
+    cell::RefCell,
+    fmt,
+};
 use std::{
     fs::File,
-    io::{self, IsTerminal as _},
+    io::{
+        self,
+        IsTerminal as _,
+    },
     os::fd::OwnedFd,
     thread,
 };
 
 use bang_core::{
-    ActionBinding, ActionLayer, Context, Event, Reaction, Value, Widget, WidgetId,
+    ActionBinding,
+    ActionLayer,
+    Context,
+    Event,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
 };
-use screw::{RenderCtx, Surface, TickInterest, VerticalSize};
+use screw::{
+    RenderCtx,
+    Surface,
+    TickInterest,
+    VerticalSize,
+};
 
 use crate::{
-    Error, Result,
+    Error,
+    Result,
     advanced::replay_events,
     live::{
-        run_live_session, run_live_session_forced, run_live_session_forced_on,
+        run_live_session,
+        run_live_session_forced,
+        run_live_session_forced_on,
         run_live_session_on,
     },
 };
@@ -75,10 +100,10 @@ impl Drop for GuardStack {
 /// typed prompt API.
 #[derive(Clone)]
 pub struct Interaction {
-    runner: Rc<Runner>,
-    guards: Vec<Rc<GuardFactory>>,
+    runner:       Rc<Runner>,
+    guards:       Vec<Rc<GuardFactory>>,
     summary_sink: Option<Rc<SummarySink>>,
-    summaries: bool,
+    summaries:    bool,
 }
 
 impl Interaction {
@@ -115,8 +140,7 @@ impl Interaction {
         let sink = handle_sink(&owned);
         Self::from_runner(move |widget| {
             let duplicate = owned.try_clone().map_err(Error::terminal)?;
-            run_live_session_on(InteractionWidget::new(widget), duplicate)
-                .map_err(Error::from_live)
+            run_live_session_on(InteractionWidget::new(widget), duplicate).map_err(Error::from_live)
         })
         .with_optional_summary_sink(sink.ok())
     }
@@ -213,18 +237,20 @@ impl Interaction {
         let enabled = summary.enabled.unwrap_or(self.summaries);
         let answer_line: SummaryAnswer<'_> = &line;
         self.run(widget, actions, enabled.then_some(answer_line))
-            .map_err(|error| match prompt {
-                Some(name) => error.naming_prompt(name),
-                None => error,
+            .map_err(|error| {
+                match prompt {
+                    Some(name) => error.naming_prompt(name),
+                    None => error,
+                }
             })
     }
 
     pub(crate) fn from_runner(runner: impl Fn(Box<dyn Widget>) -> Result<Value> + 'static) -> Self {
         Self {
-            runner: Rc::new(runner),
-            guards: Vec::new(),
+            runner:       Rc::new(runner),
+            guards:       Vec::new(),
             summary_sink: None,
-            summaries: true,
+            summaries:    true,
         }
     }
 
@@ -236,7 +262,8 @@ impl Interaction {
     ///
     /// # Errors
     ///
-    /// Fails when a guard cannot be acquired or when the session ends without a value.
+    /// Fails when a guard cannot be acquired or when the session ends without a
+    /// value.
     pub fn interact<W>(
         &self,
         widget: W,
@@ -281,7 +308,7 @@ impl Interaction {
 )]
 pub(crate) struct Summary<'a> {
     pub(crate) enabled: Option<bool>,
-    pub(crate) answer: SummaryAnswer<'a>,
+    pub(crate) answer:  SummaryAnswer<'a>,
 }
 
 impl<'a> Summary<'a> {
@@ -353,7 +380,7 @@ pub(crate) fn scripted(
         .map(|events| events.into_iter().collect::<Vec<_>>())
         .collect();
     let state = Rc::new(RefCell::new(Script {
-        scripts: queued,
+        scripts:       queued,
         unused_events: 0,
     }));
     Interaction::from_runner(move |widget| {
@@ -370,7 +397,7 @@ pub(crate) fn scripted(
 }
 
 struct Script {
-    scripts: VecDeque<Vec<Event>>,
+    scripts:       VecDeque<Vec<Event>>,
     unused_events: usize,
 }
 
@@ -395,7 +422,7 @@ mod tests {
     use super::*;
 
     struct RecordedGuard {
-        label: &'static str,
+        label:  &'static str,
         events: Rc<RefCell<Vec<&'static str>>>,
     }
 
@@ -439,9 +466,7 @@ mod tests {
     fn dropping_a_scripted_interaction_with_unread_events_panics() {
         let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
         let interaction = scripted([[submit.clone(), submit]]);
-        interaction
-            .interact(TextInput::new("w"), [])
-            .unwrap();
+        interaction.interact(TextInput::new("w"), []).unwrap();
     }
 
     #[test]
@@ -464,7 +489,7 @@ mod tests {
         let with_first = base.with_guard(move || {
             first_events.borrow_mut().push("acquire first");
             Ok(RecordedGuard {
-                label: "release first",
+                label:  "release first",
                 events: Rc::clone(&first_events),
             })
         });
@@ -472,25 +497,20 @@ mod tests {
         let interaction = with_first.with_guard(move || {
             second_events.borrow_mut().push("acquire second");
             Ok(RecordedGuard {
-                label: "release second",
+                label:  "release second",
                 events: Rc::clone(&second_events),
             })
         });
 
-        interaction
-            .interact(TextInput::new("widget"), [])
-            .unwrap();
+        interaction.interact(TextInput::new("widget"), []).unwrap();
 
-        assert_eq!(
-            *events.borrow(),
-            [
-                "acquire first",
-                "acquire second",
-                "run",
-                "release second",
-                "release first",
-            ]
-        );
+        assert_eq!(*events.borrow(), [
+            "acquire first",
+            "acquire second",
+            "run",
+            "release second",
+            "release first",
+        ]);
     }
 
     #[test]
@@ -500,7 +520,7 @@ mod tests {
         let with_first = Interaction::disabled().with_guard(move || {
             first_events.borrow_mut().push("acquire first");
             Ok(RecordedGuard {
-                label: "release first",
+                label:  "release first",
                 events: Rc::clone(&first_events),
             })
         });
@@ -515,9 +535,10 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.kind(), crate::ErrorKind::InteractionUnavailable);
-        assert_eq!(
-            *events.borrow(),
-            ["acquire first", "acquire second", "release first"]
-        );
+        assert_eq!(*events.borrow(), [
+            "acquire first",
+            "acquire second",
+            "release first"
+        ]);
     }
 }

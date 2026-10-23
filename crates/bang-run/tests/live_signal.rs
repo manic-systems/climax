@@ -2,15 +2,28 @@
 
 #![cfg(test)]
 
-use core::{mem, ptr, time::Duration};
+use core::{
+    mem,
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _},
+    io::{
+        self,
+        Read as _,
+    },
     os::{
-        fd::{FromRawFd as _, RawFd},
+        fd::{
+            FromRawFd as _,
+            RawFd,
+        },
         unix::process::CommandExt as _,
     },
-    process::{Command, Stdio},
+    process::{
+        Command,
+        Stdio,
+    },
     thread,
     time::Instant,
 };
@@ -30,8 +43,12 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
     command
         .args(["select", "--option", "alpha", "--option", "bravo"])
         .env("TERM", "xterm-256color")
-        .stdin(Stdio::from(slave.try_clone().expect("clone slave for stdin")))
-        .stdout(Stdio::from(slave.try_clone().expect("clone slave for stdout")))
+        .stdin(Stdio::from(
+            slave.try_clone().expect("clone slave for stdin"),
+        ))
+        .stdout(Stdio::from(
+            slave.try_clone().expect("clone slave for stdout"),
+        ))
         .stderr(Stdio::from(slave));
     // A parent that ran this test in the background or under nohup leaves
     // signals ignored or blocked, and the child inherits both across exec.
@@ -39,21 +56,32 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
         // SAFETY: a zeroed sigset_t is plain data that sigemptyset initialises.
         let mut empty = unsafe { mem::zeroed::<libc::sigset_t>() };
         // SAFETY: empty is a valid sigset_t for the call.
-        unsafe { libc::sigemptyset(&raw mut empty); }
+        unsafe {
+            libc::sigemptyset(&raw mut empty);
+        }
         // SAFETY: empty is initialised and a null old set is allowed.
-        unsafe { libc::sigprocmask(libc::SIG_SETMASK, &raw const empty, ptr::null_mut()); }
+        unsafe {
+            libc::sigprocmask(libc::SIG_SETMASK, &raw const empty, ptr::null_mut());
+        }
         for inherited in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
             // SAFETY: SIG_DFL is a valid disposition.
-            unsafe { libc::signal(inherited, libc::SIG_DFL); }
+            unsafe {
+                libc::signal(inherited, libc::SIG_DFL);
+            }
         }
         Ok(())
     };
     // SAFETY: the hook only calls async-signal-safe libc functions.
-    unsafe { command.pre_exec(reset_signals); }
+    unsafe {
+        command.pre_exec(reset_signals);
+    }
     let mut child = command.spawn().expect("spawn bang under a pty");
 
     let mut first_frame = [0_u8; 256];
-    assert_ne!(master.read(&mut first_frame).expect("read the first frame"), 0);
+    assert_ne!(
+        master.read(&mut first_frame).expect("read the first frame"),
+        0
+    );
     let pid = libc::pid_t::try_from(child.id()).expect("pid fits");
     // SAFETY: signalling the child this test spawned.
     assert_eq!(unsafe { libc::kill(pid, signal) }, 0);
@@ -61,7 +89,9 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
     let started = Instant::now();
     loop {
         if let Some(status) = child.try_wait().expect("poll the child") {
-            return status.code().expect("the child exited instead of dying by the signal");
+            return status
+                .code()
+                .expect("the child exited instead of dying by the signal");
         }
         if started.elapsed() > TIMEOUT {
             let _result = child.kill();
@@ -74,8 +104,8 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

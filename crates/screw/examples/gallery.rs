@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
 
 extern crate alloc;
 
 use alloc::sync::Arc;
 use core::time::Duration;
 use std::{
-    io::{self, IsTerminal as _},
+    io::{
+        self,
+        IsTerminal as _,
+    },
     sync::{
         Mutex,
         PoisonError,

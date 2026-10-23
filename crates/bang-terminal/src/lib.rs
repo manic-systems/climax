@@ -17,10 +17,17 @@
 //! come back last.
 //!
 //! ```no_run
-//! use std::io::{self, Write as _};
+//! use std::io::{
+//!     self,
+//!     Write as _,
+//! };
 //!
 //! use bang_terminal::{
-//!     RawModeOptions, ScreenGuard, ScreenOptions, TerminalEvents, TerminalModeGuard,
+//!     RawModeOptions,
+//!     ScreenGuard,
+//!     ScreenOptions,
+//!     TerminalEvents,
+//!     TerminalModeGuard,
 //!     TerminalPoll,
 //! };
 //!
@@ -44,7 +51,13 @@
 //! [`Decoder`] decodes bytes without any terminal at all.
 
 #![warn(missing_docs)]
-#![cfg_attr(test, expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes"))]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::non_ascii_literal,
+        reason = "terminal glyphs read better as themselves than as escapes"
+    )
+)]
 
 extern crate alloc;
 
@@ -54,12 +67,31 @@ mod events;
 mod mode;
 mod screen;
 mod signal;
-#[doc(hidden)]
-pub mod testing;
+#[doc(hidden)] pub mod testing;
 
-pub use cleanup::{CleanupFailure, CleanupFailures, CleanupStage};
+pub use cleanup::{
+    CleanupFailure,
+    CleanupFailures,
+    CleanupStage,
+};
 pub use decoder::Decoder;
-pub use events::{TerminalEvents, TerminalPoll, resize_event};
-pub use mode::{RawModeOptions, TerminalModeGuard};
-pub use screen::{CursorPolicy, ScreenGuard, ScreenKind, ScreenOptions};
-pub use signal::{Signal, SignalGuard, SignalPoller};
+pub use events::{
+    TerminalEvents,
+    TerminalPoll,
+    resize_event,
+};
+pub use mode::{
+    RawModeOptions,
+    TerminalModeGuard,
+};
+pub use screen::{
+    CursorPolicy,
+    ScreenGuard,
+    ScreenKind,
+    ScreenOptions,
+};
+pub use signal::{
+    Signal,
+    SignalGuard,
+    SignalPoller,
+};

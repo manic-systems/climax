@@ -13,16 +13,36 @@
 //! [`crate::terminal`].
 
 pub use bang_core::{
-    ActionBinding, ActionLayer, Context as WidgetContext, Date, Event, FocusTarget, Key, KeyEvent,
-    Modifiers, Number, Reaction, Session, SessionReaction, SessionStatus, Value, Widget, widgets,
+    ActionBinding,
+    ActionLayer,
+    Context as WidgetContext,
+    Date,
+    Event,
+    FocusTarget,
+    Key,
+    KeyEvent,
+    Modifiers,
+    Number,
+    Reaction,
+    Session,
+    SessionReaction,
+    SessionStatus,
+    Value,
+    Widget,
+    WidgetId,
+    widgets,
 };
 
-pub use bang_core::WidgetId;
-
-pub use crate::live::LiveSessionError;
-
-pub use crate::interaction::InteractionWidget;
-use crate::{Error, Interaction, Result, interaction::scripted};
+use crate::{
+    Error,
+    Interaction,
+    Result,
+    interaction::scripted,
+};
+pub use crate::{
+    interaction::InteractionWidget,
+    live::LiveSessionError,
+};
 
 /// Run a custom widget in the live terminal session.
 ///
@@ -65,8 +85,9 @@ pub fn interaction_from_runner(
 ///
 /// # Errors
 ///
-/// Fails with `ErrorKind::Cancelled` when the widget or an unclaimed Ctrl-C cancels, and with
-/// `ErrorKind::InputEnded` when the events run out before the widget submits.
+/// Fails with `ErrorKind::Cancelled` when the widget or an unclaimed Ctrl-C
+/// cancels, and with `ErrorKind::InputEnded` when the events run out before the
+/// widget submits.
 pub fn replay_events(
     widget: impl Widget + 'static,
     events: impl IntoIterator<Item = Event>,
@@ -117,7 +138,11 @@ fn is_control_char(event: &Event, value: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use bang_core::{ActionBinding, ActionLayer, widgets::TextInput};
+    use bang_core::{
+        ActionBinding,
+        ActionLayer,
+        widgets::TextInput,
+    };
 
     use super::*;
 

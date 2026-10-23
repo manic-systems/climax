@@ -1,11 +1,11 @@
 [package]
-name = "fixture-climax-with-components"
-version = "0.0.0"
+name              = "fixture-climax-with-components"
+version           = "0.0.0"
 edition.workspace = true
-publish = false
+publish           = false
 
 [dependencies]
-bang.workspace = true
-climax = { path = "../../../crates/climax" }
-pound = { workspace = true, features = [ "derive", "std" ] }
+bang.workspace  = true
+climax          = { path = "../../../crates/climax" }
+pound           = { workspace = true, features = [ "derive", "std" ] }
 screw.workspace = true

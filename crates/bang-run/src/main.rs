@@ -2,11 +2,17 @@
 
 use core::fmt;
 use std::{
-    io::{self, Write as _},
+    io::{
+        self,
+        Write as _,
+    },
     process,
 };
 
-use bang_run::{Cli, CliError};
+use bang_run::{
+    Cli,
+    CliError,
+};
 use pound::Parse as _;
 
 fn main() {

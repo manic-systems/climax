@@ -1,25 +1,36 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::sync::Arc;
-use core::{fmt, ops::Range};
+use core::{
+    fmt,
+    ops::Range,
+};
 use std::sync::Mutex;
 
 use crate::{
-    RenderCtx, Surface, TickInterest, VerticalSize, Widget, WidgetRef, renderer::layout_surface,
-    surface::append_surface, sync::lock, widget::combine_tick_interest,
+    RenderCtx,
+    Surface,
+    TickInterest,
+    VerticalSize,
+    Widget,
+    WidgetRef,
+    renderer::layout_surface,
+    surface::append_surface,
+    sync::lock,
+    widget::combine_tick_interest,
 };
 
 /// The result of allocating logical children into a physical viewport.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ViewportReport {
     /// Children with at least one rendered row.
-    pub visible: Range<usize>,
+    pub visible:       Range<usize>,
     /// Children rendered without clipping.
     pub fully_visible: Range<usize>,
     /// Requested start for the preceding physical page, if any.
-    pub page_up: Option<usize>,
+    pub page_up:       Option<usize>,
     /// Requested start for the following physical page, if any.
-    pub page_down: Option<usize>,
+    pub page_down:     Option<usize>,
 }
 
 /// A cloneable observer for the latest [`VerticalViewport`] allocation.
@@ -51,18 +62,17 @@ impl ViewportReportHandle {
 /// remaining height between them before they render.
 #[derive(Clone)]
 pub struct VerticalViewport<H = WidgetRef> {
-    children: Box<[H]>,
+    children:        Box<[H]>,
     requested_start: usize,
-    anchor: Option<usize>,
-    max_children: Option<usize>,
-    trailing: Option<H>,
-    report: ViewportReportHandle,
+    anchor:          Option<usize>,
+    max_children:    Option<usize>,
+    trailing:        Option<H>,
+    report:          ViewportReportHandle,
 }
 
 impl<H> fmt::Debug for VerticalViewport<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f
-            .debug_struct("VerticalViewport")
+        f.debug_struct("VerticalViewport")
             .field("children", &self.children.len())
             .field("requested_start", &self.requested_start)
             .field("anchor", &self.anchor)
@@ -77,12 +87,12 @@ impl<H> VerticalViewport<H> {
     /// Create a viewport over logical child widgets.
     pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
-            children: children.into().into_boxed_slice(),
+            children:        children.into().into_boxed_slice(),
             requested_start: 0,
-            anchor: None,
-            max_children: None,
-            trailing: None,
-            report: ViewportReportHandle::default(),
+            anchor:          None,
+            max_children:    None,
+            trailing:        None,
+            report:          ViewportReportHandle::default(),
         }
     }
 
@@ -317,7 +327,13 @@ fn previous_start(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LayoutMode, Renderer, Stack, Text, widget};
+    use crate::{
+        LayoutMode,
+        Renderer,
+        Stack,
+        Text,
+        widget,
+    };
 
     #[test]
     fn viewport_allocates_wrapped_children_around_an_anchor() {

@@ -2,19 +2,38 @@
 
 #![cfg(all(feature = "interactive", feature = "render"))]
 #![cfg(test)]
-#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
-    sync::{Mutex, PoisonError},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
+    sync::{
+        Mutex,
+        PoisonError,
+    },
     thread,
     time::Instant,
 };
 
-use climax::{Context, terminal::InteractionMode};
+use climax::{
+    Context,
+    terminal::InteractionMode,
+};
 
 const STDERR: RawFd = 2;
 
@@ -45,9 +64,13 @@ fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_st
     // Linux, closing a PTY's only master reference hangs up the slave, and
     // the writer thread would otherwise finish (and drop its handle) before
     // raw mode ever activates on it.
-    let mut write_handle = master.try_clone().expect("clone master for the writer thread");
+    let mut write_handle = master
+        .try_clone()
+        .expect("clone master for the writer thread");
     let writer = thread::spawn(move || {
-        write_handle.write_all(b"\r").expect("submit the highlighted choice");
+        write_handle
+            .write_all(b"\r")
+            .expect("submit the highlighted choice");
         write_handle.flush().expect("flush PTY input");
     });
 
@@ -71,7 +94,9 @@ fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_st
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn read_until(master: &mut File, needle: &[u8]) -> Vec<u8> {
@@ -99,7 +124,9 @@ fn set_nonblocking(file: &File) {
     // SAFETY: fd is owned by file for the duration of this call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     // SAFETY: fd and flags are valid.
-    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK); }
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+    }
 }
 
 fn set_blocking(file: &File) {
@@ -108,14 +135,16 @@ fn set_blocking(file: &File) {
     // SAFETY: fd is owned by file for the duration of this call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     // SAFETY: fd and flags are valid.
-    unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK); }
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+    }
 }
 
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,
@@ -137,7 +166,7 @@ fn open_pty() -> (File, File) {
 /// that some operation never writes to it can be checked rather than assumed.
 struct StderrCapture {
     saved: RawFd,
-    read: File,
+    read:  File,
 }
 
 impl StderrCapture {
@@ -150,12 +179,22 @@ impl StderrCapture {
         let created = unsafe { libc::pipe(pipe.as_mut_ptr()) };
         assert_eq!(created, 0, "create pipe: {}", io::Error::last_os_error());
         let [read_fd, write_fd] = pipe;
-        // SAFETY: write_fd is a valid, open fd; STDERR names the fd being replaced.
+        // SAFETY: write_fd is a valid, open fd; STDERR names the fd being
+        // replaced.
         let redirected = unsafe { libc::dup2(write_fd, STDERR) };
-        assert_eq!(redirected, STDERR, "redirect stderr: {}", io::Error::last_os_error());
-        // SAFETY: write_fd was just duplicated onto STDERR and its own copy is unused.
-        unsafe { libc::close(write_fd); }
-        // SAFETY: read_fd was just returned by pipe above as a live, owned descriptor.
+        assert_eq!(
+            redirected,
+            STDERR,
+            "redirect stderr: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: write_fd was just duplicated onto STDERR and its own copy is
+        // unused.
+        unsafe {
+            libc::close(write_fd);
+        }
+        // SAFETY: read_fd was just returned by pipe above as a live, owned
+        // descriptor.
         let read = unsafe { File::from_raw_fd(read_fd) };
         Self { saved, read }
     }
@@ -163,11 +202,16 @@ impl StderrCapture {
     /// Restores the original stderr and returns whatever was written to it
     /// while captured.
     fn restore(mut self) -> Vec<u8> {
-        // SAFETY: self.saved is a live descriptor duplicated from stderr in `install`;
-        // dup2 closes whatever was on STDERR (the pipe's write end) before replacing it.
-        unsafe { libc::dup2(self.saved, STDERR); }
+        // SAFETY: self.saved is a live descriptor duplicated from stderr in
+        // `install`; dup2 closes whatever was on STDERR (the pipe's
+        // write end) before replacing it.
+        unsafe {
+            libc::dup2(self.saved, STDERR);
+        }
         // SAFETY: self.saved is no longer needed once restored.
-        unsafe { libc::close(self.saved); }
+        unsafe {
+            libc::close(self.saved);
+        }
         set_nonblocking(&self.read);
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 4096];
@@ -184,9 +228,13 @@ impl StderrCapture {
 }
 
 fn answered_select_output(context: &Context, mut master: File) -> Vec<u8> {
-    let mut write_handle = master.try_clone().expect("clone master for the writer thread");
+    let mut write_handle = master
+        .try_clone()
+        .expect("clone master for the writer thread");
     let writer = thread::spawn(move || {
-        write_handle.write_all(b"\r").expect("submit the highlighted choice");
+        write_handle
+            .write_all(b"\r")
+            .expect("submit the highlighted choice");
     });
     context
         .select::<&str>("choice")
@@ -215,7 +263,10 @@ fn a_submitted_prompt_leaves_a_summary_on_the_terminal_handle_by_default() {
         .expect("with_terminal")
         .with_interaction_mode(InteractionMode::Force);
     let output = answered_select_output(&context, master);
-    assert!(contains(&output, "choice › first".as_bytes()), "got {output:?}");
+    assert!(
+        contains(&output, "choice › first".as_bytes()),
+        "got {output:?}"
+    );
 }
 
 #[test]
@@ -228,5 +279,8 @@ fn prompt_summaries_off_survives_a_later_terminal_and_mode_change() {
         .expect("with_terminal")
         .with_interaction_mode(InteractionMode::Force);
     let output = answered_select_output(&context, master);
-    assert!(!contains(&output, "choice › first".as_bytes()), "got {output:?}");
+    assert!(
+        !contains(&output, "choice › first".as_bytes()),
+        "got {output:?}"
+    );
 }

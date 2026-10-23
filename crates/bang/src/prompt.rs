@@ -1,17 +1,32 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::rc::Rc;
-use core::{convert::Infallible, fmt, result};
+use core::{
+    convert::Infallible,
+    fmt,
+    result,
+};
 
 use bang_core::{
     Value,
     widgets::{
-        MultiSelect, ReviewActionBinding, ReviewList, ReviewState, SearchSelect, Select,
-        SelectItem, TextInput,
+        MultiSelect,
+        ReviewActionBinding,
+        ReviewList,
+        ReviewState,
+        SearchSelect,
+        Select,
+        SelectItem,
+        TextInput,
     },
 };
 
-use crate::{Error, Interaction, Result, interaction::Summary};
+use crate::{
+    Error,
+    Interaction,
+    Result,
+    interaction::Summary,
+};
 
 const DEFAULT_PAGE_SIZE: usize = 9;
 
@@ -64,21 +79,21 @@ pub fn text(prompt: impl Into<String>) -> TextPrompt {
 
 #[derive(Clone, Debug)]
 struct ListConfig {
-    header: Option<String>,
-    wrap: bool,
+    header:    Option<String>,
+    wrap:      bool,
     page_size: usize,
-    selected: Option<usize>,
-    summary: Option<bool>,
+    selected:  Option<usize>,
+    summary:   Option<bool>,
 }
 
 impl Default for ListConfig {
     fn default() -> Self {
         Self {
-            header: None,
-            wrap: true,
+            header:    None,
+            wrap:      true,
             page_size: DEFAULT_PAGE_SIZE,
-            selected: None,
-            summary: None,
+            selected:  None,
+            summary:   None,
         }
     }
 }
@@ -148,18 +163,24 @@ pub struct SelectConfig {
 }
 
 impl SelectConfig {
-    list_options!("Start with the choice at `selected` highlighted, counting from zero.", list);
+    list_options!(
+        "Start with the choice at `selected` highlighted, counting from zero.",
+        list
+    );
 }
 
 /// Presentation settings for [`MultiSelectPrompt`].
 #[derive(Clone, Debug, Default)]
 pub struct MultiSelectConfig {
-    list: ListConfig,
+    list:    ListConfig,
     checked: Vec<usize>,
 }
 
 impl MultiSelectConfig {
-    list_options!("Start with the choice at `selected` highlighted, counting from zero.", list);
+    list_options!(
+        "Start with the choice at `selected` highlighted, counting from zero.",
+        list
+    );
 
     /// Start with the choice at `index` checked. Repeat to check several.
     #[must_use]
@@ -180,14 +201,15 @@ impl MultiSelectConfig {
 /// Presentation settings for [`SearchPrompt`].
 #[derive(Clone, Debug, Default)]
 pub struct SearchConfig {
-    list: ListConfig,
-    prompt: Option<String>,
+    list:        ListConfig,
+    prompt:      Option<String>,
     placeholder: Option<String>,
 }
 
 impl SearchConfig {
     list_options!(
-        "Start with the choice at `selected` highlighted, counting from zero. The query starts empty, so every choice is listed.",
+        "Start with the choice at `selected` highlighted, counting from zero. The query starts \
+         empty, so every choice is listed.",
         list
     );
 
@@ -215,10 +237,10 @@ type Validator = dyn Fn(&str) -> result::Result<(), String> + 'static;
     reason = "the prompt modules read the summary choice directly"
 )]
 pub struct TextConfig {
-    id: Option<String>,
-    value: Option<String>,
-    placeholder: Option<String>,
-    validator: Option<Rc<Validator>>,
+    id:                 Option<String>,
+    value:              Option<String>,
+    placeholder:        Option<String>,
+    validator:          Option<Rc<Validator>>,
     pub(crate) summary: Option<bool>,
 }
 
@@ -266,8 +288,7 @@ impl TextConfig {
 
 impl fmt::Debug for TextConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f
-            .debug_struct("TextConfig")
+        f.debug_struct("TextConfig")
             .field("id", &self.id)
             .field("value", &self.value)
             .field("placeholder", &self.placeholder)
@@ -280,21 +301,24 @@ impl fmt::Debug for TextConfig {
 /// Presentation settings for [`ReviewPrompt`] and [`ReviewPromptWithActions`].
 #[derive(Clone, Debug)]
 pub struct ReviewConfig {
-    list: ListConfig,
+    list:         ListConfig,
     show_removed: bool,
 }
 
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
-            list: ListConfig::default(),
+            list:         ListConfig::default(),
             show_removed: true,
         }
     }
 }
 
 impl ReviewConfig {
-    list_options!("Start with the item at `selected` highlighted, counting from zero.", list);
+    list_options!(
+        "Start with the item at `selected` highlighted, counting from zero.",
+        list
+    );
 
     /// Choose whether removed items stay in view. Defaults to `true`.
     #[must_use]
@@ -355,15 +379,19 @@ impl<T> PromptOutcome<T> {
         self.into_option().unwrap_or(default)
     }
 
-    /// The submitted value, or an [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled)
-    /// error when the user left.
+    /// The submitted value, or an
+    /// [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) error when the
+    /// user left.
     ///
     /// This lets a command that cannot continue without an answer end through
     /// `?`. Applications built on `climax` exit with status 130 on it, the
     /// same as an unhandled Ctrl-C.
     ///
     /// ```
-    /// use bang::{ErrorKind, PromptOutcome};
+    /// use bang::{
+    ///     ErrorKind,
+    ///     PromptOutcome,
+    /// };
     ///
     /// assert_eq!(PromptOutcome::Submit(3).or_cancel().unwrap(), 3);
     /// let error = PromptOutcome::<u8>::Leave.or_cancel().unwrap_err();
@@ -372,7 +400,8 @@ impl<T> PromptOutcome<T> {
     ///
     /// # Errors
     ///
-    /// Fails with [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) when the user left.
+    /// Fails with [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) when
+    /// the user left.
     pub fn or_cancel(self) -> Result<T> {
         self.into_option().ok_or_else(Error::cancelled)
     }
@@ -392,8 +421,8 @@ pub enum ReviewExit<A> {
 /// An item returned from an accepted review.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reviewed<T> {
-    value: T,
-    state: ReviewState,
+    value:   T,
+    state:   ReviewState,
     changed: bool,
 }
 
@@ -426,7 +455,7 @@ impl<T> Reviewed<T> {
 /// The exit and, when accepted, the resulting review items.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewOutcome<T, A> {
-    exit: ReviewExit<A>,
+    exit:           ReviewExit<A>,
     accepted_items: Option<Vec<Reviewed<T>>>,
 }
 
@@ -496,9 +525,9 @@ fn require_choices(kind: &str, count: usize) -> Result<()> {
 
 #[derive(Clone, Debug)]
 struct ReviewPromptCore<T> {
-    id: String,
-    choices: Vec<ReviewChoice<T>>,
-    config: ReviewConfig,
+    id:          String,
+    choices:     Vec<ReviewChoice<T>>,
+    config:      ReviewConfig,
     interaction: Interaction,
 }
 
@@ -506,9 +535,9 @@ impl<T> ReviewPromptCore<T> {
     #[must_use]
     fn new(header: impl Into<String>) -> Self {
         Self {
-            id: "review".to_owned(),
-            choices: Vec::new(),
-            config: ReviewConfig {
+            id:          "review".to_owned(),
+            choices:     Vec::new(),
+            config:      ReviewConfig {
                 list: ListConfig::with_header(header),
                 ..ReviewConfig::default()
             },
@@ -615,7 +644,7 @@ impl<T> ReviewPrompt<T> {
         value: A,
     ) -> ReviewPromptWithActions<T, A> {
         ReviewPromptWithActions {
-            core: self.core,
+            core:    self.core,
             actions: vec![ReviewPromptAction {
                 key,
                 help: help.into(),
@@ -653,13 +682,14 @@ impl<T> ReviewPrompt<T> {
             },
             Err(error) => return Err(error),
         };
-        let outcome: ReviewOutcome<T, Infallible> =
-            resolve_review(value, choices, Vec::new())?;
+        let outcome: ReviewOutcome<T, Infallible> = resolve_review(value, choices, Vec::new())?;
         let (exit, items) = outcome.into_parts();
         match exit {
-            ReviewExit::Submit => items
-                .map(PromptOutcome::Submit)
-                .ok_or_else(|| Error::unexpected("accepted review items")),
+            ReviewExit::Submit => {
+                items
+                    .map(PromptOutcome::Submit)
+                    .ok_or_else(|| Error::unexpected("accepted review items"))
+            },
             ReviewExit::Leave => Ok(PromptOutcome::Leave),
             ReviewExit::Action(never) => match never {},
         }
@@ -681,7 +711,7 @@ impl<T> Configurable for ReviewPrompt<T> {
 /// one item.
 #[derive(Clone, Debug)]
 pub struct ReviewPromptWithActions<T, A> {
-    core: ReviewPromptCore<T>,
+    core:    ReviewPromptCore<T>,
     actions: Vec<ReviewPromptAction<A>>,
 }
 
@@ -709,9 +739,9 @@ impl<T, A> ReviewPromptWithActions<T, A> {
     /// # Errors
     ///
     /// Fails with `ErrorKind::InvalidConfiguration` if no item was added or an
-    /// action key is reserved or repeated, with `ErrorKind::InputEnded` if input
-    /// ends first, and with `ErrorKind::InteractionUnavailable` if the driver's
-    /// terminal isn't interactive.
+    /// action key is reserved or repeated, with `ErrorKind::InputEnded` if
+    /// input ends first, and with `ErrorKind::InteractionUnavailable` if
+    /// the driver's terminal isn't interactive.
     pub fn interact(self) -> Result<ReviewOutcome<T, A>> {
         validate_review_actions(&self.actions)?;
         let interaction = self.core.interaction.clone();
@@ -725,10 +755,12 @@ impl<T, A> ReviewPromptWithActions<T, A> {
             Summary::new(summary, &review_summary),
         ) {
             Ok(value) => resolve_review(value, choices, self.actions),
-            Err(error) if error.kind() == crate::ErrorKind::Cancelled => Ok(ReviewOutcome {
-                exit: ReviewExit::Leave,
-                accepted_items: None,
-            }),
+            Err(error) if error.kind() == crate::ErrorKind::Cancelled => {
+                Ok(ReviewOutcome {
+                    exit:           ReviewExit::Leave,
+                    accepted_items: None,
+                })
+            },
             Err(error) => Err(error),
         }
     }
@@ -772,8 +804,8 @@ struct ReviewChoice<T> {
 
 #[derive(Clone, Debug)]
 struct ReviewPromptAction<A> {
-    key: char,
-    help: String,
+    key:   char,
+    help:  String,
     value: A,
 }
 
@@ -782,9 +814,9 @@ struct ReviewPromptAction<A> {
 /// The prompt needs at least one choice. Create it with [`select`].
 #[derive(Clone, Debug)]
 pub struct SelectPrompt<T> {
-    id: String,
-    choices: Vec<Choice<T>>,
-    config: SelectConfig,
+    id:          String,
+    choices:     Vec<Choice<T>>,
+    config:      SelectConfig,
     interaction: Interaction,
 }
 
@@ -793,9 +825,9 @@ impl<T> SelectPrompt<T> {
     #[must_use]
     pub fn new(header: impl Into<String>) -> Self {
         Self {
-            id: "select".to_owned(),
-            choices: Vec::new(),
-            config: SelectConfig {
+            id:          "select".to_owned(),
+            choices:     Vec::new(),
+            config:      SelectConfig {
                 list: ListConfig::with_header(header),
             },
             interaction: Interaction::default(),
@@ -816,8 +848,8 @@ impl<T> SelectPrompt<T> {
     ///
     /// # Errors
     ///
-    /// Fails with `ErrorKind::InvalidConfiguration` if no choice was added, with
-    /// `ErrorKind::InputEnded` if input ends first, and with
+    /// Fails with `ErrorKind::InvalidConfiguration` if no choice was added,
+    /// with `ErrorKind::InputEnded` if input ends first, and with
     /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<T>> {
@@ -870,9 +902,9 @@ impl<T> Configurable for SelectPrompt<T> {
 /// must be added. Create it with [`multi_select`].
 #[derive(Clone, Debug)]
 pub struct MultiSelectPrompt<T> {
-    id: String,
-    choices: Vec<Choice<T>>,
-    config: MultiSelectConfig,
+    id:          String,
+    choices:     Vec<Choice<T>>,
+    config:      MultiSelectConfig,
     interaction: Interaction,
 }
 
@@ -881,10 +913,10 @@ impl<T> MultiSelectPrompt<T> {
     #[must_use]
     pub fn new(header: impl Into<String>) -> Self {
         Self {
-            id: "multi_select".to_owned(),
-            choices: Vec::new(),
-            config: MultiSelectConfig {
-                list: ListConfig::with_header(header),
+            id:          "multi_select".to_owned(),
+            choices:     Vec::new(),
+            config:      MultiSelectConfig {
+                list:    ListConfig::with_header(header),
                 checked: Vec::new(),
             },
             interaction: Interaction::default(),
@@ -920,8 +952,8 @@ impl<T> MultiSelectPrompt<T> {
     ///
     /// # Errors
     ///
-    /// Fails with `ErrorKind::InvalidConfiguration` if no choice was added, with
-    /// `ErrorKind::InputEnded` if input ends first, and with
+    /// Fails with `ErrorKind::InvalidConfiguration` if no choice was added,
+    /// with `ErrorKind::InputEnded` if input ends first, and with
     /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<Vec<T>>> {
@@ -973,9 +1005,9 @@ impl<T> Configurable for MultiSelectPrompt<T> {
 /// The prompt needs at least one choice. Create it with [`search`].
 #[derive(Clone, Debug)]
 pub struct SearchPrompt<T> {
-    id: String,
-    choices: Vec<Choice<T>>,
-    config: SearchConfig,
+    id:          String,
+    choices:     Vec<Choice<T>>,
+    config:      SearchConfig,
     interaction: Interaction,
 }
 
@@ -984,11 +1016,11 @@ impl<T> SearchPrompt<T> {
     #[must_use]
     pub fn new(header: impl Into<String>) -> Self {
         Self {
-            id: "search".to_owned(),
-            choices: Vec::new(),
-            config: SearchConfig {
-                list: ListConfig::with_header(header),
-                prompt: None,
+            id:          "search".to_owned(),
+            choices:     Vec::new(),
+            config:      SearchConfig {
+                list:        ListConfig::with_header(header),
+                prompt:      None,
                 placeholder: None,
             },
             interaction: Interaction::default(),
@@ -998,7 +1030,8 @@ impl<T> SearchPrompt<T> {
     choice_option!();
     prompt_options!();
     list_options!(
-        "Start with the choice at `selected` highlighted, counting from zero. The query starts empty, so every choice is listed.",
+        "Start with the choice at `selected` highlighted, counting from zero. The query starts \
+         empty, so every choice is listed.",
         config.list
     );
 
@@ -1023,8 +1056,8 @@ impl<T> SearchPrompt<T> {
     ///
     /// # Errors
     ///
-    /// Fails with `ErrorKind::InvalidConfiguration` if no choice was added, with
-    /// `ErrorKind::InputEnded` if input ends first, and with
+    /// Fails with `ErrorKind::InvalidConfiguration` if no choice was added,
+    /// with `ErrorKind::InputEnded` if input ends first, and with
     /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<T>> {
@@ -1081,8 +1114,8 @@ impl<T> Configurable for SearchPrompt<T> {
 /// Create it with [`text`].
 #[derive(Clone, Debug)]
 pub struct TextPrompt {
-    prompt: String,
-    config: TextConfig,
+    prompt:      String,
+    config:      TextConfig,
     interaction: Interaction,
 }
 
@@ -1091,8 +1124,8 @@ impl TextPrompt {
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            config: TextConfig::default(),
+            prompt:      prompt.into(),
+            config:      TextConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -1176,8 +1209,8 @@ pub(crate) fn text_widget(
     default_id: &str,
     mask: Option<char>,
 ) -> TextInput {
-    let mut widget = TextInput::new(config.id.unwrap_or_else(|| default_id.to_owned()))
-        .with_prompt(prompt);
+    let mut widget =
+        TextInput::new(config.id.unwrap_or_else(|| default_id.to_owned())).with_prompt(prompt);
     if let Some(placeholder) = config.placeholder {
         widget = widget.with_placeholder(placeholder);
     }
@@ -1308,7 +1341,10 @@ fn resolve_many<T>(value: Value, choices: Vec<Choice<T>>) -> Result<Vec<T>> {
         return Err(Error::unexpected("known choices"));
     }
     indices.sort_unstable();
-    if indices.windows(2).any(|pair| matches!(pair, [first, second] if first == second)) {
+    if indices
+        .windows(2)
+        .any(|pair| matches!(pair, [first, second] if first == second))
+    {
         return Err(Error::unexpected("distinct choices"));
     }
     let mut output = Vec::with_capacity(indices.len());
@@ -1336,7 +1372,7 @@ fn resolve_review<T, A>(
         .ok_or_else(|| Error::unexpected("a review exit"))?;
     if exit_name == "leave" {
         return Ok(ReviewOutcome {
-            exit: ReviewExit::Leave,
+            exit:           ReviewExit::Leave,
             accepted_items: None,
         });
     }
@@ -1561,8 +1597,8 @@ mod tests {
                 state: ReviewState::Unconfirmed,
             }],
             vec![ReviewPromptAction {
-                key: 'g',
-                help: "regenerate".to_owned(),
+                key:   'g',
+                help:  "regenerate".to_owned(),
                 value: "regen",
             }],
         )
@@ -1599,9 +1635,9 @@ mod tests {
     fn action_free_review_uses_the_ordinary_prompt_outcome() {
         let outcome = review("review")
             .item("one", 42, ReviewState::Unconfirmed)
-            .interaction(scripted_interaction([vec![
-                bang_core::Event::key(bang_core::Key::Enter),
-            ]]))
+            .interaction(scripted_interaction([vec![bang_core::Event::key(
+                bang_core::Key::Enter,
+            )]]))
             .interact()
             .unwrap();
 
@@ -1719,8 +1755,7 @@ mod tests {
             bang_core::Key::Char('c'),
             bang_core::Modifiers::CONTROL,
         ));
-        let interaction =
-            scripted_interaction([vec![control_c.clone()], vec![control_c]]);
+        let interaction = scripted_interaction([vec![control_c.clone()], vec![control_c]]);
 
         assert_eq!(
             review("files")
@@ -1765,7 +1800,8 @@ mod tests {
         assert_eq!(error.kind(), crate::ErrorKind::InteractionUnavailable);
         assert_eq!(
             error.to_string(),
-            "cannot ask \"shell\" because there is no interactive terminal, so pass the answer another way or run in a terminal"
+            "cannot ask \"shell\" because there is no interactive terminal, so pass the answer \
+             another way or run in a terminal"
         );
     }
 
@@ -1833,8 +1869,8 @@ mod tests {
         assert_eq!(kept.config.list.header.as_deref(), Some("original"));
         assert_eq!(kept.config.list.page_size, 3);
 
-        let replaced = review::<()>("original")
-            .with_config(ReviewConfig::default().header("replacement"));
+        let replaced =
+            review::<()>("original").with_config(ReviewConfig::default().header("replacement"));
         assert_eq!(
             replaced.core.config.list.header.as_deref(),
             Some("replacement")

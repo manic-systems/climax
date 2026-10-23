@@ -11,7 +11,10 @@ use bang::advanced::interaction_from_runner;
 fn a_custom_runner_can_report_cancelled_and_input_ended() {
     let cancelled = interaction_from_runner(|_widget| Err(bang::Error::cancelled()));
     assert_eq!(
-        bang::text("name").interaction(cancelled).interact().unwrap(),
+        bang::text("name")
+            .interaction(cancelled)
+            .interact()
+            .unwrap(),
         bang::PromptOutcome::Leave
     );
 

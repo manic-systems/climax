@@ -2,7 +2,11 @@
 
 //! Shared lock policy.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{
+    Mutex,
+    MutexGuard,
+    PoisonError,
+};
 
 /// Lock a mutex, recovering the guarded value if a holder panicked.
 ///
@@ -11,7 +15,5 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// half-updated value. Recovering keeps an unrelated thread's failure from
 /// cascading into a second panic while a widget is rendering.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

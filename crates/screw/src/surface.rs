@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::{iter, mem};
+use core::{
+    iter,
+    mem,
+};
 
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::{
-    Rect, Style,
-    measure::{Segment, segments},
+    Rect,
+    Style,
+    measure::{
+        Segment,
+        segments,
+    },
 };
 
 /// How an overlaid widget treats the cells it covers.
@@ -15,7 +22,8 @@ use crate::{
 pub enum Fill {
     /// Cells the source leaves blank show the base underneath.
     Transparent,
-    /// The whole destination is blanked with this style before the source is drawn.
+    /// The whole destination is blanked with this style before the source is
+    /// drawn.
     Opaque(Style),
 }
 
@@ -82,8 +90,9 @@ impl Cell {
         self.style
     }
 
-    /// Creates a cell for `text`, or `None` unless it is exactly one extended grapheme cluster
-    /// that takes columns. Lone combining marks, controls and multi-cluster strings are refused.
+    /// Creates a cell for `text`, or `None` unless it is exactly one extended
+    /// grapheme cluster that takes columns. Lone combining marks, controls
+    /// and multi-cluster strings are refused.
     pub fn new(text: &str, style: Style) -> Option<Self> {
         let mut clusters = segments(text);
         let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
@@ -98,8 +107,9 @@ impl Cell {
         })
     }
 
-    /// Appends `text` to this cell and measures the result again. Without `attach` the text is
-    /// only joined when the two form a single grapheme cluster. Returns whether it was joined.
+    /// Appends `text` to this cell and measures the result again. Without
+    /// `attach` the text is only joined when the two form a single grapheme
+    /// cluster. Returns whether it was joined.
     fn join(&mut self, text: &str, attach: bool) -> bool {
         let mut joined = String::with_capacity(self.text.len() + text.len());
         joined.push_str(&self.text);
@@ -162,8 +172,8 @@ impl Default for Row {
 
 /// A grid of styled rows that widgets render into.
 ///
-/// A surface always has at least one row. Text is added with [`Surface::write`] and rows are
-/// started with [`Surface::newline`].
+/// A surface always has at least one row. Text is added with [`Surface::write`]
+/// and rows are started with [`Surface::newline`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Surface {
     rows:   Vec<Row>,
@@ -207,8 +217,8 @@ impl Surface {
         self.cursor = Some(position);
     }
 
-    /// Removes any cursor a widget placed, so a child that does not own input can be rendered
-    /// without claiming the terminal cursor.
+    /// Removes any cursor a widget placed, so a child that does not own input
+    /// can be rendered without claiming the terminal cursor.
     pub const fn clear_cursor(&mut self) {
         self.cursor = None;
     }
@@ -223,11 +233,12 @@ impl Surface {
 
     /// Write text into the surface.
     ///
-    /// Text is laid out per extended grapheme cluster, so an emoji sequence or a base with its
-    /// combining marks occupies one cell of the cluster's display width. Tabs expand to spaces up
-    /// to the next multiple of eight columns. Escapes and other C0/C1 controls have no cell
-    /// representation and are dropped so they cannot leak into cell text or corrupt widths.
-    /// Zero-width clusters append to the prior cell.
+    /// Text is laid out per extended grapheme cluster, so an emoji sequence or
+    /// a base with its combining marks occupies one cell of the cluster's
+    /// display width. Tabs expand to spaces up to the next multiple of
+    /// eight columns. Escapes and other C0/C1 controls have no cell
+    /// representation and are dropped so they cannot leak into cell text or
+    /// corrupt widths. Zero-width clusters append to the prior cell.
     ///
     /// See [`Self::newline`] for the one control that does have a meaning here.
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
@@ -242,7 +253,11 @@ impl Surface {
                         self.current_row_mut().cells.push(space(style));
                     }
                 },
-                Segment::Cluster { text: cluster, width, .. } => {
+                Segment::Cluster {
+                    text: cluster,
+                    width,
+                    ..
+                } => {
                     let joined = (first || width == 0)
                         && !(sealed && first)
                         && self
@@ -276,13 +291,14 @@ impl Surface {
         }
     }
 
-    /// Appends `cell` as it is, without joining it to the previous cell or measuring it again.
+    /// Appends `cell` as it is, without joining it to the previous cell or
+    /// measuring it again.
     pub(crate) fn push_cell(&mut self, cell: &Cell) {
         self.current_row_mut().cells.push(cell.clone());
     }
 
-    /// Turns every soft break into a hard one, so a later wrap pass cannot rejoin rows whose
-    /// cells were placed by composition.
+    /// Turns every soft break into a hard one, so a later wrap pass cannot
+    /// rejoin rows whose cells were placed by composition.
     pub(crate) fn harden_soft_breaks(&mut self) {
         for row in &mut self.rows {
             if row.break_after() == RowBreak::Soft {
@@ -291,8 +307,9 @@ impl Surface {
         }
     }
 
-    /// Stops the next write from joining the cells already on the row, so a boundary between
-    /// independently measured pieces cannot merge clusters.
+    /// Stops the next write from joining the cells already on the row, so a
+    /// boundary between independently measured pieces cannot merge
+    /// clusters.
     pub(crate) const fn seal(&mut self) {
         self.sealed = true;
     }
@@ -302,7 +319,8 @@ impl Surface {
         self.newline_with_break(RowBreak::Hard);
     }
 
-    /// Ends the current row with a soft break, marking the next row as a continuation.
+    /// Ends the current row with a soft break, marking the next row as a
+    /// continuation.
     pub fn soft_wrap(&mut self) {
         self.newline_with_break(RowBreak::Soft);
     }
@@ -332,9 +350,10 @@ impl Surface {
 
     /// Draws `source` over this surface.
     ///
-    /// `destination` is where the source lands and `canvas` bounds every write, so anything outside
-    /// it is clipped. `fill` decides whether the destination hides the cells below it and `cursor`
-    /// decides which cursor survives.
+    /// `destination` is where the source lands and `canvas` bounds every write,
+    /// so anything outside it is clipped. `fill` decides whether the
+    /// destination hides the cells below it and `cursor` decides which
+    /// cursor survives.
     pub fn overlay(
         &mut self,
         source: &Self,
@@ -459,7 +478,7 @@ enum Column {
 #[derive(Clone)]
 struct PlacedCell {
     start: usize,
-    cell: Cell,
+    cell:  Cell,
 }
 
 fn overlay_writes(
@@ -471,16 +490,16 @@ fn overlay_writes(
 ) -> Vec<PlacedCell> {
     let mut writes = Vec::new();
     if let Fill::Opaque(style) = fill {
-        writes.extend(
-            (requested.origin.col..requested.right()).map(|start| PlacedCell {
+        writes.extend((requested.origin.col..requested.right()).map(|start| {
+            PlacedCell {
                 start,
                 cell: Cell {
                     text: " ".into(),
                     width: 1,
                     style,
                 },
-            }),
-        );
+            }
+        }));
     }
 
     let Some(row) = source.rows().get(source_row) else {
@@ -497,7 +516,7 @@ fn overlay_writes(
             writes.retain(|write| write.start < target || write.start >= target_right);
             writes.push(PlacedCell {
                 start: target,
-                cell: cell.clone(),
+                cell:  cell.clone(),
             });
         }
         source_col = source_right;
@@ -556,14 +575,18 @@ fn columns(row: &Row) -> Vec<Column> {
     for cell in row.cells() {
         let start = columns.len();
         columns.push(Column::Cell(cell.clone()));
-        columns.extend(iter::repeat_n(Column::Continuation { start }, cell.width.saturating_sub(1)));
+        columns.extend(iter::repeat_n(
+            Column::Continuation { start },
+            cell.width.saturating_sub(1),
+        ));
     }
     columns
 }
 
 fn ensure_columns(columns: &mut Vec<Column>, len: usize) {
     columns.extend(
-        iter::repeat_with(|| Column::Cell(space(Style::PLAIN))).take(len.saturating_sub(columns.len())),
+        iter::repeat_with(|| Column::Cell(space(Style::PLAIN)))
+            .take(len.saturating_sub(columns.len())),
     );
 }
 

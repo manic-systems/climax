@@ -2,11 +2,20 @@
 
 #![cfg(test)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
 };
@@ -15,7 +24,10 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 
 #[test]
 fn a_custom_widget_runs_on_a_caller_owned_handle() {
-    use bang::advanced::{Value, widgets::TextInput};
+    use bang::advanced::{
+        Value,
+        widgets::TextInput,
+    };
 
     let (mut master, slave) = open_pty();
     let (results_tx, results_rx) = mpsc::channel();
@@ -37,8 +49,8 @@ fn a_custom_widget_runs_on_a_caller_owned_handle() {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

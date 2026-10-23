@@ -2,12 +2,26 @@
 
 #![cfg(test)]
 
-use std::io::{self, Write as _};
+use std::io::{
+    self,
+    Write as _,
+};
 
-use bang::advanced::{Event, Key};
-use bang::terminal::{
-    CursorPolicy, Decoder, RawModeOptions, ScreenGuard, ScreenKind, ScreenOptions, TerminalEvents,
-    TerminalPoll,
+use bang::{
+    advanced::{
+        Event,
+        Key,
+    },
+    terminal::{
+        CursorPolicy,
+        Decoder,
+        RawModeOptions,
+        ScreenGuard,
+        ScreenKind,
+        ScreenOptions,
+        TerminalEvents,
+        TerminalPoll,
+    },
 };
 
 #[test]

@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::{error, fmt, result};
+use core::{
+    error,
+    fmt,
+    result,
+};
 use std::io;
 
 use bang_terminal::Signal;
@@ -49,10 +53,10 @@ pub enum ErrorKind {
 /// [`error::Error::source`] without becoming part of Bang's public data model.
 #[derive(Debug)]
 pub struct Error {
-    kind: ErrorKind,
+    kind:    ErrorKind,
     message: String,
-    signal: Option<Signal>,
-    source: Option<Box<dyn error::Error + Send + Sync>>,
+    signal:  Option<Signal>,
+    source:  Option<Box<dyn error::Error + Send + Sync>>,
 }
 
 impl Error {
@@ -71,19 +75,19 @@ impl Error {
 
     pub(crate) fn unexpected(expected: &'static str) -> Self {
         Self {
-            kind: ErrorKind::UnexpectedValue,
+            kind:    ErrorKind::UnexpectedValue,
             message: format!("prompt returned an unexpected value; expected {expected}"),
-            signal: None,
-            source: None,
+            signal:  None,
+            source:  None,
         }
     }
 
     pub(crate) fn invalid_configuration(message: impl Into<String>) -> Self {
         Self {
-            kind: ErrorKind::InvalidConfiguration,
+            kind:    ErrorKind::InvalidConfiguration,
             message: message.into(),
-            signal: None,
-            source: None,
+            signal:  None,
+            source:  None,
         }
     }
 
@@ -124,9 +128,7 @@ impl Error {
             ErrorKind::InteractionUnavailable => {
                 "interactive terminal input is unavailable".to_owned()
             },
-            ErrorKind::InteractionBusy => {
-                "terminal signal handlers are already claimed".to_owned()
-            },
+            ErrorKind::InteractionBusy => "terminal signal handlers are already claimed".to_owned(),
             ErrorKind::Cancelled => "prompt was cancelled".to_owned(),
             ErrorKind::InputEnded => "input ended before the prompt was submitted".to_owned(),
             ErrorKind::Interrupted => error.to_string(),
@@ -150,12 +152,14 @@ impl Error {
         match self.kind {
             ErrorKind::InteractionUnavailable => {
                 self.message = format!(
-                    "cannot ask \"{trimmed}\" because there is no interactive terminal, so pass the answer another way or run in a terminal"
+                    "cannot ask \"{trimmed}\" because there is no interactive terminal, so pass \
+                     the answer another way or run in a terminal"
                 );
             },
             ErrorKind::InputEnded => {
                 self.message = format!(
-                    "input ended before \"{trimmed}\" was answered, so supply the answer or run in a terminal"
+                    "input ended before \"{trimmed}\" was answered, so supply the answer or run \
+                     in a terminal"
                 );
             },
             ErrorKind::Cancelled
@@ -174,10 +178,10 @@ impl Error {
     #[must_use]
     pub fn cancelled() -> Self {
         Self {
-            kind: ErrorKind::Cancelled,
+            kind:    ErrorKind::Cancelled,
             message: "prompt was cancelled".to_owned(),
-            signal: None,
-            source: None,
+            signal:  None,
+            source:  None,
         }
     }
 
@@ -186,10 +190,10 @@ impl Error {
     #[must_use]
     pub fn input_ended() -> Self {
         Self {
-            kind: ErrorKind::InputEnded,
+            kind:    ErrorKind::InputEnded,
             message: "input ended before the prompt was submitted".to_owned(),
-            signal: None,
-            source: None,
+            signal:  None,
+            source:  None,
         }
     }
 
@@ -197,10 +201,10 @@ impl Error {
     #[must_use]
     pub fn interaction_busy() -> Self {
         Self {
-            kind: ErrorKind::InteractionBusy,
+            kind:    ErrorKind::InteractionBusy,
             message: "another interaction already owns the terminal".to_owned(),
-            signal: None,
-            source: None,
+            signal:  None,
+            source:  None,
         }
     }
 
@@ -208,10 +212,10 @@ impl Error {
     #[must_use]
     pub fn interaction_unavailable() -> Self {
         Self {
-            kind: ErrorKind::InteractionUnavailable,
+            kind:    ErrorKind::InteractionUnavailable,
             message: "interactive terminal input is unavailable".to_owned(),
-            signal: None,
-            source: None,
+            signal:  None,
+            source:  None,
         }
     }
 
@@ -220,10 +224,10 @@ impl Error {
     #[must_use]
     pub fn terminal(source: impl error::Error + Send + Sync + 'static) -> Self {
         Self {
-            kind: ErrorKind::Terminal,
+            kind:    ErrorKind::Terminal,
             message: "terminal failure".to_owned(),
-            signal: None,
-            source: Some(Box::new(source)),
+            signal:  None,
+            source:  Some(Box::new(source)),
         }
     }
 }
@@ -253,9 +257,18 @@ pub type Result<T> = result::Result<T, Error>;
 mod tests {
     use std::io;
 
-    use bang_terminal::{CleanupFailure, CleanupFailures, CleanupStage, Signal};
+    use bang_terminal::{
+        CleanupFailure,
+        CleanupFailures,
+        CleanupStage,
+        Signal,
+    };
 
-    use super::{Error, ErrorKind, LiveSessionError};
+    use super::{
+        Error,
+        ErrorKind,
+        LiveSessionError,
+    };
 
     #[test]
     fn a_signal_is_an_interruption_with_its_cause() {
@@ -269,7 +282,7 @@ mod tests {
     #[test]
     fn a_signal_outranks_a_cleanup_failure() {
         let error = Error::from_live(LiveSessionError::Cleanup {
-            primary: Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
+            primary:  Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
             failures: CleanupFailures::new(vec![CleanupFailure::new(
                 CleanupStage::RawMode,
                 io::Error::from_raw_os_error(5),
@@ -299,7 +312,7 @@ mod tests {
     #[test]
     fn a_cleanup_failure_after_cancel_is_a_terminal_error() {
         let error = Error::from_live(LiveSessionError::Cleanup {
-            primary: Some(Box::new(LiveSessionError::Cancelled)),
+            primary:  Some(Box::new(LiveSessionError::Cancelled)),
             failures: CleanupFailures::new(vec![CleanupFailure::new(
                 CleanupStage::RawMode,
                 io::Error::from_raw_os_error(5),

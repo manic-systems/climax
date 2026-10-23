@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::ops::{BitOr, BitOrAssign};
+use core::ops::{
+    BitOr,
+    BitOrAssign,
+};
 
 /// An input or lifecycle event delivered to a widget.
 #[derive(Clone, Debug, Eq, PartialEq)]

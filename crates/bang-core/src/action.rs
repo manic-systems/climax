@@ -173,7 +173,6 @@ fn action_output(action: &str, value: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use crate::widgets::{Form, Select};
     use crate::{
         ActionBinding,
         ActionLayer,
@@ -186,6 +185,8 @@ mod tests {
         SessionStatus,
         Value,
         widgets::{
+            Form,
+            Select,
             SelectItem,
             TextInput,
         },
@@ -246,7 +247,10 @@ mod tests {
             .with_actions([ActionBinding::control_char('s', "save")]),
         );
 
-        assert_eq!(session.handle(Event::key(Key::Down)), SessionReaction::Changed);
+        assert_eq!(
+            session.handle(Event::key(Key::Down)),
+            SessionReaction::Changed
+        );
         assert!(matches!(
             session.handle(Event::key(Key::Enter)),
             SessionReaction::Submit(_)

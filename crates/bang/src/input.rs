@@ -1,22 +1,59 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::rc::Rc;
-use core::{fmt, mem, result, str::FromStr};
-use std::time::{SystemTime, UNIX_EPOCH};
+use core::{
+    fmt,
+    mem,
+    result,
+    str::FromStr,
+};
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
 
 use bang_core::{
-    Context, Date, Event, Key, Modifiers, Reaction, Value, Widget, WidgetId,
-    widgets::{DatePicker, Select, SelectItem},
+    Context,
+    Date,
+    Event,
+    Key,
+    Modifiers,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
+    widgets::{
+        DatePicker,
+        Select,
+        SelectItem,
+    },
 };
 use screw::{
-    LocalWidgetRef, RenderCtx, Role, Span, Spans, Stack, Surface, TickInterest, VerticalSize,
+    LocalWidgetRef,
+    RenderCtx,
+    Role,
+    Span,
+    Spans,
+    Stack,
+    Surface,
+    TickInterest,
+    VerticalSize,
     local_widget,
 };
 
 use crate::{
-    Configurable, Error, Interaction, PromptOutcome, Result,
+    Configurable,
+    Error,
+    Interaction,
+    PromptOutcome,
+    Result,
     interaction::Summary,
-    prompt::{TextConfig, resolve_prompt, resolve_text, text_widget},
+    prompt::{
+        TextConfig,
+        resolve_prompt,
+        resolve_text,
+        text_widget,
+    },
 };
 
 const DEFAULT_MASK: char = '*';
@@ -123,8 +160,8 @@ impl PasswordConfig {
 /// Create it with [`password`].
 #[derive(Clone, Debug)]
 pub struct PasswordPrompt {
-    prompt: String,
-    config: PasswordConfig,
+    prompt:      String,
+    config:      PasswordConfig,
     interaction: Interaction,
 }
 
@@ -133,8 +170,8 @@ impl PasswordPrompt {
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            config: PasswordConfig::default(),
+            prompt:      prompt.into(),
+            config:      PasswordConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -225,7 +262,7 @@ macro_rules! confirm_options {
 /// [`ConfirmConfig::new`].
 #[derive(Clone, Debug)]
 pub struct ConfirmConfig {
-    id: String,
+    id:      String,
     default: bool,
     summary: Option<bool>,
 }
@@ -233,7 +270,7 @@ pub struct ConfirmConfig {
 impl Default for ConfirmConfig {
     fn default() -> Self {
         Self {
-            id: "confirm".to_owned(),
+            id:      "confirm".to_owned(),
             default: false,
             summary: None,
         }
@@ -259,8 +296,8 @@ impl ConfirmConfig {
 /// Create it with [`confirm`].
 #[derive(Clone, Debug)]
 pub struct ConfirmPrompt {
-    prompt: String,
-    config: ConfirmConfig,
+    prompt:      String,
+    config:      ConfirmConfig,
     interaction: Interaction,
 }
 
@@ -269,8 +306,8 @@ impl ConfirmPrompt {
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            config: ConfirmConfig::new(),
+            prompt:      prompt.into(),
+            config:      ConfirmConfig::new(),
             interaction: Interaction::default(),
         }
     }
@@ -297,13 +334,10 @@ impl ConfirmPrompt {
     /// `ErrorKind::InteractionUnavailable` if the driver's terminal isn't
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<bool>> {
-        let select = Select::new(
-            self.config.id,
-            [
-                SelectItem::new("Yes", "yes"),
-                SelectItem::new("No", "no"),
-            ],
-        )
+        let select = Select::new(self.config.id, [
+            SelectItem::new("Yes", "yes"),
+            SelectItem::new("No", "no"),
+        ])
         .with_header(self.prompt.clone())
         .with_selected_index(usize::from(!self.config.default));
         let widget = YesNoKeys(select);
@@ -314,13 +348,17 @@ impl ConfirmPrompt {
                 _ => None,
             }
         });
-        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, [], summary), |value| {
-            match value.as_str() {
-                Some("yes") => Ok(true),
-                Some("no") => Ok(false),
-                _ => Err(Error::unexpected("yes or no")),
-            }
-        })
+        resolve_prompt(
+            self.interaction
+                .interact_named(Some(&self.prompt), widget, [], summary),
+            |value| {
+                match value.as_str() {
+                    Some("yes") => Ok(true),
+                    Some("no") => Ok(false),
+                    _ => Err(Error::unexpected("yes or no")),
+                }
+            },
+        )
     }
 }
 
@@ -367,7 +405,7 @@ macro_rules! date_options {
 /// [`DateConfig::new`].
 #[derive(Clone, Debug)]
 pub struct DateConfig {
-    id: String,
+    id:      String,
     default: Option<Date>,
     summary: Option<bool>,
 }
@@ -375,7 +413,7 @@ pub struct DateConfig {
 impl Default for DateConfig {
     fn default() -> Self {
         Self {
-            id: "date".to_owned(),
+            id:      "date".to_owned(),
             default: None,
             summary: None,
         }
@@ -401,8 +439,8 @@ impl DateConfig {
 /// Create it with [`date`].
 #[derive(Clone, Debug)]
 pub struct DatePrompt {
-    prompt: String,
-    config: DateConfig,
+    prompt:      String,
+    config:      DateConfig,
     interaction: Interaction,
 }
 
@@ -411,8 +449,8 @@ impl DatePrompt {
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            config: DateConfig::new(),
+            prompt:      prompt.into(),
+            config:      DateConfig::new(),
             interaction: Interaction::default(),
         }
     }
@@ -438,15 +476,17 @@ impl DatePrompt {
     /// interactive.
     pub fn interact(self) -> Result<PromptOutcome<Date>> {
         let today = today_local();
-        let picker = DatePicker::new(self.config.id, self.config.default.unwrap_or(today))
-            .with_today(today);
+        let picker =
+            DatePicker::new(self.config.id, self.config.default.unwrap_or(today)).with_today(today);
         let widget = Headed::new(self.prompt.clone(), picker);
         let summary = Summary::new(self.config.summary, &|value| {
             value.as_date().map(|date| date.to_string())
         });
-        resolve_prompt(self.interaction.interact_named(Some(&self.prompt), widget, [], summary), |value| {
-            value.as_date().ok_or_else(|| Error::unexpected("a date"))
-        })
+        resolve_prompt(
+            self.interaction
+                .interact_named(Some(&self.prompt), widget, [], summary),
+            |value| value.as_date().ok_or_else(|| Error::unexpected("a date")),
+        )
     }
 }
 
@@ -514,7 +554,7 @@ macro_rules! number_value_option {
 
 /// Presentation settings for [`NumberPrompt`].
 pub struct NumberConfig<T> {
-    text: TextConfig,
+    text:  TextConfig,
     check: Option<Rc<NumberCheck<T>>>,
 }
 
@@ -529,7 +569,7 @@ impl<T: fmt::Display> NumberConfig<T> {
 impl<T> Default for NumberConfig<T> {
     fn default() -> Self {
         Self {
-            text: TextConfig::default(),
+            text:  TextConfig::default(),
             check: None,
         }
     }
@@ -538,7 +578,7 @@ impl<T> Default for NumberConfig<T> {
 impl<T> Clone for NumberConfig<T> {
     fn clone(&self) -> Self {
         Self {
-            text: self.text.clone(),
+            text:  self.text.clone(),
             check: self.check.clone(),
         }
     }
@@ -546,8 +586,7 @@ impl<T> Clone for NumberConfig<T> {
 
 impl<T> fmt::Debug for NumberConfig<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f
-            .debug_struct("NumberConfig")
+        f.debug_struct("NumberConfig")
             .field("text", &self.text)
             .field("check", &self.check.as_ref().map(|_| ".."))
             .finish()
@@ -561,8 +600,8 @@ impl<T> fmt::Debug for NumberConfig<T> {
 /// parse error until it succeeds. Floating point types accept `nan` and `inf`
 /// because they parse them.
 pub struct NumberPrompt<T> {
-    prompt: String,
-    config: NumberConfig<T>,
+    prompt:      String,
+    config:      NumberConfig<T>,
     interaction: Interaction,
 }
 
@@ -575,8 +614,8 @@ where
     #[must_use]
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
-            prompt: prompt.into(),
-            config: NumberConfig::default(),
+            prompt:      prompt.into(),
+            config:      NumberConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -611,10 +650,14 @@ where
             value.as_str().map(|raw| raw.trim().to_owned())
         });
         let widget = text_widget(self.prompt, text, "number", None);
-        resolve_prompt(self.interaction.interact_named(Some(&prompt), widget, [], summary), |value| {
-            let answer_text = resolve_text(value)?;
-            parse_number::<T>(&answer_text).map_err(|_message| Error::unexpected("a number"))
-        })
+        resolve_prompt(
+            self.interaction
+                .interact_named(Some(&prompt), widget, [], summary),
+            |value| {
+                let answer_text = resolve_text(value)?;
+                parse_number::<T>(&answer_text).map_err(|_message| Error::unexpected("a number"))
+            },
+        )
     }
 }
 
@@ -638,8 +681,8 @@ where
 impl<T> Clone for NumberPrompt<T> {
     fn clone(&self) -> Self {
         Self {
-            prompt: self.prompt.clone(),
-            config: self.config.clone(),
+            prompt:      self.prompt.clone(),
+            config:      self.config.clone(),
             interaction: self.interaction.clone(),
         }
     }
@@ -647,8 +690,7 @@ impl<T> Clone for NumberPrompt<T> {
 
 impl<T> fmt::Debug for NumberPrompt<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f
-            .debug_struct("NumberPrompt")
+        f.debug_struct("NumberPrompt")
             .field("prompt", &self.prompt)
             .field("config", &self.config)
             .field("interaction", &self.interaction)
@@ -729,7 +771,7 @@ impl<W: Widget> Widget for YesNoKeys<W> {
 /// Shows a prompt line above a widget that has no header of its own.
 struct Headed<W> {
     prompt: Span,
-    inner: W,
+    inner:  W,
 }
 
 impl<W> Headed<W> {
@@ -782,7 +824,11 @@ fn today_local() -> Date {
 }
 
 fn date_at(unix_seconds: i64, offset_seconds: i64) -> Date {
-    Date::from_unix_days(unix_seconds.saturating_add(offset_seconds).div_euclid(86_400))
+    Date::from_unix_days(
+        unix_seconds
+            .saturating_add(offset_seconds)
+            .div_euclid(86_400),
+    )
 }
 
 fn convert<T, U: TryFrom<T>>(value: T) -> Option<U> {
@@ -805,7 +851,11 @@ fn local_offset_seconds(unix_seconds: i64) -> i64 {
 mod tests {
     use core::iter;
 
-    use bang_core::{Event, Key, KeyEvent};
+    use bang_core::{
+        Event,
+        Key,
+        KeyEvent,
+    };
 
     use super::*;
     use crate::advanced::scripted_interaction;
@@ -830,8 +880,14 @@ mod tests {
         let instant = 1_791_597_600;
         let utc = Date::new(2026, 10, 10).unwrap();
         assert_eq!(date_at(instant, 0), utc);
-        assert_eq!(date_at(instant, -8 * 3_600), Date::new(2026, 10, 9).unwrap());
-        assert_eq!(date_at(instant, 23 * 3_600), Date::new(2026, 10, 11).unwrap());
+        assert_eq!(
+            date_at(instant, -8 * 3_600),
+            Date::new(2026, 10, 9).unwrap()
+        );
+        assert_eq!(
+            date_at(instant, 23 * 3_600),
+            Date::new(2026, 10, 11).unwrap()
+        );
     }
 
     #[test]
@@ -870,11 +926,8 @@ mod tests {
 
     #[test]
     fn confirm_declines_by_default_and_accepts_when_defaulted_or_moved() {
-        let interaction = scripted_interaction([
-            vec![enter()],
-            vec![enter()],
-            keys([Key::Down, Key::Enter]),
-        ]);
+        let interaction =
+            scripted_interaction([vec![enter()], vec![enter()], keys([Key::Down, Key::Enter])]);
 
         let first = confirm("sure?").interaction(interaction.clone()).interact();
         let second = confirm("sure?")
@@ -907,26 +960,23 @@ mod tests {
         .take(4)
         .collect::<Vec<_>>();
 
-        assert_eq!(
-            answers,
-            [
-                PromptOutcome::Submit(true),
-                PromptOutcome::Submit(true),
-                PromptOutcome::Submit(false),
-                PromptOutcome::Submit(false),
-            ]
-        );
+        assert_eq!(answers, [
+            PromptOutcome::Submit(true),
+            PromptOutcome::Submit(true),
+            PromptOutcome::Submit(false),
+            PromptOutcome::Submit(false),
+        ]);
     }
 
     #[test]
     fn confirm_ignores_y_and_n_held_with_a_control_chord() {
-        let chord = Event::Key(KeyEvent::with_modifiers(
-            Key::Char('y'),
-            Modifiers::CONTROL,
-        ));
+        let chord = Event::Key(KeyEvent::with_modifiers(Key::Char('y'), Modifiers::CONTROL));
         let interaction = scripted_interaction([vec![chord, enter()]]);
 
-        let outcome = confirm("sure?").interaction(interaction).interact().unwrap();
+        let outcome = confirm("sure?")
+            .interaction(interaction)
+            .interact()
+            .unwrap();
 
         assert_eq!(outcome, PromptOutcome::Submit(false));
     }
@@ -971,7 +1021,10 @@ mod tests {
             panic!("date should submit");
         };
 
-        assert_eq!(Date::new(picked.year, picked.month, picked.day), Some(picked));
+        assert_eq!(
+            Date::new(picked.year, picked.month, picked.day),
+            Some(picked)
+        );
     }
 
     #[test]
@@ -1002,7 +1055,11 @@ mod tests {
 
         let numbered = number::<i64>("count: ")
             .with_config(NumberConfig::default().value(7_i64).validator(|count| {
-                if *count > 0 { Ok(()) } else { Err("positive".to_owned()) }
+                if *count > 0 {
+                    Ok(())
+                } else {
+                    Err("positive".to_owned())
+                }
             }))
             .interaction(scripted_interaction([vec![enter()]]))
             .interact()

@@ -1,14 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
 
 use std::io;
 
-use screw::{CursorMerge, Edge, Fill, Floating, Insets, Layers, Renderer, Size, Style};
+use screw::{
+    CursorMerge,
+    Edge,
+    Fill,
+    Floating,
+    Insets,
+    Layers,
+    Renderer,
+    Size,
+    Style,
+};
 
 fn main() -> io::Result<()> {
     let document = "Document content keeps its full layout width.\n\nThe pane covers these cells.";
-    let actions = "┌─ Actions ──────────┐\n│ q  quit           │\n│ ?  help           │\n└───────────────────┘";
+    let actions = "┌─ Actions ──────────┐\n│ q  quit           │\n│ ?  help           \
+                   │\n└───────────────────┘";
     let frame = Layers::new(document).float(
         actions,
         Floating::new(Edge::BOTTOM | Edge::RIGHT)

@@ -1,10 +1,27 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use screw::{RenderCtx, Role, Span, Spans, Surface};
-use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation as _};
+use screw::{
+    RenderCtx,
+    Role,
+    Span,
+    Spans,
+    Surface,
+};
+use unicode_segmentation::{
+    GraphemeCursor,
+    UnicodeSegmentation as _,
+};
 
 use super::navigation::no_modifiers;
-use crate::{Context, Event, Key, Reaction, Value, Widget, WidgetId};
+use crate::{
+    Context,
+    Event,
+    Key,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
+};
 
 type Validator = dyn Fn(&str) -> Result<(), String> + 'static;
 
@@ -75,7 +92,8 @@ impl TextInput {
         self
     }
 
-    /// Refuse to submit with the returned message until `validator` accepts the value.
+    /// Refuse to submit with the returned message until `validator` accepts the
+    /// value.
     #[must_use]
     pub fn with_validator(
         mut self,
@@ -254,24 +272,26 @@ impl Widget for TextInput {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         match event {
-            Event::Key(key) => match key.key {
-                Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
-                Key::Backspace => self.backspace(),
-                Key::Delete => self.delete(),
-                Key::Left => self.move_left(),
-                Key::Right => self.move_right(),
-                Key::Home => self.move_home(),
-                Key::End => self.move_end(),
-                Key::Enter => self.submit(),
-                Key::Esc => Reaction::Cancel,
-                Key::Char(_)
-                | Key::Tab
-                | Key::Backtab
-                | Key::Up
-                | Key::Down
-                | Key::PageUp
-                | Key::PageDown
-                | Key::Function(_) => Reaction::Ignored,
+            Event::Key(key) => {
+                match key.key {
+                    Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
+                    Key::Backspace => self.backspace(),
+                    Key::Delete => self.delete(),
+                    Key::Left => self.move_left(),
+                    Key::Right => self.move_right(),
+                    Key::Home => self.move_home(),
+                    Key::End => self.move_end(),
+                    Key::Enter => self.submit(),
+                    Key::Esc => Reaction::Cancel,
+                    Key::Char(_)
+                    | Key::Tab
+                    | Key::Backtab
+                    | Key::Up
+                    | Key::Down
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::Function(_) => Reaction::Ignored,
+                }
             },
             Event::Paste(value) => self.insert_str(&value),
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
@@ -301,7 +321,10 @@ fn next_boundary(value: &str, cursor: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use screw::{Position, Theme};
+    use screw::{
+        Position,
+        Theme,
+    };
 
     use super::*;
 

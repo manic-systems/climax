@@ -2,10 +2,25 @@
 
 #![cfg(test)]
 
-use bang::advanced::{
-    Event, Key, KeyEvent, Reaction, Value, Widget, WidgetContext, WidgetId, replay_events,
+use bang::{
+    advanced::{
+        Event,
+        Key,
+        KeyEvent,
+        Reaction,
+        Value,
+        Widget,
+        WidgetContext,
+        WidgetId,
+        replay_events,
+    },
+    screw::{
+        RenderCtx,
+        Role,
+        Surface,
+        Widget as ScreenWidget,
+    },
 };
-use bang::screw::{RenderCtx, Role, Surface, Widget as ScreenWidget};
 
 struct Echo {
     typed: String,
@@ -34,9 +49,12 @@ impl Widget for Echo {
             Event::Key(KeyEvent {
                 key: Key::Enter, ..
             }) => Reaction::Submit(Value::from(self.typed.clone())),
-            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick | _ => {
-                Reaction::Ignored
-            },
+            Event::Key(_)
+            | Event::Paste(_)
+            | Event::UnknownEscape(_)
+            | Event::Resize { .. }
+            | Event::Tick
+            | _ => Reaction::Ignored,
         }
     }
 }

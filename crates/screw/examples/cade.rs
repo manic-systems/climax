@@ -5,7 +5,10 @@ extern crate alloc;
 use alloc::sync::Arc;
 use core::time::Duration;
 use std::{
-    io::{self, IsTerminal as _},
+    io::{
+        self,
+        IsTerminal as _,
+    },
     thread,
 };
 

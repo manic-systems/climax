@@ -42,8 +42,7 @@ struct Port(u16);
 
 impl FromArg for Port {
     fn from_arg(raw: &str) -> result::Result<Self, ValueError> {
-        raw
-            .parse()
+        raw.parse()
             .map(Self)
             .map_err(|_parse_error| ValueError::new(raw, "expected a port number"))
     }
@@ -65,6 +64,9 @@ fn the_prelude_carries_what_a_manual_from_arg_impl_needs() {
 fn a_returned_parse_error_debugs_as_its_report() {
     let error = climax::try_run_from(["--nope"], |_context, _args: Args| Ok(())).unwrap_err();
     let report = format!("{error:?}");
-    assert!(report.starts_with("unrecognized argument '--nope'"), "got {report}");
+    assert!(
+        report.starts_with("unrecognized argument '--nope'"),
+        "got {report}"
+    );
     assert!(report.contains("Usage:"), "got {report}");
 }

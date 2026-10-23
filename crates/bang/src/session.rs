@@ -1,20 +1,40 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::io::{
-    self,
-    Read,
-};
 use core::time::Duration;
 use std::{
-    os::fd::{AsFd, OwnedFd},
+    io::{
+        self,
+        Read,
+    },
+    os::fd::{
+        AsFd,
+        OwnedFd,
+    },
     time::Instant,
 };
 
 use bang_core::{
-    Event, Key, Modifiers, Session, SessionReaction, SessionStatus, Value, Widget,
+    Event,
+    Key,
+    Modifiers,
+    Session,
+    SessionReaction,
+    SessionStatus,
+    Value,
+    Widget,
 };
-use bang_terminal::{Signal, SignalPoller, TerminalEvents, TerminalPoll, resize_event};
-use screw::{TickInterest, Viewport, Widget as _};
+use bang_terminal::{
+    Signal,
+    SignalPoller,
+    TerminalEvents,
+    TerminalPoll,
+    resize_event,
+};
+use screw::{
+    TickInterest,
+    Viewport,
+    Widget as _,
+};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(66);
 
@@ -25,7 +45,8 @@ pub(crate) enum RunOutcome {
     Submitted(Value),
     /// The widget or an unclaimed Ctrl-C cancelled the session.
     Cancelled,
-    /// Input ended or an unclaimed Ctrl-D closed it before a value was produced.
+    /// Input ended or an unclaimed Ctrl-D closed it before a value was
+    /// produced.
     InputEnded,
     /// A signal arrived.
     Signalled(Signal),
@@ -48,7 +69,7 @@ pub(crate) trait SessionRenderer {
 #[derive(Debug, Default)]
 pub(crate) struct SessionOptions {
     signals: Option<SignalPoller>,
-    resize: Option<OwnedFd>,
+    resize:  Option<OwnedFd>,
 }
 
 impl SessionOptions {
@@ -57,11 +78,12 @@ impl SessionOptions {
     pub(crate) const fn new() -> Self {
         Self {
             signals: None,
-            resize: None,
+            resize:  None,
         }
     }
 
-    /// Stop the session with [`RunOutcome::Signalled`] when `signals` yields one.
+    /// Stop the session with [`RunOutcome::Signalled`] when `signals` yields
+    /// one.
     #[must_use]
     pub(crate) const fn signals(mut self, signals: SignalPoller) -> Self {
         self.signals = Some(signals);
@@ -77,7 +99,8 @@ impl SessionOptions {
     }
 }
 
-/// Run `widget` as an interactive session on `input`, drawing through `renderer`.
+/// Run `widget` as an interactive session on `input`, drawing through
+/// `renderer`.
 ///
 /// The caller owns terminal setup, so raw mode and any screen modes must
 /// already be active. `input` is polled for bytes with an Escape deadline.
@@ -147,8 +170,9 @@ fn tick_interval(interest: TickInterest) -> Option<Duration> {
 /// Live session event dispatch.
 ///
 /// Ctrl-C and Ctrl-D are offered to the widget first. A widget that returns
-/// anything but [`bang_core::Reaction::Ignored`] has claimed the key and the session
-/// continues; an ignored Ctrl-C cancels and an ignored Ctrl-D ends input.
+/// anything but [`bang_core::Reaction::Ignored`] has claimed the key and the
+/// session continues; an ignored Ctrl-C cancels and an ignored Ctrl-D ends
+/// input.
 fn handle_event(
     session: &mut Session,
     event: Event,
@@ -159,7 +183,7 @@ fn handle_event(
     if let Event::Resize { cols, rows } = &event {
         renderer.resize(Viewport {
             columns: usize::from(*cols),
-            rows: usize::from(*rows),
+            rows:    usize::from(*rows),
         })?;
     }
     let reaction = session.handle(event);
@@ -221,26 +245,39 @@ mod tests {
     use std::{
         fs::File,
         io::Cursor,
-        sync::{Mutex, mpsc},
+        sync::{
+            Mutex,
+            mpsc,
+        },
         thread,
     };
 
-    use bang_core::{Reaction, WidgetId, widgets::TextInput};
+    use bang_core::{
+        Reaction,
+        WidgetId,
+        widgets::TextInput,
+    };
     use bang_terminal::{
         SignalGuard,
-        testing::{SIGNAL_LOCK, pty},
+        testing::{
+            SIGNAL_LOCK,
+            pty,
+        },
     };
-    use screw::{RenderCtx, Surface};
+    use screw::{
+        RenderCtx,
+        Surface,
+    };
 
     use super::*;
 
     #[derive(Default)]
     struct FakeRenderer {
-        frames: Vec<String>,
-        resizes: Vec<Viewport>,
-        viewport: Option<Viewport>,
+        frames:              Vec<String>,
+        resizes:             Vec<Viewport>,
+        viewport:            Option<Viewport>,
         viewports_at_render: Vec<Option<Viewport>>,
-        fail_render_at: Option<usize>,
+        fail_render_at:      Option<usize>,
     }
 
     impl SessionRenderer for FakeRenderer {
@@ -264,7 +301,7 @@ mod tests {
     fn scripted_input_resize_and_submission_share_one_driver() {
         let size = Viewport {
             columns: 80,
-            rows: 24,
+            rows:    24,
         };
         let (_master, slave) = pty(80, 24).unwrap();
         let mut events = TerminalEvents::blocking(Cursor::new(b"ab\r")).resize_from(slave);
@@ -285,10 +322,9 @@ mod tests {
                 .iter()
                 .all(|viewport| *viewport == Some(size))
         );
-        assert_eq!(
-            renderer.frames,
-            ["name: ", "name: a", "name: ab", "name: ab"]
-        );
+        assert_eq!(renderer.frames, [
+            "name: ", "name: a", "name: ab", "name: ab"
+        ]);
     }
 
     #[test]
@@ -447,8 +483,12 @@ mod tests {
         let (done, outcome) = mpsc::channel();
         thread::spawn(move || {
             let options = SessionOptions::new().resize_from(slave);
-            let result =
-                drive_tty_session(SubmitsOnResize, input, &mut FakeRenderer::default(), options);
+            let result = drive_tty_session(
+                SubmitsOnResize,
+                input,
+                &mut FakeRenderer::default(),
+                options,
+            );
             drop(done.send(result.unwrap()));
         });
 

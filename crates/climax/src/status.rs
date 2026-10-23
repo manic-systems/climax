@@ -1,37 +1,72 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::{
-    collections::{BTreeMap, VecDeque},
+    collections::{
+        BTreeMap,
+        VecDeque,
+    },
     sync::Arc,
 };
+#[cfg(feature = "interactive")] use core::result;
 use core::{
     any::Any,
-    fmt, mem,
+    fmt,
+    mem,
     panic::AssertUnwindSafe,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{
+        AtomicU64,
+        Ordering,
+    },
     time::Duration,
 };
-#[cfg(feature = "interactive")]
-use core::result;
 use std::{
-    io::{self, Error as IoError, ErrorKind as IoErrorKind, Write as _},
+    io::{
+        self,
+        Error as IoError,
+        ErrorKind as IoErrorKind,
+        Write as _,
+    },
     os::fd::OwnedFd,
     panic::catch_unwind,
     sync::{
         OnceLock,
-        mpsc::{self, Receiver, RecvTimeoutError, Sender},
+        mpsc::{
+            self,
+            Receiver,
+            RecvTimeoutError,
+            Sender,
+        },
     },
-    thread::{self, JoinHandle, ThreadId},
+    thread::{
+        self,
+        JoinHandle,
+        ThreadId,
+    },
     time::Instant,
 };
 
-use screw::{Looping, RenderCtx, Renderer, Surface, Text, TickInterest, Widget, WidgetRef, layout, widget};
+use screw::{
+    Looping,
+    RenderCtx,
+    Renderer,
+    Surface,
+    Text,
+    TickInterest,
+    Widget,
+    WidgetRef,
+    layout,
+    widget,
+};
 
 use crate::{
-    Error, Result,
+    Error,
+    Result,
     error::ErrorKind,
     output::SharedWriter,
-    terminal::{StatusMode, TerminalCapabilities},
+    terminal::{
+        StatusMode,
+        TerminalCapabilities,
+    },
 };
 
 /// Standalone status for use without a [`crate::Context`].
@@ -58,8 +93,8 @@ pub fn message(message: impl Into<String>) -> Status {
 
 /// A transient status line, configured with builders and then started.
 ///
-/// Made by `Context::status`. Call `start` to get a handle, `finish` to show and
-/// remove it at once, or `during` to scope it to an operation.
+/// Made by `Context::status`. Call `start` to get a handle, `finish` to show
+/// and remove it at once, or `during` to scope it to an operation.
 pub struct Status {
     message:         String,
     widget:          Option<WidgetRef>,
@@ -67,18 +102,18 @@ pub struct Status {
     fps:             u16,
     final_message:   Option<String>,
     failure_message: Option<String>,
-    coordinator: StatusCoordinator,
+    coordinator:     StatusCoordinator,
 }
 
 impl Status {
     #[must_use]
     pub(crate) fn new(message: impl Into<String>, coordinator: StatusCoordinator) -> Self {
         Self {
-            message:         message.into(),
-            widget:          None,
-            spinner:         false,
-            fps:             15,
-            final_message:   None,
+            message: message.into(),
+            widget: None,
+            spinner: false,
+            fps: 15,
+            final_message: None,
             failure_message: None,
             coordinator,
         }
@@ -123,8 +158,8 @@ impl Status {
     }
 
     #[must_use]
-    /// Message printed when the status finishes successfully, in place of the live
-    /// line.
+    /// Message printed when the status finishes successfully, in place of the
+    /// live line.
     pub fn final_message(mut self, message: impl Into<String>) -> Self {
         self.final_message = Some(message.into());
         self
@@ -148,9 +183,9 @@ impl Status {
     #[must_use]
     pub fn start(self) -> StatusRuntime {
         let entry = StatusEntry {
-            widget: self.root_widget(),
-            plain: self.message,
-            final_message: self.final_message,
+            widget:          self.root_widget(),
+            plain:           self.message,
+            final_message:   self.final_message,
             failure_message: self.failure_message,
         };
         let coordinator = self.coordinator.current().clone();
@@ -161,8 +196,8 @@ impl Status {
         }
     }
 
-    /// Start the status and finish it at once as a success, which prints the final
-    /// message when one is set.
+    /// Start the status and finish it at once as a success, which prints the
+    /// final message when one is set.
     ///
     /// # Errors
     ///
@@ -173,13 +208,15 @@ impl Status {
 
     /// Show the status while `operation` runs.
     ///
-    /// Success removes it as finished and prints [`Self::final_message`]. An error
-    /// removes it as failed and prints [`Self::failure_message`], and that error wins
-    /// over a cleanup failure, which is attached to it as a related error.
+    /// Success removes it as finished and prints [`Self::final_message`]. An
+    /// error removes it as failed and prints [`Self::failure_message`], and
+    /// that error wins over a cleanup failure, which is attached to it as a
+    /// related error.
     ///
     /// # Errors
     ///
-    /// Fails with the error of `operation`, together with any failure removing the status.
+    /// Fails with the error of `operation`, together with any failure removing
+    /// the status.
     pub fn during<T>(self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         let mut status = self.start();
         match operation() {
@@ -187,9 +224,11 @@ impl Status {
                 status.remove(true)?;
                 Ok(value)
             },
-            Err(error) => match status.remove(false) {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(error.with_related(cleanup)),
+            Err(error) => {
+                match status.remove(false) {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(error.with_related(cleanup)),
+                }
             },
         }
     }
@@ -217,7 +256,7 @@ impl Status {
 /// Dropping the handle without calling `finish` counts as a failure.
 pub struct StatusRuntime {
     coordinator: StatusCoordinator,
-    id: Option<u64>,
+    id:          Option<u64>,
 }
 
 impl StatusRuntime {
@@ -232,8 +271,8 @@ impl StatusRuntime {
 
     /// Remove the status as a success.
     ///
-    /// Reports a failure retained for this status, such as a widget that panicked or a
-    /// first frame that could not be drawn.
+    /// Reports a failure retained for this status, such as a widget that
+    /// panicked or a first frame that could not be drawn.
     ///
     /// # Errors
     ///
@@ -243,7 +282,9 @@ impl StatusRuntime {
     }
 
     fn remove(&mut self, success: bool) -> Result<()> {
-        self.id.take().map_or(Ok(()), |id| self.coordinator.remove(id, success))
+        self.id
+            .take()
+            .map_or(Ok(()), |id| self.coordinator.remove(id, success))
     }
 }
 
@@ -254,9 +295,9 @@ impl Drop for StatusRuntime {
 }
 
 struct StatusEntry {
-    widget: WidgetRef,
-    plain: String,
-    final_message: Option<String>,
+    widget:          WidgetRef,
+    plain:           String,
+    final_message:   Option<String>,
     failure_message: Option<String>,
 }
 
@@ -327,7 +368,9 @@ impl WidthSource {
     fn columns(&self) -> usize {
         match self {
             Self::Fixed(columns) => *columns,
-            Self::Stderr | Self::Terminal(_) => self.measure().unwrap_or(screw::Viewport::FALLBACK).columns,
+            Self::Stderr | Self::Terminal(_) => {
+                self.measure().unwrap_or(screw::Viewport::FALLBACK).columns
+            },
         }
     }
 
@@ -349,21 +392,19 @@ impl WidthSource {
         match self {
             Self::Fixed(columns) => Self::Fixed(*columns),
             Self::Stderr => Self::Stderr,
-            Self::Terminal(handle) => handle
-                .try_clone()
-                .map_or(Self::FALLBACK, Self::Terminal),
+            Self::Terminal(handle) => handle.try_clone().map_or(Self::FALLBACK, Self::Terminal),
         }
     }
 }
 
 struct Inner {
-    next_id: AtomicU64,
-    writer: SharedWriter,
-    mode: AtomicU64,
-    width: WidthSource,
+    next_id:         AtomicU64,
+    writer:          SharedWriter,
+    mode:            AtomicU64,
+    width:           WidthSource,
     request_timeout: Duration,
-    channel: OnceLock<Channel>,
-    successor: OnceLock<StatusCoordinator>,
+    channel:         OnceLock<Channel>,
+    successor:       OnceLock<StatusCoordinator>,
 }
 
 struct Channel {
@@ -399,15 +440,21 @@ impl Inner {
         let latest = self.mode.load(Ordering::Acquire);
         if latest > spawned_with {
             let (reply, _discarded) = mpsc::channel();
-            drop(channel.sender.send(Command::SetMode { stamp: latest, reply }));
+            drop(channel.sender.send(Command::SetMode {
+                stamp: latest,
+                reply,
+            }));
         }
     }
 
     fn publish_mode(&self, mode: StatusMode) -> u64 {
-        let next = |stamp: u64| (((stamp >> MODE_BITS) + 1) << MODE_BITS) | u64::from(mode_to_u8(mode));
+        let next =
+            |stamp: u64| (((stamp >> MODE_BITS) + 1) << MODE_BITS) | u64::from(mode_to_u8(mode));
         let previous = self
             .mode
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |stamp| Some(next(stamp)))
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |stamp| {
+                Some(next(stamp))
+            })
             .unwrap_or_else(|stamp| stamp);
         next(previous)
     }
@@ -461,14 +508,14 @@ const fn mode_from_u8(value: u8) -> StatusMode {
 
 enum Command {
     Insert {
-        id: u64,
+        id:    u64,
         entry: StatusEntry,
-        fps: u16,
+        fps:   u16,
     },
     Remove {
-        id: u64,
+        id:      u64,
         success: bool,
-        reply: Sender<Result<()>>,
+        reply:   Sender<Result<()>>,
     },
     MarkDirty,
     Stop {
@@ -480,17 +527,17 @@ enum Command {
     },
     #[cfg(feature = "structured")]
     Around {
-        writer: SharedWriter,
-        bytes: Vec<u8>,
+        writer:    SharedWriter,
+        bytes:     Vec<u8>,
         requester: ThreadId,
-        deadline: Instant,
-        reply: Sender<Result<()>>,
+        deadline:  Instant,
+        reply:     Sender<Result<()>>,
     },
     #[cfg(feature = "interactive")]
     AcquireLease {
         holder: ThreadId,
-        token: u64,
-        reply: Sender<result::Result<(), LeaseError>>,
+        token:  u64,
+        reply:  Sender<result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
@@ -510,10 +557,13 @@ enum Command {
     },
 }
 
-#[cfg_attr(not(feature = "interactive"), expect(dead_code, reason = "only a prompt lease sets or reads it"))]
+#[cfg_attr(
+    not(feature = "interactive"),
+    expect(dead_code, reason = "only a prompt lease sets or reads it")
+)]
 struct Lease {
     holder: ThreadId,
-    token: u64,
+    token:  u64,
 }
 
 #[cfg(feature = "interactive")]
@@ -532,13 +582,19 @@ impl From<Failure> for Error {
     fn from(failure: Failure) -> Self {
         match failure {
             Failure::Stopped => actor_stopped(),
-            Failure::TimedOut => output_error(IoError::new(
-                IoErrorKind::TimedOut,
-                "the transient actor did not answer in time, a status widget may be blocking it",
-            )),
-            Failure::OnActor => output_error(IoError::other(
-                "a status widget called into the transient actor it runs on, which would wait on itself",
-            )),
+            Failure::TimedOut => {
+                output_error(IoError::new(
+                    IoErrorKind::TimedOut,
+                    "the transient actor did not answer in time, a status widget may be blocking \
+                     it",
+                ))
+            },
+            Failure::OnActor => {
+                output_error(IoError::other(
+                    "a status widget called into the transient actor it runs on, which would wait \
+                     on itself",
+                ))
+            },
         }
     }
 }
@@ -552,7 +608,12 @@ impl StatusCoordinator {
         Self::build(writer, mode, width, REQUEST_TIMEOUT)
     }
 
-    fn build(writer: SharedWriter, mode: StatusMode, width: WidthSource, request_timeout: Duration) -> Self {
+    fn build(
+        writer: SharedWriter,
+        mode: StatusMode,
+        width: WidthSource,
+        request_timeout: Duration,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 next_id: AtomicU64::new(0),
@@ -570,7 +631,11 @@ impl StatusCoordinator {
         drop(self.inner.channel().sender.send(command));
     }
 
-    fn request<T>(&self, command: impl FnOnce(Sender<T>) -> Command, failed: impl FnOnce(Failure) -> T) -> T {
+    fn request<T>(
+        &self,
+        command: impl FnOnce(Sender<T>) -> Command,
+        failed: impl FnOnce(Failure) -> T,
+    ) -> T {
         let channel = self.inner.channel();
         if channel.thread.thread().id() == thread::current().id() {
             return failed(Failure::OnActor);
@@ -590,7 +655,10 @@ impl StatusCoordinator {
         if this.inner.channel.get().is_none() {
             return Ok(());
         }
-        this.request(|reply| Command::SetMode { stamp, reply }, |failure| Err(failure.into()))
+        this.request(
+            |reply| Command::SetMode { stamp, reply },
+            |failure| Err(failure.into()),
+        )
     }
 
     fn insert(&self, entry: StatusEntry, fps: u16) -> u64 {
@@ -607,7 +675,13 @@ impl StatusCoordinator {
     }
 
     pub(crate) fn mark_dirty(&self) -> Result<()> {
-        if self.inner.channel().sender.send(Command::MarkDirty).is_err() {
+        if self
+            .inner
+            .channel()
+            .sender
+            .send(Command::MarkDirty)
+            .is_err()
+        {
             return Err(actor_stopped());
         }
         Ok(())
@@ -618,7 +692,12 @@ impl StatusCoordinator {
     /// the lease.
     pub(crate) fn notice(&self, buffer: &[u8]) -> Result<()> {
         self.current().request(
-            |reply| Command::Notice { bytes: buffer.to_owned(), reply },
+            |reply| {
+                Command::Notice {
+                    bytes: buffer.to_owned(),
+                    reply,
+                }
+            },
             |failure| Err(failure.into()),
         )
     }
@@ -633,7 +712,15 @@ impl StatusCoordinator {
         let this = self.current();
         let deadline = Instant::now() + this.inner.request_timeout;
         this.request(
-            |reply| Command::Around { writer, bytes, requester: thread::current().id(), deadline, reply },
+            |reply| {
+                Command::Around {
+                    writer,
+                    bytes,
+                    requester: thread::current().id(),
+                    deadline,
+                    reply,
+                }
+            },
             |failure| Err(failure.into()),
         )
     }
@@ -645,7 +732,10 @@ impl StatusCoordinator {
         if this.inner.channel.get().is_none() {
             return true;
         }
-        this.request(|reply| Command::IsIdle { reply }, |failure| matches!(failure, Failure::Stopped))
+        this.request(
+            |reply| Command::IsIdle { reply },
+            |failure| matches!(failure, Failure::Stopped),
+        )
     }
 
     /// Make `next` the coordinator that replaces this one, so a flush of this
@@ -670,7 +760,10 @@ impl StatusCoordinator {
         let own = if self.inner.channel.get().is_none() {
             Ok(())
         } else {
-            self.request(|reply| Command::Flush { reply }, |failure| Err(failure.into()))
+            self.request(
+                |reply| Command::Flush { reply },
+                |failure| Err(failure.into()),
+            )
         };
         let Some(next) = self.inner.successor.get() else {
             return own;
@@ -686,7 +779,11 @@ impl StatusCoordinator {
     pub(crate) fn prompt_guard(&self) -> bang::Result<PromptGuard> {
         let this = self.current();
         match this.acquire_lease() {
-            Ok(()) => Ok(PromptGuard { coordinator: this.clone() }),
+            Ok(()) => {
+                Ok(PromptGuard {
+                    coordinator: this.clone(),
+                })
+            },
             Err(LeaseError::Busy) => Err(bang::Error::interaction_busy()),
             Err(LeaseError::Clear(error)) => Err(bang::Error::terminal(error)),
         }
@@ -696,7 +793,11 @@ impl StatusCoordinator {
     pub(crate) fn application_guard(&self) -> Result<PromptGuard> {
         let this = self.current();
         match this.acquire_lease() {
-            Ok(()) => Ok(PromptGuard { coordinator: this.clone() }),
+            Ok(()) => {
+                Ok(PromptGuard {
+                    coordinator: this.clone(),
+                })
+            },
             Err(LeaseError::Busy) => Err(Error::from(bang::Error::interaction_busy())),
             Err(LeaseError::Clear(error)) => Err(error),
         }
@@ -706,10 +807,17 @@ impl StatusCoordinator {
     fn acquire_lease(&self) -> result::Result<(), LeaseError> {
         let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         self.request(
-            |reply| Command::AcquireLease { holder: thread::current().id(), token, reply },
+            |reply| {
+                Command::AcquireLease {
+                    holder: thread::current().id(),
+                    token,
+                    reply,
+                }
+            },
             |failure| {
-                // The actor may grant after the bound expires but before the reply
-                // receiver is dropped, and would then hold a lease nobody releases.
+                // The actor may grant after the bound expires but before the
+                // reply receiver is dropped, and would then
+                // hold a lease nobody releases.
                 self.send(Command::CancelLease { token });
                 Err(LeaseError::Clear(failure.into()))
             },
@@ -772,9 +880,9 @@ const MAX_QUEUED_LINES: usize = 1024;
 
 #[derive(Default)]
 struct ErrorLog {
-    error: Option<Error>,
-    repeated: u64,
-    capped: u64,
+    error:     Option<Error>,
+    repeated:  u64,
+    capped:    u64,
     discarded: u64,
 }
 
@@ -798,14 +906,22 @@ impl ErrorLog {
     fn take(&mut self) -> Option<Error> {
         let mut error = self.error.take()?;
         if self.repeated > 0 {
-            error =
-                error.with_related(Error::message(format!("{} more transient failures of the same kind", self.repeated)));
+            error = error.with_related(Error::message(format!(
+                "{} more transient failures of the same kind",
+                self.repeated
+            )));
         }
         if self.capped > 0 {
-            error = error.with_related(Error::message(format!("{} transient lines were dropped", self.capped)));
+            error = error.with_related(Error::message(format!(
+                "{} transient lines were dropped",
+                self.capped
+            )));
         }
         if self.discarded > 0 {
-            error = error.with_related(Error::message(format!("{} transient lines were discarded", self.discarded)));
+            error = error.with_related(Error::message(format!(
+                "{} transient lines were discarded",
+                self.discarded
+            )));
         }
         self.repeated = 0;
         self.capped = 0;
@@ -820,40 +936,40 @@ fn is_permanent(error: &IoError) -> bool {
 
 struct ActorConfig {
     writer: SharedWriter,
-    stamp: u64,
-    width: WidthSource,
+    stamp:  u64,
+    width:  WidthSource,
 }
 
 #[cfg(feature = "structured")]
 struct DeferredAround {
-    writer: SharedWriter,
-    bytes: Vec<u8>,
+    writer:   SharedWriter,
+    bytes:    Vec<u8>,
     deadline: Instant,
-    reply: Sender<Result<()>>,
+    reply:    Sender<Result<()>>,
 }
 
 /// State owned by the transient-terminal thread.
 struct Actor {
-    renderer: Renderer<SharedWriter>,
-    writer: SharedWriter,
-    mode: StatusMode,
-    mode_stamp: u64,
-    width: WidthSource,
-    columns: usize,
+    renderer:         Renderer<SharedWriter>,
+    writer:           SharedWriter,
+    mode:             StatusMode,
+    mode_stamp:       u64,
+    width:            WidthSource,
+    columns:          usize,
     last_width_check: Instant,
-    fps: u16,
-    entries: BTreeMap<u64, StatusEntry>,
-    dirty: bool,
-    last_draw: Option<Instant>,
-    pending: VecDeque<Vec<u8>>,
-    accepted: usize,
-    flush_owed: bool,
-    lease: Option<Lease>,
+    fps:              u16,
+    entries:          BTreeMap<u64, StatusEntry>,
+    dirty:            bool,
+    last_draw:        Option<Instant>,
+    pending:          VecDeque<Vec<u8>>,
+    accepted:         usize,
+    flush_owed:       bool,
+    lease:            Option<Lease>,
     #[cfg(feature = "structured")]
-    deferred: VecDeque<DeferredAround>,
-    dead: bool,
-    errors: ErrorLog,
-    panicked: BTreeMap<u64, Error>,
+    deferred:         VecDeque<DeferredAround>,
+    dead:             bool,
+    errors:           ErrorLog,
+    panicked:         BTreeMap<u64, Error>,
 }
 
 impl Actor {
@@ -901,7 +1017,11 @@ impl Actor {
             },
             Some(_) => self.deferred.push_back(write),
             None => {
-                drop(write.reply.send(self.write_around(write.writer, &write.bytes)));
+                drop(
+                    write
+                        .reply
+                        .send(self.write_around(write.writer, &write.bytes)),
+                );
             },
         }
     }
@@ -934,7 +1054,13 @@ impl Actor {
         self.lease = None;
         self.drain_pending();
         #[cfg(feature = "structured")]
-        while let Some(DeferredAround { writer, bytes, deadline, reply }) = self.deferred.pop_front() {
+        while let Some(DeferredAround {
+            writer,
+            bytes,
+            deadline,
+            reply,
+        }) = self.deferred.pop_front()
+        {
             if Instant::now() < deadline {
                 drop(reply.send(self.write_around(writer, &bytes)));
             }
@@ -948,7 +1074,12 @@ impl Actor {
                 self.clear_if_live();
             }
             self.dirty = true;
-            let StatusEntry { widget, plain, final_message, failure_message } = entry;
+            let StatusEntry {
+                widget,
+                plain,
+                final_message,
+                failure_message,
+            } = entry;
             self.discard_widget(id, widget);
             let line = match (self.mode, success) {
                 (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
@@ -991,16 +1122,38 @@ impl Actor {
                 drop(reply.send(result));
             },
             #[cfg(feature = "structured")]
-            Command::Around { writer, bytes, requester, deadline, reply } => {
-                self.around(DeferredAround { writer, bytes, deadline, reply }, requester);
+            Command::Around {
+                writer,
+                bytes,
+                requester,
+                deadline,
+                reply,
+            } => {
+                self.around(
+                    DeferredAround {
+                        writer,
+                        bytes,
+                        deadline,
+                        reply,
+                    },
+                    requester,
+                );
             },
             #[cfg(feature = "interactive")]
-            Command::AcquireLease { holder, token, reply } => self.acquire_lease(holder, token, &reply),
+            Command::AcquireLease {
+                holder,
+                token,
+                reply,
+            } => self.acquire_lease(holder, token, &reply),
             #[cfg(feature = "interactive")]
             Command::ReleaseLease => self.release_lease(),
             #[cfg(feature = "interactive")]
             Command::CancelLease { token } => {
-                if self.lease.as_ref().is_some_and(|lease| lease.token == token) {
+                if self
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.token == token)
+                {
                     self.release_lease();
                 }
             },
@@ -1012,7 +1165,11 @@ impl Actor {
                 let mode = mode_from_stamp(stamp);
                 self.mode_stamp = stamp;
                 let clearing = self.mode == StatusMode::Live && mode != StatusMode::Live;
-                let result = if clearing { self.clear_immediate() } else { Ok(()) };
+                let result = if clearing {
+                    self.clear_immediate()
+                } else {
+                    Ok(())
+                };
                 self.mode = mode;
                 self.dirty = true;
                 drop(reply.send(result));
@@ -1022,7 +1179,10 @@ impl Actor {
                 drop(reply.send(self.report_all()));
             },
             Command::IsIdle { reply } => {
-                let idle = self.entries.is_empty() && self.pending.is_empty() && !self.flush_owed && !self.leased();
+                let idle = self.entries.is_empty()
+                    && self.pending.is_empty()
+                    && !self.flush_owed
+                    && !self.leased();
                 let _acknowledged = reply.send(idle);
             },
         }
@@ -1055,7 +1215,10 @@ impl Actor {
     }
 
     fn record_widget_panic(&mut self, ids: &[u64], what: &str, payload: &(dyn Any + Send)) {
-        let message = format!("a status widget panicked while {what} and was removed, {}", panic_message(payload));
+        let message = format!(
+            "a status widget panicked while {what} and was removed, {}",
+            panic_message(payload)
+        );
         for id in ids {
             let fresh = Error::message(message.clone());
             let error = match self.panicked.remove(id) {
@@ -1088,7 +1251,11 @@ impl Actor {
             })
             .map(|(id, _)| *id)
             .collect();
-        let doomed = if culprits.is_empty() { self.entries.keys().copied().collect() } else { culprits };
+        let doomed = if culprits.is_empty() {
+            self.entries.keys().copied().collect()
+        } else {
+            culprits
+        };
         self.record_widget_panic(&doomed, what, payload);
         for id in doomed {
             if let Some(entry) = self.entries.remove(&id) {
@@ -1110,7 +1277,8 @@ impl Actor {
         self.accepted = 0;
         self.flush_owed = false;
         if discarded > 0 {
-            self.errors.note_discarded(u64::try_from(discarded).unwrap_or(u64::MAX));
+            self.errors
+                .note_discarded(u64::try_from(discarded).unwrap_or(u64::MAX));
         }
     }
 
@@ -1142,7 +1310,10 @@ impl Actor {
         if self.dead {
             return Ok(());
         }
-        self.renderer.clear().map(|_stats| ()).map_err(|error| self.immediate_failure(error))
+        self.renderer
+            .clear()
+            .map(|_stats| ())
+            .map_err(|error| self.immediate_failure(error))
     }
 
     fn enqueue(&mut self, line: Vec<u8>) {
@@ -1221,8 +1392,14 @@ impl Actor {
         if self.width.follows_terminal() {
             self.refresh_width();
         }
-        let widgets: Vec<WidgetRef> = self.entries.values().map(|entry| Arc::clone(&entry.widget)).collect();
-        match catch_unwind(AssertUnwindSafe(|| self.renderer.draw(&StatusStack(widgets)))) {
+        let widgets: Vec<WidgetRef> = self
+            .entries
+            .values()
+            .map(|entry| Arc::clone(&entry.widget))
+            .collect();
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.renderer.draw(&StatusStack(widgets))
+        })) {
             Ok(Ok(_)) => self.dirty = false,
             Ok(Err(error)) => {
                 self.record_transient_failure(error);
@@ -1255,7 +1432,9 @@ impl Actor {
         if !self.wants_periodic_ticks() {
             return false;
         }
-        let Some(last_draw) = self.last_draw else { return true };
+        let Some(last_draw) = self.last_draw else {
+            return true;
+        };
         let elapsed = Instant::now().saturating_duration_since(last_draw);
         if elapsed < self.frame_interval() {
             return false;
@@ -1269,7 +1448,9 @@ impl Actor {
         if !self.wants_periodic_ticks() {
             return None;
         }
-        let Some(last_draw) = self.last_draw else { return Some(Duration::ZERO) };
+        let Some(last_draw) = self.last_draw else {
+            return Some(Duration::ZERO);
+        };
         let elapsed = Instant::now().saturating_duration_since(last_draw);
         let until_frame = self.frame_interval().saturating_sub(elapsed);
         let until_draw = if self.dirty {
@@ -1278,7 +1459,9 @@ impl Actor {
             match self.tick_interest() {
                 TickInterest::Never => None,
                 TickInterest::EveryFrame => Some(until_frame),
-                TickInterest::Every(interval) => Some(until_frame.max(interval.saturating_sub(elapsed))),
+                TickInterest::Every(interval) => {
+                    Some(until_frame.max(interval.saturating_sub(elapsed)))
+                },
             }
         };
         // Terminals give no resize notice without a signal handler, so a
@@ -1298,7 +1481,11 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
     let mut actor = Actor::new(config);
     loop {
         let event = actor.next_wake().map_or_else(
-            || receiver.recv().map_err(|_disconnected| RecvTimeoutError::Disconnected),
+            || {
+                receiver
+                    .recv()
+                    .map_err(|_disconnected| RecvTimeoutError::Disconnected)
+            },
             |wait| receiver.recv_timeout(wait),
         );
         match event {
@@ -1319,7 +1506,9 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
 
 fn collect_reports(errors: impl IntoIterator<Item = Error>) -> Result<()> {
     let mut remaining = errors.into_iter();
-    remaining.next().map_or(Ok(()), |first| Err(remaining.fold(first, Error::with_related)))
+    remaining.next().map_or(Ok(()), |first| {
+        Err(remaining.fold(first, Error::with_related))
+    })
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {
@@ -1344,7 +1533,11 @@ impl Widget for StatusStack {
 }
 
 fn combined_tick_interest(entries: &BTreeMap<u64, StatusEntry>) -> TickInterest {
-    screw::combine_tick_interest(entries.values().map(|entry| entry.widget.as_ref().tick_interest()))
+    screw::combine_tick_interest(
+        entries
+            .values()
+            .map(|entry| entry.widget.as_ref().tick_interest()),
+    )
 }
 
 fn wants_frame_tick(interest: TickInterest, elapsed: Duration) -> bool {
@@ -1362,19 +1555,25 @@ fn output_error(error: IoError) -> Error {
 #[cfg(test)]
 mod tests {
     use core::{
-        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+        sync::atomic::{
+            AtomicBool,
+            AtomicUsize,
+            Ordering,
+        },
         time::Duration,
     };
     use std::{
         collections::HashSet,
         fs,
-        sync::{Barrier, Mutex},
+        sync::{
+            Barrier,
+            Mutex,
+        },
         time::Instant,
     };
 
-    use crate::sync::lock;
-
     use super::*;
+    use crate::sync::lock;
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -1398,9 +1597,9 @@ mod tests {
 
     fn entry(message: &str) -> StatusEntry {
         StatusEntry {
-            widget: widget(Text::new(message.to_owned())),
-            plain: message.to_owned(),
-            final_message: None,
+            widget:          widget(Text::new(message.to_owned())),
+            plain:           message.to_owned(),
+            final_message:   None,
             failure_message: None,
         }
     }
@@ -1536,9 +1735,9 @@ mod tests {
                     thread_barrier.wait();
                     thread_coordinator.insert(
                         StatusEntry {
-                            widget: widget(Probe(thread_seen)),
-                            plain: "working".to_owned(),
-                            final_message: None,
+                            widget:          widget(Probe(thread_seen)),
+                            plain:           "working".to_owned(),
+                            final_message:   None,
                             failure_message: None,
                         },
                         15,
@@ -1735,7 +1934,8 @@ mod tests {
     #[test]
     fn prompt_exclusivity_suspends_and_restores_status_presentation() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
         let status = Status::new("working", coordinator.clone())
             .spinner()
             .start();
@@ -1980,7 +2180,12 @@ mod tests {
         let coordinator = StatusCoordinator::new(SharedWriter::new(BrokenPipe), StatusMode::Plain);
         let error = coordinator.notice(b"first\n").unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Output);
-        assert!(error.related_errors().iter().any(|related| related.to_string().contains("discarded")));
+        assert!(
+            error
+                .related_errors()
+                .iter()
+                .any(|related| related.to_string().contains("discarded"))
+        );
 
         for _ in 0..10 {
             assert!(coordinator.notice(b"after-death\n").is_err());
@@ -2006,7 +2211,12 @@ mod tests {
         let reported_drop = (0..1100)
             .filter_map(|_| coordinator.notice(b"line\n").err())
             .inspect(|error| assert_eq!(error.kind(), ErrorKind::Output))
-            .any(|error| error.related_errors().iter().any(|related| related.to_string().contains("dropped")));
+            .any(|error| {
+                error
+                    .related_errors()
+                    .iter()
+                    .any(|related| related.to_string().contains("dropped"))
+            });
         assert!(reported_drop);
     }
 
@@ -2014,7 +2224,8 @@ mod tests {
     #[test]
     fn a_stream_write_through_around_appears_after_the_live_region_clears_and_is_not_overwritten() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
         let status = Status::new("working", coordinator.clone())
             .spinner()
             .start();
@@ -2022,7 +2233,10 @@ mod tests {
         let before = capture.text();
 
         coordinator
-            .write_around(SharedWriter::new(capture.clone()), b"stream line\n".to_vec())
+            .write_around(
+                SharedWriter::new(capture.clone()),
+                b"stream line\n".to_vec(),
+            )
             .unwrap();
         let after_around = capture.text();
         let appended = &after_around[before.len()..];
@@ -2039,15 +2253,21 @@ mod tests {
     #[test]
     fn a_notice_under_a_live_status_clears_the_region_before_it_is_written() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
         let status = Status::new("working", coordinator.clone()).start();
         wait_for(|| !capture.text().is_empty());
         let before = capture.text();
 
         coordinator.notice(b"notice line\n").unwrap();
         let appended = capture.text()[before.len()..].to_owned();
-        let at = appended.find("notice line\n").expect("the notice was written");
-        assert!(at > 0, "a clear sequence must precede the notice: {appended:?}");
+        let at = appended
+            .find("notice line\n")
+            .expect("the notice was written");
+        assert!(
+            at > 0,
+            "a clear sequence must precede the notice: {appended:?}"
+        );
 
         status.finish().unwrap();
     }
@@ -2075,7 +2295,8 @@ mod tests {
     #[test]
     fn a_notice_has_reached_the_writer_when_it_returns() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
         let mut notice = TransientNotice::coordinator(coordinator);
         for index in 0..50 {
             io::Write::write_all(&mut notice, format!("notice {index}\n").as_bytes()).unwrap();
@@ -2112,7 +2333,8 @@ mod tests {
     #[test]
     fn a_notice_under_a_lease_returns_at_once_and_is_written_on_release() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
         let guard = coordinator.prompt_guard().unwrap();
         coordinator.notice(b"queued\n").unwrap();
         assert!(capture.text().is_empty());
@@ -2124,7 +2346,8 @@ mod tests {
     #[test]
     fn a_stream_write_waits_for_another_threads_lease_and_fails_on_the_holders_own() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
         let guard = coordinator.prompt_guard().unwrap();
 
         let own = coordinator
@@ -2137,7 +2360,10 @@ mod tests {
                 coordinator.write_around(SharedWriter::new(capture.clone()), b"other\n".to_vec())
             });
             thread::sleep(Duration::from_millis(100));
-            assert!(capture.text().is_empty(), "the write must wait for the lease");
+            assert!(
+                capture.text().is_empty(),
+                "the write must wait for the lease"
+            );
             drop(guard);
             streaming.join().unwrap()
         });
@@ -2158,17 +2384,28 @@ mod tests {
     fn a_lease_granted_to_a_caller_that_gave_up_is_released_by_its_cancellation() {
         let mut actor = actor_with(WidthSource::Fixed(40));
         let (reply, _abandoned) = mpsc::channel();
-        actor.apply(Command::AcquireLease { holder: thread::current().id(), token: 7, reply });
+        actor.apply(Command::AcquireLease {
+            holder: thread::current().id(),
+            token: 7,
+            reply,
+        });
         assert!(actor.leased());
 
         actor.apply(Command::CancelLease { token: 8 });
-        assert!(actor.leased(), "another request's cancellation must not release the lease");
+        assert!(
+            actor.leased(),
+            "another request's cancellation must not release the lease"
+        );
         actor.apply(Command::CancelLease { token: 7 });
         assert!(!actor.leased());
     }
 
     fn drawn_static_status(actor: &mut Actor) {
-        actor.apply(Command::Insert { id: 0, entry: entry("static"), fps: 15 });
+        actor.apply(Command::Insert {
+            id:    0,
+            entry: entry("static"),
+            fps:   15,
+        });
         actor.draw();
     }
 
@@ -2201,7 +2438,9 @@ mod tests {
     }
 
     fn start_broken(coordinator: &StatusCoordinator) -> StatusRuntime {
-        let broken = Status::new("broken", coordinator.clone()).widget(widget(PanicsOnRender)).start();
+        let broken = Status::new("broken", coordinator.clone())
+            .widget(widget(PanicsOnRender))
+            .start();
         // The first insert draws at once, and a reply means the draw has run.
         coordinator.is_idle();
         broken
@@ -2210,7 +2449,8 @@ mod tests {
     #[test]
     fn a_panicking_widget_is_reported_by_its_own_finish_and_the_actor_survives() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
         let broken = start_broken(&coordinator);
         let healthy = Status::new("healthy", coordinator.clone()).start();
 
@@ -2222,12 +2462,16 @@ mod tests {
 
         healthy.finish().unwrap();
         coordinator.flush_transient().unwrap();
-        Status::new("later", coordinator).final_message("later done").finish().unwrap();
+        Status::new("later", coordinator)
+            .final_message("later done")
+            .finish()
+            .unwrap();
     }
 
     #[test]
     fn a_stale_widget_panic_report_reaches_no_other_call() {
-        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let broken = start_broken(&coordinator);
         drop(broken);
 
@@ -2238,7 +2482,8 @@ mod tests {
 
     #[test]
     fn the_closing_flush_reports_a_panicked_status_that_is_still_live() {
-        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let broken = start_broken(&coordinator);
 
         coordinator.notice(b"unrelated\n").unwrap();
@@ -2259,7 +2504,8 @@ mod tests {
             }
         }
 
-        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let seen = Arc::new(Mutex::new(None));
         let started = Instant::now();
         let status = Status::new("widget", coordinator.clone())
@@ -2268,16 +2514,28 @@ mod tests {
         wait_for(|| lock(&seen).is_some());
         assert!(started.elapsed() < Duration::from_secs(5));
         let error = lock(&seen).take().unwrap();
-        assert!(error.to_string().contains("would wait on itself"), "{error}");
+        assert!(
+            error.to_string().contains("would wait on itself"),
+            "{error}"
+        );
         status.finish().unwrap();
     }
 
     #[cfg(feature = "structured")]
     #[test]
     fn a_widget_streaming_beside_a_waiting_stream_fails_at_once() {
-        use crate::output::{Format, Output, PresentationRoute};
+        use crate::output::{
+            Format,
+            Output,
+            PresentationRoute,
+        };
 
-        struct Streams(Output, Arc<Barrier>, AtomicBool, Arc<Mutex<Option<(Error, Duration)>>>);
+        struct Streams(
+            Output,
+            Arc<Barrier>,
+            AtomicBool,
+            Arc<Mutex<Option<(Error, Duration)>>>,
+        );
 
         impl Widget for Streams {
             fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
@@ -2293,7 +2551,8 @@ mod tests {
             }
         }
 
-        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let output = Output::new(Format::Text)
             .with_writer(Capture::default())
             .with_route(PresentationRoute::Around(coordinator.clone()));
@@ -2311,7 +2570,10 @@ mod tests {
         drop(output.stream(&2).text(|value| value).emit());
         wait_for(|| lock(&seen).is_some());
         let (error, elapsed) = lock(&seen).take().unwrap();
-        assert!(error.to_string().contains("would wait on itself"), "{error}");
+        assert!(
+            error.to_string().contains("would wait on itself"),
+            "{error}"
+        );
         assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
         status.finish().unwrap();
     }
@@ -2340,7 +2602,10 @@ mod tests {
         release.wait();
 
         let error = coordinator.notice(b"stuck\n").unwrap_err();
-        assert!(error.to_string().contains("did not answer in time"), "{error}");
+        assert!(
+            error.to_string().contains("did not answer in time"),
+            "{error}"
+        );
         release.wait();
         drop(status);
     }
@@ -2369,7 +2634,10 @@ mod tests {
         release.wait();
 
         let error = coordinator.set_mode(StatusMode::Plain).unwrap_err();
-        assert!(error.to_string().contains("did not answer in time"), "{error}");
+        assert!(
+            error.to_string().contains("did not answer in time"),
+            "{error}"
+        );
         assert!(!coordinator.is_idle());
         release.wait();
         drop(status);
@@ -2389,12 +2657,17 @@ mod tests {
 
         let error = thread::scope(|scope| {
             scope
-                .spawn(|| coordinator.write_around(SharedWriter::new(capture.clone()), b"late\n".to_vec()))
+                .spawn(|| {
+                    coordinator.write_around(SharedWriter::new(capture.clone()), b"late\n".to_vec())
+                })
                 .join()
                 .unwrap()
         })
         .unwrap_err();
-        assert!(error.to_string().contains("did not answer in time"), "{error}");
+        assert!(
+            error.to_string().contains("did not answer in time"),
+            "{error}"
+        );
 
         drop(guard);
         coordinator.flush_transient().unwrap();
@@ -2404,11 +2677,17 @@ mod tests {
     #[test]
     fn a_mode_set_while_the_actor_starts_is_replayed() {
         let capture = Capture::default();
-        let coordinator = StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
-        let status = Status::new("working", coordinator.clone()).final_message("done").start();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .final_message("done")
+            .start();
 
         coordinator.inner.publish_mode(StatusMode::Silent);
-        coordinator.inner.reconcile_mode(coordinator.inner.channel(), mode_to_u8(StatusMode::Live).into());
+        coordinator.inner.reconcile_mode(
+            coordinator.inner.channel(),
+            mode_to_u8(StatusMode::Live).into(),
+        );
 
         status.finish().unwrap();
         assert!(!capture.text().contains("done"));
@@ -2420,14 +2699,21 @@ mod tests {
         let silent = (1 << MODE_BITS) | u64::from(mode_to_u8(StatusMode::Silent));
         let live = (2 << MODE_BITS) | u64::from(mode_to_u8(StatusMode::Live));
         let (reply, _replies) = mpsc::channel();
-        actor.apply(Command::SetMode { stamp: live, reply: reply.clone() });
-        actor.apply(Command::SetMode { stamp: silent, reply });
+        actor.apply(Command::SetMode {
+            stamp: live,
+            reply: reply.clone(),
+        });
+        actor.apply(Command::SetMode {
+            stamp: silent,
+            reply,
+        });
         assert_eq!(actor.mode, StatusMode::Live);
     }
 
     #[test]
     fn set_mode_does_not_start_the_actor() {
-        let coordinator = StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Auto);
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Auto);
         coordinator.set_mode(StatusMode::Silent).unwrap();
         assert!(coordinator.inner.channel.get().is_none());
     }

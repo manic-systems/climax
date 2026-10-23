@@ -2,16 +2,43 @@
 
 #![cfg(test)]
 
-use core::{mem, ptr};
+use core::{
+    mem,
+    ptr,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
-    panic, thread,
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        RawFd,
+    },
+    panic,
+    thread,
 };
 
-use bang::advanced::{Event, Key, KeyEvent, Reaction, Widget, WidgetContext, WidgetId};
-use bang::screw::{RenderCtx, Role, Surface, Widget as ScreenWidget};
+use bang::{
+    advanced::{
+        Event,
+        Key,
+        KeyEvent,
+        Reaction,
+        Widget,
+        WidgetContext,
+        WidgetId,
+    },
+    screw::{
+        RenderCtx,
+        Role,
+        Surface,
+        Widget as ScreenWidget,
+    },
+};
 
 // The signal handlers are process-wide, so both cases run in turn in one test.
 #[test]
@@ -63,9 +90,12 @@ impl Widget for Tall {
                 key: Key::Char('x'),
                 ..
             }) => panic!("kaboom"),
-            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick | _ => {
-                Reaction::Ignored
-            },
+            Event::Key(_)
+            | Event::Paste(_)
+            | Event::UnknownEscape(_)
+            | Event::Resize { .. }
+            | Event::Tick
+            | _ => Reaction::Ignored,
         }
     }
 }
@@ -92,7 +122,9 @@ fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
     drain(&master, &mut output);
 
     let text = String::from_utf8_lossy(&output);
-    let message = text.find("PANIC-MESSAGE").expect("the panic message reached the terminal");
+    let message = text
+        .find("PANIC-MESSAGE")
+        .expect("the panic message reached the terminal");
     assert!(text[..message].contains("frame line 3"));
     assert!(
         !has_cursor_up(&text[message..]),
@@ -103,7 +135,8 @@ fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
 
 fn has_cursor_up(text: &str) -> bool {
     text.split("\x1b[").skip(1).any(|rest| {
-        rest.trim_start_matches(|ch: char| ch.is_ascii_digit()).starts_with('A')
+        rest.trim_start_matches(|ch: char| ch.is_ascii_digit())
+            .starts_with('A')
     })
 }
 
@@ -111,8 +144,8 @@ fn drain(master: &File, output: &mut Vec<u8>) {
     let mut buffer = [0_u8; 1024];
     loop {
         let mut poll = libc::pollfd {
-            fd: master.as_raw_fd(),
-            events: libc::POLLIN,
+            fd:      master.as_raw_fd(),
+            events:  libc::POLLIN,
             revents: 0,
         };
         // SAFETY: poll points at one valid pollfd.
@@ -138,8 +171,8 @@ fn local_modes(file: &File) -> libc::tcflag_t {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

@@ -1,17 +1,34 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
 
 extern crate alloc;
 
 use alloc::sync::Arc;
-use core::{error::Error, mem};
+use core::{
+    error::Error,
+    mem,
+};
 use std::{
-    io::{self, Write},
+    io::{
+        self,
+        Write,
+    },
     sync::Mutex,
 };
 
-use screw::{Align, Color, Renderer, Span, Spans, Style, Table};
+use screw::{
+    Align,
+    Color,
+    Renderer,
+    Span,
+    Spans,
+    Style,
+    Table,
+};
 use screw_pty::EmittedScreen;
 
 #[derive(Clone, Default)]
@@ -19,7 +36,10 @@ struct Shared(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Shared {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.extend_from_slice(buf);
+        self.0
+            .lock()
+            .map_err(|_poison| io::Error::other("sink lock poisoned"))?
+            .extend_from_slice(buf);
         Ok(buf.len())
     }
 
@@ -95,7 +115,9 @@ fn clusters_reach_the_screen_as_single_cells_and_survive_patching() {
     let mut screen = EmittedScreen::new(13, 5);
     for tail in ["x", "y", ""] {
         renderer.draw_surface(rows(tail)).unwrap();
-        screen.feed(&mem::take(&mut *shared.0.lock().expect("sink lock"))).unwrap();
+        screen
+            .feed(&mem::take(&mut *shared.0.lock().expect("sink lock")))
+            .unwrap();
         screen.finish().unwrap();
 
         assert_eq!(screen.cell(0, 0).unwrap().text(), "\u{26a0}\u{fe0f}");
@@ -127,7 +149,9 @@ fn a_height_only_resize_repaints_the_frame() {
     renderer.draw(&frame.as_str()).unwrap();
     screen.feed(&shared.0.lock().expect("sink lock")).unwrap();
 
-    let shown: Vec<String> = (0..3).map(|row| screen.trimmed_line(row).unwrap()).collect();
+    let shown: Vec<String> = (0..3)
+        .map(|row| screen.trimmed_line(row).unwrap())
+        .collect();
     assert_eq!(shown, ["r0", "r1", "r2"]);
 }
 
@@ -159,7 +183,10 @@ fn clusters_split_across_writes_patch_like_a_fresh_draw() {
     drawn.finish().unwrap();
 
     assert_eq!(patched.trimmed_line(0), drawn.trimmed_line(0));
-    assert_eq!(patched.trimmed_line(0).unwrap(), "\u{2764}\u{fe0f}🇯🇵👩\u{200d}💻cb");
+    assert_eq!(
+        patched.trimmed_line(0).unwrap(),
+        "\u{2764}\u{fe0f}🇯🇵👩\u{200d}💻cb"
+    );
     assert_eq!(patched.cell(0, 6).unwrap().text(), "c");
 }
 

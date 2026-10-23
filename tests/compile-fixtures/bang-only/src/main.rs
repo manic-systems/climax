@@ -44,12 +44,12 @@ mod tests {
 
     #[test]
     fn a_scripted_interaction_drives_a_text_prompt() {
-        let interaction = scripted_interaction([[
-            Event::char('a'),
-            Event::char('b'),
-            Event::key(Key::Enter),
-        ]]);
-        let outcome = bang::text("name").interaction(interaction).interact().unwrap();
+        let interaction =
+            scripted_interaction([[Event::char('a'), Event::char('b'), Event::key(Key::Enter)]]);
+        let outcome = bang::text("name")
+            .interaction(interaction)
+            .interact()
+            .unwrap();
         assert_eq!(outcome, PromptOutcome::Submit("ab".to_owned()));
     }
 }

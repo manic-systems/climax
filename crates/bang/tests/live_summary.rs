@@ -4,17 +4,30 @@
 
 mod summary_common;
 
-use std::{env, sync::Once};
+use std::{
+    env,
+    sync::Once,
+};
 
-use bang::{ConfirmPrompt, PromptOutcome};
-use summary_common::{DIM_SUMMARY, find, rfind, run_confirm};
+use bang::{
+    ConfirmPrompt,
+    PromptOutcome,
+};
+use summary_common::{
+    DIM_SUMMARY,
+    find,
+    rfind,
+    run_confirm,
+};
 
 fn colours_on() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         // SAFETY: runs once before any test in this binary reads the
         // environment through screw, and tests only ever remove the variable.
-        unsafe { env::remove_var("NO_COLOR"); }
+        unsafe {
+            env::remove_var("NO_COLOR");
+        }
     });
 }
 

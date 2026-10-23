@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::collections::BTreeMap;
-use core::{fmt, str::FromStr};
+use core::{
+    fmt,
+    str::FromStr,
+};
 
 /// A value a widget submits.
 #[derive(Clone, Debug, PartialEq)]
@@ -178,9 +181,9 @@ impl Date {
         };
         let year = (year_of_era + era * 400).saturating_add(i64::from(month <= 2));
         Self {
-            year: i32::try_from(year).unwrap_or(if year < 0 { i32::MIN } else { i32::MAX }),
+            year:  i32::try_from(year).unwrap_or(if year < 0 { i32::MIN } else { i32::MAX }),
             month: u8::try_from(month).unwrap_or(1),
-            day: u8::try_from(day).unwrap_or(1),
+            day:   u8::try_from(day).unwrap_or(1),
         }
     }
 
@@ -191,9 +194,8 @@ impl Date {
         let era = year.div_euclid(400);
         let year_of_era = year - era * 400;
         let month = i64::from(self.month);
-        let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5
-            + i64::from(self.day)
-            - 1;
+        let day_of_year =
+            (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(self.day) - 1;
         let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
         era * 146_097 + day_of_era - 719_468
     }
@@ -218,7 +220,13 @@ impl FromStr for Date {
             .ok_or_else(|| invalid_date(value))?
             .parse::<i32>()
             .ok()
-            .and_then(|year| if negative { year.checked_neg() } else { Some(year) })
+            .and_then(|year| {
+                if negative {
+                    year.checked_neg()
+                } else {
+                    Some(year)
+                }
+            })
             .ok_or_else(|| invalid_date(value))?;
         let month = parts
             .next()

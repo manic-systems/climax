@@ -2,12 +2,26 @@
 
 #![cfg(test)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
-    process::{Command, Stdio},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        RawFd,
+    },
+    process::{
+        Command,
+        Stdio,
+    },
     thread,
     time::Instant,
 };
@@ -138,8 +152,8 @@ fn open_pty(rows: u16) -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
     let size = libc::winsize {
-        ws_row: rows,
-        ws_col: 80,
+        ws_row:    rows,
+        ws_col:    80,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };

@@ -1,14 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use core::fmt;
-use std::{io, os::fd::OwnedFd, sync::OnceLock};
-
-use rustix::{
-    io::{Errno, read},
-    pipe::{PipeFlags, pipe_with},
+use std::{
+    io,
+    os::fd::OwnedFd,
+    sync::OnceLock,
 };
 
-use crate::cleanup::{CleanupFailures, CleanupStage, staged};
+use rustix::{
+    io::{
+        Errno,
+        read,
+    },
+    pipe::{
+        PipeFlags,
+        pipe_with,
+    },
+};
+
+use crate::cleanup::{
+    CleanupFailures,
+    CleanupStage,
+    staged,
+};
 
 /// One of the terminal signals a [`SignalGuard`] catches.
 ///
@@ -64,7 +78,7 @@ static PIPE: OnceLock<Pipe> = OnceLock::new();
 
 #[derive(Debug)]
 struct Pipe {
-    read_fd: OwnedFd,
+    read_fd:   OwnedFd,
     _write_fd: OwnedFd,
 }
 
@@ -120,17 +134,18 @@ impl SignalPoller {
     }
 }
 
-/// Catches `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` and queues them for polling.
+/// Catches `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` and queues them for
+/// polling.
 ///
 /// A signal the process was ignoring when the guard was installed stays
 /// ignored and is never queued. Any other previous handler is replaced while
-/// the guard is installed and is never chained to. The previous handlers come back on
-/// [`SignalGuard::restore`] or on drop.
+/// the guard is installed and is never chained to. The previous handlers come
+/// back on [`SignalGuard::restore`] or on drop.
 #[derive(Debug)]
 pub struct SignalGuard {
-    poller: SignalPoller,
+    poller:   SignalPoller,
     previous: Vec<(Signal, handlers::Previous)>,
-    active: bool,
+    active:   bool,
 }
 
 impl SignalGuard {
@@ -236,12 +251,22 @@ fn install_terminal_handlers_exclusive() -> io::Result<SignalGuard> {
 /// The raw `sigaction` calls rustix does not cover, kept in one place.
 mod handlers {
     use core::{
-        mem, ptr,
-        sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
+        mem,
+        ptr,
+        sync::atomic::{
+            AtomicBool,
+            AtomicI32,
+            AtomicU8,
+            Ordering,
+        },
     };
     use std::{
         io,
-        os::fd::{AsRawFd as _, BorrowedFd, OwnedFd},
+        os::fd::{
+            AsRawFd as _,
+            BorrowedFd,
+            OwnedFd,
+        },
     };
 
     use rustix::io::write;
@@ -296,7 +321,8 @@ mod handlers {
     pub(super) fn install(signal: Signal) -> io::Result<Option<Previous>> {
         // SAFETY: zeroed storage is written by sigaction before it is read
         let mut previous = unsafe { mem::zeroed::<libc::sigaction>() };
-        // SAFETY: a null new action only queries, and previous is valid for the call
+        // SAFETY: a null new action only queries, and previous is valid for the
+        // call
         if unsafe { libc::sigaction(signal.as_raw(), ptr::null(), &raw mut previous) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -304,7 +330,8 @@ mod handlers {
             return Ok(None);
         }
 
-        // SAFETY: a zeroed sigaction is a valid starting point and is fully set below
+        // SAFETY: a zeroed sigaction is a valid starting point and is fully set
+        // below
         let mut action = unsafe { mem::zeroed::<libc::sigaction>() };
         action.sa_sigaction = handle as *const () as usize;
         action.sa_flags = 0;
@@ -381,7 +408,9 @@ mod handlers {
         }
         if !slot.is_null() {
             // SAFETY: as above
-            unsafe { *slot = saved; }
+            unsafe {
+                *slot = saved;
+            }
         }
     }
 }

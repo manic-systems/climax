@@ -2,16 +2,31 @@
 
 #![cfg(test)]
 
-use core::{mem, ptr, time::Duration};
+use core::{
+    mem,
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
 };
 
-use bang::{ErrorKind, PromptOutcome, terminal::Signal};
+use bang::{
+    ErrorKind,
+    PromptOutcome,
+    terminal::Signal,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -97,11 +112,15 @@ impl DefaultDispositions {
         // SAFETY: a zeroed sigset_t is plain data that sigemptyset initialises.
         let mut set = unsafe { mem::zeroed::<libc::sigset_t>() };
         // SAFETY: set is a valid sigset_t for the call.
-        unsafe { libc::sigemptyset(&raw mut set); }
+        unsafe {
+            libc::sigemptyset(&raw mut set);
+        }
         let previous = TERMINAL_SIGNALS
             .map(|signal| {
                 // SAFETY: set was initialised by sigemptyset above.
-                unsafe { libc::sigaddset(&raw mut set, signal); }
+                unsafe {
+                    libc::sigaddset(&raw mut set, signal);
+                }
                 // SAFETY: SIG_DFL is a valid disposition.
                 (signal, unsafe { libc::signal(signal, libc::SIG_DFL) })
             })
@@ -118,7 +137,9 @@ impl Drop for DefaultDispositions {
     fn drop(&mut self) {
         for &(signal, previous) in &self.0 {
             // SAFETY: restoring the disposition read in reset.
-            unsafe { libc::signal(signal, previous); }
+            unsafe {
+                libc::signal(signal, previous);
+            }
         }
     }
 }
@@ -152,8 +173,8 @@ fn termios(file: &File) -> Vec<u64> {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

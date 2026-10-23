@@ -2,11 +2,21 @@
 
 #![cfg(test)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
 };
@@ -46,8 +56,8 @@ fn session_on_a_caller_owned_handle_submits_on_enter_without_touching_process_st
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,
@@ -69,7 +79,7 @@ fn open_pty() -> (File, File) {
 /// that some operation never writes to it can be checked rather than assumed.
 struct StderrCapture {
     saved: RawFd,
-    read: File,
+    read:  File,
 }
 
 impl StderrCapture {
@@ -82,12 +92,22 @@ impl StderrCapture {
         let created = unsafe { libc::pipe(pipe.as_mut_ptr()) };
         assert_eq!(created, 0, "create pipe: {}", io::Error::last_os_error());
         let [read_fd, write_fd] = pipe;
-        // SAFETY: write_fd is a valid, open fd; STDERR names the fd being replaced.
+        // SAFETY: write_fd is a valid, open fd; STDERR names the fd being
+        // replaced.
         let redirected = unsafe { libc::dup2(write_fd, STDERR) };
-        assert_eq!(redirected, STDERR, "redirect stderr: {}", io::Error::last_os_error());
-        // SAFETY: write_fd was just duplicated onto STDERR and its own copy is unused.
-        unsafe { libc::close(write_fd); }
-        // SAFETY: read_fd was just returned by pipe above as a live, owned descriptor.
+        assert_eq!(
+            redirected,
+            STDERR,
+            "redirect stderr: {}",
+            io::Error::last_os_error()
+        );
+        // SAFETY: write_fd was just duplicated onto STDERR and its own copy is
+        // unused.
+        unsafe {
+            libc::close(write_fd);
+        }
+        // SAFETY: read_fd was just returned by pipe above as a live, owned
+        // descriptor.
         let read = unsafe { File::from_raw_fd(read_fd) };
         Self { saved, read }
     }
@@ -95,11 +115,16 @@ impl StderrCapture {
     /// Restores the original stderr and returns whatever was written to it
     /// while captured.
     fn restore(mut self) -> Vec<u8> {
-        // SAFETY: self.saved is a live descriptor duplicated from stderr in `install`;
-        // dup2 closes whatever was on STDERR (the pipe's write end) before replacing it.
-        unsafe { libc::dup2(self.saved, STDERR); }
+        // SAFETY: self.saved is a live descriptor duplicated from stderr in
+        // `install`; dup2 closes whatever was on STDERR (the pipe's
+        // write end) before replacing it.
+        unsafe {
+            libc::dup2(self.saved, STDERR);
+        }
         // SAFETY: self.saved is no longer needed once restored.
-        unsafe { libc::close(self.saved); }
+        unsafe {
+            libc::close(self.saved);
+        }
         let mut buffer = Vec::new();
         self.read
             .read_to_end(&mut buffer)

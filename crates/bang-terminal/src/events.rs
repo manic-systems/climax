@@ -3,19 +3,38 @@
 use alloc::collections::VecDeque;
 use core::time::Duration;
 use std::{
-    io::{self, Read},
-    os::fd::{AsFd, OwnedFd},
+    io::{
+        self,
+        Read,
+    },
+    os::fd::{
+        AsFd,
+        OwnedFd,
+    },
     time::Instant,
 };
 
 use bang_core::Event;
 use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    io::{Errno, read},
+    event::{
+        PollFd,
+        PollFlags,
+        Timespec,
+        poll,
+    },
+    io::{
+        Errno,
+        read,
+    },
 };
 use screw::Viewport;
 
-use crate::{Decoder, Signal, SignalPoller, decoder::EscapeState};
+use crate::{
+    Decoder,
+    Signal,
+    SignalPoller,
+    decoder::EscapeState,
+};
 
 const DEFAULT_ESCAPE_TIMEOUT: Duration = Duration::from_millis(35);
 const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -23,7 +42,8 @@ const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// One result of [`TerminalEvents::next_event`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TerminalPoll {
-    /// A decoded input event, including `Event::Resize` from the resize terminal.
+    /// A decoded input event, including `Event::Resize` from the resize
+    /// terminal.
     Event(Event),
     /// A signal caught by the signal guard.
     Signal(Signal),
@@ -53,18 +73,18 @@ enum InputReadiness {
 /// polled or [`TerminalEvents::blocking`] for a plain reader, then call
 /// [`TerminalEvents::next_event`] in a loop.
 pub struct TerminalEvents<R> {
-    input: R,
-    signals: Option<SignalPoller>,
-    resize: Option<OwnedFd>,
-    clock: fn() -> Instant,
-    wait: WaitMode,
-    decoder: Decoder,
-    pending: VecDeque<TerminalPoll>,
-    last_size: Option<Viewport>,
+    input:            R,
+    signals:          Option<SignalPoller>,
+    resize:           Option<OwnedFd>,
+    clock:            fn() -> Instant,
+    wait:             WaitMode,
+    decoder:          Decoder,
+    pending:          VecDeque<TerminalPoll>,
+    last_size:        Option<Viewport>,
     size_initialized: bool,
-    escape_timeout: Duration,
-    escape_since: Option<Instant>,
-    ended: bool,
+    escape_timeout:   Duration,
+    escape_since:     Option<Instant>,
+    ended:            bool,
 }
 
 impl<R> TerminalEvents<R> {
@@ -109,7 +129,8 @@ impl<R> TerminalEvents<R> {
         self
     }
 
-    /// Report `Event::Resize` whenever the terminal behind `terminal` changes size.
+    /// Report `Event::Resize` whenever the terminal behind `terminal` changes
+    /// size.
     #[must_use]
     pub fn resize_from(mut self, terminal: OwnedFd) -> Self {
         self.resize = Some(terminal);
@@ -151,8 +172,9 @@ impl<R> TerminalEvents<R>
 where
     R: Read,
 {
-    /// Read the terminal size once and treat it as already reported, so the first poll
-    /// does not repeat it as a resize. `None` without a [`Self::resize_from`] terminal.
+    /// Read the terminal size once and treat it as already reported, so the
+    /// first poll does not repeat it as a resize. `None` without a
+    /// [`Self::resize_from`] terminal.
     pub fn initial_terminal_size(&mut self) -> Option<Viewport> {
         let size = self.current_size();
         self.size_initialized = true;
@@ -186,7 +208,10 @@ where
     /// # Errors
     ///
     /// Fails when reading or polling the input fails.
-    pub fn next_event_within(&mut self, limit: Option<Duration>) -> io::Result<Option<TerminalPoll>> {
+    pub fn next_event_within(
+        &mut self,
+        limit: Option<Duration>,
+    ) -> io::Result<Option<TerminalPoll>> {
         if let Some(item) = self.pending.pop_front() {
             return Ok(Some(item));
         }
@@ -225,8 +250,9 @@ where
             if let Some(chunk) = input {
                 let decoded = self.decoder.feed(&chunk);
                 self.queue_events(decoded);
-                // Only arm the deadline for a prefix `flush_escape` can resolve;
-                // an incomplete CSI has to wait for its final byte regardless.
+                // Only arm the deadline for a prefix `flush_escape` can
+                // resolve; an incomplete CSI has to wait for
+                // its final byte regardless.
                 if self.decoder.escape_state() == EscapeState::Ambiguous
                     && !matches!(self.wait, WaitMode::Sync)
                 {
@@ -251,7 +277,10 @@ where
     }
 
     fn wait_for_input(&mut self, cap: Option<Duration>) -> io::Result<InputReadiness> {
-        let timeout = cap.map_or_else(|| self.wait_timeout(), |limit| self.wait_timeout().min(limit));
+        let timeout = cap.map_or_else(
+            || self.wait_timeout(),
+            |limit| self.wait_timeout().min(limit),
+        );
         match &mut self.wait {
             WaitMode::Sync => {
                 let mut buffer = [0_u8; 256];
@@ -318,9 +347,9 @@ pub fn resize_event(size: Viewport) -> Event {
 
 // Reads the fd `poll` just reported ready, bypassing any userspace buffer a
 // generic `R: Read` might hold bytes in that `poll` cannot see. It takes one
-// byte at a time, including inside a paste, so typeahead behind a key or a paste
-// end that finishes the session stays in the kernel queue for whoever reads the
-// terminal next.
+// byte at a time, including inside a paste, so typeahead behind a key or a
+// paste end that finishes the session stays in the kernel queue for whoever
+// reads the terminal next.
 fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness> {
     if !wait_for_fd(fd, timeout)? {
         return Ok(InputReadiness::Timeout);
@@ -337,7 +366,7 @@ fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness
 fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
     let mut descriptors = [PollFd::new(fd, PollFlags::IN)];
     let spec = Timespec {
-        tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
+        tv_sec:  i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
         tv_nsec: timeout.subsec_nanos().into(),
     };
     match poll(&mut descriptors, Some(&spec)) {
@@ -358,12 +387,25 @@ fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
-    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::sync::atomic::{
+        AtomicBool,
+        Ordering,
+    };
     use std::{
         fs::File,
-        io::{BufReader, Cursor, Write as _},
-        os::{fd::BorrowedFd, unix::net::UnixStream},
-        sync::{OnceLock, mpsc},
+        io::{
+            BufReader,
+            Cursor,
+            Write as _,
+        },
+        os::{
+            fd::BorrowedFd,
+            unix::net::UnixStream,
+        },
+        sync::{
+            OnceLock,
+            mpsc,
+        },
         thread,
     };
 
@@ -372,7 +414,11 @@ mod tests {
     use super::*;
     use crate::{
         SignalGuard,
-        testing::{SIGNAL_LOCK, pty, resize_pty},
+        testing::{
+            SIGNAL_LOCK,
+            pty,
+            resize_pty,
+        },
     };
 
     #[test]
@@ -402,7 +448,7 @@ mod tests {
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize {
                 cols: 100,
-                rows: 30
+                rows: 30,
             }),
         );
         assert_eq!(
@@ -570,7 +616,9 @@ mod tests {
     fn pollable_source_delivers_a_burst_larger_than_one_read_without_the_next_byte() {
         let (reader, mut writer) = UnixStream::pair().unwrap();
         let alphabet = b"abcdefghijklmnopqrstuvwxyz";
-        let burst: Vec<u8> = (0..300).map(|index| alphabet[index % alphabet.len()]).collect();
+        let burst: Vec<u8> = (0..300)
+            .map(|index| alphabet[index % alphabet.len()])
+            .collect();
         let burst_for_writer = burst.clone();
         let trailing_sent = Arc::new(AtomicBool::new(false));
         let writer_sent = Arc::clone(&trailing_sent);
@@ -582,8 +630,7 @@ mod tests {
             writer.write_all(b"z").unwrap();
         });
 
-        let mut events =
-            TerminalEvents::pollable(Buffered(BufReader::new(reader))).unwrap();
+        let mut events = TerminalEvents::pollable(Buffered(BufReader::new(reader))).unwrap();
         for byte in burst {
             assert_eq!(
                 events.next_event().unwrap(),

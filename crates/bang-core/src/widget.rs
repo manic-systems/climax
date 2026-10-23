@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use crate::{Event, Value, WidgetId};
+use crate::{
+    Event,
+    Value,
+    WidgetId,
+};
 
 /// context from a handled event
 #[derive(Debug, Default)]
@@ -77,7 +81,8 @@ impl Reaction {
 pub trait Widget: screw::Widget {
     /// Identifies the widget to drivers and actions.
     fn id(&self) -> WidgetId;
-    /// Handle `event`, using `cx` to request focus changes, and report what happened.
+    /// Handle `event`, using `cx` to request focus changes, and report what
+    /// happened.
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction;
 
     /// The value the widget would submit now, if it has one. Defaults to none.

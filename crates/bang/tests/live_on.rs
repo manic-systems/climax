@@ -2,11 +2,20 @@
 
 #![cfg(test)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
 };
@@ -21,7 +30,9 @@ fn live_on_runs_two_prompts_in_a_row_on_the_same_handle() {
     let (results_tx, results_rx) = mpsc::channel();
     thread::spawn(move || {
         let interaction = bang::Interaction::live_on(slave);
-        let first = bang::text("first").interaction(interaction.clone()).interact();
+        let first = bang::text("first")
+            .interaction(interaction.clone())
+            .interact();
         let _first_sent = first_done_tx.send(());
         let second = bang::text("second").interaction(interaction).interact();
         let _results_sent = results_tx.send((first, second));
@@ -34,7 +45,9 @@ fn live_on_runs_two_prompts_in_a_row_on_the_same_handle() {
     // actually been read, because raw mode toggles off and back on between
     // sessions on the same handle; sending it earlier races unread bytes
     // against that toggle and desyncs the line discipline.
-    first_done_rx.recv_timeout(TIMEOUT).expect("first prompt timed out");
+    first_done_rx
+        .recv_timeout(TIMEOUT)
+        .expect("first prompt timed out");
     master.write_all(b"beta\r").expect("write second answer");
     master.flush().expect("flush PTY input");
 
@@ -52,8 +65,8 @@ fn live_on_runs_two_prompts_in_a_row_on_the_same_handle() {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

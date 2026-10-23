@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{cell::RefCell, rc::Rc, time::Instant};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::Instant,
+};
 
-use screw::{RenderCtx, Runtime, Stack, Style, Surface, Widget, local_widget, widget};
+use screw::{
+    RenderCtx,
+    Runtime,
+    Stack,
+    Style,
+    Surface,
+    Widget,
+    local_widget,
+    widget,
+};
 
 struct LocalView(Rc<RefCell<String>>);
 

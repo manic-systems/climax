@@ -3,7 +3,14 @@
 use climax::{
     caress::Shell,
     install::manual,
-    pound::{ArgSpec, CommandSpec, Error, Kind, Matches, Parse},
+    pound::{
+        ArgSpec,
+        CommandSpec,
+        Error,
+        Kind,
+        Matches,
+        Parse,
+    },
 };
 
 struct Args {

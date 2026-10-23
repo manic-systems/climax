@@ -2,7 +2,15 @@
 
 use core::fmt;
 
-use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
+use crate::{
+    InputAnchor,
+    Line,
+    LocalWidgetRef,
+    Stack,
+    WidgetRef,
+    local_widget,
+    widget,
+};
 
 /// Collects rows into a vertical [`Stack`].
 ///
@@ -15,8 +23,7 @@ pub struct LayoutBuilder<H = WidgetRef> {
 
 impl<H> fmt::Debug for LayoutBuilder<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f
-            .debug_struct("LayoutBuilder")
+        f.debug_struct("LayoutBuilder")
             .field("rows", &self.rows.len())
             .finish()
     }

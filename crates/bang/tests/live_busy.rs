@@ -2,16 +2,29 @@
 
 #![cfg(test)]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{FromRawFd as _, RawFd},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        FromRawFd as _,
+        RawFd,
+    },
     sync::mpsc,
     thread,
 };
 
-use bang::{ErrorKind, PromptOutcome};
+use bang::{
+    ErrorKind,
+    PromptOutcome,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -47,8 +60,8 @@ fn a_second_session_on_another_handle_is_busy_and_the_first_is_unharmed() {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,

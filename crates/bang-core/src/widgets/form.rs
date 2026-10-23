@@ -3,11 +3,30 @@
 use alloc::collections::BTreeMap;
 
 use screw::{
-    LocalWidgetRef, RenderCtx, Role, Span, Spans, Stack, Surface, Text, TickInterest,
-    VerticalSize, combine_tick_interest, local_widget,
+    LocalWidgetRef,
+    RenderCtx,
+    Role,
+    Span,
+    Spans,
+    Stack,
+    Surface,
+    Text,
+    TickInterest,
+    VerticalSize,
+    combine_tick_interest,
+    local_widget,
 };
 
-use crate::{Context, Event, FocusTarget, Key, Reaction, Value, Widget, WidgetId};
+use crate::{
+    Context,
+    Event,
+    FocusTarget,
+    Key,
+    Reaction,
+    Value,
+    Widget,
+    WidgetId,
+};
 
 /// Several named widgets shown together, with one active at a time.
 /// Submitting the form yields an object with each field's value under its name.
@@ -53,7 +72,7 @@ impl Form {
             "form field name '{owned}' is already used"
         );
         self.fields.push(FormField {
-            name: owned,
+            name:     owned,
             widget:   Box::new(widget),
             accepted: None,
         });
@@ -136,7 +155,10 @@ impl Form {
                 value
             } else {
                 let mut cx = Context::new();
-                match self.fields[index].widget.handle(Event::key(Key::Enter), &mut cx) {
+                match self.fields[index]
+                    .widget
+                    .handle(Event::key(Key::Enter), &mut cx)
+                {
                     Reaction::Submit(value) => {
                         self.fields[index].accepted = Some(value.clone());
                         value
@@ -187,14 +209,10 @@ impl screw::Widget for Form {
             let active = index == self.active;
             children.push(local_widget(Spans::new([
                 Span::new(if active { "> " } else { "  " }).role(Role::Dim),
-                Span::new(field.name.clone()).role(if active {
-                    Role::Selected
-                } else {
-                    Role::Dim
-                }),
+                Span::new(field.name.clone()).role(if active { Role::Selected } else { Role::Dim }),
             ])));
             children.push(local_widget(FieldWidget {
-                widget: &*field.widget,
+                widget:  &*field.widget,
                 focused: active,
             }));
         }
@@ -259,7 +277,11 @@ impl Widget for Form {
         let Some(field) = self.fields.get_mut(self.active) else {
             return match event {
                 Event::Key(key) if key.key == Key::Enter => Reaction::Submit(self.object_value()),
-                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
+                Event::Key(_)
+                | Event::Paste(_)
+                | Event::UnknownEscape(_)
+                | Event::Resize { .. }
+                | Event::Tick => Reaction::Ignored,
             };
         };
 
@@ -306,7 +328,7 @@ struct FormField {
 
 /// Draws a field, withholding the terminal cursor unless it has focus.
 struct FieldWidget<'a> {
-    widget: &'a dyn Widget,
+    widget:  &'a dyn Widget,
     focused: bool,
 }
 
@@ -336,7 +358,10 @@ mod tests {
     use screw::Surface;
 
     use super::*;
-    use crate::{KeyEvent, widgets::TextInput};
+    use crate::{
+        KeyEvent,
+        widgets::TextInput,
+    };
 
     fn press(form: &mut Form, key: Key) -> Reaction {
         form.handle(Event::Key(KeyEvent::new(key)), &mut Context::new())
@@ -371,7 +396,10 @@ mod tests {
 
         let reaction = press(&mut form, Key::Enter);
 
-        assert_eq!(reaction, Reaction::Focus(FocusTarget::Widget("name".into())));
+        assert_eq!(
+            reaction,
+            Reaction::Focus(FocusTarget::Widget("name".into()))
+        );
         assert_eq!(form.active_index(), 0);
 
         press(&mut form, Key::Char('a'));
@@ -406,12 +434,16 @@ mod tests {
 
         fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
             match event {
-                Event::Key(key) if key.key == Key::Enter => Reaction::Submit(Value::from(self.value)),
+                Event::Key(key) if key.key == Key::Enter => {
+                    Reaction::Submit(Value::from(self.value))
+                },
                 Event::Key(_) => {
                     self.value = "new";
                     Reaction::Focus(FocusTarget::Next)
                 },
-                Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
+                Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
+                    Reaction::Ignored
+                },
             }
         }
 
@@ -453,7 +485,11 @@ mod tests {
         fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
             match event {
                 Event::Key(key) if key.key == Key::Enter => Reaction::Submit(Value::from("answer")),
-                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
+                Event::Key(_)
+                | Event::Paste(_)
+                | Event::UnknownEscape(_)
+                | Event::Resize { .. }
+                | Event::Tick => Reaction::Ignored,
             }
         }
     }
@@ -477,7 +513,11 @@ mod tests {
                     self.done = true;
                     Reaction::Submit(Value::from("once"))
                 },
-                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
+                Event::Key(_)
+                | Event::Paste(_)
+                | Event::UnknownEscape(_)
+                | Event::Resize { .. }
+                | Event::Tick => Reaction::Ignored,
             }
         }
     }
@@ -517,7 +557,10 @@ mod tests {
                     Reaction::Submit(Value::from("spun"))
                 },
                 Event::Tick => Reaction::Changed,
-                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } => Reaction::Ignored,
+                Event::Key(_)
+                | Event::Paste(_)
+                | Event::UnknownEscape(_)
+                | Event::Resize { .. } => Reaction::Ignored,
             }
         }
     }
@@ -529,7 +572,10 @@ mod tests {
             .with_field("nick", TextInput::new("nick"));
         press(&mut form, Key::Enter);
         press(&mut form, Key::Backtab);
-        assert_eq!(form.handle(Event::Tick, &mut Context::new()), Reaction::Changed);
+        assert_eq!(
+            form.handle(Event::Tick, &mut Context::new()),
+            Reaction::Changed
+        );
         press(&mut form, Key::Tab);
 
         assert_eq!(
@@ -565,7 +611,10 @@ mod tests {
                     self.count += 1;
                     Reaction::Changed
                 },
-                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } => Reaction::Ignored,
+                Event::Key(_)
+                | Event::Paste(_)
+                | Event::UnknownEscape(_)
+                | Event::Resize { .. } => Reaction::Ignored,
             }
         }
 

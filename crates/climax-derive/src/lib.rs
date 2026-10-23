@@ -7,8 +7,15 @@
 
 use pound_derive_impl::Options;
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenStream as TokenStream2, TokenTree};
-use quote::{quote, quote_spanned};
+use proc_macro2::{
+    Span,
+    TokenStream as TokenStream2,
+    TokenTree,
+};
+use quote::{
+    quote,
+    quote_spanned,
+};
 
 const OPTIONS: Options = Options::new("::climax::pound", true);
 
@@ -29,10 +36,12 @@ pub fn serde(args: TokenStream, item: TokenStream) -> TokenStream {
 
 fn expand_serde(args: TokenStream2, item: &TokenStream2) -> TokenStream2 {
     match serde_derive_names(args) {
-        Ok(names) => quote! {
-            #[derive(#(::climax::serde::#names),*)]
-            #[serde(crate = "::climax::serde")]
-            #item
+        Ok(names) => {
+            quote! {
+                #[derive(#(::climax::serde::#names),*)]
+                #[serde(crate = "::climax::serde")]
+                #item
+            }
         },
         Err((span, message)) => quote_spanned! { span => compile_error!(#message); #item },
     }
@@ -57,7 +66,8 @@ fn serde_derive_names(args: TokenStream2) -> Result<Vec<proc_macro2::Ident>, (Sp
             Some(other) => {
                 return Err((
                     other.span(),
-                    "expected `,` between serde derive names, which are plain names rather than paths"
+                    "expected `,` between serde derive names, which are plain names rather than \
+                     paths"
                         .to_owned(),
                 ));
             },
@@ -79,23 +89,38 @@ mod tests {
     use super::*;
 
     fn expand(args: &str, item: &str) -> String {
-        expand_serde(TokenStream2::from_str(args).unwrap(), &TokenStream2::from_str(item).unwrap())
-            .to_string()
+        expand_serde(
+            TokenStream2::from_str(args).unwrap(),
+            &TokenStream2::from_str(item).unwrap(),
+        )
+        .to_string()
     }
 
     #[test]
     fn listed_names_become_climax_rooted_derives() {
-        let out = expand("Serialize, Deserialize,", "#[serde(rename_all = \"kebab-case\")] struct A;");
-        assert!(out.starts_with(
-            "# [derive (:: climax :: serde :: Serialize , :: climax :: serde :: Deserialize)] \
-             # [serde (crate = \"::climax::serde\")] \
-             # [serde (rename_all = \"kebab-case\")] struct A ;"
-        ), "{out}");
+        let out = expand(
+            "Serialize, Deserialize,",
+            "#[serde(rename_all = \"kebab-case\")] struct A;",
+        );
+        assert!(
+            out.starts_with(
+                "# [derive (:: climax :: serde :: Serialize , :: climax :: serde :: Deserialize)] \
+                 # [serde (crate = \"::climax::serde\")] # [serde (rename_all = \"kebab-case\")] \
+                 struct A ;"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
     fn an_empty_list_and_non_names_are_rejected_with_the_item_kept() {
-        for args in ["", "Serialize Deserialize", "serde::Serialize", "1", "Serialize,,"] {
+        for args in [
+            "",
+            "Serialize Deserialize",
+            "serde::Serialize",
+            "1",
+            "Serialize,,",
+        ] {
             let out = expand(args, "struct A;");
             assert!(out.contains("compile_error"), "{args}: {out}");
             assert!(out.ends_with("struct A ;"), "{args}: {out}");

@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-#[cfg(feature = "interactive")]
-use bang::{advanced::LiveSessionError, terminal::Signal};
-use core::{error, fmt, result};
+use core::{
+    error,
+    fmt,
+    result,
+};
 use std::io;
+
+#[cfg(feature = "interactive")]
+use bang::{
+    advanced::LiveSessionError,
+    terminal::Signal,
+};
 
 /// The result type used across `climax`, with [`Error`] as the error.
 pub type Result<T> = result::Result<T, Error>;
@@ -49,12 +57,12 @@ pub enum ErrorKind {
     reason = "the output module sets the signal when it relays an interrupted error"
 )]
 pub struct Error {
-    kind: ErrorKind,
-    message: String,
+    kind:              ErrorKind,
+    message:           String,
     pub(crate) signal: Option<i32>,
-    exit_code: Option<u8>,
-    source: Option<Box<dyn error::Error + Send + Sync + 'static>>,
-    related: Vec<Self>,
+    exit_code:         Option<u8>,
+    source:            Option<Box<dyn error::Error + Send + Sync + 'static>>,
+    related:           Vec<Self>,
 }
 
 impl Error {
@@ -62,12 +70,12 @@ impl Error {
     /// An error carrying only a message, of kind [`ErrorKind::Message`].
     pub fn message(message: impl Into<String>) -> Self {
         Self {
-            kind: ErrorKind::Message,
-            message: message.into(),
-            signal: None,
+            kind:      ErrorKind::Message,
+            message:   message.into(),
+            signal:    None,
             exit_code: None,
-            source: None,
-            related: Vec::new(),
+            source:    None,
+            related:   Vec::new(),
         }
     }
 
@@ -78,7 +86,10 @@ impl Error {
     /// prints nothing. Return it when the user declines to continue.
     ///
     /// ```
-    /// use climax::{Error, ErrorKind};
+    /// use climax::{
+    ///     Error,
+    ///     ErrorKind,
+    /// };
     ///
     /// let error = Error::cancelled();
     /// assert_eq!(error.kind(), ErrorKind::Cancelled);
@@ -86,18 +97,18 @@ impl Error {
     /// ```
     pub fn cancelled() -> Self {
         Self {
-            kind: ErrorKind::Cancelled,
-            message: "cancelled".to_owned(),
-            signal: None,
+            kind:      ErrorKind::Cancelled,
+            message:   "cancelled".to_owned(),
+            signal:    None,
             exit_code: None,
-            source: None,
-            related: Vec::new(),
+            source:    None,
+            related:   Vec::new(),
         }
     }
 
     #[must_use]
-    /// Wrap an application error as the source, of kind [`ErrorKind::Application`].
-    /// The message is the source's own text.
+    /// Wrap an application error as the source, of kind
+    /// [`ErrorKind::Application`]. The message is the source's own text.
     pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
         Self::with_source(ErrorKind::Application, source)
     }
@@ -111,12 +122,12 @@ impl Error {
     ) -> Self {
         let combined = format!("{}: {source}", message.into());
         Self {
-            kind: ErrorKind::Application,
-            message: combined,
-            signal: None,
+            kind:      ErrorKind::Application,
+            message:   combined,
+            signal:    None,
             exit_code: None,
-            source: Some(Box::new(source)),
-            related: Vec::new(),
+            source:    Some(Box::new(source)),
+            related:   Vec::new(),
         }
     }
 
@@ -218,7 +229,10 @@ impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         #[cfg(feature = "parse")]
         if self.kind == ErrorKind::Parse
-            && let Some(parse) = self.source.as_deref().and_then(|source| source.downcast_ref::<pound::Error>())
+            && let Some(parse) = self
+                .source
+                .as_deref()
+                .and_then(|source| source.downcast_ref::<pound::Error>())
         {
             let report = parse.render(pound::Term::plain());
             return f.write_str(report.strip_prefix("error: ").unwrap_or(&report));
@@ -386,7 +400,10 @@ impl error::Error for BoxedSource {
 /// [`ErrorKind::Application`] error.
 ///
 /// ```
-/// use climax::{ResultExt as _, prelude::*};
+/// use climax::{
+///     ResultExt as _,
+///     prelude::*,
+/// };
 ///
 /// fn count(text: &str) -> climax::Result<u32> {
 ///     let count = text.parse::<u32>().context("reading the count")?;
@@ -414,7 +431,10 @@ pub trait ResultExt<T> {
     /// text and keeping it as the source.
     ///
     /// ```
-    /// use climax::{ResultExt as _, prelude::*};
+    /// use climax::{
+    ///     ResultExt as _,
+    ///     prelude::*,
+    /// };
     ///
     /// let error = "x".parse::<u8>().app_err().unwrap_err();
     /// assert_eq!(error.kind(), ErrorKind::Application);
@@ -467,16 +487,23 @@ mod tests {
     fn context_and_boxed_errors_become_application_errors() {
         let failed = "x".parse::<u8>().context("reading the count").unwrap_err();
         assert_eq!(failed.kind(), ErrorKind::Application);
-        assert_eq!(failed.to_string(), "reading the count: invalid digit found in string");
+        assert_eq!(
+            failed.to_string(),
+            "reading the count: invalid digit found in string"
+        );
         assert!(failed.source_error().is_some());
 
         let bare = "x".parse::<u8>().app_err().unwrap_err();
         assert_eq!(bare.to_string(), "invalid digit found in string");
 
-        let boxed: Box<dyn error::Error + Send + Sync> = Box::new(Layered(io::Error::other("disk full")));
+        let boxed: Box<dyn error::Error + Send + Sync> =
+            Box::new(Layered(io::Error::other("disk full")));
         let converted = Error::from(boxed);
         assert_eq!(converted.kind(), ErrorKind::Application);
-        assert_eq!(format!("{converted:?}"), "could not save\n\nCaused by:\n    disk full");
+        assert_eq!(
+            format!("{converted:?}"),
+            "could not save\n\nCaused by:\n    disk full"
+        );
     }
 
     #[cfg(feature = "anyhow")]
@@ -502,7 +529,10 @@ mod tests {
     fn a_zero_exit_code_is_stored_as_one() {
         assert_eq!(Error::message("x").with_exit_code(0).exit_code(), Some(1));
         assert_eq!(Error::cancelled().with_exit_code(0).exit_code(), Some(1));
-        assert_eq!(Error::message("x").with_exit_code(255).exit_code(), Some(255));
+        assert_eq!(
+            Error::message("x").with_exit_code(255).exit_code(),
+            Some(255)
+        );
     }
 
     #[test]
@@ -516,10 +546,18 @@ mod tests {
     #[cfg(feature = "interactive")]
     #[test]
     fn cleanup_failures_behind_an_interruption_become_related_errors() {
-        use bang::{advanced::LiveSessionError, terminal::{CleanupFailure, CleanupFailures, CleanupStage, Signal}};
+        use bang::{
+            advanced::LiveSessionError,
+            terminal::{
+                CleanupFailure,
+                CleanupFailures,
+                CleanupStage,
+                Signal,
+            },
+        };
 
         let source = LiveSessionError::Cleanup {
-            primary: Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
+            primary:  Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
             failures: CleanupFailures::new(vec![
                 CleanupFailure::new(CleanupStage::Screen, io::Error::other("no tty")),
                 CleanupFailure::new(CleanupStage::RawMode, io::Error::other("EIO")),
@@ -527,7 +565,10 @@ mod tests {
         };
         let related = cleanup_errors(Some(&source));
         assert_eq!(related.len(), 2);
-        assert_eq!(related[0].to_string(), "terminal cleanup failed, Screen: no tty");
+        assert_eq!(
+            related[0].to_string(),
+            "terminal cleanup failed, Screen: no tty"
+        );
         assert!(cleanup_errors(Some(&LiveSessionError::Cancelled)).is_empty());
     }
 
@@ -549,7 +590,10 @@ mod tests {
     #[test]
     fn debug_prints_the_message_and_the_unseen_source_chain() {
         let error = Error::application(Layered(io::Error::other("disk full")));
-        assert_eq!(format!("{error:?}"), "could not save\n\nCaused by:\n    disk full");
+        assert_eq!(
+            format!("{error:?}"),
+            "could not save\n\nCaused by:\n    disk full"
+        );
         assert_eq!(format!("{:?}", Error::message("boom")), "boom");
         let context = Error::application_context("cannot query", io::Error::other("closed"));
         assert_eq!(format!("{context:?}"), "cannot query: closed");

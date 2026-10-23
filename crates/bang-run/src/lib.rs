@@ -6,11 +6,18 @@ extern crate alloc;
 
 mod config;
 
-use core::{error::Error as StdError, fmt};
+use core::{
+    error::Error as StdError,
+    fmt,
+};
 use std::fs;
 
 use bang::{
-    advanced::{LiveSessionError, interact_widget, replay_events},
+    advanced::{
+        LiveSessionError,
+        interact_widget,
+        replay_events,
+    },
     terminal::Decoder,
 };
 use bang_core::{
@@ -87,13 +94,15 @@ impl From<bang::Error> for CliError {
     fn from(error: bang::Error) -> Self {
         match error.kind() {
             bang::ErrorKind::Cancelled => Self::Cancelled,
-            bang::ErrorKind::Interrupted => error.signal().map_or_else(
-                || Self::Failed(error.to_string()),
-                |signal| {
-                    let source = StdError::source(&error);
-                    Self::Interrupted(signal.as_raw(), cleanup_failures(source))
-                },
-            ),
+            bang::ErrorKind::Interrupted => {
+                error.signal().map_or_else(
+                    || Self::Failed(error.to_string()),
+                    |signal| {
+                        let source = StdError::source(&error);
+                        Self::Interrupted(signal.as_raw(), cleanup_failures(source))
+                    },
+                )
+            },
             bang::ErrorKind::InvalidConfiguration => Self::Usage(error.to_string()),
             bang::ErrorKind::InputEnded
             | bang::ErrorKind::InteractionBusy
@@ -244,13 +253,15 @@ impl From<OutputFormat> for CoreOutputFormat {
 ///
 /// # Errors
 ///
-/// Fails with a [`CliError`] when the invocation or config is invalid, the prompt is
-/// cancelled or interrupted, or the terminal or config file fails.
+/// Fails with a [`CliError`] when the invocation or config is invalid, the
+/// prompt is cancelled or interrupted, or the terminal or config file fails.
 pub fn run(cli: Cli) -> Result<String, CliError> {
     let output = cli.output;
     let result = match (cli.config, cli.command) {
         (Some(_config), Some(_command)) => {
-            return Err(CliError::Usage("use either --config or a widget subcommand, not both".to_owned()));
+            return Err(CliError::Usage(
+                "use either --config or a widget subcommand, not both".to_owned(),
+            ));
         },
         (Some(config), None) => {
             let source = fs::read_to_string(&config).map_err(|error| {
@@ -258,7 +269,11 @@ pub fn run(cli: Cli) -> Result<String, CliError> {
             })?;
             run_config(WidgetConfig::parse(&source).map_err(CliError::Usage)?)
         },
-        (None, None) => return Err(CliError::Usage("expected --config or a widget subcommand".to_owned())),
+        (None, None) => {
+            return Err(CliError::Usage(
+                "expected --config or a widget subcommand".to_owned(),
+            ));
+        },
         (None, Some(command)) => run_command(command),
     }?;
 
@@ -274,7 +289,8 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action,
         } => {
             run_widget(
-                Select::new("select", choice_items(option).map_err(CliError::Usage)?).with_page_size(page_size),
+                Select::new("select", choice_items(option).map_err(CliError::Usage)?)
+                    .with_page_size(page_size),
                 input_bytes,
                 action_bindings(action).map_err(CliError::Usage)?,
             )
@@ -286,8 +302,11 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action,
         } => {
             run_widget(
-                MultiSelect::new("multi-select", choice_items(option).map_err(CliError::Usage)?)
-                    .with_page_size(page_size),
+                MultiSelect::new(
+                    "multi-select",
+                    choice_items(option).map_err(CliError::Usage)?,
+                )
+                .with_page_size(page_size),
                 input_bytes,
                 action_bindings(action).map_err(CliError::Usage)?,
             )
@@ -325,14 +344,17 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action_output,
             action,
         } => {
-            let actions =
-                review_action_bindings_with_defaults(action, action_output).map_err(CliError::Usage)?;
+            let actions = review_action_bindings_with_defaults(action, action_output)
+                .map_err(CliError::Usage)?;
             run_widget(
-                ReviewList::new("review-list", choice_items(option).map_err(CliError::Usage)?)
-                    .with_page_size(page_size)
-                    .with_show_removed(!hide_removed)
-                    .with_exit_output(action_output || !actions.is_empty())
-                    .with_custom_actions(actions),
+                ReviewList::new(
+                    "review-list",
+                    choice_items(option).map_err(CliError::Usage)?,
+                )
+                .with_page_size(page_size)
+                .with_show_removed(!hide_removed)
+                .with_exit_output(action_output || !actions.is_empty())
+                .with_custom_actions(actions),
                 input_bytes,
                 Vec::new(),
             )
@@ -564,7 +586,10 @@ fn action_bindings(actions: Vec<String>) -> Result<Vec<ActionBinding>, String> {
     let mut seen = Vec::new();
     let mut bindings = Vec::new();
     for action in actions {
-        bindings.push(push_unique_action(&mut seen, parse_action_binding(&action)?)?);
+        bindings.push(push_unique_action(
+            &mut seen,
+            parse_action_binding(&action)?,
+        )?);
     }
     Ok(bindings)
 }
@@ -681,19 +706,27 @@ fn hex_byte(high: char, low: char) -> Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
-    use bang::{
-        advanced::LiveSessionError,
-        terminal::{CleanupFailure, CleanupFailures, CleanupStage, Signal},
-    };
-
     use std::io;
 
-    use super::{CliError, cleanup_failures};
+    use bang::{
+        advanced::LiveSessionError,
+        terminal::{
+            CleanupFailure,
+            CleanupFailures,
+            CleanupStage,
+            Signal,
+        },
+    };
+
+    use super::{
+        CliError,
+        cleanup_failures,
+    };
 
     #[test]
     fn an_interruption_keeps_its_cleanup_failures() {
         let session = LiveSessionError::Cleanup {
-            primary: Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
+            primary:  Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
             failures: CleanupFailures::new(vec![CleanupFailure::new(
                 CleanupStage::RawMode,
                 io::Error::from_raw_os_error(5),

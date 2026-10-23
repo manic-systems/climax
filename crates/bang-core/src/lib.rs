@@ -11,7 +11,13 @@
 //! Most applications should use the user-facing `bang` crate.
 
 #![warn(missing_docs)]
-#![cfg_attr(test, expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes"))]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::non_ascii_literal,
+        reason = "terminal glyphs read better as themselves than as escapes"
+    )
+)]
 
 extern crate alloc;
 
@@ -25,10 +31,37 @@ mod widget;
 /// The built-in widgets.
 pub mod widgets;
 
-pub use action::{ActionBinding, ActionLayer};
-pub use event::{Event, Key, KeyEvent, Modifiers};
+pub use action::{
+    ActionBinding,
+    ActionLayer,
+};
+pub use event::{
+    Event,
+    Key,
+    KeyEvent,
+    Modifiers,
+};
 pub use ids::WidgetId;
-pub use output::{OutputFormat, escape_json, format_json, format_output, format_text};
-pub use session::{Session, SessionReaction, SessionStatus};
-pub use value::{Date, Number, Value};
-pub use widget::{Context, FocusTarget, Reaction, Widget};
+pub use output::{
+    OutputFormat,
+    escape_json,
+    format_json,
+    format_output,
+    format_text,
+};
+pub use session::{
+    Session,
+    SessionReaction,
+    SessionStatus,
+};
+pub use value::{
+    Date,
+    Number,
+    Value,
+};
+pub use widget::{
+    Context,
+    FocusTarget,
+    Reaction,
+    Widget,
+};

@@ -2,17 +2,35 @@
 
 #![expect(dead_code, reason = "each test binary uses a different subset")]
 
-use core::{ptr, time::Duration};
+use core::{
+    ptr,
+    time::Duration,
+};
 use std::{
     fs::File,
-    io::{self, Read as _, Write as _},
-    os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
-    sync::{Mutex, PoisonError},
+    io::{
+        self,
+        Read as _,
+        Write as _,
+    },
+    os::fd::{
+        AsRawFd as _,
+        FromRawFd as _,
+        RawFd,
+    },
+    sync::{
+        Mutex,
+        PoisonError,
+    },
     thread,
     time::Instant,
 };
 
-use bang::{ConfirmPrompt, Interaction, PromptOutcome};
+use bang::{
+    ConfirmPrompt,
+    Interaction,
+    PromptOutcome,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 pub const DIM_SUMMARY: &[u8] = b"\x1b[2mDeploy to prod? \xe2\x80\xba no\x1b[0m\r\n";
@@ -28,9 +46,12 @@ pub fn run_confirm(
     let (mut master, slave) = open_pty();
     set_nonblocking(&master);
     let prompt = thread::spawn(move || {
-        configure(bang::confirm("Deploy to prod?"), Interaction::live_on(slave))
-            .interact()
-            .expect("confirm succeeded")
+        configure(
+            bang::confirm("Deploy to prod?"),
+            Interaction::live_on(slave),
+        )
+        .interact()
+        .expect("confirm succeeded")
     });
 
     let mut output = Vec::new();
@@ -42,17 +63,24 @@ pub fn run_confirm(
 }
 
 pub fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|part| part == needle)
+    haystack
+        .windows(needle.len())
+        .position(|part| part == needle)
 }
 
 pub fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).rposition(|part| part == needle)
+    haystack
+        .windows(needle.len())
+        .rposition(|part| part == needle)
 }
 
 fn read_until(master: &mut File, output: &mut Vec<u8>, needle: &[u8]) {
     let started = Instant::now();
     while find(output, needle).is_none() {
-        assert!(started.elapsed() < TIMEOUT, "timed out waiting for {needle:?}");
+        assert!(
+            started.elapsed() < TIMEOUT,
+            "timed out waiting for {needle:?}"
+        );
         drain(master, output);
         thread::sleep(Duration::from_millis(5));
     }
@@ -82,8 +110,8 @@ fn set_nonblocking(file: &File) {
 fn open_pty() -> (File, File) {
     let mut master_fd: RawFd = -1;
     let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid for this call, and null termios/winsize
-    // ask openpty for its own defaults.
+    // SAFETY: both fd pointers are valid for this call, and null
+    // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
             &raw mut master_fd,
