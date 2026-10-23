@@ -2,6 +2,13 @@
 
 `pound`, `pound-derive` and `pound-derive-impl` release together under one version.
 
+## 0.6.1
+
+### Added
+
+- `#[pound(deprecated = "note")]` on a field, subcommand or `ValueEnum` variant keeps it working but prints `warning: '--old' is deprecated: note` to stderr when it is used. Help tags it `[deprecated]` and `--help` adds the note. A native `#[deprecated]` counts too, and pound's own attribute outranks it.
+- `ArgSpec::deprecated` and its builder method carry the note.
+
 ## 0.6.0
 
 ### Added

@@ -29,9 +29,9 @@ bang-screw-pty    = { path = "crates/bang-screw-pty", version = "0.0.1" }
 bang-terminal     = { path = "crates/bang-terminal", version = "0.0.1" }
 caress            = { path = "crates/caress", version = "0.3.0" }
 climax            = { path = "crates/climax", version = "0.0.1" }
-pound             = { path = "crates/pound", version = "0.6.0", default-features = false }
-pound-derive      = { path = "crates/pound-derive", version = "=0.6.0" }
-pound-derive-impl = { path = "crates/pound-derive-impl", version = "=0.6.0" }
+pound             = { path = "crates/pound", version = "0.6.1", default-features = false }
+pound-derive      = { path = "crates/pound-derive", version = "=0.6.1" }
+pound-derive-impl = { path = "crates/pound-derive-impl", version = "=0.6.1" }
 screw             = { path = "crates/screw", version = "0.0.1" }
 screw-pty         = { path = "crates/screw-pty", version = "0.0.1" }
 
