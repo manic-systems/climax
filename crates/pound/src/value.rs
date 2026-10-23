@@ -141,6 +141,8 @@ pub struct Choice {
     pub hidden:      bool,
     /// answers to its spellings in any ASCII case
     pub ignore_case: bool,
+    /// selecting it prints a warning, followed by this note unless it is empty
+    pub deprecated:  Option<&'static str>,
 }
 
 impl Choice {
@@ -152,6 +154,7 @@ impl Choice {
             help: "",
             hidden: false,
             ignore_case: false,
+            deprecated: None,
         }
     }
 
@@ -176,6 +179,12 @@ impl Choice {
     #[must_use]
     pub const fn ignore_case(mut self) -> Self {
         self.ignore_case = true;
+        self
+    }
+
+    #[must_use]
+    pub const fn deprecated(mut self, note: &'static str) -> Self {
+        self.deprecated = Some(note);
         self
     }
 

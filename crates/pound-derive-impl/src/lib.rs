@@ -16,7 +16,10 @@ use quote::quote;
 use venial::parse_item;
 
 use crate::{
-    attr::written_keys,
+    attr::{
+        mentions_deprecated,
+        written_keys,
+    },
     emit::Emitter,
     model::{
         Derive,
@@ -63,7 +66,7 @@ pub fn derive_parse(input: TokenStream2, options: &Options) -> TokenStream2 {
         Ok(item) => item,
         Err(err) => return err.to_compile_error(),
     };
-    let emitter = Emitter::new(options);
+    let emitter = Emitter::new(options, mentions_deprecated(&item));
     let keys = emitter.key_refs(&written_keys(&item));
     let body = Derive::new(&item).map_or_else(
         |err| err.to_compile_error(),
@@ -81,7 +84,7 @@ pub fn derive_value_enum(input: TokenStream2, options: &Options) -> TokenStream2
         Ok(item) => item,
         Err(err) => return err.to_compile_error(),
     };
-    let emitter = Emitter::new(options);
+    let emitter = Emitter::new(options, mentions_deprecated(&item));
     let keys = emitter.key_refs(&written_keys(&item));
     let body = ValueEnum::new(&item).map_or_else(
         |err| err.to_compile_error(),

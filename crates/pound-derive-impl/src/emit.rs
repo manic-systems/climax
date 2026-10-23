@@ -42,12 +42,14 @@ use crate::{
 };
 
 pub struct Emitter {
-    root: TokenStream,
-    help: bool,
+    root:  TokenStream,
+    help:  bool,
+    /// `#[allow(deprecated)]` when the input has a native `#[deprecated]`
+    allow: TokenStream,
 }
 
 impl Emitter {
-    pub fn new(options: &Options) -> Self {
+    pub fn new(options: &Options, allow_deprecated: bool) -> Self {
         let lead = options.root.starts_with("::").then(|| quote!(::));
         let segments = options
             .root
@@ -56,8 +58,13 @@ impl Emitter {
             .map(|segment| Ident::new(segment, Span::call_site()));
 
         Self {
-            root: quote! { #lead #(#segments)::* },
-            help: options.help,
+            root:  quote! { #lead #(#segments)::* },
+            help:  options.help,
+            allow: if allow_deprecated {
+                quote! { #[allow(deprecated)] }
+            } else {
+                TokenStream::new()
+            },
         }
     }
 
@@ -77,7 +84,7 @@ impl Emitter {
     }
 
     fn parse_struct(&self, name: &Ident, header: &Header, command: &Command) -> TokenStream {
-        let root = &self.root;
+        let (root, allow) = (&self.root, &self.allow);
         let fields = &command.fields;
         let head = self.header(header);
         let cmd_id = generated("CMD");
@@ -103,6 +110,7 @@ impl Emitter {
             };
 
         quote! {
+            #allow
             impl #root::Parse for #name {
                 const SPEC: &'static #root::CommandSpec = {
                     #consts
@@ -130,7 +138,7 @@ impl Emitter {
     }
 
     fn parse_enum(&self, name: &Ident, header: &Header, variants: &[Variant]) -> TokenStream {
-        let root = &self.root;
+        let (root, allow) = (&self.root, &self.allow);
         let head = self.header(header);
         let (sm, spec_ident, m_ident) = (local("sm"), local("spec"), local("m"));
         let (subs_id, root_id) = (generated("SUBS"), generated("ROOT"));
@@ -171,8 +179,10 @@ impl Emitter {
             format!("pound: `{name}` has more than one #[pound(external)] variant");
 
         quote! {
+            #allow
             impl #root::Subcommands for #name {}
 
+            #allow
             impl #root::Parse for #name {
                 const SPEC: &'static #root::CommandSpec = {
                     #(#sub_consts)*
@@ -297,6 +307,7 @@ impl Emitter {
 
         let about = self.help_lit(short_help(&named.prose.doc));
         let hidden_call = named.hidden.then(|| quote!(.hidden()));
+        let deprecated_call = deprecated_call(named.deprecated.as_deref());
         let order_call = named.display_order.map(|n| quote! { .display_order(#n) });
         let reads_spec = !fields.args.is_empty();
 
@@ -323,6 +334,7 @@ impl Emitter {
                     .aliases(&[ #(#aliases),* ])
                     .about(#about)
                     #hidden_call
+                    #deprecated_call
                     #order_call
             },
             arm,
@@ -397,7 +409,7 @@ impl Emitter {
     }
 
     pub fn value_enum(&self, value_enum: &ValueEnum) -> TokenStream {
-        let root = &self.root;
+        let (root, allow) = (&self.root, &self.allow);
         let name = &value_enum.ident;
 
         let ignore_case = value_enum.ignore_case.then(|| quote!(.ignore_case()));
@@ -405,8 +417,9 @@ impl Emitter {
             let (label, aliases) = (&variant.label, &variant.aliases);
             let help = self.help_lit(&variant.help);
             let hidden = variant.hidden.then(|| quote!(.hidden()));
+            let deprecated = deprecated_call(variant.deprecated.as_deref());
             quote! {
-                #root::Choice::new(#label).aliases(&[ #(#aliases),* ]).help(#help) #hidden #ignore_case
+                #root::Choice::new(#label).aliases(&[ #(#aliases),* ]).help(#help) #hidden #deprecated #ignore_case
             }
         });
 
@@ -428,6 +441,7 @@ impl Emitter {
         let (raw, listed, choice) = (local("s"), local("listed"), local("choice"));
 
         quote! {
+            #allow
             impl #root::FromArg for #name {
                 const POSSIBLE: ::core::option::Option<&'static [#root::Choice]> =
                     ::core::option::Option::Some(&[ #(#choices),* ]);
@@ -443,6 +457,7 @@ impl Emitter {
                 }
             }
 
+            #allow
             impl #name {
                 #[doc(hidden)]
                 pub const fn __pound_label(&self) -> &'static str {
@@ -452,6 +467,7 @@ impl Emitter {
                 }
             }
 
+            #allow
             impl #root::ArgValue for #name {
                 const ALL: &'static [Self] = &[ #(#variants),* ];
 
@@ -805,6 +821,9 @@ impl Emitter {
             spec = quote! { #spec.possible_opt(#possible).hint(#hint) };
         }
 
+        let deprecated = deprecated_call(arg.deprecated.as_deref());
+        spec = quote! { #spec #deprecated };
+
         let hide = [
             (arg.hidden, quote! { .hidden() }),
             (arg.hide_possible, quote! { .hide_possible() }),
@@ -1127,6 +1146,14 @@ impl Emitter {
             quote! { "" }
         }
     }
+}
+
+fn deprecated_call(note: Option<&str>) -> TokenStream {
+    let Some(text) = note else {
+        return TokenStream::new();
+    };
+
+    quote! { .deprecated(#text) }
 }
 
 // the `&[(usize, usize)]` token list for a set of index pairs.

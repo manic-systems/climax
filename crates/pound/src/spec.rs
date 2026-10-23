@@ -236,6 +236,9 @@ pub struct ArgSpec {
     pub complete:        Option<Completer>,
     /// what the value names, for a shell with no candidates to offer
     pub hint:            Hint,
+    /// given on the line, it prints a warning, followed by this note unless
+    /// it is empty
+    pub deprecated:      Option<&'static str>,
 }
 
 impl ArgSpec {
@@ -275,6 +278,7 @@ impl ArgSpec {
             exclusive: false,
             complete: None,
             hint: Hint::Unknown,
+            deprecated: None,
         }
     }
 
@@ -478,6 +482,12 @@ impl ArgSpec {
         self
     }
 
+    #[must_use]
+    pub const fn deprecated(mut self, note: &'static str) -> Self {
+        self.deprecated = Some(note);
+        self
+    }
+
     /// true for kinds that consume a following token
     #[must_use]
     pub const fn takes_value(&self) -> bool {
@@ -631,6 +641,8 @@ pub struct SubSpec {
     /// where help lists this command among the others, in place of its
     /// position in the declaration
     pub display_order: Option<usize>,
+    /// selecting it prints a warning, followed by this note unless it is empty
+    pub deprecated:    Option<&'static str>,
 }
 
 impl SubSpec {
@@ -646,6 +658,7 @@ impl SubSpec {
             flattened: false,
             external: false,
             display_order: None,
+            deprecated: None,
         }
     }
 
@@ -698,6 +711,12 @@ impl SubSpec {
     #[must_use]
     pub const fn display_order(mut self, display_order: usize) -> Self {
         self.display_order = Some(display_order);
+        self
+    }
+
+    #[must_use]
+    pub const fn deprecated(mut self, note: &'static str) -> Self {
+        self.deprecated = Some(note);
         self
     }
 }

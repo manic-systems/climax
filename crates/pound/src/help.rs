@@ -13,6 +13,7 @@ use core::{
 use crate::spec::{
     ArgSpec,
     Kind,
+    SubSpec,
 };
 use crate::{
     spec::{
@@ -391,11 +392,21 @@ fn help_text(arg: &ArgSpec, long: bool) -> String {
         .iter()
         .filter(|choice| !choice.hidden)
         .collect::<Vec<_>>();
-    let listed = long && choices.iter().any(|choice| !choice.help.is_empty());
+    let listed = long
+        && choices
+            .iter()
+            .any(|choice| !choice.help.is_empty() || choice.deprecated.is_some());
 
     let mut rendered = text.to_owned();
-    if !choices.is_empty() && !listed {
-        let names = choices.iter().map(|choice| choice.name).collect::<Vec<_>>();
+    if let Some(note) = arg.deprecated {
+        push_deprecated(&mut rendered, note, long);
+    }
+    let names = choices
+        .iter()
+        .filter(|choice| choice.deprecated.is_none())
+        .map(|choice| choice.name)
+        .collect::<Vec<_>>();
+    if !listed && !names.is_empty() {
         push_tag(
             &mut rendered,
             format_args!("possible values: {}", names.join(", ")),
@@ -423,9 +434,31 @@ fn help_text(arg: &ArgSpec, long: bool) -> String {
             if !choice.help.is_empty() {
                 let _description_result = write!(rendered, ": {}", choice.help);
             }
+            if let Some(note) = choice.deprecated {
+                push_deprecated(&mut rendered, note, true);
+            }
         }
     }
     rendered
+}
+
+#[cfg(feature = "help")]
+fn sub_help(sub: &SubSpec, long: bool) -> String {
+    let mut rendered = sub.about.to_owned();
+    if let Some(note) = sub.deprecated {
+        push_deprecated(&mut rendered, note, long);
+    }
+    rendered
+}
+
+/// `[deprecated]`, with the note in long help
+#[cfg(feature = "help")]
+fn push_deprecated(out: &mut String, note: &str, long: bool) {
+    if long && !note.is_empty() {
+        push_tag(out, format_args!("deprecated: {note}"));
+    } else {
+        push_tag(out, format_args!("deprecated"));
+    }
 }
 
 #[cfg(feature = "help")]
@@ -502,7 +535,7 @@ pub(crate) fn render(cmd: &Command<'_>, long: bool) -> Help {
         .map(|sub| {
             Row {
                 left: vec![Span::literal(sub.name)],
-                help: sub.about.to_owned(),
+                help: sub_help(sub, long),
             }
         })
         .collect::<Vec<_>>();

@@ -101,6 +101,8 @@ pub(crate) struct Pound {
     pub ignore_case:     bool,
     /// keep this arg/variant out of help output
     pub hidden:          bool,
+    /// the note a use warns with, empty for a bare `deprecated`
+    pub deprecated:      Option<String>,
     pub hide_possible:   bool,
     pub hide_default:    bool,
     pub hide_env:        bool,
@@ -216,6 +218,7 @@ impl Pound {
             "hide_env"        => self.hide_env        = bare(key, span, value.is_some())?,
             "global"          => self.global          = bare(key, span, value.is_some())?,
             "allow_hyphen_values" => self.hyphen_values = bare(key, span, value.is_some())?,
+            "deprecated"      => self.deprecated      = Some(value.unwrap_or_default()),
             "group"           => {
                 self.group = Some(needed(key, span, value)?);
                 self.group_refs.extend(bare_ident(seg));
@@ -286,6 +289,62 @@ pub fn pound(attrs: &[Attribute]) -> Result<Pound, Error> {
 /// every key written in a `#[pound(...)]` on the item, its variants and its
 /// fields, malformed or not
 pub fn written_keys(item: &Item) -> Vec<Ident> {
+    attribute_lists(item)
+        .into_iter()
+        .flatten()
+        .filter(|attr| path_is(attr, "pound"))
+        .filter_map(|attr| {
+            match &attr.value {
+                AttributeValue::Group(_, tokens) => Some(split_commas(tokens)),
+                AttributeValue::Equals(..) | AttributeValue::Empty => None,
+            }
+        })
+        .flatten()
+        .filter_map(|seg| {
+            match seg.first() {
+                Some(TokenTree::Ident(key)) => Some(key.clone()),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// whether the item, a variant or a field carries a native `#[deprecated]`,
+/// which the generated impls touch
+pub fn mentions_deprecated(item: &Item) -> bool {
+    attribute_lists(item)
+        .into_iter()
+        .flatten()
+        .any(|attr| path_is(attr, "deprecated"))
+}
+
+/// the note of a native `#[deprecated]`, `#[deprecated = "..."]` or
+/// `#[deprecated(note = "...")]`, empty when it gives none
+pub fn native_deprecated(attrs: &[Attribute]) -> Option<String> {
+    let attr = attrs.iter().find(|attr| path_is(attr, "deprecated"))?;
+
+    let note = match &attr.value {
+        AttributeValue::Empty => None,
+        AttributeValue::Equals(_, tokens) => tokens.first().map(unquote),
+        AttributeValue::Group(_, tokens) => {
+            split_commas(tokens).into_iter().find_map(|seg| {
+                match seg.as_slice() {
+                    [TokenTree::Ident(key), TokenTree::Punct(punct), value]
+                        if key == "note" && punct.as_char() == '=' =>
+                    {
+                        Some(unquote(value))
+                    },
+                    _ => None,
+                }
+            })
+        },
+    };
+
+    Some(note.unwrap_or_default())
+}
+
+/// the attributes of the item, its variants and its fields
+fn attribute_lists(item: &Item) -> Vec<&Vec<Attribute>> {
     fn field_attrs(fields: &Fields) -> Vec<&Vec<Attribute>> {
         match fields {
             Fields::Named(named) => {
@@ -335,23 +394,6 @@ pub fn written_keys(item: &Item) -> Vec<Ident> {
     }
 
     lists
-        .into_iter()
-        .flatten()
-        .filter(|attr| path_is(attr, "pound"))
-        .filter_map(|attr| {
-            match &attr.value {
-                AttributeValue::Group(_, tokens) => Some(split_commas(tokens)),
-                AttributeValue::Equals(..) | AttributeValue::Empty => None,
-            }
-        })
-        .flatten()
-        .filter_map(|seg| {
-            match seg.first() {
-                Some(TokenTree::Ident(key)) => Some(key.clone()),
-                _ => None,
-            }
-        })
-        .collect()
 }
 
 /// the doc comment of an item or field, empty when none. lines are joined into
@@ -879,6 +921,7 @@ const BARE_KEYS: &[&str] = &[
     "exclusive",
     "help_if_empty",
     "hidden",
+    "deprecated",
     "hide_possible",
     "hide_default",
     "hide_env",

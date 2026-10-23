@@ -98,6 +98,14 @@ pub(crate) enum Paint {
     /// text typed as is, a flag spelling or a command name
     Literal,
     Error,
+    #[cfg_attr(
+        not(feature = "std"),
+        expect(
+            dead_code,
+            reason = "only deprecation warnings paint it, which need std"
+        )
+    )]
+    Warning,
     Tip,
 }
 
@@ -109,6 +117,7 @@ impl Paint {
             Self::Heading => Some("\x1b[1;4m"),
             Self::Literal => Some("\x1b[1m"),
             Self::Error => Some("\x1b[1;31m"),
+            Self::Warning => Some("\x1b[1;33m"),
             Self::Tip => Some("\x1b[1;32m"),
         }
     }

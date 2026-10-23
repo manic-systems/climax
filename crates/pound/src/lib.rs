@@ -226,6 +226,10 @@ pub trait Parse: Sized {
         next.update_from_matches(Self::SPEC, &matches)
             .map_err(|error| matches.locate(Self::SPEC, error))?;
         *self = next;
+
+        #[cfg(feature = "std")]
+        matches.warn_deprecated(Self::SPEC);
+
         Ok(())
     }
 
@@ -331,7 +335,12 @@ fn parse_as<'a, T: Parse>(
     args: impl IntoIterator<Item = &'a str>,
 ) -> Result<T, Error> {
     let matches = parse::parse_spec(spec, args)?;
-    T::from_matches(T::SPEC, &matches).map_err(|error| matches.locate(spec, error))
+    let parsed = T::from_matches(T::SPEC, &matches).map_err(|error| matches.locate(spec, error))?;
+
+    #[cfg(feature = "std")]
+    matches.warn_deprecated(spec);
+
+    Ok(parsed)
 }
 
 /// build a borrowed argument iterator from a raw libc `main(argc, argv)`.

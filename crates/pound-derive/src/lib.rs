@@ -128,18 +128,19 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// these go on the variants of an enum that derives `Parse`. each variant is a
 /// subcommand whose fields take the field attributes below.
 ///
-/// | attribute                | meaning                                                                         |
-/// |--------------------------|---------------------------------------------------------------------------------|
-/// | `name = "rm"`            | the subcommand name. defaults to the variant name in kebab case                 |
-/// | `alias = ["remove", "del"]` | extra names that select this subcommand, one as `"remove"`                   |
-/// | `hidden`                 | accepted but left out of help                                                   |
-/// | `display_order = 0`      | list the subcommand at that position, where one without it keeps its own        |
-/// | `required_group = g`     | exactly one member of group `g` among the variant's fields must be given        |
-/// | `help_if_empty`          | the same for this subcommand, given no words after its name                     |
-/// | `before_help = "text"`   | text this subcommand's help page opens with                                     |
-/// | `after_help = "text"`    | text this subcommand's help page closes with                                    |
-/// | `flatten`                | on a tuple variant holding one enum, offers that enum's commands as if declared here |
-/// | `external`               | on a `Vec<T>` or `pound::External` tuple variant, takes any other subcommand name and what follows, `help` too |
+/// | attribute                   | meaning                                                                                                        |
+/// |-----------------------------|----------------------------------------------------------------------------------------------------------------|
+/// | `name = "rm"`               | the subcommand name. defaults to the variant name in kebab case                                                |
+/// | `alias = ["remove", "del"]` | extra names that select this subcommand, one as `"remove"`                                                     |
+/// | `hidden`                    | accepted but left out of help                                                                                  |
+/// | `deprecated = "note"`       | accepted with a warning and tagged in help, see [deprecation](#deprecation)                                    |
+/// | `display_order = 0`         | list the subcommand at that position, where one without it keeps its own                                       |
+/// | `required_group = g`        | exactly one member of group `g` among the variant's fields must be given                                       |
+/// | `help_if_empty`             | the same for this subcommand, given no words after its name                                                    |
+/// | `before_help = "text"`      | text this subcommand's help page opens with                                                                    |
+/// | `after_help = "text"`       | text this subcommand's help page closes with                                                                   |
+/// | `flatten`                   | on a tuple variant holding one enum, offers that enum's commands as if declared here                           |
+/// | `external`                  | on a `Vec<T>` or `pound::External` tuple variant, takes any other subcommand name and what follows, `help` too |
 ///
 /// the doc comment on a variant is the subcommand's description. a variant is
 /// a unit variant or has named fields, and tuple fields are only for `flatten`
@@ -389,17 +390,18 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// ## help text
 ///
-/// | attribute            | meaning                                                                          |
-/// |----------------------|----------------------------------------------------------------------------------|
-/// | `help = "text"`      | the short description, used in place of the doc comment and kept as written      |
-/// | `long_help = "text"` | what `--help` shows in place of the short description                            |
-/// | `value_name = "N"`   | the placeholder for the value in usage and errors, defaulting to the field name  |
-/// | `heading = "Output"` | list the arg under a help section of that name, where `Options` is the default   |
-/// | `display_order = 0`  | list a flag or option at that position, where one without it keeps its own      |
-/// | `hidden`             | accept the arg but leave it out of help                                          |
-/// | `hide_possible`      | leave the `[possible values: ...]` tag out of help and man pages                 |
-/// | `hide_default`       | leave the `[default: ...]` tag out of help and man pages                         |
-/// | `hide_env`           | leave the `[env: ...]` tag out of help and man pages                             |
+/// | attribute             | meaning                                                                           |
+/// |-----------------------|-----------------------------------------------------------------------------------|
+/// | `help = "text"`       | the short description, used in place of the doc comment and kept as written       |
+/// | `long_help = "text"`  | what `--help` shows in place of the short description                             |
+/// | `value_name = "N"`    | the placeholder for the value in usage and errors, defaulting to the field name   |
+/// | `heading = "Output"`  | list the arg under a help section of that name, where `Options` is the default    |
+/// | `display_order = 0`   | list a flag or option at that position, where one without it keeps its own        |
+/// | `hidden`              | accept the arg but leave it out of help                                           |
+/// | `deprecated = "note"` | accept the arg with a warning and tag it in help, see [deprecation](#deprecation) |
+/// | `hide_possible`       | leave the `[possible values: ...]` tag out of help and man pages                  |
+/// | `hide_default`        | leave the `[default: ...]` tag out of help and man pages                          |
+/// | `hide_env`            | leave the `[env: ...]` tag out of help and man pages                              |
 ///
 /// without `help`, the doc comment on the field is the description. as on an
 /// item, its first paragraph is the `-h` summary with one trailing period
@@ -422,6 +424,33 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// }
 ///
 /// assert!(Run::try_parse_from(["--keep"]).is_ok());
+/// ```
+///
+/// ## deprecation
+///
+/// a field or variant marked `deprecated` still parses. once a parse succeeds,
+/// each deprecated arg or subcommand used prints `warning: '--old' is
+/// deprecated: note` to stderr, without the note when bare. an env var or
+/// default filling the arg prints nothing. help tags it `[deprecated]`, and
+/// `--help` adds the note.
+///
+/// a native `#[deprecated]`, `#[deprecated = "note"]` or
+/// `#[deprecated(note = "note")]` counts too. `#[pound(deprecated)]` outranks
+/// it, so the native note can speak to the code and pound's to the user.
+///
+/// ```
+/// use pound::Parse;
+///
+/// #[derive(Parse)]
+/// struct Build {
+///     #[pound(long)]
+///     jobs:  Option<usize>,
+///     #[deprecated(note = "read `jobs` instead")]
+///     #[pound(long, deprecated = "use --jobs")]
+///     cores: Option<usize>,
+/// }
+///
+/// assert!(Build::try_parse_from(["--cores", "4"]).is_ok());
 /// ```
 ///
 /// ## global arguments
@@ -499,11 +528,12 @@ pub fn derive_parse(input: TokenStream) -> TokenStream {
 /// each variant is spelled in kebab case, so `PlainText` is `plain-text`. the
 /// attributes below go on the variants.
 ///
-/// | attribute        | meaning                                           |
-/// |------------------|---------------------------------------------------|
-/// | `name = "yml"`   | the spelling, in place of the kebab case one      |
-/// | `alias = ["a", "b"]` | more spellings that select it, never listed  |
-/// | `hidden`         | accepted, but left out of help and completion     |
+/// | attribute             | meaning                                                                     |
+/// |-----------------------|-----------------------------------------------------------------------------|
+/// | `name = "yml"`        | the spelling, in place of the kebab case one                                |
+/// | `alias = ["a", "b"]`  | more spellings that select it, never listed                                 |
+/// | `hidden`              | accepted, but left out of help and completion                               |
+/// | `deprecated = "note"` | accepted with a warning, left out of `-h` and errors, tagged under `--help` |
 ///
 /// `#[pound(ignore_case)]` on the enum accepts a value in any ASCII case, so
 /// `JSON` selects `json`.
