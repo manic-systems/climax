@@ -12,9 +12,22 @@ use core::{
     mem,
     ptr,
 };
-#[cfg(feature = "std")] use std::env;
+#[cfg(feature = "std")]
+use std::{
+    env,
+    io::{
+        self,
+        Write as _,
+    },
+};
 
 #[cfg(not(feature = "std"))] use crate::alloc_prelude::*;
+#[cfg(feature = "std")]
+use crate::term::{
+    Paint,
+    Span,
+    Term,
+};
 use crate::{
     complete::Next,
     error::{
@@ -233,6 +246,69 @@ impl<'a> Matches<'a> {
 
     pub(crate) const fn selected(&self) -> Option<&Command<'static>> {
         self.selected.as_ref()
+    }
+
+    /// print a warning for each deprecated arg, subcommand and value this
+    /// parse used, once each
+    #[cfg(feature = "std")]
+    pub(crate) fn warn_deprecated(&self, spec: &CommandSpec) {
+        let mut found = Vec::new();
+        self.find_deprecated(spec, &mut found);
+
+        let term = Term::stderr();
+
+        for deprecation in found {
+            let _reason = writeln!(io::stderr(), "{}", deprecation.render(term));
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn find_deprecated(&self, spec: &CommandSpec, found: &mut Vec<Deprecation>) {
+        for (arg, slot) in spec.args.iter().zip(&self.slots) {
+            if slot.count == 0 && !slot.negated {
+                continue;
+            }
+
+            if let Some(note) = arg.deprecated {
+                found.push(Deprecation {
+                    used: format!("'{}'", arg.display_name()),
+                    note,
+                });
+            }
+
+            let choices = arg.possible.unwrap_or_default();
+
+            for value in &slot.values {
+                let Some(choice) = choices.iter().find(|choice| choice.answers(value)) else {
+                    continue;
+                };
+                let Some(note) = choice.deprecated else {
+                    continue;
+                };
+                let used = format!("value '{}' of '{}'", choice.name, arg.display_name());
+
+                if !found.iter().any(|seen| seen.used == used) {
+                    found.push(Deprecation { used, note });
+                }
+            }
+        }
+
+        for (inner, inner_m) in spec.flattened.iter().zip(&self.flattened) {
+            inner_m.find_deprecated(inner, found);
+        }
+
+        if let Some((i, sub_m)) = &self.sub {
+            let sub = &spec.subs[*i];
+
+            if let Some(note) = sub.deprecated {
+                found.push(Deprecation {
+                    used: format!("subcommand '{}'", sub.name),
+                    note,
+                });
+            }
+
+            sub_m.find_deprecated(sub.spec, found);
+        }
     }
 
     /// searches the deepest selected command first
@@ -598,6 +674,32 @@ impl<'a> Matches<'a> {
     }
 }
 
+/// a deprecated arg, subcommand or value a parse used
+#[cfg(feature = "std")]
+struct Deprecation {
+    /// how the warning names it, `'--old'` or `subcommand 'old'`
+    used: String,
+    note: &'static str,
+}
+
+#[cfg(feature = "std")]
+impl Deprecation {
+    fn render(&self, term: Term) -> String {
+        let mut out = String::new();
+        Span::new("warning:", Paint::Warning).write(&mut out, term);
+        out.push(' ');
+        out.push_str(&self.used);
+        out.push_str(" is deprecated");
+
+        if !self.note.is_empty() {
+            out.push_str(": ");
+            out.push_str(self.note);
+        }
+
+        out
+    }
+}
+
 /// the value an arg takes when it was not given, and the env var it was read
 /// from, if any
 struct Fallback {
@@ -650,7 +752,7 @@ fn parse_with<T>(
             .possible
             .unwrap_or_default()
             .iter()
-            .filter(|choice| !choice.hidden)
+            .filter(|choice| !choice.hidden && choice.deprecated.is_none())
             .map(|choice| choice.name)
             .collect::<Vec<_>>();
         if !listed.is_empty() {
@@ -2368,6 +2470,7 @@ mod tests {
         flattened:     false,
         external:      false,
         display_order: None,
+        deprecated:    None,
     }];
     const ROOT: CommandSpec = CommandSpec {
         name:           "prog",

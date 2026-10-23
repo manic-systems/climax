@@ -146,6 +146,10 @@ pub struct display_order;
 /// accepted, but left out of help
 pub struct hidden;
 
+/// accepted with a warning, and tagged in help. this outranks a
+/// native `#[deprecated]`, which pound also reads
+pub struct deprecated;
+
 /// leave the `[possible values: ...]` tag out of help
 pub struct hide_possible;
 

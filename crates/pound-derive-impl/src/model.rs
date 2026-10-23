@@ -33,6 +33,7 @@ use crate::attr::{
     Text,
     ValueHint,
     doc,
+    native_deprecated,
     pound,
     short_help,
     summary,
@@ -52,12 +53,13 @@ const VARIANT_ATTRIBUTES: &[&str] = &[
     "display_order",
     "alias",
     "hidden",
+    "deprecated",
     "required_group",
     "help_if_empty",
     "before_help",
     "after_help",
 ];
-const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden"];
+const VALUE_VARIANT_ATTRIBUTES: &[&str] = &["name", "alias", "hidden", "deprecated"];
 const FIELD_ATTRIBUTES: &[&str] = &[
     "short",
     "long",
@@ -66,6 +68,7 @@ const FIELD_ATTRIBUTES: &[&str] = &[
     "last",
     "count",
     "hidden",
+    "deprecated",
     "global",
     "exclusive",
     "group",
@@ -241,6 +244,7 @@ pub struct Named {
     pub name:          String,
     pub aliases:       Vec<String>,
     pub hidden:        bool,
+    pub deprecated:    Option<String>,
     pub display_order: Option<usize>,
     pub help_if_empty: bool,
     pub prose:         Prose,
@@ -298,6 +302,9 @@ impl Variant {
                     .unwrap_or_else(|| camel_to_kebab(&ident.to_string())),
                 aliases: vattr.aliases,
                 hidden: vattr.hidden,
+                deprecated: vattr
+                    .deprecated
+                    .or_else(|| native_deprecated(&variant.attributes)),
                 display_order: vattr.display_order,
                 help_if_empty: vattr.help_if_empty,
                 prose: Prose::new(&variant.attributes, vattr.before_help, vattr.after_help),
@@ -1049,6 +1056,7 @@ pub struct Arg {
     pub conflicts_with:  Vec<Ident>,
     pub requires:        Vec<Ident>,
     pub hidden:          bool,
+    pub deprecated:      Option<String>,
     pub hide_possible:   bool,
     pub hide_default:    bool,
     pub hide_env:        bool,
@@ -1138,6 +1146,9 @@ impl Arg {
             conflicts_with: attr.conflicts_with,
             requires: attr.requires,
             hidden: attr.hidden,
+            deprecated: attr
+                .deprecated
+                .or_else(|| native_deprecated(&field.attributes)),
             hide_possible: attr.hide_possible,
             hide_default: attr.hide_default,
             hide_env: attr.hide_env,
@@ -1240,12 +1251,13 @@ pub struct ValueEnum {
 
 /// one variant of a `ValueEnum`, with every word that selects it
 pub struct ValueVariant {
-    pub ident:   Ident,
+    pub ident:      Ident,
     /// the spelling listed and printed back
-    pub label:   String,
-    pub aliases: Vec<String>,
-    pub help:    String,
-    pub hidden:  bool,
+    pub label:      String,
+    pub aliases:    Vec<String>,
+    pub help:       String,
+    pub hidden:     bool,
+    pub deprecated: Option<String>,
 }
 
 impl ValueVariant {
@@ -1285,13 +1297,16 @@ impl ValueEnum {
             vattr.allow_only(VALUE_VARIANT_ATTRIBUTES)?;
 
             let this = ValueVariant {
-                ident:   vname.clone(),
-                label:   vattr
+                ident:      vname.clone(),
+                label:      vattr
                     .name
                     .unwrap_or_else(|| camel_to_kebab(&vname.to_string())),
-                aliases: vattr.aliases,
-                help:    short_help(&doc(&variant.attributes)).to_owned(),
-                hidden:  vattr.hidden,
+                aliases:    vattr.aliases,
+                help:       short_help(&doc(&variant.attributes)).to_owned(),
+                hidden:     vattr.hidden,
+                deprecated: vattr
+                    .deprecated
+                    .or_else(|| native_deprecated(&variant.attributes)),
             };
 
             for word in this.spellings() {
