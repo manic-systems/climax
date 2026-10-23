@@ -60,11 +60,19 @@ pub struct TerminalModeGuard {
 
 impl TerminalModeGuard {
     /// Switch the terminal behind `input` to raw mode, remembering its settings.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `input` is not a terminal or its settings cannot be read or written.
     pub fn activate(input: &(impl AsFd + ?Sized), options: RawModeOptions) -> io::Result<Self> {
         activate_fd(input, options)
     }
 
     /// Restore the saved settings now and report any failure, which drop cannot.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the saved settings cannot be written back.
     pub fn restore(mut self) -> Result<(), CleanupFailures> {
         self.restore_active()
     }
@@ -122,16 +130,19 @@ fn terminal_mode_error(errno: Errno) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use rustix::termios::LocalModes;
+
     use super::*;
+    use crate::testing::pty;
 
     #[test]
     fn raw_mode_keeps_output_post_processing() {
-        let (_master, slave) = crate::testing::pty(80, 24).unwrap();
+        let (_master, slave) = pty(80, 24).unwrap();
         let guard = TerminalModeGuard::activate(&slave, RawModeOptions::blocking()).unwrap();
 
         let raw = tcgetattr(&slave).unwrap();
         assert!(raw.output_modes.contains(OutputModes::OPOST | OutputModes::ONLCR));
-        assert!(!raw.local_modes.contains(rustix::termios::LocalModes::ECHO));
+        assert!(!raw.local_modes.contains(LocalModes::ECHO));
         guard.restore().unwrap();
     }
 

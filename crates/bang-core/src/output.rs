@@ -27,22 +27,28 @@ pub fn format_output(value: &Value, output: OutputFormat) -> String {
 pub fn format_text(value: &Value) -> String {
     match value {
         Value::Null => "\n".to_owned(),
-        Value::Bool(value) => format!("{value}\n"),
-        Value::String(value) => format!("{value}\n"),
+        Value::Bool(flag) => format!("{flag}\n"),
+        Value::String(text) => format!("{text}\n"),
         Value::Number(number) => format!("{number}\n"),
         Value::Date(date) => format!("{date}\n"),
         Value::List(values) => {
-            values
+            let mut lines = values
                 .iter()
-                .map(|value| match value {
-                    Value::String(value) => value.clone(),
-                    _ => format_json(value),
+                .map(|item| match item {
+                    Value::String(text) => text.clone(),
+                    Value::Null
+                    | Value::Bool(_)
+                    | Value::Number(_)
+                    | Value::Date(_)
+                    | Value::List(_)
+                    | Value::Object(_) => format_json(item),
                 })
                 .collect::<Vec<_>>()
-                .join("\n")
-                + "\n"
+                .join("\n");
+            lines.push('\n');
+            lines
         },
-        _ => format!("{}\n", format_json(value)),
+        Value::Object(_) => format!("{}\n", format_json(value)),
     }
 }
 
@@ -50,12 +56,13 @@ pub fn format_text(value: &Value) -> String {
 #[must_use]
 pub fn format_json(value: &Value) -> String {
     match value {
-        Value::Bool(value) => value.to_string(),
-        Value::String(value) => format!("\"{}\"", escape_json(value)),
+        Value::Null => "null".to_owned(),
+        Value::Bool(flag) => flag.to_string(),
+        Value::String(text) => format!("\"{}\"", escape_json(text)),
         Value::Number(number) => match number {
-            Number::Integer(value) => value.to_string(),
+            Number::Integer(integer) => integer.to_string(),
             // JSON has no NaN/Infinity; emit null rather than invalid JSON.
-            Number::Float(value) if value.is_finite() => value.to_string(),
+            Number::Float(float) if float.is_finite() => float.to_string(),
             Number::Float(_) => "null".to_owned(),
         },
         Value::Date(date) => format!("\"{date}\""),
@@ -70,12 +77,11 @@ pub fn format_json(value: &Value) -> String {
                 "{{{}}}",
                 values
                     .iter()
-                    .map(|(key, value)| format!("\"{}\":{}", escape_json(key), format_json(value)))
+                    .map(|(key, item)| format!("\"{}\":{}", escape_json(key), format_json(item)))
                     .collect::<Vec<_>>()
                     .join(",")
             )
         },
-        _ => "null".to_owned(),
     }
 }
 
@@ -84,7 +90,7 @@ pub fn format_json(value: &Value) -> String {
 pub fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| match value {
+        .flat_map(|ch| match ch {
             '"' => "\\\"".chars().collect::<Vec<_>>(),
             '\\' => "\\\\".chars().collect(),
             '\n' => "\\n".chars().collect(),
@@ -92,8 +98,10 @@ pub fn escape_json(value: &str) -> String {
             '\t' => "\\t".chars().collect(),
             '\u{08}' => "\\b".chars().collect(),
             '\u{0C}' => "\\f".chars().collect(),
-            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-            value => vec![value],
+            control if control.is_control() => {
+                format!("\\u{:04x}", u32::from(control)).chars().collect()
+            },
+            other => vec![other],
         })
         .collect()
 }

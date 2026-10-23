@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
 
 /// Names a widget so a driver or an action can refer to it.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

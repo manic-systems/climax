@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::{any::Any, fmt, panic::AssertUnwindSafe, time::Duration};
 use std::{
-    any::Any,
-    fmt,
     io::{self, IsTerminal as _, Write},
-    panic::{self, AssertUnwindSafe},
+    panic,
     sync::mpsc::{
         self,
         Receiver,
@@ -15,10 +14,7 @@ use std::{
         self,
         JoinHandle,
     },
-    time::{
-        Duration,
-        Instant,
-    },
+    time::Instant,
 };
 
 use crate::{
@@ -46,8 +42,8 @@ pub struct Runtime<W, H = WidgetRef, F = WidgetRef> {
 }
 
 impl<W: fmt::Debug, H, F> fmt::Debug for Runtime<W, H, F> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f
             .debug_struct("Runtime")
             .field("renderer", &self.renderer)
             .field("frame_interval", &self.frame_interval)
@@ -167,6 +163,10 @@ where
     }
 
     /// Draws immediately, ignoring the frame rate, and records `now` as the time of the draw.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the frame cannot be written to or flushed through the writer.
     pub fn draw_now(&mut self, now: Instant) -> io::Result<RenderStats> {
         let stats = self.renderer.draw(&self.root)?;
         self.dirty = false;
@@ -175,6 +175,10 @@ where
     }
 
     /// Draws if a frame is due at `now`, returning the stats or `None` when nothing was drawn.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the frame cannot be written to or flushed through the writer.
     pub fn tick(&mut self, now: Instant) -> io::Result<Option<RenderStats>> {
         if !self.should_draw(now) {
             return Ok(None);
@@ -275,8 +279,8 @@ pub struct LiveRuntime<W> {
 }
 
 impl<W> fmt::Debug for LiveRuntime<W> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f
             .debug_struct("LiveRuntime")
             .field("handle", &self.handle)
             .field("running", &self.thread.is_some())
@@ -307,8 +311,8 @@ pub struct AutoRuntimeBuilder<W, H = WidgetRef, F = WidgetRef> {
 }
 
 impl<W, H, F> fmt::Debug for AutoRuntimeBuilder<W, H, F> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f
             .debug_struct("AutoRuntimeBuilder")
             .field("interactive", &self.interactive)
             .field("fps", &self.fps)
@@ -431,8 +435,8 @@ where
             runtime = runtime.layout_mode(self.layout_mode);
             runtime = runtime.cursor_visibility(self.cursor_visibility);
             runtime = runtime.theme(self.theme);
-            let runtime = runtime.with_final_widget_type(self.final_widget);
-            AutoRuntime::Live(runtime.start())
+            let typed = runtime.with_final_widget_type(self.final_widget);
+            AutoRuntime::Live(typed.start())
         } else {
             AutoRuntime::Plain(PlainRuntime {
                 writer:       self.writer,
@@ -456,10 +460,10 @@ pub enum AutoRuntime<W, H = WidgetRef, F = WidgetRef> {
 }
 
 impl<W, H, F> fmt::Debug for AutoRuntime<W, H, F> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Live(runtime) => formatter.debug_tuple("Live").field(runtime).finish(),
-            Self::Plain(runtime) => formatter.debug_tuple("Plain").field(runtime).finish(),
+            Self::Live(runtime) => f.debug_tuple("Live").field(runtime).finish(),
+            Self::Plain(runtime) => f.debug_tuple("Plain").field(runtime).finish(),
         }
     }
 }
@@ -471,6 +475,10 @@ where
     F: crate::Widget + Send + 'static,
 {
     /// Schedules a redraw when live and does nothing when plain.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the live runtime thread has stopped.
     pub fn mark_dirty(&self) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.mark_dirty(),
@@ -479,6 +487,10 @@ where
     }
 
     /// Changes the width.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the live runtime thread has stopped.
     pub fn resize(&mut self, width: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize(width),
@@ -487,6 +499,10 @@ where
     }
 
     /// Changes the width and the height.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the live runtime thread has stopped.
     pub fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         match self {
             Self::Live(runtime) => runtime.resize_viewport(width, height),
@@ -498,6 +514,10 @@ where
     ///
     /// No newline follows the frame and the cursor rests at the end of its last row, so write one
     /// before printing anything else.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the final frame cannot be written or the live runtime thread failed or panicked.
     pub fn finish(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish(),
@@ -506,6 +526,10 @@ where
     }
 
     /// Ends the runtime with `final_widget` as the last frame and returns the writer.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the final frame cannot be written or the live runtime thread failed or panicked.
     pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
     where
         G: crate::Widget + Send + 'static,
@@ -517,6 +541,10 @@ where
     }
 
     /// Ends the runtime erasing what it drew and returns the writer.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the erase cannot be written or the live runtime thread failed or panicked.
     pub fn finish_cleared(self) -> io::Result<W> {
         match self {
             Self::Live(runtime) => runtime.finish_cleared(),
@@ -539,8 +567,8 @@ pub struct PlainRuntime<W, H = WidgetRef, F = WidgetRef> {
 }
 
 impl<W, H, F> fmt::Debug for PlainRuntime<W, H, F> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f
             .debug_struct("PlainRuntime")
             .field("width", &self.width)
             .field("height", &self.height)
@@ -561,6 +589,10 @@ where
     ///
     /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch to either runtime
     /// with `?`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails.
     pub const fn resize(&mut self, width: usize) -> io::Result<()> {
         self.width = Some(width);
         Ok(())
@@ -570,6 +602,10 @@ where
     ///
     /// This never fails and returns a `Result` so [`AutoRuntime`] can dispatch to either runtime
     /// with `?`.
+    ///
+    /// # Errors
+    ///
+    /// Never fails.
     pub const fn resize_viewport(&mut self, width: usize, height: usize) -> io::Result<()> {
         self.width = Some(width);
         self.height = Some(height);
@@ -579,6 +615,10 @@ where
     /// Writes the final widget, or the root when none was set, and returns the writer.
     ///
     /// No trailing newline is written, so write one before printing anything else.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the final text cannot be written to the writer.
     pub fn finish(self) -> io::Result<W> {
         let Self {
             writer,
@@ -589,14 +629,18 @@ where
             theme,
             final_widget,
         } = self;
-        if let Some(final_widget) = final_widget {
-            write_plain_frame(writer, &final_widget, width, height, layout_mode, theme)
+        if let Some(widget) = final_widget {
+            write_plain_frame(writer, &widget, width, height, layout_mode, theme)
         } else {
             write_plain_frame(writer, &root, width, height, layout_mode, theme)
         }
     }
 
     /// Writes `final_widget` as the final text and returns the writer.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the final text cannot be written to the writer.
     pub fn finish_with<G>(self, final_widget: &G) -> io::Result<W>
     where
         G: crate::Widget,
@@ -612,6 +656,10 @@ where
     }
 
     /// Returns the writer without writing anything.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the writer cannot be flushed.
     pub fn finish_cleared(mut self) -> io::Result<W> {
         self.writer.flush()?;
         Ok(self.writer)
@@ -640,8 +688,8 @@ where
         &mut surface,
     );
     surface = layout_surface(surface, columns, layout_mode);
-    if let Some(height) = height {
-        surface.fit_height(height);
+    if let Some(rows) = height {
+        surface.fit_height(rows);
     }
     writer.write_all(surface.plain_text().as_bytes())?;
     writer.flush()?;
@@ -688,16 +736,28 @@ where
     }
 
     /// Schedules a redraw.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the runtime thread has stopped.
     pub fn mark_dirty(&self) -> io::Result<()> {
         self.handle.mark_dirty()
     }
 
     /// Changes the width.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the runtime thread has stopped.
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.handle.resize(width)
     }
 
     /// Changes the width and the height.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the runtime thread has stopped.
     pub fn resize_viewport(&self, width: usize, height: usize) -> io::Result<()> {
         self.handle.resize_viewport(width, height)
     }
@@ -708,6 +768,10 @@ where
     /// before printing anything else. When drawing fails or a widget panics on the thread, the
     /// writer is dropped after a best effort to show a hidden cursor again, and the error carries
     /// the panic message. Use [`LiveRuntime::finish_recovering`] to keep the writer in that case.
+    ///
+    /// # Errors
+    ///
+    /// Fails when drawing fails, a widget panics on the runtime thread, or the thread has already stopped.
     pub fn finish(self) -> io::Result<W> {
         self.finish_via(ThreadFinishMode::Current)
     }
@@ -716,6 +780,10 @@ where
     ///
     /// The writer is `None` only when the thread died without returning it, which a failed draw or
     /// a panicking widget does not cause.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`LiveRuntime::finish`] does, with the writer handed back when it survived.
     pub fn finish_recovering(self) -> Result<W, (Option<W>, io::Error)> {
         self.finish_via_recovering(ThreadFinishMode::Current)
     }
@@ -723,6 +791,10 @@ where
     /// Stops the thread after drawing `final_widget` as the last frame and returns the writer.
     ///
     /// The cursor is left as [`LiveRuntime::finish`] leaves it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when drawing fails, a widget panics on the runtime thread, or the thread has already stopped.
     pub fn finish_with<G>(self, final_widget: G) -> io::Result<W>
     where
         G: crate::Widget + Send + 'static,
@@ -731,6 +803,10 @@ where
     }
 
     /// Stops the thread after erasing what it drew and returns the writer.
+    ///
+    /// # Errors
+    ///
+    /// Fails when drawing fails, a widget panics on the runtime thread, or the thread has already stopped.
     pub fn finish_cleared(self) -> io::Result<W> {
         self.finish_via(ThreadFinishMode::Clear)
     }
@@ -747,10 +823,11 @@ where
         match (sent, self.join()) {
             (Ok(()), joined) => joined,
             (Err(_), Err(joined)) => Err(joined),
-            (Err(sent), Ok(writer)) => Err((Some(writer), sent)),
+            (Err(failure), Ok(writer)) => Err((Some(writer), failure)),
         }
     }
 
+    #[expect(clippy::expect_used, reason = "a live runtime is joined at most once")]
     fn join(&mut self) -> Result<W, (Option<W>, io::Error)> {
         let thread = self
             .thread
@@ -774,16 +851,28 @@ impl Clone for RuntimeHandle {
 
 impl RuntimeHandle {
     /// Schedules a redraw.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the runtime thread has stopped.
     pub fn mark_dirty(&self) -> io::Result<()> {
         self.send(RuntimeCommand::Dirty)
     }
 
     /// Changes the width.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the runtime thread has stopped.
     pub fn resize(&self, width: usize) -> io::Result<()> {
         self.send(RuntimeCommand::Resize(width))
     }
 
     /// Changes the width and the height.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the runtime thread has stopped.
     pub fn resize_viewport(&self, width: usize, height: usize) -> io::Result<()> {
         self.send(RuntimeCommand::ResizeViewport(width, height))
     }
@@ -806,9 +895,9 @@ impl<W> Drop for LiveRuntime<W> {
             } else {
                 ThreadFinishMode::Current
             };
-            let _ = self.handle.send(RuntimeCommand::Finish(finish_mode));
+            drop(self.handle.send(RuntimeCommand::Finish(finish_mode)));
             if let Some(thread) = self.thread.take() {
-                let _ = thread.join();
+                drop(thread.join());
             }
         }
     }
@@ -910,17 +999,18 @@ fn wants_frame_tick(interest: TickInterest, elapsed: Duration, frame_interval: D
 }
 
 fn fps_interval(fps: u16) -> Duration {
-    let fps = u64::from(fps.max(1));
-    Duration::from_nanos(1_000_000_000 / fps)
+    let rate = u64::from(fps.max(1));
+    Duration::from_nanos(1_000_000_000 / rate)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
+    use alloc::{rc::Rc, sync::Arc};
+    use core::{
         cell::{Cell, RefCell},
-        rc::Rc,
-        sync::{Arc, Mutex},
+        sync::atomic::{AtomicUsize, Ordering},
     };
+    use std::sync::Mutex;
 
     use crate::{Position, Stack, Style, Widget, local_widget};
 
@@ -956,7 +1046,7 @@ mod tests {
 
     impl Write for SharedBuffer {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().write(buf)
+            self.0.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.write(buf)
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -964,12 +1054,12 @@ mod tests {
         }
     }
 
-    struct PanicsOnSecondRender(std::sync::atomic::AtomicUsize);
+    struct PanicsOnSecondRender(AtomicUsize);
 
     impl Widget for PanicsOnSecondRender {
         fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
             assert!(
-                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0,
+                self.0.fetch_add(1, Ordering::SeqCst) == 0,
                 "widget exploded"
             );
             out.write("x", Style::PLAIN);
@@ -983,7 +1073,7 @@ mod tests {
     #[test]
     fn a_widget_panic_on_the_thread_restores_the_cursor_and_is_reported() {
         let buffer = SharedBuffer::default();
-        let widget = PanicsOnSecondRender(std::sync::atomic::AtomicUsize::default());
+        let widget = PanicsOnSecondRender(AtomicUsize::default());
         let live = Runtime::new(buffer.clone(), widget)
             .cursor_visibility(CursorVisibility::FromSurface)
             .start();
@@ -1007,7 +1097,7 @@ mod tests {
         }
 
         fn flush(&mut self) -> io::Result<()> {
-            self.flushed.lock().unwrap().append(&mut self.pending);
+            self.flushed.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.append(&mut self.pending);
             Ok(())
         }
     }
@@ -1029,7 +1119,7 @@ mod tests {
     #[test]
     fn finish_recovering_returns_the_writer_after_a_widget_panic() {
         let buffer = SharedBuffer::default();
-        let widget = PanicsOnSecondRender(std::sync::atomic::AtomicUsize::default());
+        let widget = PanicsOnSecondRender(AtomicUsize::default());
         let live = Runtime::new(buffer, widget).start();
         let Err((writer, error)) = live.finish_recovering() else {
             panic!("the widget panic was not reported");
@@ -1092,7 +1182,7 @@ mod tests {
     #[test]
     fn synchronous_runtime_accepts_a_local_root() {
         let value = Rc::new(RefCell::new("before".to_owned()));
-        let root = local_widget(LocalValue(value.clone()));
+        let root = local_widget(LocalValue(Rc::clone(&value)));
         let mut runtime = Runtime::new(Vec::new(), root).width(12);
         runtime.draw_now(Instant::now()).unwrap();
         *value.borrow_mut() = "after".to_owned();
@@ -1177,10 +1267,11 @@ mod tests {
 
     #[test]
     fn finish_with_accepts_a_third_widget_type() {
+        let overriding: Box<dyn Widget + Send> = Box::new("override");
         let output = Runtime::new(Vec::new(), "root")
             .final_widget("configured".to_owned())
             .start()
-            .finish_with(Box::new("override") as Box<dyn Widget + Send>)
+            .finish_with(overriding)
             .unwrap();
         assert!(!output.is_empty());
     }
@@ -1214,7 +1305,7 @@ mod tests {
 
     fn recording_widget() -> (WidgetRef, RecordedFrames) {
         let seen = Arc::new(Mutex::new(Vec::new()));
-        (Arc::new(ConstraintRecorder { seen: seen.clone() }), seen)
+        (Arc::new(ConstraintRecorder { seen: Arc::clone(&seen) }), seen)
     }
 
     #[test]
@@ -1276,7 +1367,7 @@ mod tests {
             .final_widget("success frame")
             .start();
 
-        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let unwound = panic::catch_unwind(AssertUnwindSafe(|| {
             let _live = live;
             panic!("simulated panic while a live runtime is in scope");
         }));

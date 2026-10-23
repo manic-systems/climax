@@ -182,7 +182,12 @@ impl Widget for DatePicker {
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_days(7),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
-            _ => Reaction::Ignored,
+            Key::Char(_)
+            | Key::Tab
+            | Key::Backtab
+            | Key::Backspace
+            | Key::Delete
+            | Key::Function(_) => Reaction::Ignored,
         }
     }
 

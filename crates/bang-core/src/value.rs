@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    collections::BTreeMap,
-    fmt,
-    str::FromStr,
-};
+use alloc::collections::BTreeMap;
+use core::{fmt, str::FromStr};
 
 /// A value a widget submits.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,54 +27,60 @@ impl Value {
     /// The boolean, if this is a `Bool`.
     #[must_use]
     pub const fn as_bool(&self) -> Option<bool> {
-        match self {
-            Self::Bool(value) => Some(*value),
-            _ => None,
+        if let Self::Bool(value) = self {
+            Some(*value)
+        } else {
+            None
         }
     }
 
     /// The text, if this is a `String`.
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            _ => None,
+        if let Self::String(value) = self {
+            Some(value)
+        } else {
+            None
         }
     }
 
     /// The number, if this is a `Number`.
     #[must_use]
     pub const fn as_number(&self) -> Option<Number> {
-        match self {
-            Self::Number(value) => Some(*value),
-            _ => None,
+        if let Self::Number(value) = self {
+            Some(*value)
+        } else {
+            None
         }
     }
 
     /// The date, if this is a `Date`.
     #[must_use]
     pub const fn as_date(&self) -> Option<Date> {
-        match self {
-            Self::Date(value) => Some(*value),
-            _ => None,
+        if let Self::Date(value) = self {
+            Some(*value)
+        } else {
+            None
         }
     }
 
     /// The items, if this is a `List`.
     #[must_use]
     pub fn as_list(&self) -> Option<&[Self]> {
-        match self {
-            Self::List(value) => Some(value),
-            _ => None,
+        if let Self::List(value) = self {
+            Some(value)
+        } else {
+            None
         }
     }
 
     /// The fields, if this is an `Object`.
     #[must_use]
     pub const fn as_object(&self) -> Option<&BTreeMap<String, Self>> {
-        match self {
-            Self::Object(value) => Some(value),
-            _ => None,
+        if let Self::Object(value) = self {
+            Some(value)
+        } else {
+            None
         }
     }
 }
@@ -258,13 +261,13 @@ mod tests {
 
     #[test]
     fn unix_days_follow_the_epoch() {
-        for (days, date) in [
+        for (days, candidate) in [
             (0, Date::new(1970, 1, 1)),
             (19_723, Date::new(2024, 1, 1)),
             (19_782, Date::new(2024, 2, 29)),
             (-1, Date::new(1969, 12, 31)),
         ] {
-            let date = date.unwrap();
+            let date = candidate.unwrap();
             assert_eq!(Date::from_unix_days(days), date);
             assert_eq!(date.unix_days(), days);
         }
@@ -282,6 +285,6 @@ mod tests {
     fn a_negative_year_round_trips_through_text() {
         let date = Date::new(-5, 3, 1).unwrap();
         assert_eq!(date.to_string().parse::<Date>(), Ok(date));
-        assert!("--5-03-01".parse::<Date>().is_err());
+        "--5-03-01".parse::<Date>().unwrap_err();
     }
 }

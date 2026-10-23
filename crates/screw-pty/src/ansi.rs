@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{error::Error, fmt};
+use core::{error::Error, fmt, mem, str};
 
 use screw::{Position, Style};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -65,13 +65,18 @@ pub enum ScreenError {
 }
 
 impl fmt::Display for ScreenError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    #[expect(
+        clippy::use_debug,
+        reason = "the sequence may carry control characters that Debug escapes"
+    )]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidUtf8 => formatter.write_str("terminal output contains invalid UTF-8"),
-            Self::IncompleteSequence => formatter
-                .write_str("terminal output ends in an incomplete escape or UTF-8 sequence"),
+            Self::InvalidUtf8 => f.write_str("terminal output contains invalid UTF-8"),
+            Self::IncompleteSequence => {
+                f.write_str("terminal output ends in an incomplete escape or UTF-8 sequence")
+            },
             Self::UnsupportedSequence(sequence) => {
-                write!(formatter, "unsupported terminal sequence {sequence:?}")
+                write!(f, "unsupported terminal sequence {sequence:?}")
             },
         }
     }
@@ -318,11 +323,11 @@ impl EmittedScreen {
     /// Create a fixed-size screen. Zero dimensions saturate to one cell.
     #[must_use]
     pub fn new(columns: usize, rows: usize) -> Self {
-        let columns = columns.max(1);
-        let rows = rows.max(1);
+        let width = columns.max(1);
+        let height = rows.max(1);
         Self {
-            primary: ScreenBuffer::new(columns, rows),
-            alternate: ScreenBuffer::new(columns, rows),
+            primary: ScreenBuffer::new(width, height),
+            alternate: ScreenBuffer::new(width, height),
             alternate_active: false,
             cursor_visible: true,
             bracketed_paste: false,
@@ -338,6 +343,10 @@ impl EmittedScreen {
     ///
     /// Once a feed reports an error, the model stops interpreting bytes and
     /// every later `feed` or `finish` call returns that same error again.
+    ///
+    /// # Errors
+    ///
+    /// Fails on invalid UTF-8 and on any terminal sequence the model does not interpret.
     pub fn feed(&mut self, bytes: &[u8]) -> Result<(), ScreenError> {
         if let Some(error) = self.error.clone() {
             return Err(error);
@@ -352,6 +361,10 @@ impl EmittedScreen {
     }
 
     /// Verify that the complete stream did not end partway through a sequence.
+    ///
+    /// # Errors
+    ///
+    /// Fails when an earlier feed failed or the stream ended partway through a sequence.
     pub fn finish(&self) -> Result<(), ScreenError> {
         if let Some(error) = &self.error {
             return Err(error.clone());
@@ -440,7 +453,7 @@ impl EmittedScreen {
             },
             ParserState::Csi(bytes) => {
                 if (0x40..=0x7e).contains(&byte) {
-                    let parameters = std::mem::take(bytes);
+                    let parameters = mem::take(bytes);
                     self.parser = ParserState::Ground;
                     self.apply_csi(&parameters, byte)
                 } else if (0x20..=0x3f).contains(&byte) {
@@ -458,13 +471,13 @@ impl EmittedScreen {
     fn feed_ground(&mut self, byte: u8) -> Result<(), ScreenError> {
         if !self.utf8.is_empty() || byte >= 0x80 {
             self.utf8.push(byte);
-            return match std::str::from_utf8(&self.utf8) {
+            return match str::from_utf8(&self.utf8) {
                 Ok(text) => {
                     let chars = text.chars().collect::<Vec<_>>();
                     self.utf8.clear();
                     for ch in chars {
                         if is_c1_control(ch) {
-                            return Err(unsupported(format!("C1 control U+{:04X}", ch as u32)));
+                            return Err(unsupported(format!("C1 control U+{:04X}", u32::from(ch))));
                         }
                         let style = self.style;
                         self.active_mut().put_char(ch, style)?;
@@ -499,12 +512,12 @@ impl EmittedScreen {
     }
 
     fn apply_csi(&mut self, bytes: &[u8], final_byte: u8) -> Result<(), ScreenError> {
-        let (private, parameters) = if bytes.first() == Some(&b'?') {
+        let (private, raw) = if bytes.first() == Some(&b'?') {
             (true, &bytes[1..])
         } else {
             (false, bytes)
         };
-        let parameters = parse_parameters(parameters, private, final_byte)?;
+        let parameters = parse_parameters(raw, private, final_byte)?;
         match (private, final_byte) {
             (false, b'A') => self.move_cursor(-distance(&parameters, final_byte)?, 0),
             (false, b'B') => self.move_cursor(distance(&parameters, final_byte)?, 0),
@@ -535,12 +548,12 @@ impl EmittedScreen {
     }
 
     fn apply_sgr(&mut self, parameters: &[usize], final_byte: u8) -> Result<(), ScreenError> {
-        let parameters = if parameters.is_empty() {
+        let codes = if parameters.is_empty() {
             &[0][..]
         } else {
             parameters
         };
-        let mut remaining = parameters.iter().copied();
+        let mut remaining = codes.iter().copied();
         while let Some(code) = remaining.next() {
             match code {
                 0 => self.style = Style::PLAIN,
@@ -556,7 +569,7 @@ impl EmittedScreen {
                 100..=107 => self.style.bg = Some(bright_color(code - 100)),
                 38 | 48 => {
                     let color = extended_color(&mut remaining)
-                        .ok_or_else(|| unsupported(csi_sequence(false, parameters, final_byte)))?;
+                        .ok_or_else(|| unsupported(csi_sequence(false, codes, final_byte)))?;
                     if code == 38 {
                         self.style.fg = Some(color);
                     } else {
@@ -636,7 +649,7 @@ fn parse_parameters(
             if part.is_empty() {
                 Ok(0)
             } else if part.iter().all(u8::is_ascii_digit) {
-                std::str::from_utf8(part)
+                str::from_utf8(part)
                     .ok()
                     .and_then(|value| value.parse().ok())
                     .ok_or_else(|| unsupported(raw_csi_sequence(private, bytes, final_byte)))
@@ -648,12 +661,12 @@ fn parse_parameters(
 }
 
 fn csi_sequence(private: bool, parameters: &[usize], final_byte: u8) -> String {
-    let parameters = parameters
+    let joined = parameters
         .iter()
         .map(usize::to_string)
         .collect::<Vec<_>>()
         .join(";");
-    raw_csi_sequence(private, parameters.as_bytes(), final_byte)
+    raw_csi_sequence(private, joined.as_bytes(), final_byte)
 }
 
 /// Build an unsupported-sequence message from the raw parameter bytes, so a
@@ -661,8 +674,8 @@ fn csi_sequence(private: bool, parameters: &[usize], final_byte: u8) -> String {
 /// decimal byte values.
 fn raw_csi_sequence(private: bool, parameters: &[u8], final_byte: u8) -> String {
     let marker = if private { "?" } else { "" };
-    let parameters = String::from_utf8_lossy(parameters);
-    format!("CSI {marker}{parameters}{}", char::from(final_byte))
+    let text = String::from_utf8_lossy(parameters);
+    format!("CSI {marker}{text}{}", char::from(final_byte))
 }
 
 fn single_parameter(parameters: &[usize], final_byte: u8) -> Result<Option<usize>, ScreenError> {
@@ -675,7 +688,7 @@ fn single_parameter(parameters: &[usize], final_byte: u8) -> Result<Option<usize
 
 fn distance(parameters: &[usize], final_byte: u8) -> Result<isize, ScreenError> {
     let value = single_parameter(parameters, final_byte)?.unwrap_or(1).max(1);
-    isize::try_from(value).map_err(|_| unsupported(format!("cursor distance {value}")))
+    isize::try_from(value).map_err(|_overflow| unsupported(format!("cursor distance {value}")))
 }
 
 const fn color(index: usize) -> screw::Color {
@@ -797,8 +810,8 @@ mod tests {
                 }
                 surface.write(line, Style::PLAIN);
             }
-            if let Some(cursor) = cursor {
-                surface.set_cursor(cursor);
+            if let Some(position) = cursor {
+                surface.set_cursor(position);
             }
             surface
         }

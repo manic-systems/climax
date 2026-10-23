@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use screw::{
     LocalWidgetRef, RenderCtx, Role, Span, Spans, Stack, Surface, Text, TickInterest,
@@ -47,13 +47,13 @@ impl Form {
     /// Panics when a field called `name` already exists, since the submitted
     /// object holds one value per name and would drop the earlier answer.
     pub fn push_field(&mut self, name: impl Into<String>, widget: impl Widget + 'static) {
-        let name = name.into();
+        let owned = name.into();
         assert!(
-            self.fields.iter().all(|field| field.name != name),
-            "form field name '{name}' is already used"
+            self.fields.iter().all(|field| field.name != owned),
+            "form field name '{owned}' is already used"
         );
         self.fields.push(FormField {
-            name,
+            name: owned,
             widget:   Box::new(widget),
             accepted: None,
         });
@@ -91,11 +91,11 @@ impl Form {
             return Reaction::Ignored;
         }
 
-        let active = active.min(self.fields.len() - 1);
-        if active == self.active {
+        let clamped = active.min(self.fields.len() - 1);
+        if clamped == self.active {
             return Reaction::Ignored;
         }
-        self.active = active;
+        self.active = clamped;
         self.focus_reaction()
     }
 
@@ -143,7 +143,9 @@ impl Form {
                     },
                     Reaction::Action(value) => return Reaction::Action(value),
                     Reaction::Cancel => return Reaction::Cancel,
-                    _ => return self.refuse(index),
+                    Reaction::Ignored | Reaction::Changed | Reaction::Focus(_) => {
+                        return self.refuse(index);
+                    },
                 }
             };
             values.insert(self.fields[index].name.clone(), value);
@@ -236,7 +238,19 @@ impl Widget for Form {
                     Key::Tab => return self.move_focus(1),
                     Key::Backtab => return self.move_focus(-1),
                     Key::Esc => return Reaction::Cancel,
-                    _ => {},
+                    Key::Char(_)
+                    | Key::Enter
+                    | Key::Backspace
+                    | Key::Delete
+                    | Key::Up
+                    | Key::Down
+                    | Key::Left
+                    | Key::Right
+                    | Key::Home
+                    | Key::End
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::Function(_) => {},
                 }
             },
             Event::Resize { .. } | Event::Tick | Event::Paste(_) | Event::UnknownEscape(_) => {},
@@ -245,7 +259,7 @@ impl Widget for Form {
         let Some(field) = self.fields.get_mut(self.active) else {
             return match event {
                 Event::Key(key) if key.key == Key::Enter => Reaction::Submit(self.object_value()),
-                _ => Reaction::Ignored,
+                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
             };
         };
 
@@ -269,7 +283,7 @@ impl Widget for Form {
             Reaction::Focus(FocusTarget::Widget(id)) => {
                 self.fields
                     .iter()
-                    .position(|field| field.widget.id() == id)
+                    .position(|candidate| candidate.widget.id() == id)
                     .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
                         self.set_active_index(index)
                     })
@@ -331,9 +345,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "form field name 'who' is already used")]
     fn a_repeated_field_name_is_refused() {
-        let _ = Form::new("form")
-            .with_field("who", TextInput::new("first"))
-            .with_field("who", TextInput::new("second"));
+        drop(
+            Form::new("form")
+                .with_field("who", TextInput::new("first"))
+                .with_field("who", TextInput::new("second")),
+        );
     }
 
     fn required(id: &'static str) -> TextInput {
@@ -395,7 +411,7 @@ mod tests {
                     self.value = "new";
                     Reaction::Focus(FocusTarget::Next)
                 },
-                _ => Reaction::Ignored,
+                Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
             }
         }
 
@@ -437,7 +453,7 @@ mod tests {
         fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
             match event {
                 Event::Key(key) if key.key == Key::Enter => Reaction::Submit(Value::from("answer")),
-                _ => Reaction::Ignored,
+                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
             }
         }
     }
@@ -461,7 +477,7 @@ mod tests {
                     self.done = true;
                     Reaction::Submit(Value::from("once"))
                 },
-                _ => Reaction::Ignored,
+                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => Reaction::Ignored,
             }
         }
     }
@@ -501,7 +517,7 @@ mod tests {
                     Reaction::Submit(Value::from("spun"))
                 },
                 Event::Tick => Reaction::Changed,
-                _ => Reaction::Ignored,
+                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } => Reaction::Ignored,
             }
         }
     }
@@ -549,7 +565,7 @@ mod tests {
                     self.count += 1;
                     Reaction::Changed
                 },
-                _ => Reaction::Ignored,
+                Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } => Reaction::Ignored,
             }
         }
 

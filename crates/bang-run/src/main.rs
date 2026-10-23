@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::fmt;
 use std::{
-    fmt,
     io::{self, Write as _},
+    process,
 };
 
 use bang_run::{Cli, CliError};
@@ -17,21 +18,21 @@ fn main() {
                 .and_then(|()| stdout.flush())
             {
                 if error.kind() == io::ErrorKind::BrokenPipe {
-                    std::process::exit(141);
+                    process::exit(141);
                 }
                 print_error(error);
-                std::process::exit(1);
+                process::exit(1);
             }
         },
         Err(error @ (CliError::Cancelled | CliError::Interrupted(..))) => {
             for failure in error.cleanup_failures() {
                 print_error(failure);
             }
-            std::process::exit(error.exit_code())
+            process::exit(error.exit_code())
         },
         Err(error) => {
             print_error(&error);
-            std::process::exit(error.exit_code());
+            process::exit(error.exit_code());
         },
     }
 }
@@ -44,7 +45,7 @@ fn print_error(error: impl fmt::Display) {
 /// broken write on the panic message itself). Write through the caller's
 /// stream and drop the result instead.
 fn write_error(mut writer: impl io::Write, error: impl fmt::Display) {
-    let _ = writeln!(writer, "error: {error}");
+    drop(writeln!(writer, "error: {error}"));
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{error, fmt, io};
+use core::{error, fmt};
+use std::io;
 
 /// The part of terminal teardown that failed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +45,7 @@ impl CleanupFailure {
 }
 
 impl fmt::Display for CleanupFailure {
+    #[expect(clippy::use_debug, reason = "the stage is named by its variant")]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}: {}", self.stage, self.source)
     }
@@ -104,7 +106,7 @@ impl error::Error for CleanupFailures {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.0
             .first()
-            .map(|failure| failure as &(dyn error::Error + 'static))
+            .map(|failure| -> &(dyn error::Error + 'static) { failure })
     }
 }
 
@@ -138,6 +140,6 @@ mod tests {
         assert_eq!(failures.failures().len(), 2);
         assert_eq!(failures.failures()[0].stage(), CleanupStage::Signals);
         assert_eq!(failures.to_string(), "Signals: first; Signals: second");
-        assert!(staged(CleanupStage::Screen, Vec::new()).is_ok());
+        staged(CleanupStage::Screen, Vec::new()).unwrap();
     }
 }

@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{ptr, time::Duration};
 use std::{
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read as _, Write as _},
     os::fd::{AsRawFd as _, FromRawFd as _, RawFd},
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -132,8 +135,8 @@ fn run_in_pty_size(args: &[&str], input: &[u8], rows: u16) -> Vec<u8> {
 }
 
 fn open_pty(rows: u16) -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     let size = libc::winsize {
         ws_row: rows,
         ws_col: 80,
@@ -143,16 +146,19 @@ fn open_pty(rows: u16) -> (File, File) {
     // SAFETY: both fd pointers and the winsize pointer are valid for this call.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
             &raw const size,
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }
 
 fn set_nonblocking(file: &File) {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use bang_core::{
     ActionBinding,
@@ -389,12 +389,12 @@ fn finish_options(options: Vec<OptionEntry>) -> Result<FinishedOptions, String> 
     let mut items = Vec::new();
     let mut review_states = Vec::new();
     for (index, option) in options.into_iter().enumerate() {
-        let option = option.finish()?;
-        if option.selected {
+        let finished = option.finish()?;
+        if finished.selected {
             selected_indices.push(index);
         }
-        review_states.push(option.review_state);
-        items.push(option.item);
+        review_states.push(finished.review_state);
+        items.push(finished.item);
     }
     Ok(FinishedOptions {
         items,
@@ -408,9 +408,9 @@ fn finish_actions(
     review_list: bool,
 ) -> Result<(Vec<ActionBinding>, Vec<ReviewActionBinding>), String> {
     if review_list {
-        finish_review_actions(actions).map(|actions| (Vec::new(), actions))
+        finish_review_actions(actions).map(|resolved| (Vec::new(), resolved))
     } else {
-        finish_widget_actions(actions).map(|actions| (actions, Vec::new()))
+        finish_widget_actions(actions).map(|resolved| (resolved, Vec::new()))
     }
 }
 
@@ -462,7 +462,7 @@ pub(crate) fn push_unique_review_action(
         ));
     }
     let key = action.key().to_ascii_lowercase();
-    if seen.iter().any(|seen: &char| seen.eq_ignore_ascii_case(&key)) {
+    if seen.iter().any(|existing: &char| existing.eq_ignore_ascii_case(&key)) {
         return Err(format!("duplicate review action key '{key}'"));
     }
     seen.push(key);
@@ -470,10 +470,10 @@ pub(crate) fn push_unique_review_action(
 }
 
 pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
-    let Some((key, name)) = value.split_once(':') else {
+    let Some((key_text, name)) = value.split_once(':') else {
         return Err("action must use key:name syntax".to_owned());
     };
-    let key = parse_action_key_event(key)?;
+    let key = parse_action_key_event(key_text)?;
     if name.is_empty() {
         return Err("action name cannot be empty".to_owned());
     }
@@ -481,10 +481,10 @@ pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
 }
 
 pub fn parse_review_action_binding(value: &str) -> Result<ReviewActionBinding, String> {
-    let Some((key, name)) = value.split_once(':') else {
+    let Some((key_text, name)) = value.split_once(':') else {
         return Err("review action must use key:name syntax".to_owned());
     };
-    let key = parse_action_key(key, "review action")?;
+    let key = parse_action_key(key_text, "review action")?;
     if name.is_empty() {
         return Err("review action name cannot be empty".to_owned());
     }
@@ -493,11 +493,11 @@ pub fn parse_review_action_binding(value: &str) -> Result<ReviewActionBinding, S
 
 fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
     let normalized = value.to_ascii_lowercase();
-    if let Some(key) = normalized
+    if let Some(stripped) = normalized
         .strip_prefix("ctrl-")
         .or_else(|| normalized.strip_prefix("control-"))
     {
-        let key = parse_control_action_key(key, value)?;
+        let key = parse_control_action_key(stripped, value)?;
         return Ok(KeyEvent::with_modifiers(Key::Char(key), Modifiers::CONTROL));
     }
 
@@ -523,15 +523,15 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
 
 fn parse_control_action_key(key: &str, original: &str) -> Result<char, String> {
     let mut chars = key.chars();
-    let Some(key) = chars.next() else {
+    let Some(letter) = chars.next() else {
         return Err("control action key cannot be empty".to_owned());
     };
-    if chars.next().is_some() || !key.is_ascii_alphabetic() {
+    if chars.next().is_some() || !letter.is_ascii_alphabetic() {
         return Err(format!(
             "control action key '{original}' must use ctrl- plus one letter"
         ));
     }
-    Ok(key.to_ascii_lowercase())
+    Ok(letter.to_ascii_lowercase())
 }
 
 fn parse_action_key(value: &str, label: &str) -> Result<char, String> {
@@ -553,8 +553,8 @@ fn format_action_key_event(key: &KeyEvent) -> String {
             format!("ctrl-{value}")
         },
         (Key::Char(value), modifiers) if modifiers.bits() == 0 => value.to_string(),
-        (key, modifiers) if modifiers.bits() == 0 => format!("{key:?}").to_ascii_lowercase(),
-        (key, modifiers) => format!("{key:?}+{}", modifiers.bits()).to_ascii_lowercase(),
+        (code, modifiers) if modifiers.bits() == 0 => format!("{code:?}").to_ascii_lowercase(),
+        (code, modifiers) => format!("{code:?}+{}", modifiers.bits()).to_ascii_lowercase(),
     }
 }
 
@@ -583,11 +583,11 @@ const fn is_reserved_action_key(key: char) -> bool {
 
 fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
     Ok(match value {
-        toml::Value::String(value) => Value::String(value),
-        toml::Value::Integer(value) => Value::Number(Number::Integer(value)),
-        toml::Value::Float(value) => Value::Number(Number::Float(value)),
-        toml::Value::Boolean(value) => Value::Bool(value),
-        toml::Value::Datetime(value) => Value::String(value.to_string()),
+        toml::Value::String(text) => Value::String(text),
+        toml::Value::Integer(integer) => Value::Number(Number::Integer(integer)),
+        toml::Value::Float(float) => Value::Number(Number::Float(float)),
+        toml::Value::Boolean(flag) => Value::Bool(flag),
+        toml::Value::Datetime(moment) => Value::String(moment.to_string()),
         toml::Value::Array(values) => {
             Value::List(
                 values
@@ -600,7 +600,7 @@ fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
             Value::Object(
                 values
                     .into_iter()
-                    .map(|(key, value)| Ok((key, toml_value_to_bang(value)?)))
+                    .map(|(key, field)| Ok((key, toml_value_to_bang(field)?)))
                     .collect::<Result<BTreeMap<_, _>, String>>()?,
             )
         },

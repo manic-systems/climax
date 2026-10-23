@@ -1,23 +1,27 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use alloc::{collections::VecDeque, rc::Rc};
+use core::{any::Any, cell::RefCell, fmt};
 use std::{
-    any::Any,
-    cell::RefCell,
-    collections::VecDeque,
-    fmt,
     fs::File,
     io::{self, IsTerminal as _},
     os::fd::OwnedFd,
-    rc::Rc,
+    thread,
 };
-
 
 use bang_core::{
     ActionBinding, ActionLayer, Context, Event, Reaction, Value, Widget, WidgetId,
 };
 use screw::{RenderCtx, Surface, TickInterest, VerticalSize};
 
-use crate::{Error, Result};
+use crate::{
+    Error, Result,
+    advanced::replay_events,
+    live::{
+        run_live_session, run_live_session_forced, run_live_session_forced_on,
+        run_live_session_on,
+    },
+};
 
 type Runner = dyn Fn(Box<dyn Widget>) -> Result<Value>;
 type GuardFactory = dyn Fn() -> Result<Box<dyn Any>>;
@@ -85,7 +89,7 @@ impl Interaction {
     #[must_use]
     pub fn live() -> Self {
         Self::from_runner(|widget| {
-            crate::live::run_live_session(InteractionWidget::new(widget)).map_err(Error::from_live)
+            run_live_session(InteractionWidget::new(widget)).map_err(Error::from_live)
         })
         .with_summary_sink(stderr_sink())
     }
@@ -94,8 +98,7 @@ impl Interaction {
     #[must_use]
     pub fn forced() -> Self {
         Self::from_runner(|widget| {
-            crate::live::run_live_session_forced(InteractionWidget::new(widget))
-                .map_err(Error::from_live)
+            run_live_session_forced(InteractionWidget::new(widget)).map_err(Error::from_live)
         })
         .with_summary_sink(stderr_sink())
     }
@@ -108,11 +111,11 @@ impl Interaction {
     /// consume.
     #[must_use]
     pub fn live_on(handle: impl Into<OwnedFd>) -> Self {
-        let handle = handle.into();
-        let sink = handle_sink(&handle);
+        let owned = handle.into();
+        let sink = handle_sink(&owned);
         Self::from_runner(move |widget| {
-            let handle = handle.try_clone().map_err(Error::terminal)?;
-            crate::live::run_live_session_on(InteractionWidget::new(widget), handle)
+            let duplicate = owned.try_clone().map_err(Error::terminal)?;
+            run_live_session_on(InteractionWidget::new(widget), duplicate)
                 .map_err(Error::from_live)
         })
         .with_optional_summary_sink(sink.ok())
@@ -122,11 +125,11 @@ impl Interaction {
     /// terminal capability detection.
     #[must_use]
     pub fn forced_on(handle: impl Into<OwnedFd>) -> Self {
-        let handle = handle.into();
-        let sink = handle_sink(&handle);
+        let owned = handle.into();
+        let sink = handle_sink(&owned);
         Self::from_runner(move |widget| {
-            let handle = handle.try_clone().map_err(Error::terminal)?;
-            crate::live::run_live_session_forced_on(InteractionWidget::new(widget), handle)
+            let duplicate = owned.try_clone().map_err(Error::terminal)?;
+            run_live_session_forced_on(InteractionWidget::new(widget), duplicate)
                 .map_err(Error::from_live)
         })
         .with_optional_summary_sink(sink.ok())
@@ -151,7 +154,7 @@ impl Interaction {
         F: Fn() -> Result<G> + 'static,
     {
         self.guards.push(Rc::new(move || {
-            factory().map(|guard| Box::new(guard) as Box<dyn Any>)
+            factory().map(|guard| -> Box<dyn Any> { Box::new(guard) })
         }));
         self
     }
@@ -196,9 +199,9 @@ impl Interaction {
     where
         W: Widget + 'static,
     {
-        let label = prompt.map(summary_label).filter(|label| !label.is_empty());
+        let heading = prompt.map(summary_label).filter(|text| !text.is_empty());
         let line = |value: &Value| {
-            let label = label.as_deref()?;
+            let label = heading.as_deref()?;
             let answer = (summary.answer)(value)?;
             let line = if answer.is_empty() {
                 label.to_owned()
@@ -208,9 +211,10 @@ impl Interaction {
             Some(screw::single_line(&line).into_owned())
         };
         let enabled = summary.enabled.unwrap_or(self.summaries);
-        self.run(widget, actions, enabled.then_some(&line as SummaryAnswer<'_>))
+        let answer_line: SummaryAnswer<'_> = &line;
+        self.run(widget, actions, enabled.then_some(answer_line))
             .map_err(|error| match prompt {
-                Some(prompt) => error.naming_prompt(prompt),
+                Some(name) => error.naming_prompt(name),
                 None => error,
             })
     }
@@ -229,6 +233,10 @@ impl Interaction {
     /// This is how a widget built from [`crate::advanced`] reaches a driver
     /// other than the process terminal, such as [`Self::live_on`] with
     /// `/dev/tty` or [`Self::forced`]. Application guards run around it.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a guard cannot be acquired or when the session ends without a value.
     pub fn interact<W>(
         &self,
         widget: W,
@@ -253,12 +261,12 @@ impl Interaction {
         for factory in &self.guards {
             guards.0.push(factory()?);
         }
-        let widget = ActionLayer::new(widget).with_actions(actions);
-        let result = (self.runner)(Box::new(widget));
+        let layered = ActionLayer::new(widget).with_actions(actions);
+        let result = (self.runner)(Box::new(layered));
         if let (Ok(value), Some(answer), Some(sink)) = (&result, summary, &self.summary_sink)
             && let Some(line) = answer(value)
         {
-            let _ = sink(&line);
+            drop(sink(&line));
         }
         drop(guards);
         result
@@ -267,6 +275,10 @@ impl Interaction {
 
 /// How a prompt describes its submitted answer, if at all.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the prompt modules build summaries field by field"
+)]
 pub(crate) struct Summary<'a> {
     pub(crate) enabled: Option<bool>,
     pub(crate) answer: SummaryAnswer<'a>,
@@ -324,8 +336,8 @@ impl Widget for InteractionWidget {
         self.0.id()
     }
 
-    fn handle(&mut self, event: Event, context: &mut Context) -> Reaction {
-        self.0.handle(event, context)
+    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        self.0.handle(event, cx)
     }
 
     fn current_value(&self) -> Option<Value> {
@@ -336,12 +348,12 @@ impl Widget for InteractionWidget {
 pub(crate) fn scripted(
     scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
 ) -> Interaction {
-    let scripts = scripts
+    let queued = scripts
         .into_iter()
         .map(|events| events.into_iter().collect::<Vec<_>>())
         .collect();
     let state = Rc::new(RefCell::new(Script {
-        scripts,
+        scripts: queued,
         unused_events: 0,
     }));
     Interaction::from_runner(move |widget| {
@@ -350,9 +362,9 @@ pub(crate) fn scripted(
             .scripts
             .pop_front()
             .ok_or_else(Error::input_ended)?;
-        let mut events = events.into_iter();
-        let result = crate::advanced::replay_events(InteractionWidget::new(widget), &mut events);
-        state.borrow_mut().unused_events += events.count();
+        let mut remaining = events.into_iter();
+        let result = replay_events(InteractionWidget::new(widget), &mut remaining);
+        state.borrow_mut().unused_events += remaining.count();
         result
     })
 }
@@ -364,7 +376,7 @@ struct Script {
 
 impl Drop for Script {
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if thread::panicking() {
             return;
         }
         assert!(
@@ -378,6 +390,8 @@ impl Drop for Script {
 
 #[cfg(test)]
 mod tests {
+    use bang_core::widgets::TextInput;
+
     use super::*;
 
     struct RecordedGuard {
@@ -394,7 +408,7 @@ mod tests {
     #[test]
     fn summary_lines_drop_escapes_and_collapse_line_breaks() {
         let lines = Rc::new(RefCell::new(Vec::new()));
-        let sink_lines = lines.clone();
+        let sink_lines = Rc::clone(&lines);
         let interaction = Interaction::from_runner(|_widget| Ok(Value::from("done")))
             .with_summary_sink(Rc::new(move |line| {
                 sink_lines.borrow_mut().push(line.to_owned());
@@ -405,7 +419,7 @@ mod tests {
         interaction
             .interact_named(
                 Some("Pick\x1b]0;title\x07 one:"),
-                bang_core::widgets::TextInput::new("w"),
+                TextInput::new("w"),
                 [],
                 Summary::new(None, &answer),
             )
@@ -417,7 +431,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "1 unused scripts and 0 unused events")]
     fn dropping_a_scripted_interaction_with_an_unstarted_script_panics() {
-        let _ = scripted([Vec::new(), Vec::new()]).interact(bang_core::widgets::TextInput::new("w"), []);
+        drop(scripted([Vec::new(), Vec::new()]).interact(TextInput::new("w"), []));
     }
 
     #[test]
@@ -426,7 +440,7 @@ mod tests {
         let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
         let interaction = scripted([[submit.clone(), submit]]);
         interaction
-            .interact(bang_core::widgets::TextInput::new("w"), [])
+            .interact(TextInput::new("w"), [])
             .unwrap();
     }
 
@@ -434,37 +448,37 @@ mod tests {
     fn a_fully_consumed_scripted_interaction_drops_quietly() {
         let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
         scripted([[submit]])
-            .interact(bang_core::widgets::TextInput::new("w"), [])
+            .interact(TextInput::new("w"), [])
             .unwrap();
     }
 
     #[test]
     fn guards_are_acquired_in_order_and_released_lifo() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let runner_events = events.clone();
-        let interaction = Interaction::from_runner(move |_widget| {
+        let runner_events = Rc::clone(&events);
+        let base = Interaction::from_runner(move |_widget| {
             runner_events.borrow_mut().push("run");
             Ok(Value::from("done"))
         });
-        let first_events = events.clone();
-        let interaction = interaction.with_guard(move || {
+        let first_events = Rc::clone(&events);
+        let with_first = base.with_guard(move || {
             first_events.borrow_mut().push("acquire first");
             Ok(RecordedGuard {
                 label: "release first",
-                events: first_events.clone(),
+                events: Rc::clone(&first_events),
             })
         });
-        let second_events = events.clone();
-        let interaction = interaction.with_guard(move || {
+        let second_events = Rc::clone(&events);
+        let interaction = with_first.with_guard(move || {
             second_events.borrow_mut().push("acquire second");
             Ok(RecordedGuard {
                 label: "release second",
-                events: second_events.clone(),
+                events: Rc::clone(&second_events),
             })
         });
 
         interaction
-            .interact(bang_core::widgets::TextInput::new("widget"), [])
+            .interact(TextInput::new("widget"), [])
             .unwrap();
 
         assert_eq!(
@@ -482,22 +496,22 @@ mod tests {
     #[test]
     fn acquired_guards_unwind_lifo_when_later_acquisition_fails() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let first_events = events.clone();
-        let interaction = Interaction::disabled().with_guard(move || {
+        let first_events = Rc::clone(&events);
+        let with_first = Interaction::disabled().with_guard(move || {
             first_events.borrow_mut().push("acquire first");
             Ok(RecordedGuard {
                 label: "release first",
-                events: first_events.clone(),
+                events: Rc::clone(&first_events),
             })
         });
-        let second_events = events.clone();
-        let interaction = interaction.with_guard(move || -> Result<RecordedGuard> {
+        let second_events = Rc::clone(&events);
+        let interaction = with_first.with_guard(move || -> Result<RecordedGuard> {
             second_events.borrow_mut().push("acquire second");
             Err(Error::interaction_unavailable())
         });
 
         let error = interaction
-            .interact(bang_core::widgets::TextInput::new("widget"), [])
+            .interact(TextInput::new("widget"), [])
             .unwrap_err();
 
         assert_eq!(error.kind(), crate::ErrorKind::InteractionUnavailable);

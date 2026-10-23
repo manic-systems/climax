@@ -1,24 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 #![cfg(all(feature = "interactive", feature = "render"))]
+#![cfg(test)]
+#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
 
+use core::{ptr, time::Duration};
 use std::{
     fs::File,
     io::{self, Read as _, Write as _},
     os::fd::{FromRawFd as _, RawFd},
+    sync::{Mutex, PoisonError},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use climax::{Context, terminal::InteractionMode};
 
 const STDERR: RawFd = 2;
 
-static PROMPTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static PROMPTS: Mutex<()> = Mutex::new(());
 
 #[test]
 fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_stderr() {
-    let _serial = PROMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = PROMPTS.lock().unwrap_or_else(PoisonError::into_inner);
     let (mut master, slave) = open_pty();
     let captured_stderr = StderrCapture::install();
 
@@ -95,7 +99,7 @@ fn set_nonblocking(file: &File) {
     // SAFETY: fd is owned by file for the duration of this call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     // SAFETY: fd and flags are valid.
-    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK); }
 }
 
 fn set_blocking(file: &File) {
@@ -104,26 +108,29 @@ fn set_blocking(file: &File) {
     // SAFETY: fd is owned by file for the duration of this call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     // SAFETY: fd and flags are valid.
-    unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK); }
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }
 
 /// Redirects process stderr to a pipe for the duration of a test, so a claim
@@ -140,14 +147,14 @@ impl StderrCapture {
         assert!(saved >= 0, "dup stderr: {}", io::Error::last_os_error());
         let mut pipe = [-1_i32; 2];
         // SAFETY: pipe is a valid two-element buffer.
-        let result = unsafe { libc::pipe(pipe.as_mut_ptr()) };
-        assert_eq!(result, 0, "create pipe: {}", io::Error::last_os_error());
+        let created = unsafe { libc::pipe(pipe.as_mut_ptr()) };
+        assert_eq!(created, 0, "create pipe: {}", io::Error::last_os_error());
         let [read_fd, write_fd] = pipe;
         // SAFETY: write_fd is a valid, open fd; STDERR names the fd being replaced.
-        let result = unsafe { libc::dup2(write_fd, STDERR) };
-        assert_eq!(result, STDERR, "redirect stderr: {}", io::Error::last_os_error());
+        let redirected = unsafe { libc::dup2(write_fd, STDERR) };
+        assert_eq!(redirected, STDERR, "redirect stderr: {}", io::Error::last_os_error());
         // SAFETY: write_fd was just duplicated onto STDERR and its own copy is unused.
-        unsafe { libc::close(write_fd) };
+        unsafe { libc::close(write_fd); }
         // SAFETY: read_fd was just returned by pipe above as a live, owned descriptor.
         let read = unsafe { File::from_raw_fd(read_fd) };
         Self { saved, read }
@@ -158,9 +165,9 @@ impl StderrCapture {
     fn restore(mut self) -> Vec<u8> {
         // SAFETY: self.saved is a live descriptor duplicated from stderr in `install`;
         // dup2 closes whatever was on STDERR (the pipe's write end) before replacing it.
-        unsafe { libc::dup2(self.saved, STDERR) };
+        unsafe { libc::dup2(self.saved, STDERR); }
         // SAFETY: self.saved is no longer needed once restored.
-        unsafe { libc::close(self.saved) };
+        unsafe { libc::close(self.saved); }
         set_nonblocking(&self.read);
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 4096];
@@ -201,7 +208,7 @@ fn answered_select_output(context: &Context, mut master: File) -> Vec<u8> {
 
 #[test]
 fn a_submitted_prompt_leaves_a_summary_on_the_terminal_handle_by_default() {
-    let _serial = PROMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = PROMPTS.lock().unwrap_or_else(PoisonError::into_inner);
     let (master, slave) = open_pty();
     let context = Context::new()
         .with_terminal(slave)
@@ -213,7 +220,7 @@ fn a_submitted_prompt_leaves_a_summary_on_the_terminal_handle_by_default() {
 
 #[test]
 fn prompt_summaries_off_survives_a_later_terminal_and_mode_change() {
-    let _serial = PROMPTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = PROMPTS.lock().unwrap_or_else(PoisonError::into_inner);
     let (master, slave) = open_pty();
     let context = Context::new()
         .with_prompt_summaries(false)

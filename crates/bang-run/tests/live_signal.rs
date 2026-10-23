@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{mem, ptr, time::Duration};
 use std::{
     fs::File,
     io::{self, Read as _},
@@ -9,7 +12,7 @@ use std::{
     },
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,20 +33,23 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
         .stdin(Stdio::from(slave.try_clone().expect("clone slave for stdin")))
         .stdout(Stdio::from(slave.try_clone().expect("clone slave for stdout")))
         .stderr(Stdio::from(slave));
+    // A parent that ran this test in the background or under nohup leaves
+    // signals ignored or blocked, and the child inherits both across exec.
+    let reset_signals = || {
+        // SAFETY: a zeroed sigset_t is plain data that sigemptyset initialises.
+        let mut empty = unsafe { mem::zeroed::<libc::sigset_t>() };
+        // SAFETY: empty is a valid sigset_t for the call.
+        unsafe { libc::sigemptyset(&raw mut empty); }
+        // SAFETY: empty is initialised and a null old set is allowed.
+        unsafe { libc::sigprocmask(libc::SIG_SETMASK, &raw const empty, ptr::null_mut()); }
+        for inherited in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+            // SAFETY: SIG_DFL is a valid disposition.
+            unsafe { libc::signal(inherited, libc::SIG_DFL); }
+        }
+        Ok(())
+    };
     // SAFETY: the hook only calls async-signal-safe libc functions.
-    unsafe {
-        // A parent that ran this test in the background or under nohup leaves
-        // signals ignored or blocked, and the child inherits both across exec.
-        command.pre_exec(|| {
-            let mut empty = std::mem::zeroed::<libc::sigset_t>();
-            libc::sigemptyset(&raw mut empty);
-            libc::sigprocmask(libc::SIG_SETMASK, &raw const empty, std::ptr::null_mut());
-            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
-                libc::signal(signal, libc::SIG_DFL);
-            }
-            Ok(())
-        });
-    }
+    unsafe { command.pre_exec(reset_signals); }
     let mut child = command.spawn().expect("spawn bang under a pty");
 
     let mut first_frame = [0_u8; 256];
@@ -66,20 +72,23 @@ fn exit_code_after(signal: libc::c_int) -> i32 {
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }

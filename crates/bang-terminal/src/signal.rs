@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{fmt, io, os::fd::OwnedFd, sync::OnceLock};
+use core::fmt;
+use std::{io, os::fd::OwnedFd, sync::OnceLock};
 
 use rustix::{
     io::{Errno, read},
@@ -96,6 +97,10 @@ pub struct SignalPoller {
 
 impl SignalPoller {
     /// Take the next queued signal without blocking.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the signal pipe cannot be read.
     pub fn poll_signal(&self) -> io::Result<Option<Signal>> {
         let mut record = [0_u8; 2];
         loop {
@@ -132,6 +137,10 @@ impl SignalGuard {
     /// Install handlers for the conventional terminal signals.
     ///
     /// Only one guard can be active in a process at a time.
+    ///
+    /// # Errors
+    ///
+    /// Fails when another guard is active or a handler cannot be installed.
     pub fn install_terminal_handlers() -> io::Result<Self> {
         handlers::claim()?;
         let installed = install_terminal_handlers_exclusive();
@@ -148,11 +157,19 @@ impl SignalGuard {
     }
 
     /// Take the next queued signal without blocking.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the signal pipe cannot be read.
     pub fn poll_signal(&mut self) -> io::Result<Option<Signal>> {
         self.poller.poll_signal()
     }
 
     /// Put the previous handlers back and report any failure.
+    ///
+    /// # Errors
+    ///
+    /// Fails when a previous handler cannot be put back.
     pub fn restore(mut self) -> Result<(), CleanupFailures> {
         self.restore_active().0
     }
@@ -201,8 +218,8 @@ fn install_terminal_handlers_exclusive() -> io::Result<SignalGuard> {
             Ok(Some(old)) => previous.push((signal, old)),
             Ok(None) => {},
             Err(error) => {
-                for (signal, old) in &previous {
-                    let _result = handlers::restore(*signal, old);
+                for (installed, old) in &previous {
+                    let _result = handlers::restore(*installed, old);
                 }
                 return Err(error);
             },
@@ -218,11 +235,16 @@ fn install_terminal_handlers_exclusive() -> io::Result<SignalGuard> {
 
 /// The raw `sigaction` calls rustix does not cover, kept in one place.
 mod handlers {
+    use core::{
+        mem, ptr,
+        sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
+    };
     use std::{
         io,
         os::fd::{AsRawFd as _, BorrowedFd, OwnedFd},
-        sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
     };
+
+    use rustix::io::write;
 
     use super::Signal;
 
@@ -249,7 +271,7 @@ mod handlers {
         ACTIVE
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map(drop)
-            .map_err(|_| {
+            .map_err(|_busy| {
                 io::Error::new(
                     io::ErrorKind::AlreadyExists,
                     "terminal signal handlers are already installed",
@@ -267,11 +289,15 @@ mod handlers {
 
     /// Install the handler and return the disposition it replaced, or `None`
     /// when the signal was ignored and has been left that way.
+    #[expect(
+        clippy::as_conversions,
+        reason = "sigaction stores the handler address as an integer"
+    )]
     pub(super) fn install(signal: Signal) -> io::Result<Option<Previous>> {
         // SAFETY: zeroed storage is written by sigaction before it is read
-        let mut previous = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        let mut previous = unsafe { mem::zeroed::<libc::sigaction>() };
         // SAFETY: a null new action only queries, and previous is valid for the call
-        if unsafe { libc::sigaction(signal.as_raw(), std::ptr::null(), &raw mut previous) } != 0 {
+        if unsafe { libc::sigaction(signal.as_raw(), ptr::null(), &raw mut previous) } != 0 {
             return Err(io::Error::last_os_error());
         }
         if previous.sa_sigaction == libc::SIG_IGN {
@@ -279,7 +305,7 @@ mod handlers {
         }
 
         // SAFETY: a zeroed sigaction is a valid starting point and is fully set below
-        let mut action = unsafe { std::mem::zeroed::<libc::sigaction>() };
+        let mut action = unsafe { mem::zeroed::<libc::sigaction>() };
         action.sa_sigaction = handle as *const () as usize;
         action.sa_flags = 0;
         // SAFETY: sa_mask points to valid memory
@@ -296,7 +322,7 @@ mod handlers {
 
     pub(super) fn restore(signal: Signal, previous: &Previous) -> io::Result<()> {
         // SAFETY: previous was returned by sigaction for this signal
-        if unsafe { libc::sigaction(signal.as_raw(), previous, std::ptr::null_mut()) } != 0 {
+        if unsafe { libc::sigaction(signal.as_raw(), previous, ptr::null_mut()) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -334,31 +360,40 @@ mod handlers {
             target_os = "ios",
             target_os = "freebsd"
         )))]
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
 
     extern "C" fn handle(signal: libc::c_int) {
         let slot = errno_slot();
-        // SAFETY: a non-null slot is the interrupted thread's errno
-        let saved = if slot.is_null() { 0 } else { unsafe { *slot } };
+        let saved = if slot.is_null() {
+            0
+        } else {
+            // SAFETY: a non-null slot is the interrupted thread's errno
+            unsafe { *slot }
+        };
         let generation = GENERATION.load(Ordering::SeqCst);
         let fd = WRITE_FD.load(Ordering::SeqCst);
         if fd >= 0 {
             let byte = u8::try_from(signal).unwrap_or(0);
             // SAFETY: the pipe is never closed once published
             let write_fd = unsafe { BorrowedFd::borrow_raw(fd) };
-            let _result = rustix::io::write(write_fd, &[generation, byte]);
+            let _result = write(write_fd, &[generation, byte]);
         }
         if !slot.is_null() {
             // SAFETY: as above
-            unsafe { *slot = saved };
+            unsafe { *slot = saved; }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::BorrowedFd;
+
+    use rustix::io::write;
+
     use super::*;
+    use crate::testing::SIGNAL_LOCK;
 
     fn raise(signal: libc::c_int) {
         // SAFETY: raising a signal that has a handler or is ignored
@@ -375,7 +410,7 @@ mod tests {
 
     #[test]
     fn terminal_signal_handlers_are_a_process_singleton() {
-        let _serial = crate::testing::SIGNAL_LOCK.lock().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         let error = SignalGuard::install_terminal_handlers().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
@@ -389,7 +424,7 @@ mod tests {
 
     #[test]
     fn successive_guards_share_one_queue() {
-        let _serial = crate::testing::SIGNAL_LOCK.lock().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
         for signal in [libc::SIGTERM, libc::SIGHUP] {
             let mut guard = SignalGuard::install_terminal_handlers().unwrap();
             raise(signal);
@@ -404,7 +439,7 @@ mod tests {
 
     #[test]
     fn a_stale_handler_write_never_reaches_a_later_guard() {
-        let _serial = crate::testing::SIGNAL_LOCK.lock().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
         let first = SignalGuard::install_terminal_handlers().unwrap();
         let stale = handlers::generation();
         first.restore().unwrap();
@@ -412,8 +447,8 @@ mod tests {
         let mut second = SignalGuard::install_terminal_handlers().unwrap();
         let fd = handlers::write_fd();
         // SAFETY: the write end is never closed once published
-        let write_fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) };
-        rustix::io::write(write_fd, &[stale, u8::try_from(libc::SIGTERM).unwrap()]).unwrap();
+        let write_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+        write(write_fd, &[stale, u8::try_from(libc::SIGTERM).unwrap()]).unwrap();
         assert_eq!(second.poll_signal().unwrap(), None);
 
         raise(libc::SIGHUP);
@@ -423,7 +458,7 @@ mod tests {
 
     #[test]
     fn restore_polling_returns_a_signal_queued_before_release() {
-        let _serial = crate::testing::SIGNAL_LOCK.lock().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         raise(libc::SIGTERM);
         let (result, late) = guard.restore_polling();
@@ -433,7 +468,7 @@ mod tests {
 
     #[test]
     fn an_ignored_signal_stays_ignored_and_is_not_queued() {
-        let _serial = crate::testing::SIGNAL_LOCK.lock().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
         // SAFETY: SIG_IGN is a valid disposition
         let before = unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
         let mut guard = SignalGuard::install_terminal_handlers().unwrap();

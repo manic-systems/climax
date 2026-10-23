@@ -2,9 +2,10 @@
 
 //! Test support shared with the `bang` crate. Not part of the public API.
 
+use core::ptr;
 use std::{
     io,
-    os::fd::{FromRawFd as _, OwnedFd},
+    os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd},
     sync::Mutex,
 };
 
@@ -13,30 +14,30 @@ pub static SIGNAL_LOCK: Mutex<()> = Mutex::new(());
 
 /// A pseudo-terminal with the given size, returned as `(master, slave)`.
 pub fn pty(cols: u16, rows: u16) -> io::Result<(OwnedFd, OwnedFd)> {
-    let mut master = 0;
-    let mut slave = 0;
+    let mut master_fd = 0;
+    let mut slave_fd = 0;
     // SAFETY: both out pointers are valid and the optional arguments are null.
     let opened = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     if opened != 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: openpty returned two descriptors that nothing else owns.
-    let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+    // SAFETY: openpty returned a master descriptor that nothing else owns.
+    let master = unsafe { OwnedFd::from_raw_fd(master_fd) };
+    // SAFETY: openpty returned a slave descriptor that nothing else owns.
+    let slave = unsafe { OwnedFd::from_raw_fd(slave_fd) };
     resize_pty(&master, cols, rows)?;
     Ok((master, slave))
 }
 
 pub fn resize_pty(master: &OwnedFd, cols: u16, rows: u16) -> io::Result<()> {
-    use std::os::fd::AsRawFd as _;
-
     let size = libc::winsize {
         ws_row: rows,
         ws_col: cols,

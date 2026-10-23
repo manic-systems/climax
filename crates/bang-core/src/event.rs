@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::ops::{BitOr, BitOrAssign};
+
 /// An input or lifecycle event delivered to a widget.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -138,7 +140,7 @@ impl Modifiers {
     }
 }
 
-impl core::ops::BitOr for Modifiers {
+impl BitOr for Modifiers {
     type Output = Self;
 
     fn bitor(self, rhs: Self) -> Self::Output {
@@ -146,7 +148,7 @@ impl core::ops::BitOr for Modifiers {
     }
 }
 
-impl core::ops::BitOrAssign for Modifiers {
+impl BitOrAssign for Modifiers {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
     }

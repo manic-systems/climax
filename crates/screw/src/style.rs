@@ -63,12 +63,12 @@ impl Color {
             Self::BrightCyan => simple(66),
             Self::BrightWhite => simple(67),
             Self::Indexed(index) => vec![extended.to_string(), "5".to_owned(), index.to_string()],
-            Self::Rgb(r, g, b) => vec![
+            Self::Rgb(red, green, blue) => vec![
                 extended.to_string(),
                 "2".to_owned(),
-                r.to_string(),
-                g.to_string(),
-                b.to_string(),
+                red.to_string(),
+                green.to_string(),
+                blue.to_string(),
             ],
         };
         codes.extend(parts);
@@ -76,7 +76,10 @@ impl Color {
 }
 
 /// Colours and text attributes applied to written cells.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each attribute is an independent SGR flag"
+)]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Style {
     /// Foreground colour, or the terminal default when `None`.
@@ -252,7 +255,7 @@ impl Style {
 
     pub(crate) fn sgr(self) -> String {
         if self == Self::default() {
-            return "\x1b[0m".to_string();
+            return "\x1b[0m".to_owned();
         }
 
         let mut codes = vec!["0".to_owned()];

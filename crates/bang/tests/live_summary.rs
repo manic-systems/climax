@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
 mod summary_common;
 
-use std::sync::Once;
+use std::{env, sync::Once};
 
 use bang::{ConfirmPrompt, PromptOutcome};
 use summary_common::{DIM_SUMMARY, find, rfind, run_confirm};
@@ -12,7 +14,7 @@ fn colours_on() {
     ONCE.call_once(|| {
         // SAFETY: runs once before any test in this binary reads the
         // environment through screw, and tests only ever remove the variable.
-        unsafe { std::env::remove_var("NO_COLOR") };
+        unsafe { env::remove_var("NO_COLOR"); }
     });
 }
 

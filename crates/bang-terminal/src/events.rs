@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::os::fd::{AsFd, OwnedFd};
+use alloc::collections::VecDeque;
+use core::time::Duration;
 use std::{
-    collections::VecDeque,
     io::{self, Read},
-    time::{Duration, Instant},
+    os::fd::{AsFd, OwnedFd},
+    time::Instant,
 };
 
 use bang_core::Event;
@@ -137,6 +138,8 @@ where
 {
     /// Poll a descriptor for input and Escape deadlines without a worker.
     ///
+    /// # Errors
+    ///
     /// Fails when the descriptor is not open.
     pub fn pollable(input: R) -> io::Result<Self> {
         let fd = input.as_fd().try_clone_to_owned()?;
@@ -158,14 +161,15 @@ where
     }
 
     fn current_size(&self) -> Option<Viewport> {
-        self.resize
-            .as_ref()
-            .and_then(|terminal| Viewport::of(terminal).ok())
+        let terminal = self.resize.as_ref()?;
+        Viewport::of(terminal).ok()
     }
 
     /// Block until the next event, signal or end of input.
     ///
-    /// Read and poll failures are returned as errors.
+    /// # Errors
+    ///
+    /// Fails when reading or polling the input fails.
     pub fn next_event(&mut self) -> io::Result<TerminalPoll> {
         loop {
             if let Some(item) = self.next_event_within(None)? {
@@ -178,6 +182,10 @@ where
     ///
     /// Only a [`Self::pollable`] source can time out. A [`Self::blocking`]
     /// source waits in `read` and ignores `limit`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when reading or polling the input fails.
     pub fn next_event_within(&mut self, limit: Option<Duration>) -> io::Result<Option<TerminalPoll>> {
         if let Some(item) = self.pending.pop_front() {
             return Ok(Some(item));
@@ -188,12 +196,12 @@ where
         if let Some(item) = self.poll_sideband()? {
             return Ok(Some(item));
         }
-        let deadline = limit.map(|limit| (self.clock)() + limit);
+        let deadline = limit.map(|span| (self.clock)() + span);
 
         loop {
             let remaining = match deadline {
-                Some(deadline) => {
-                    let remaining = deadline.saturating_duration_since((self.clock)());
+                Some(due) => {
+                    let remaining = due.saturating_duration_since((self.clock)());
                     if remaining.is_zero() {
                         return Ok(None);
                     }
@@ -201,7 +209,7 @@ where
                 },
                 None => None,
             };
-            let bytes = match self.wait_for_input(remaining)? {
+            let input = match self.wait_for_input(remaining)? {
                 InputReadiness::Timeout => {
                     if let Some(event) = self.flush_due_escape() {
                         return Ok(Some(TerminalPoll::Event(event)));
@@ -211,11 +219,11 @@ where
                     }
                     continue;
                 },
-                InputReadiness::Bytes(bytes) => Some(bytes),
+                InputReadiness::Bytes(chunk) => Some(chunk),
                 InputReadiness::End => None,
             };
-            if let Some(bytes) = bytes {
-                let decoded = self.decoder.feed(&bytes);
+            if let Some(chunk) = input {
+                let decoded = self.decoder.feed(&chunk);
                 self.queue_events(decoded);
                 // Only arm the deadline for a prefix `flush_escape` can resolve;
                 // an incomplete CSI has to wait for its final byte regardless.
@@ -243,7 +251,7 @@ where
     }
 
     fn wait_for_input(&mut self, cap: Option<Duration>) -> io::Result<InputReadiness> {
-        let timeout = cap.map_or_else(|| self.wait_timeout(), |cap| self.wait_timeout().min(cap));
+        let timeout = cap.map_or_else(|| self.wait_timeout(), |limit| self.wait_timeout().min(limit));
         match &mut self.wait {
             WaitMode::Sync => {
                 let mut buffer = [0_u8; 256];
@@ -270,8 +278,8 @@ where
         if !self.size_initialized || size != self.last_size {
             self.size_initialized = true;
             self.last_size = size;
-            if let Some(size) = size {
-                return Ok(Some(TerminalPoll::Event(resize_event(size))));
+            if let Some(current) = size {
+                return Ok(Some(TerminalPoll::Event(resize_event(current))));
             }
         }
         Ok(None)
@@ -328,11 +336,11 @@ fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness
 
 fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
     let mut descriptors = [PollFd::new(fd, PollFlags::IN)];
-    let timeout = Timespec {
+    let spec = Timespec {
         tv_sec: i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
         tv_nsec: timeout.subsec_nanos().into(),
     };
-    match poll(&mut descriptors, Some(&timeout)) {
+    match poll(&mut descriptors, Some(&spec)) {
         Ok(0) | Err(Errno::INTR) => return Ok(false),
         Ok(_) => {},
         Err(errno) => return Err(errno.into()),
@@ -349,12 +357,23 @@ fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::{io::Write as _, os::unix::net::UnixStream, thread};
+    use alloc::sync::Arc;
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use std::{
+        fs::File,
+        io::{BufReader, Cursor, Write as _},
+        os::{fd::BorrowedFd, unix::net::UnixStream},
+        sync::{OnceLock, mpsc},
+        thread,
+    };
 
     use bang_core::Key;
 
     use super::*;
+    use crate::{
+        SignalGuard,
+        testing::{SIGNAL_LOCK, pty, resize_pty},
+    };
 
     #[test]
     fn blocking_source_preserves_decoder_queue_before_end() {
@@ -372,13 +391,13 @@ mod tests {
 
     #[test]
     fn initial_and_changed_sizes_are_emitted_without_input_policy() {
-        let (master, slave) = crate::testing::pty(80, 24).unwrap();
+        let (master, slave) = pty(80, 24).unwrap();
         let mut events = TerminalEvents::blocking(Cursor::new(b"x")).resize_from(slave);
         assert_eq!(
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize { cols: 80, rows: 24 }),
         );
-        crate::testing::resize_pty(&master, 100, 30).unwrap();
+        resize_pty(&master, 100, 30).unwrap();
         assert_eq!(
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize {
@@ -394,8 +413,8 @@ mod tests {
 
     #[test]
     fn signals_are_sideband_outcomes_not_input_events() {
-        let _serial = crate::testing::SIGNAL_LOCK.lock().unwrap();
-        let guard = crate::SignalGuard::install_terminal_handlers().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let guard = SignalGuard::install_terminal_handlers().unwrap();
         let mut events = TerminalEvents::blocking(Cursor::new(b"x")).signals(guard.poller());
         // SAFETY: raising a signal the guard has a handler for.
         assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
@@ -413,7 +432,7 @@ mod tests {
     #[test]
     fn pollable_poll_distinguishes_escape_deadline_from_hangup() {
         fn fixed_now() -> Instant {
-            static BASE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+            static BASE: OnceLock<Instant> = OnceLock::new();
             *BASE.get_or_init(Instant::now)
         }
 
@@ -477,8 +496,8 @@ mod tests {
 
     #[test]
     fn a_hung_up_terminal_is_the_end_of_input() {
-        let (master, slave) = crate::testing::pty(80, 24).unwrap();
-        let mut events = TerminalEvents::pollable(std::fs::File::from(slave)).unwrap();
+        let (master, slave) = pty(80, 24).unwrap();
+        let mut events = TerminalEvents::pollable(File::from(slave)).unwrap();
         drop(master);
         assert_eq!(events.next_event().unwrap(), TerminalPoll::End);
         assert_eq!(events.next_event().unwrap(), TerminalPoll::End);
@@ -533,16 +552,16 @@ mod tests {
 
     /// A reader that owns its descriptor through an 8 KiB userspace buffer,
     /// the shape `stdin.lock()` has in production.
-    struct Buffered(std::io::BufReader<UnixStream>);
+    struct Buffered(BufReader<UnixStream>);
 
     impl Read for Buffered {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            self.0.read(buffer)
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.0.read(buf)
         }
     }
 
     impl AsFd for Buffered {
-        fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        fn as_fd(&self) -> BorrowedFd<'_> {
             self.0.get_ref().as_fd()
         }
     }
@@ -553,18 +572,18 @@ mod tests {
         let alphabet = b"abcdefghijklmnopqrstuvwxyz";
         let burst: Vec<u8> = (0..300).map(|index| alphabet[index % alphabet.len()]).collect();
         let burst_for_writer = burst.clone();
-        let trailing_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let writer_sent = std::sync::Arc::clone(&trailing_sent);
-        let (burst_read, wait_for_burst) = std::sync::mpsc::channel::<()>();
+        let trailing_sent = Arc::new(AtomicBool::new(false));
+        let writer_sent = Arc::clone(&trailing_sent);
+        let (burst_read, wait_for_burst) = mpsc::channel::<()>();
         let handle = thread::spawn(move || {
             writer.write_all(&burst_for_writer).unwrap();
-            let _ = wait_for_burst.recv_timeout(Duration::from_secs(5));
-            writer_sent.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _outcome = wait_for_burst.recv_timeout(Duration::from_secs(5));
+            writer_sent.store(true, Ordering::SeqCst);
             writer.write_all(b"z").unwrap();
         });
 
         let mut events =
-            TerminalEvents::pollable(Buffered(std::io::BufReader::new(reader))).unwrap();
+            TerminalEvents::pollable(Buffered(BufReader::new(reader))).unwrap();
         for byte in burst {
             assert_eq!(
                 events.next_event().unwrap(),
@@ -572,7 +591,7 @@ mod tests {
             );
         }
         assert!(
-            !trailing_sent.load(std::sync::atomic::Ordering::SeqCst),
+            !trailing_sent.load(Ordering::SeqCst),
             "burst delivery waited for the trailing byte",
         );
         burst_read.send(()).unwrap();
@@ -587,8 +606,8 @@ mod tests {
     struct Trickle(VecDeque<u8>);
 
     impl Read for Trickle {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            match (self.0.pop_front(), buffer.first_mut()) {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match (self.0.pop_front(), buf.first_mut()) {
                 (Some(byte), Some(slot)) => {
                     *slot = byte;
                     Ok(1)

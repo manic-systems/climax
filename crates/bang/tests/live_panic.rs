@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{mem, ptr};
 use std::{
     fs::File,
     io::{self, Read as _, Write as _},
@@ -8,7 +11,7 @@ use std::{
 };
 
 use bang::advanced::{Event, Key, KeyEvent, Reaction, Widget, WidgetContext, WidgetId};
-use bang::screw::{RenderCtx, Role, Surface};
+use bang::screw::{RenderCtx, Role, Surface, Widget as ScreenWidget};
 
 // The signal handlers are process-wide, so both cases run in turn in one test.
 #[test]
@@ -23,7 +26,7 @@ fn a_panicking_widget_leaves_the_terminal_as_it_found_it() {
     let before = local_modes(&probe);
 
     let worker = thread::spawn(move || {
-        let _ = bang::text("name")
+        let _outcome = bang::text("name")
             .validator(|_| panic!("validator exploded"))
             .interaction(bang::Interaction::live_on(slave))
             .interact();
@@ -39,7 +42,7 @@ fn a_panicking_widget_leaves_the_terminal_as_it_found_it() {
 
 struct Tall;
 
-impl bang::screw::Widget for Tall {
+impl ScreenWidget for Tall {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let style = ctx.theme().style(Role::Prompt);
         for line in 0..4 {
@@ -60,7 +63,9 @@ impl Widget for Tall {
                 key: Key::Char('x'),
                 ..
             }) => panic!("kaboom"),
-            _ => Reaction::Ignored,
+            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick | _ => {
+                Reaction::Ignored
+            },
         }
     }
 }
@@ -70,11 +75,11 @@ fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
     let tty = slave.try_clone().expect("duplicate the slave");
     let previous = panic::take_hook();
     panic::set_hook(Box::new(move |_| {
-        let _ = (&tty).write_all(b"\nPANIC-MESSAGE\n");
+        let _written = (&tty).write_all(b"\nPANIC-MESSAGE\n");
     }));
 
     let worker = thread::spawn(move || {
-        let _ = bang::Interaction::live_on(slave).interact(Tall, []);
+        let _outcome = bang::Interaction::live_on(slave).interact(Tall, []);
     });
 
     let mut output = Vec::new();
@@ -98,7 +103,7 @@ fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
 
 fn has_cursor_up(text: &str) -> bool {
     text.split("\x1b[").skip(1).any(|rest| {
-        rest.trim_start_matches(|c: char| c.is_ascii_digit()).starts_with('A')
+        rest.trim_start_matches(|ch: char| ch.is_ascii_digit()).starts_with('A')
     })
 }
 
@@ -123,27 +128,31 @@ fn drain(master: &File, output: &mut Vec<u8>) {
 
 fn local_modes(file: &File) -> libc::tcflag_t {
     // SAFETY: a zeroed termios is overwritten by tcgetattr.
-    let mut state = unsafe { std::mem::zeroed::<libc::termios>() };
+    let mut state = unsafe { mem::zeroed::<libc::termios>() };
     // SAFETY: the descriptor is open and state is valid for the call.
-    assert_eq!(unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) }, 0);
+    let status = unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) };
+    assert_eq!(status, 0);
     state.c_lflag
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }

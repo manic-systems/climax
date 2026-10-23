@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use toml::{
@@ -44,7 +46,7 @@ fn workspace_root() -> PathBuf {
         .to_owned()
 }
 
-fn read(path: &std::path::Path) -> Table {
+fn read(path: &Path) -> Table {
     fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
         .parse()
@@ -83,7 +85,7 @@ fn workspace_dependencies_on_workspace_crates_are_exact_pins() {
             continue;
         };
         let version = entry.get("version").and_then(Value::as_str);
-        if !version.is_some_and(|version| version.starts_with('=')) {
+        if !version.is_some_and(|text| text.starts_with('=')) {
             failures.push(format!(
                 "[workspace.dependencies] {name} lacks an exact `=` version, found {version:?}"
             ));

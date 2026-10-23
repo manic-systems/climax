@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::{iter, mem};
+
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
@@ -50,6 +52,10 @@ pub struct Position {
 }
 
 /// One terminal cell, or the leading cell of a wide character.
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the renderer reads cells directly while the public API goes through getters"
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cell {
     pub(crate) text:  String,
@@ -227,7 +233,7 @@ impl Surface {
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
         let mut col = self.current_col();
         let mut first = true;
-        let sealed = std::mem::take(&mut self.sealed);
+        let sealed = mem::take(&mut self.sealed);
         for (_, segment) in segments(text.as_ref()) {
             match segment {
                 Segment::Newline => self.newline(),
@@ -236,17 +242,17 @@ impl Surface {
                         self.current_row_mut().cells.push(space(style));
                     }
                 },
-                Segment::Cluster { text, width, .. } => {
+                Segment::Cluster { text: cluster, width, .. } => {
                     let joined = (first || width == 0)
                         && !(sealed && first)
                         && self
                             .current_row_mut()
                             .cells
                             .last_mut()
-                            .is_some_and(|last| last.join(text, width == 0));
+                            .is_some_and(|last| last.join(cluster, width == 0));
                     if !joined && width > 0 {
                         self.current_row_mut().cells.push(Cell {
-                            text: text.to_owned(),
+                            text: cluster.to_owned(),
                             width,
                             style,
                         });
@@ -550,20 +556,22 @@ fn columns(row: &Row) -> Vec<Column> {
     for cell in row.cells() {
         let start = columns.len();
         columns.push(Column::Cell(cell.clone()));
-        columns.extend((1..cell.width).map(|_| Column::Continuation { start }));
+        columns.extend(iter::repeat_n(Column::Continuation { start }, cell.width.saturating_sub(1)));
     }
     columns
 }
 
 fn ensure_columns(columns: &mut Vec<Column>, len: usize) {
-    columns.extend((columns.len()..len).map(|_| Column::Cell(space(Style::PLAIN))));
+    columns.extend(
+        iter::repeat_with(|| Column::Cell(space(Style::PLAIN))).take(len.saturating_sub(columns.len())),
+    );
 }
 
 fn clear_column(columns: &mut [Column], column: usize) {
-    let Some(slot) = columns.get(column) else {
+    let Some(target) = columns.get(column) else {
         return;
     };
-    let start = match slot {
+    let start = match target {
         Column::Cell(_) => column,
         Column::Continuation { start } => *start,
     };

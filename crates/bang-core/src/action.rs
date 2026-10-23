@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use crate::{
     Context,
@@ -26,11 +26,11 @@ impl ActionBinding {
     /// Bind `key` to the action `name`. The help text starts as the name.
     #[must_use]
     pub fn new(key: KeyEvent, name: impl Into<String>) -> Self {
-        let name = name.into();
+        let owned = name.into();
         Self {
             key,
-            help: name.clone(),
-            name,
+            help: owned.clone(),
+            name: owned,
         }
     }
 
@@ -173,6 +173,7 @@ fn action_output(action: &str, value: Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use crate::widgets::{Form, Select};
     use crate::{
         ActionBinding,
         ActionLayer,
@@ -216,7 +217,7 @@ mod tests {
     #[test]
     fn action_layer_inside_a_form_leaves_the_form() {
         let mut session = Session::new(
-            crate::widgets::Form::new("form")
+            Form::new("form")
                 .with_field(
                     "name",
                     ActionLayer::new(TextInput::new("name").with_value("Ada"))
@@ -238,7 +239,7 @@ mod tests {
     #[test]
     fn action_layer_passes_unbound_events_to_inner_widget() {
         let mut session = Session::new(
-            ActionLayer::new(crate::widgets::Select::new("choice", [
+            ActionLayer::new(Select::new("choice", [
                 SelectItem::from("alpha"),
                 SelectItem::from("bravo"),
             ]))

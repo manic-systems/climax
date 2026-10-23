@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+
+extern crate alloc;
+
+use alloc::sync::Arc;
+use core::{error::Error, mem};
 use std::{
     io::{self, Write},
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 
 use screw::{Align, Color, Renderer, Span, Spans, Style, Table};
@@ -12,9 +18,9 @@ use screw_pty::EmittedScreen;
 struct Shared(Arc<Mutex<Vec<u8>>>);
 
 impl Write for Shared {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(bytes);
-        Ok(bytes.len())
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.extend_from_slice(buf);
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -22,13 +28,17 @@ impl Write for Shared {
     }
 }
 
-fn emitted(widget: &impl screw::Widget, columns: usize, rows: usize) -> EmittedScreen {
+fn emitted(
+    widget: &impl screw::Widget,
+    columns: usize,
+    rows: usize,
+) -> Result<EmittedScreen, Box<dyn Error>> {
     let mut renderer = Renderer::new(Vec::new()).width(columns + 1).height(rows);
-    renderer.draw(widget).unwrap();
+    renderer.draw(widget)?;
     let mut screen = EmittedScreen::new(columns + 1, rows + 1);
-    screen.feed(&renderer.into_inner()).unwrap();
-    screen.finish().unwrap();
-    screen
+    screen.feed(&renderer.into_inner())?;
+    screen.finish()?;
+    Ok(screen)
 }
 
 #[test]
@@ -41,7 +51,7 @@ fn a_styled_spans_line_reaches_the_screen_with_each_span_style() {
         Span::new("cd"),
     ]);
 
-    let screen = emitted(&line, 8, 1);
+    let screen = emitted(&line, 8, 1).unwrap();
 
     assert_eq!(screen.trimmed_line(0).unwrap(), "ab世cd");
     assert_eq!(screen.cell(0, 0).unwrap().style(), bold_red);
@@ -59,7 +69,7 @@ fn a_table_with_a_wide_cell_keeps_its_columns_aligned_on_screen() {
         .header(["name", "n"])
         .aligns([Align::Left, Align::Right]);
 
-    let screen = emitted(&table, 8, 3);
+    let screen = emitted(&table, 8, 3).unwrap();
 
     assert_eq!(screen.trimmed_line(0).unwrap(), "name  n");
     assert_eq!(screen.trimmed_line(1).unwrap(), "世界  1");
@@ -85,7 +95,7 @@ fn clusters_reach_the_screen_as_single_cells_and_survive_patching() {
     let mut screen = EmittedScreen::new(13, 5);
     for tail in ["x", "y", ""] {
         renderer.draw_surface(rows(tail)).unwrap();
-        screen.feed(&std::mem::take(&mut *shared.0.lock().unwrap())).unwrap();
+        screen.feed(&mem::take(&mut *shared.0.lock().expect("sink lock"))).unwrap();
         screen.finish().unwrap();
 
         assert_eq!(screen.cell(0, 0).unwrap().text(), "\u{26a0}\u{fe0f}");
@@ -109,13 +119,13 @@ fn a_height_only_resize_repaints_the_frame() {
     let shared = Shared::default();
     let mut renderer = Renderer::new(shared.clone()).width(11).height(5);
     renderer.draw(&frame.as_str()).unwrap();
-    shared.0.lock().unwrap().clear();
+    shared.0.lock().expect("sink lock").clear();
 
     let mut screen = EmittedScreen::new(11, 3);
     screen.feed(b"r2\r\nr3\r\nr4").unwrap();
     renderer.resize_viewport(11, 3);
     renderer.draw(&frame.as_str()).unwrap();
-    screen.feed(&shared.0.lock().unwrap()).unwrap();
+    screen.feed(&shared.0.lock().expect("sink lock")).unwrap();
 
     let shown: Vec<String> = (0..3).map(|row| screen.trimmed_line(row).unwrap()).collect();
     assert_eq!(shown, ["r0", "r1", "r2"]);

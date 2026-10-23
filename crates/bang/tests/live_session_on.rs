@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{ptr, time::Duration};
 use std::{
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read as _, Write as _},
     os::fd::{FromRawFd as _, RawFd},
     sync::mpsc,
     thread,
-    time::Duration,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -19,10 +21,10 @@ fn session_on_a_caller_owned_handle_submits_on_enter_without_touching_process_st
 
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let result = bang::text("value")
+        let outcome = bang::text("value")
             .interaction(bang::Interaction::forced_on(slave))
             .interact();
-        let _ = tx.send(result);
+        let _sent = tx.send(outcome);
     });
 
     master.write_all(b"hello\r").expect("write PTY input");
@@ -42,22 +44,25 @@ fn session_on_a_caller_owned_handle_submits_on_enter_without_touching_process_st
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }
 
 /// Redirects process stderr to a pipe for the duration of a test, so a claim
@@ -74,14 +79,14 @@ impl StderrCapture {
         assert!(saved >= 0, "dup stderr: {}", io::Error::last_os_error());
         let mut pipe = [-1_i32; 2];
         // SAFETY: pipe is a valid two-element buffer.
-        let result = unsafe { libc::pipe(pipe.as_mut_ptr()) };
-        assert_eq!(result, 0, "create pipe: {}", io::Error::last_os_error());
+        let created = unsafe { libc::pipe(pipe.as_mut_ptr()) };
+        assert_eq!(created, 0, "create pipe: {}", io::Error::last_os_error());
         let [read_fd, write_fd] = pipe;
         // SAFETY: write_fd is a valid, open fd; STDERR names the fd being replaced.
-        let result = unsafe { libc::dup2(write_fd, STDERR) };
-        assert_eq!(result, STDERR, "redirect stderr: {}", io::Error::last_os_error());
+        let redirected = unsafe { libc::dup2(write_fd, STDERR) };
+        assert_eq!(redirected, STDERR, "redirect stderr: {}", io::Error::last_os_error());
         // SAFETY: write_fd was just duplicated onto STDERR and its own copy is unused.
-        unsafe { libc::close(write_fd) };
+        unsafe { libc::close(write_fd); }
         // SAFETY: read_fd was just returned by pipe above as a live, owned descriptor.
         let read = unsafe { File::from_raw_fd(read_fd) };
         Self { saved, read }
@@ -92,9 +97,9 @@ impl StderrCapture {
     fn restore(mut self) -> Vec<u8> {
         // SAFETY: self.saved is a live descriptor duplicated from stderr in `install`;
         // dup2 closes whatever was on STDERR (the pipe's write end) before replacing it.
-        unsafe { libc::dup2(self.saved, STDERR) };
+        unsafe { libc::dup2(self.saved, STDERR); }
         // SAFETY: self.saved is no longer needed once restored.
-        unsafe { libc::close(self.saved) };
+        unsafe { libc::close(self.saved); }
         let mut buffer = Vec::new();
         self.read
             .read_to_end(&mut buffer)

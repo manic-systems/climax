@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
 
 use screw::{RenderCtx, Role, Span, Surface, VerticalSize};
 
@@ -91,11 +91,11 @@ impl ReviewActionBinding {
     /// Bind `key` to the action `name`. The help text starts as the name.
     #[must_use]
     pub fn new(key: char, name: impl Into<String>) -> Self {
-        let name = name.into();
+        let owned = name.into();
         Self {
             key,
-            help: name.clone(),
-            name,
+            help: owned.clone(),
+            name: owned,
         }
     }
 
@@ -157,12 +157,12 @@ impl ReviewList {
     where
         T: Into<SelectItem>,
     {
-        let items: Vec<_> = items.into_iter().map(Into::into).collect();
-        let states = vec![ReviewState::Unconfirmed; items.len()];
+        let collected: Vec<_> = items.into_iter().map(Into::into).collect();
+        let states = vec![ReviewState::Unconfirmed; collected.len()];
         Self {
             id: id.into(),
             header: Vec::new(),
-            items,
+            items: collected,
             initial_states: states.clone(),
             states,
             selected: 0,
@@ -337,10 +337,10 @@ impl ReviewList {
         let Some(current) = visible.iter().position(|index| *index == self.selected) else {
             return Reaction::Ignored;
         };
-        let Some(next) = move_index(current, visible.len(), delta, wrap) else {
+        let Some(position) = move_index(current, visible.len(), delta, wrap) else {
             return Reaction::Ignored;
         };
-        let next = visible[next];
+        let next = visible[position];
         if next == self.selected {
             return Reaction::Ignored;
         }
@@ -351,18 +351,18 @@ impl ReviewList {
 
     fn move_to(&mut self, selected: usize) -> Reaction {
         let visible = self.visible_indices();
-        if visible.is_empty() {
+        let Some(&last) = visible.last() else {
             return Reaction::Ignored;
-        }
-        let selected = visible
+        };
+        let landed = visible
             .iter()
             .copied()
             .find(|index| *index >= selected)
-            .unwrap_or_else(|| *visible.last().expect("visible is not empty"));
-        if selected == self.selected {
+            .unwrap_or(last);
+        if landed == self.selected {
             return Reaction::Ignored;
         }
-        self.selected = selected;
+        self.selected = landed;
         self.ensure_visible();
         Reaction::Changed
     }
@@ -455,8 +455,8 @@ impl ReviewList {
             ("exit".to_owned(), Value::from(exit)),
             ("rows".to_owned(), self.output_rows()),
         ]);
-        if let Some(action) = action {
-            output.insert("action".to_owned(), Value::from(action));
+        if let Some(name) = action {
+            output.insert("action".to_owned(), Value::from(name));
         }
         Value::Object(output)
     }
@@ -614,7 +614,13 @@ impl Widget for ReviewList {
             },
             Key::Enter => self.submit(),
             Key::Esc => self.leave(),
-            _ => Reaction::Ignored,
+            Key::Char(_)
+            | Key::Backspace
+            | Key::Delete
+            | Key::Left
+            | Key::Right
+            | Key::Backtab
+            | Key::Function(_) => Reaction::Ignored,
         }
     }
 
@@ -685,7 +691,7 @@ mod tests {
 
     #[test]
     fn form_advances_on_review_submit_but_bubbles_action_keys() {
-        use crate::widgets::Form;
+        use crate::widgets::{Form, TextInput};
 
         let review = || {
             ReviewList::new("review", ["alpha"])
@@ -696,7 +702,7 @@ mod tests {
         let mut session = Session::new(
             Form::new("form")
                 .with_field("review", review())
-                .with_field("note", crate::widgets::TextInput::new("note")),
+                .with_field("note", TextInput::new("note")),
         );
         assert!(matches!(
             session.handle(Event::key(Key::Enter)),
@@ -704,12 +710,12 @@ mod tests {
         ));
         assert_eq!(session.status(), &SessionStatus::Running);
 
-        let mut session = Session::new(
+        let mut action_session = Session::new(
             Form::new("form")
                 .with_field("review", review())
-                .with_field("note", crate::widgets::TextInput::new("note")),
+                .with_field("note", TextInput::new("note")),
         );
-        match session.handle(Event::char('g')) {
+        match action_session.handle(Event::char('g')) {
             SessionReaction::Submit(Value::Object(output)) => {
                 assert_eq!(output.get("exit").and_then(Value::as_str), Some("action"));
                 assert_eq!(
@@ -717,9 +723,15 @@ mod tests {
                     Some("regenerate")
                 );
             },
-            other => panic!("review action should leave the form, got {other:?}"),
+            other @ (SessionReaction::Ignored
+            | SessionReaction::Changed
+            | SessionReaction::Cancel
+            | SessionReaction::Focus(_)
+            | SessionReaction::Submit(_)) => {
+                panic!("review action should leave the form, got {other:?}")
+            },
         }
-        let SessionStatus::Submitted(Value::Object(output)) = session.status() else {
+        let SessionStatus::Submitted(Value::Object(output)) = action_session.status() else {
             panic!("form should submit the review action exit");
         };
         assert_eq!(output.get("exit").and_then(Value::as_str), Some("action"));

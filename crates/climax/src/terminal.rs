@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use std::env;
 use std::io::{self, IsTerminal as _};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::io::{Read, Write};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::os::fd::AsFd;
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::os::fd::OwnedFd;
 
 /// How prompt interaction should use detected terminal capabilities.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -34,7 +37,7 @@ pub enum StatusMode {
 }
 
 fn ansi_available() -> bool {
-    std::env::var_os("TERM").is_none_or(|term| term != "dumb")
+    env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
 /// Terminal facts observed by the application facade.
@@ -102,8 +105,8 @@ impl<'a> TerminalApplication<'a> {
 
 #[cfg(all(feature = "interactive", feature = "render"))]
 impl Write for TerminalApplication<'_> {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.output.write(buffer)
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.output.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -132,7 +135,7 @@ impl TerminalCapabilities {
     /// Detect capabilities against a single caller-owned handle used for both
     /// input and transient output, such as `/dev/tty`.
     #[cfg(any(feature = "render", feature = "interactive"))]
-    pub(crate) fn detect_on(handle: &std::os::fd::OwnedFd) -> Self {
+    pub(crate) fn detect_on(handle: &OwnedFd) -> Self {
         let is_terminal = handle.is_terminal();
         Self::new(is_terminal, is_terminal, ansi_available())
     }
@@ -225,7 +228,7 @@ impl TerminalPolicy {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
             StatusMode::Auto => StatusMode::Plain,
-            status => status,
+            status @ (StatusMode::Live | StatusMode::Plain | StatusMode::Silent) => status,
         }
     }
 

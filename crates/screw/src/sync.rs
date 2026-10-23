@@ -2,7 +2,7 @@
 
 //! Shared lock policy.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 /// Lock a mutex, recovering the guarded value if a holder panicked.
 ///
@@ -13,5 +13,5 @@ use std::sync::{Mutex, MutexGuard};
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
 }

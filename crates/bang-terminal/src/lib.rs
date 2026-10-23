@@ -44,6 +44,9 @@
 //! [`Decoder`] decodes bytes without any terminal at all.
 
 #![warn(missing_docs)]
+#![cfg_attr(test, expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes"))]
+
+extern crate alloc;
 
 mod cleanup;
 mod decoder;

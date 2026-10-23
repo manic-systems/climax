@@ -88,7 +88,9 @@ impl Decoder {
                 ESC => match self.decode_escape() {
                     EscapeResult::Event(event) => events.push(event),
                     EscapeResult::Pending => break,
-                    EscapeResult::Unknown(bytes) => events.push(Event::UnknownEscape(bytes)),
+                    EscapeResult::Unknown(sequence) => {
+                        events.push(Event::UnknownEscape(sequence));
+                    },
                 },
                 CR | LF => {
                     self.pending.drain(..1);
@@ -308,8 +310,8 @@ impl Decoder {
 }
 
 fn csi_key(parameters: &[u8], final_byte: u8) -> Option<(Key, Modifiers)> {
-    let parameters = parse_parameters(parameters)?;
-    let modifier = parameters
+    let values = parse_parameters(parameters)?;
+    let modifier = values
         .get(1)
         .copied()
         .map_or(Some(Modifiers::empty()), xterm_modifiers)?;
@@ -320,8 +322,8 @@ fn csi_key(parameters: &[u8], final_byte: u8) -> Option<(Key, Modifiers)> {
         b'D' => Key::Left,
         b'H' => Key::Home,
         b'F' => Key::End,
-        b'Z' if parameters.is_empty() => return Some((Key::Backtab, Modifiers::SHIFT)),
-        b'~' => tilde_key(*parameters.first()?)?,
+        b'Z' if values.is_empty() => return Some((Key::Backtab, Modifiers::SHIFT)),
+        b'~' => tilde_key(*values.first()?)?,
         _ => return None,
     };
     Some((key, modifier))
@@ -333,7 +335,7 @@ fn parse_parameters(bytes: &[u8]) -> Option<Vec<u16>> {
     }
     bytes
         .split(|byte| *byte == b';')
-        .map(|part| std::str::from_utf8(part).ok()?.parse().ok())
+        .map(|part| str::from_utf8(part).ok()?.parse().ok())
         .collect()
 }
 

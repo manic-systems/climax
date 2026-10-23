@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::borrow::Cow;
+use alloc::borrow::Cow;
+use core::iter;
 
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
@@ -100,8 +101,8 @@ pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
     for (_, segment) in segments(text) {
         match segment {
             Segment::Newline => {},
-            Segment::Tab => expanded.extend(std::iter::repeat_n(' ', segment.advance(col) - col)),
-            Segment::Cluster { text, .. } => expanded.push_str(text),
+            Segment::Tab => expanded.extend(iter::repeat_n(' ', segment.advance(col) - col)),
+            Segment::Cluster { text: cluster, .. } => expanded.push_str(cluster),
         }
         col = segment.advance(col);
     }
@@ -180,7 +181,7 @@ pub fn single_line(text: &str) -> Cow<'_, str> {
     for (_, segment) in segments(text) {
         match segment {
             Segment::Newline | Segment::Tab => line.push(' '),
-            Segment::Cluster { text, .. } => line.push_str(text),
+            Segment::Cluster { text: cluster, .. } => line.push_str(cluster),
         }
     }
     Cow::Owned(line)
@@ -215,12 +216,12 @@ fn pad_row(row: &str, columns: usize, align: Align) -> Cow<'_, str> {
         return Cow::Borrowed(row);
     }
     let (before, after) = split_padding(missing, align);
-    let row = if before > 0 && row.contains('\t') {
+    let content = if before > 0 && row.contains('\t') {
         expand_tabs(row)
     } else {
         Cow::Borrowed(row)
     };
-    Cow::Owned(format!("{}{row}{}", " ".repeat(before), " ".repeat(after)))
+    Cow::Owned(format!("{}{content}{}", " ".repeat(before), " ".repeat(after)))
 }
 
 #[cfg(test)]

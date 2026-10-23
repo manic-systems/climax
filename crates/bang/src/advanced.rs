@@ -22,9 +22,13 @@ pub use bang_core::WidgetId;
 pub use crate::live::LiveSessionError;
 
 pub use crate::interaction::InteractionWidget;
-use crate::{Error, Interaction, Result};
+use crate::{Error, Interaction, Result, interaction::scripted};
 
 /// Run a custom widget in the live terminal session.
+///
+/// # Errors
+///
+/// Fails when the live session cannot start or ends without a value.
 pub fn interact_widget(
     widget: impl Widget + 'static,
     actions: impl IntoIterator<Item = ActionBinding>,
@@ -41,7 +45,7 @@ pub fn interact_widget(
 pub fn scripted_interaction(
     scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
 ) -> Interaction {
-    crate::interaction::scripted(scripts)
+    scripted(scripts)
 }
 
 /// Build an interaction driver around a custom advanced session runner.
@@ -58,6 +62,11 @@ pub fn interaction_from_runner(
 /// A widget that returns anything but [`Reaction::Ignored`] has claimed the key
 /// and replay continues; an ignored Ctrl-C cancels and an ignored Ctrl-D ends
 /// input.
+///
+/// # Errors
+///
+/// Fails with `ErrorKind::Cancelled` when the widget or an unclaimed Ctrl-C cancels, and with
+/// `ErrorKind::InputEnded` when the events run out before the widget submits.
 pub fn replay_events(
     widget: impl Widget + 'static,
     events: impl IntoIterator<Item = Event>,

@@ -2,7 +2,10 @@
 
 #![cfg(feature = "interactive")]
 
-use climax::{Context, ErrorKind};
+use climax::{
+    Context, ErrorKind,
+    bang::advanced::{Event, Key, scripted_interaction},
+};
 
 fn ask(context: &Context) -> climax::Result<&'static str> {
     Ok(context
@@ -15,8 +18,8 @@ fn ask(context: &Context) -> climax::Result<&'static str> {
 
 #[test]
 fn leaving_a_prompt_with_or_cancel_ends_the_handler_as_a_cancellation() {
-    let leave = climax::bang::advanced::scripted_interaction([[climax::bang::advanced::Event::key(
-        climax::bang::advanced::Key::Esc,
+    let leave = scripted_interaction([[Event::key(
+        Key::Esc,
     )]]);
     let context = Context::new().with_interaction(leave);
 
@@ -27,8 +30,8 @@ fn leaving_a_prompt_with_or_cancel_ends_the_handler_as_a_cancellation() {
 
 #[test]
 fn submitting_passes_through_or_cancel() {
-    let submit = climax::bang::advanced::scripted_interaction([[climax::bang::advanced::Event::key(
-        climax::bang::advanced::Key::Enter,
+    let submit = scripted_interaction([[Event::key(
+        Key::Enter,
     )]]);
     let context = Context::new().with_interaction(submit);
 

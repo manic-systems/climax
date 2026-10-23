@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+
 use std::io;
 
 use screw::{CursorMerge, Edge, Fill, Floating, Insets, Layers, Renderer, Size, Style};

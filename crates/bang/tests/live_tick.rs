@@ -1,18 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{ptr, time::Duration};
 use std::{
     fs::File,
     io::{self, Read as _},
     os::fd::{FromRawFd as _, RawFd},
     sync::mpsc,
     thread,
-    time::Duration,
 };
 
 use bang::advanced::{
     Event, Reaction, Value, Widget, WidgetContext, WidgetId,
 };
-use bang::screw::{RenderCtx, Surface, TickInterest};
+use bang::screw::{RenderCtx, Style, Surface, TickInterest, Widget as ScreenWidget};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -20,12 +22,9 @@ struct Countdown {
     ticks: u32,
 }
 
-impl bang::screw::Widget for Countdown {
+impl ScreenWidget for Countdown {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-        out.write(
-            format!("ticks {}", self.ticks),
-            bang::screw::Style::default(),
-        );
+        out.write(format!("ticks {}", self.ticks), Style::default());
     }
 
     fn tick_interest(&self) -> TickInterest {
@@ -48,7 +47,9 @@ impl Widget for Countdown {
                     Reaction::Changed
                 }
             },
-            _ => Reaction::Ignored,
+            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | _ => {
+                Reaction::Ignored
+            },
         }
     }
 }
@@ -59,7 +60,7 @@ fn a_widget_that_wants_ticks_gets_them_without_input() {
     let (results_tx, results_rx) = mpsc::channel();
     thread::spawn(move || {
         let outcome = bang::Interaction::live_on(slave).interact(Countdown { ticks: 0 }, []);
-        let _ = results_tx.send(outcome);
+        let _sent = results_tx.send(outcome);
     });
 
     let value = results_rx
@@ -79,20 +80,23 @@ fn a_widget_that_wants_ticks_gets_them_without_input() {
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }

@@ -41,6 +41,10 @@ where
 }
 
 /// Writes the [`render_plain`] output of a widget to `writer`.
+///
+/// # Errors
+///
+/// Fails when the output cannot be written to `writer`.
 pub fn write_plain<T>(writer: &mut impl Write, widget: &T) -> io::Result<()>
 where
     T: Widget + ?Sized,

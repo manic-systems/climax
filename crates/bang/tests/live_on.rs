@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{ptr, time::Duration};
 use std::{
     fs::File,
-    io::{self, Write},
+    io::{self, Write as _},
     os::fd::{FromRawFd as _, RawFd},
     sync::mpsc,
     thread,
-    time::Duration,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -20,9 +22,9 @@ fn live_on_runs_two_prompts_in_a_row_on_the_same_handle() {
     thread::spawn(move || {
         let interaction = bang::Interaction::live_on(slave);
         let first = bang::text("first").interaction(interaction.clone()).interact();
-        let _ = first_done_tx.send(());
+        let _first_sent = first_done_tx.send(());
         let second = bang::text("second").interaction(interaction).interact();
-        let _ = results_tx.send((first, second));
+        let _results_sent = results_tx.send((first, second));
     });
 
     master.write_all(b"alpha\r").expect("write first answer");
@@ -48,20 +50,23 @@ fn live_on_runs_two_prompts_in_a_row_on_the_same_handle() {
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }

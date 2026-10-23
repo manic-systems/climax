@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{error, fmt, io};
+#[cfg(feature = "interactive")]
+use bang::{advanced::LiveSessionError, terminal::Signal};
+use core::{error, fmt, result};
+use std::io;
 
 /// The result type used across `climax`, with [`Error`] as the error.
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 /// A stable, high-level category for an application error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +44,10 @@ pub enum ErrorKind {
 /// `Debug` prints the same human-readable report a person wants from
 /// `fn main() -> climax::Result<()>`, the message followed by any source or
 /// related error text the message does not already carry.
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the output module sets the signal when it relays an interrupted error"
+)]
 pub struct Error {
     kind: ErrorKind,
     message: String,
@@ -102,10 +109,10 @@ impl Error {
         message: impl Into<String>,
         source: impl error::Error + Send + Sync + 'static,
     ) -> Self {
-        let message = format!("{}: {source}", message.into());
+        let combined = format!("{}: {source}", message.into());
         Self {
             kind: ErrorKind::Application,
-            message,
+            message: combined,
             signal: None,
             exit_code: None,
             source: Some(Box::new(source)),
@@ -189,9 +196,7 @@ impl Error {
             related: Vec::new(),
         }
     }
-}
 
-impl Error {
     fn chain_texts(&self) -> Vec<String> {
         let mut texts = Vec::new();
         let mut collect = |error: &Self| {
@@ -240,7 +245,7 @@ impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         self.source
             .as_deref()
-            .map(|source| source as &(dyn error::Error + 'static))
+            .map(|source| -> &(dyn error::Error + 'static) { source })
     }
 }
 
@@ -259,9 +264,12 @@ impl From<bang::Error> for Error {
             bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
             bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
             bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
-            _ => ErrorKind::Interactive,
+            bang::ErrorKind::InvalidConfiguration
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => ErrorKind::Interactive,
         };
-        let signal = value.signal().map(bang::terminal::Signal::as_raw);
+        let signal = value.signal().map(Signal::as_raw);
         let cleanup = if kind == ErrorKind::Cancelled {
             cleanup_errors(error::Error::source(&value))
         } else {
@@ -278,8 +286,8 @@ impl From<bang::Error> for Error {
 #[cfg(feature = "interactive")]
 fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
     source
-        .and_then(|source| source.downcast_ref::<bang::advanced::LiveSessionError>())
-        .map_or(&[][..], bang::advanced::LiveSessionError::cleanup_failures)
+        .and_then(|inner| inner.downcast_ref::<LiveSessionError>())
+        .map_or(&[][..], LiveSessionError::cleanup_failures)
         .iter()
         .map(|failure| {
             Error::with_source(
@@ -418,7 +426,7 @@ pub trait ResultExt<T> {
     fn app_err(self) -> Result<T>;
 }
 
-impl<T, E> ResultExt<T> for std::result::Result<T, E>
+impl<T, E> ResultExt<T> for result::Result<T, E>
 where
     E: error::Error + Send + Sync + 'static,
 {

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::{error, fmt};
 use std::{
-    error,
-    fmt,
+    env,
+    fs::File,
     io::{self, IsTerminal as _, Write},
     os::fd::{AsFd, OwnedFd},
 };
@@ -30,8 +31,8 @@ where
 {
     fn with_initial_size(writer: &'a mut W, size: Option<Viewport>) -> Self {
         let mut renderer = Renderer::new(writer).cursor_visibility(CursorVisibility::FromSurface);
-        if let Some(size) = size {
-            renderer = renderer.width(size.columns);
+        if let Some(measured) = size {
+            renderer = renderer.width(measured.columns);
         }
         Self { renderer }
     }
@@ -92,7 +93,13 @@ impl LiveSessionError {
     pub fn primary(&self) -> Option<&Self> {
         match self {
             Self::Cleanup { primary, .. } => primary.as_deref(),
-            _ => Some(self),
+            Self::Unavailable
+            | Self::RawMode(_)
+            | Self::Signals(_)
+            | Self::TerminalIo(_)
+            | Self::Cancelled
+            | Self::InputEnded
+            | Self::Signalled(_) => Some(self),
         }
     }
 
@@ -101,7 +108,13 @@ impl LiveSessionError {
     pub fn cleanup_failures(&self) -> &[CleanupFailure] {
         match self {
             Self::Cleanup { failures, .. } => failures.failures(),
-            _ => &[],
+            Self::Unavailable
+            | Self::RawMode(_)
+            | Self::Signals(_)
+            | Self::TerminalIo(_)
+            | Self::Cancelled
+            | Self::InputEnded
+            | Self::Signalled(_) => &[],
         }
     }
 }
@@ -128,8 +141,8 @@ impl fmt::Display for LiveSessionError {
             Self::InputEnded => f.write_str("input ended before submit"),
             Self::Signalled(signal) => write!(f, "interrupted by signal {signal}"),
             Self::Cleanup { primary, failures } => {
-                if let Some(primary) = primary {
-                    write!(f, "{primary}; ")?;
+                if let Some(inner) = primary {
+                    write!(f, "{inner}; ")?;
                 }
                 write!(f, "terminal cleanup failed: {failures}")
             },
@@ -145,7 +158,7 @@ impl error::Error for LiveSessionError {
             | Self::TerminalIo(error) => Some(error),
             Self::Cleanup { primary, failures } => primary
                 .as_deref()
-                .map(|error| error as &(dyn error::Error + 'static))
+                .map(|error| -> &(dyn error::Error + 'static) { error })
                 .or(Some(failures)),
             Self::Unavailable | Self::Cancelled | Self::InputEnded | Self::Signalled(_) => None,
         }
@@ -159,7 +172,7 @@ impl error::Error for LiveSessionError {
 pub(crate) fn run_live_session(widget: impl BangWidget + 'static) -> Result<Value, LiveSessionError> {
     if !io::stdin().is_terminal()
         || !io::stderr().is_terminal()
-        || std::env::var_os("TERM").is_some_and(|term| term == "dumb")
+        || env::var_os("TERM").is_some_and(|term| term == "dumb")
     {
         return Err(LiveSessionError::Unavailable);
     }
@@ -176,8 +189,8 @@ pub(crate) fn run_live_session_forced(
         .as_fd()
         .try_clone_to_owned()
         .map_err(LiveSessionError::TerminalIo)?;
-    let mut stderr = stderr.lock();
-    run_live_session_forced_with(widget, stdin, &mut stderr, resize)
+    let mut locked = stderr.lock();
+    run_live_session_forced_with(widget, stdin, &mut locked, resize)
 }
 
 /// Run a session on a caller-owned terminal handle, such as `/dev/tty` opened
@@ -188,22 +201,22 @@ pub(crate) fn run_live_session_forced(
 /// of the process's own stdin and stderr.
 pub(crate) fn run_live_session_on(
     widget: impl BangWidget + 'static,
-    handle: impl Into<std::os::fd::OwnedFd>,
+    handle: impl Into<OwnedFd>,
 ) -> Result<Value, LiveSessionError> {
-    let handle = handle.into();
-    if !handle.is_terminal() || std::env::var_os("TERM").is_some_and(|term| term == "dumb") {
+    let owned = handle.into();
+    if !owned.is_terminal() || env::var_os("TERM").is_some_and(|term| term == "dumb") {
         return Err(LiveSessionError::Unavailable);
     }
-    run_live_session_forced_on(widget, handle)
+    run_live_session_forced_on(widget, owned)
 }
 
 /// Run a session on a caller-owned terminal handle without first applying
 /// terminal capability policy.
 pub(crate) fn run_live_session_forced_on(
     widget: impl BangWidget + 'static,
-    handle: impl Into<std::os::fd::OwnedFd>,
+    handle: impl Into<OwnedFd>,
 ) -> Result<Value, LiveSessionError> {
-    let file = std::fs::File::from(handle.into());
+    let file = File::from(handle.into());
     let mut writer = &file;
     let resize = file
         .as_fd()
@@ -262,13 +275,13 @@ where
     let raw_cleanup = terminal.restore();
     let (signal_cleanup, late_signal) = signals.restore_polling();
 
-    let outcome = match (outcome, late_signal) {
+    let settled = match (outcome, late_signal) {
         (Ok(RunOutcome::Signalled(signal)), _) | (Ok(_), Some(signal)) => {
             Ok(RunOutcome::Signalled(signal))
         },
-        (outcome, _) => outcome,
+        (other, _) => other,
     };
-    let primary = match outcome {
+    let primary = match settled {
         Ok(RunOutcome::Submitted(value)) => Ok(value),
         Ok(RunOutcome::Cancelled) => Err(LiveSessionError::Cancelled),
         Ok(RunOutcome::InputEnded) => Err(LiveSessionError::InputEnded),

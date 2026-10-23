@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{cell::RefCell, ops::Range};
+use core::{cell::RefCell, ops::Range};
 
 use screw::{
     LocalWidgetRef, RenderCtx, Role, Span, Spans, Surface, Text, VerticalViewport, ViewportReport,
@@ -16,15 +16,15 @@ pub(super) fn move_index(current: usize, len: usize, delta: isize, wrap: bool) -
         return None;
     }
 
-    let current = current.min(len - 1);
+    let bounded = current.min(len - 1);
     if wrap {
-        let len = isize::try_from(len).ok()?;
-        let current = isize::try_from(current).ok()?;
-        let next = (current + delta).rem_euclid(len);
+        let span = isize::try_from(len).ok()?;
+        let from = isize::try_from(bounded).ok()?;
+        let next = (from + delta).rem_euclid(span);
         return usize::try_from(next).ok();
     }
 
-    let next = current.saturating_add_signed(delta).min(len - 1);
+    let next = bounded.saturating_add_signed(delta).min(len - 1);
     Some(next)
 }
 
@@ -46,12 +46,12 @@ pub(super) fn page_move(top: &mut usize, selected: &mut usize, target: usize, le
     if len == 0 {
         return Reaction::Ignored;
     }
-    let target = target.min(len - 1);
-    if *selected == target && *top == target {
+    let clamped = target.min(len - 1);
+    if *selected == clamped && *top == clamped {
         return Reaction::Ignored;
     }
-    *selected = target;
-    *top = target;
+    *selected = clamped;
+    *top = clamped;
     Reaction::Changed
 }
 
@@ -66,9 +66,9 @@ pub(super) fn window_range(top: usize, window_size: usize, len: usize) -> Range<
         return 0..0;
     }
     let margin = window_size.max(1);
-    let top = top.min(len - 1);
-    let start = top.saturating_sub(margin);
-    let end = top.saturating_add(margin.saturating_mul(2)).min(len);
+    let first = top.min(len - 1);
+    let start = first.saturating_sub(margin);
+    let end = first.saturating_add(margin.saturating_mul(2)).min(len);
     start..end
 }
 
@@ -105,8 +105,8 @@ impl PageLayout {
     }
 
     pub(super) fn target(&self, down: bool) -> Option<usize> {
-        let page = self.page.borrow();
-        let page = page.as_ref()?;
+        let recorded = self.page.borrow();
+        let page = recorded.as_ref()?;
         if down { page.down } else { page.up }
     }
 }
@@ -221,11 +221,11 @@ pub(super) fn move_to(
     if len == 0 {
         return Reaction::Ignored;
     }
-    let target = target.min(len - 1);
-    if target == *selected {
+    let clamped = target.min(len - 1);
+    if clamped == *selected {
         return Reaction::Ignored;
     }
-    *selected = target;
+    *selected = clamped;
     ensure_visible(selected, top, len, page_size);
     Reaction::Changed
 }
@@ -238,10 +238,11 @@ pub(super) enum PageAction {
 }
 
 pub(super) fn page_action(target: Option<usize>, visible_len: usize, down: bool) -> PageAction {
-    if let Some(target) = target {
-        PageAction::JumpTo(target)
-    } else {
-        let delta = visible_delta(visible_len);
-        PageAction::ScrollBy(if down { delta } else { -delta })
-    }
+    target.map_or_else(
+        || {
+            let delta = visible_delta(visible_len);
+            PageAction::ScrollBy(if down { delta } else { -delta })
+        },
+        PageAction::JumpTo,
+    )
 }

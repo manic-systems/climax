@@ -9,6 +9,8 @@
 //!
 //! It is not a general terminal emulator.
 
+#![cfg_attr(test, expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes"))]
+
 mod ansi;
 
 pub use ansi::{EmittedScreen, ScreenCell, ScreenError};

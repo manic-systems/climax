@@ -200,6 +200,8 @@ impl Viewport {
 
     /// Measures the terminal behind `terminal`.
     ///
+    /// # Errors
+    ///
     /// Fails when the descriptor is not a terminal or reports a zero-sized viewport.
     pub fn of(terminal: &impl AsFd) -> io::Result<Self> {
         let size = tcgetwinsize(terminal)?;

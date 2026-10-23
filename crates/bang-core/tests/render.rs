@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+
 use bang_core::{
     Context, Date, Event, Key, KeyEvent, Modifiers, Session, Widget as _,
     widgets::{DatePicker, Form, MultiSelect, ReviewList, SearchSelect, Select, TextInput},
@@ -32,6 +34,7 @@ fn items(count: usize) -> Vec<String> {
     (0..count).map(|index| format!("item-{index:02}")).collect()
 }
 
+#[expect(clippy::expect_used, reason = "the test dates are valid")]
 const fn date(day: u8) -> Date {
     Date::new(2026, 7, day).expect("test date is valid")
 }
@@ -71,6 +74,7 @@ fn a_search_match_is_styled_with_the_match_role() {
     );
     let theme = Theme::default();
     let cells = surface.rows()[1].cells();
+    assert!(cells.len() > 5);
     assert_eq!(cells[2].style(), theme.style(Role::Selected));
     assert_eq!(cells[3].style(), theme.style(Role::Match));
     assert_eq!(cells[4].style(), theme.style(Role::Match));
@@ -124,6 +128,7 @@ fn a_date_picker_marks_selected_today_and_outside_month_days() {
     assert_eq!(rows.next(), Some(".29 .30 > 1 * 2   3   4   5"));
     let theme = Theme::default();
     let week = surface.rows()[2].cells();
+    assert!(week.len() > 12);
     assert_eq!(week[0].style(), theme.style(Role::Dim));
     assert_eq!(week[8].style(), theme.style(Role::Selected));
     assert_eq!(week[12].style(), theme.style(Role::Success));
@@ -165,7 +170,7 @@ fn physical_rows_drive_page_navigation() {
 fn page_down_and_page_up_move_a_full_page_in_select() {
     let select = Select::new("choices", items(40)).with_header("choose");
     let mut session = Session::new(select);
-    let first_row = |session: &Session| lines(session, 12)[1].clone();
+    let first_row = |current: &Session| lines(current, 12)[1].clone();
 
     assert_eq!(first_row(&session), "> item-00");
 
@@ -233,27 +238,30 @@ fn a_form_shares_height_between_list_fields() {
 fn page_keys_clamp_at_both_ends_of_a_list() {
     let mut select = Select::new("choices", items(50)).with_page_size(20);
     let mut cx = Context::new();
-    let _ = lines(&select, 10);
+    drop(lines(&select, 10));
 
     let mut last = 0;
     for _ in 0..12 {
         select.handle(page_key(Key::PageDown), &mut cx);
-        let _ = lines(&select, 10);
+        drop(lines(&select, 10));
         let selected = select.selected_index().expect("a selection");
         assert!(selected >= last, "page down moved back to {selected} from {last}");
         last = selected;
     }
     assert_eq!(last, 49);
 
-    let mut last = 49;
+    let mut descending = 49;
     for _ in 0..12 {
         select.handle(page_key(Key::PageUp), &mut cx);
-        let _ = lines(&select, 10);
+        drop(lines(&select, 10));
         let selected = select.selected_index().expect("a selection");
-        assert!(selected <= last, "page up moved forward to {selected} from {last}");
-        last = selected;
+        assert!(
+            selected <= descending,
+            "page up moved forward to {selected} from {descending}"
+        );
+        descending = selected;
     }
-    assert_eq!(last, 0);
+    assert_eq!(descending, 0);
 }
 
 #[test]

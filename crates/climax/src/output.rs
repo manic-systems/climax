@@ -2,15 +2,24 @@
 
 //! Application output routing.
 
+use alloc::sync::Arc;
+#[cfg(feature = "structured")]
+use core::mem;
+use core::fmt;
+#[cfg(feature = "structured")]
+use std::sync::{Condvar, PoisonError};
 use std::{
-    fmt,
     io::{self, Write},
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 
 #[cfg(feature = "structured")]
 use serde::Serialize;
 
+#[cfg(all(feature = "render", feature = "structured"))]
+use crate::status::StatusCoordinator;
+#[cfg(feature = "render")]
+use crate::status::TransientNotice;
 use crate::{Error, Result, error::ErrorKind, sync::lock};
 
 /// How an application writes its output, chosen with
@@ -60,17 +69,17 @@ pub(crate) enum PresentationRoute {
     /// Write straight to the destination.
     Direct,
     /// Clear the live region, write through, and let the next frame redraw.
-    Around(crate::status::StatusCoordinator),
+    Around(StatusCoordinator),
     /// Write through the coordinator's notice path, because the destination
     /// is literally the transient channel's stream. The call waits for the
     /// write, or returns once the line is queued while a prompt holds the
     /// terminal.
-    Queued(crate::status::StatusCoordinator),
+    Queued(StatusCoordinator),
 }
 
 impl Output {
     #[must_use]
-    #[cfg_attr(not(feature = "structured"), allow(clippy::missing_const_for_fn))]
+    #[cfg_attr(not(feature = "structured"), expect(clippy::missing_const_for_fn, reason = "const only once the gated code is compiled in"))]
     pub(crate) fn new(format: Format) -> Self {
         Self {
             format,
@@ -141,7 +150,7 @@ impl Output {
     }
 
     #[cfg(feature = "render")]
-    pub(crate) fn with_transient(mut self, notices: crate::status::TransientNotice) -> Self {
+    pub(crate) fn with_transient(mut self, notices: TransientNotice) -> Self {
         self.notices = SharedWriter::Transient(notices);
         self
     }
@@ -155,6 +164,10 @@ impl Output {
     }
 
     /// Write an application message using the configured output policy.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `ErrorKind::Output` when the writer rejects the message or cannot be flushed.
     pub fn write_message(&self, mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
         writer
             .write_all(self.format_message(message).as_bytes())
@@ -176,6 +189,10 @@ impl Output {
     /// application holds the terminal the line is queued instead, written when
     /// it is released, and the call returns at once. Without `render`, notices
     /// write straight to the configured notice writer.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `ErrorKind::Output` when the notice cannot be written.
     pub fn notice(&self, message: impl fmt::Display) -> Result<()> {
         if self.notice_format == Format::Text {
             write_text(self.notices.clone(), message)?;
@@ -277,10 +294,10 @@ impl Output {
     /// Format an application message without writing it.
     #[must_use]
     pub fn format_message(&self, message: impl fmt::Display) -> String {
-        let message = message.to_string();
+        let text = message.to_string();
         match self.format {
-            Format::Text => format!("{message}\n"),
-            Format::Json => format!("\"{}\"\n", escape_json(&message)),
+            Format::Text => format!("{text}\n"),
+            Format::Json => format!("\"{}\"\n", escape_json(&text)),
         }
     }
 
@@ -326,22 +343,22 @@ impl Output {
     #[cfg(feature = "structured")]
     pub(crate) fn commit(&self) -> Result<()> {
         let pending = {
-            let state = std::mem::replace(&mut lock(&self.state.lifecycle).state, EmissionState::Closed);
+            let state = mem::replace(&mut lock(&self.state.lifecycle).state, EmissionState::Closed);
             drop(
                 self.state
                     .drained
                     .wait_while(lock(&self.state.lifecycle), |lifecycle| lifecycle.in_flight > 0)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    .unwrap_or_else(PoisonError::into_inner),
             );
             match state {
                 EmissionState::Finite(pending) => Some(pending),
                 EmissionState::Empty | EmissionState::Streaming | EmissionState::Closed => None,
             }
         };
-        if let Some(mut pending) = pending {
-            pending
+        if let Some(mut item) = pending {
+            item
                 .writer
-                .write_record(&pending.bytes)
+                .write_record(&item.bytes)
                 .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
         }
         Ok(())
@@ -394,7 +411,7 @@ impl Output {
 #[derive(Default)]
 struct Emission {
     lifecycle: Mutex<Lifecycle>,
-    drained: std::sync::Condvar,
+    drained: Condvar,
 }
 
 #[cfg(feature = "structured")]
@@ -481,6 +498,10 @@ where
     T: Serialize + ?Sized,
 {
     /// Encode the configured projection and register or write it.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `ErrorKind::Output` when the value cannot be encoded or written.
     pub fn emit<D>(self) -> Result<()>
     where
         F: FnOnce(&'a T) -> D,
@@ -515,7 +536,7 @@ pub(crate) enum SharedWriter {
     Stdout,
     Stderr,
     #[cfg(feature = "render")]
-    Transient(crate::status::TransientNotice),
+    Transient(TransientNotice),
     Custom(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
@@ -551,13 +572,13 @@ impl SharedWriter {
 }
 
 impl Write for SharedWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Stdout => io::stdout().write(buffer),
-            Self::Stderr => io::stderr().write(buffer),
+            Self::Stdout => io::stdout().write(buf),
+            Self::Stderr => io::stderr().write(buf),
             #[cfg(feature = "render")]
-            Self::Transient(notices) => notices.write(buffer),
-            Self::Custom(inner) => lock(inner).write(buffer),
+            Self::Transient(notices) => notices.write(buf),
+            Self::Custom(inner) => lock(inner).write(buf),
         }
     }
 
@@ -575,14 +596,16 @@ impl Write for SharedWriter {
 fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| match value {
+        .flat_map(|ch| match ch {
             '"' => "\\\"".chars().collect::<Vec<_>>(),
             '\\' => "\\\\".chars().collect(),
             '\n' => "\\n".chars().collect(),
             '\r' => "\\r".chars().collect(),
             '\t' => "\\t".chars().collect(),
-            value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-            value => vec![value],
+            control if control.is_control() => {
+                format!("\\u{:04x}", u32::from(control)).chars().collect()
+            },
+            other => vec![other],
         })
         .collect()
 }
@@ -605,8 +628,20 @@ fn output_policy(message: &'static str) -> Error {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "structured")]
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use alloc::collections::BTreeMap;
+    #[cfg(feature = "structured")]
+    use core::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    #[cfg(feature = "structured")]
+    use std::thread;
+    #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
+    use std::time::Instant;
+
     use super::*;
+    #[cfg(all(feature = "render", feature = "structured"))]
+    use crate::terminal::StatusMode;
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -618,9 +653,9 @@ mod tests {
     }
 
     impl Write for Capture {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buffer);
-            Ok(buffer.len())
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.extend_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -637,9 +672,9 @@ mod tests {
 
     #[cfg(feature = "structured")]
     impl Write for FlushCapture {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.bytes.lock().unwrap().extend_from_slice(buffer);
-            Ok(buffer.len())
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.extend_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -667,9 +702,9 @@ mod tests {
         struct OneByte(Capture);
 
         impl Write for OneByte {
-            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-                std::thread::yield_now();
-                self.0.write(&buffer[..buffer.len().min(1)])
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                thread::yield_now();
+                self.0.write(&buf[..buf.len().min(1)])
             }
 
             fn flush(&mut self) -> io::Result<()> {
@@ -682,10 +717,10 @@ mod tests {
         let threads: Vec<_> = ["a", "b"]
             .into_iter()
             .map(|letter| {
-                let output = output.clone();
-                std::thread::spawn(move || {
+                let handle = output.clone();
+                thread::spawn(move || {
                     for _ in 0..50 {
-                        output.stream(&letter.repeat(20)).text(|value| value).emit().unwrap();
+                        handle.stream(&letter.repeat(20)).text(|value| value).emit().unwrap();
                     }
                 })
             })
@@ -719,7 +754,7 @@ mod tests {
         let value = 42;
         output
             .result(&value)
-            .text(|value| format!("answer: {value}"))
+            .text(|shown| format!("answer: {shown}"))
             .emit()
             .unwrap();
         assert_eq!(capture.text(), "");
@@ -760,10 +795,10 @@ mod tests {
     fn structured_results_use_json_in_json_mode() {
         let capture = Capture::default();
         let output = Output::new(Format::Json).with_writer(capture.clone());
-        let answer = std::collections::BTreeMap::from([("value", 42)]);
+        let answer = BTreeMap::from([("value", 42)]);
         output
             .result(&answer)
-            .text(|answer| answer["value"])
+            .text(|map| map["value"])
             .emit()
             .unwrap();
         output.commit().unwrap();
@@ -819,9 +854,9 @@ mod tests {
         assert_eq!(text.text(), "heads up\n");
 
         let json = Capture::default();
-        let mut output = Output::new(Format::Json);
-        output.notices = SharedWriter::new(json.clone());
-        output.notice("heads up").unwrap();
+        let mut json_output = Output::new(Format::Json);
+        json_output.notices = SharedWriter::new(json.clone());
+        json_output.notice("heads up").unwrap();
         assert_eq!(json.text(), "");
     }
 
@@ -837,10 +872,10 @@ mod tests {
         }
 
         impl Write for Gated {
-            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-                self.entered.send(()).unwrap();
-                self.release.lock().unwrap().recv().unwrap();
-                self.bytes.write(buffer)
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.entered.send(()).map_err(io::Error::other)?;
+                self.release.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.recv().map_err(io::Error::other)?;
+                self.bytes.write(buf)
             }
 
             fn flush(&mut self) -> io::Result<()> {
@@ -858,14 +893,14 @@ mod tests {
         });
 
         let streaming = output.clone();
-        let stream = std::thread::spawn(move || streaming.stream(&1).text(|value| value).emit());
+        let stream = thread::spawn(move || streaming.stream(&1).text(|value| value).emit());
         entered_rx.recv().unwrap();
 
-        let commit = std::thread::spawn(move || {
+        let commit = thread::spawn(move || {
             output.commit().unwrap();
             capture.text()
         });
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100));
         assert!(!commit.is_finished(), "commit must wait for the write in flight");
 
         release_tx.send(()).unwrap();
@@ -877,9 +912,9 @@ mod tests {
     #[test]
     fn queued_route_has_written_when_the_call_returns() {
         let capture = Capture::default();
-        let coordinator = crate::status::StatusCoordinator::new(
+        let coordinator = StatusCoordinator::new(
             SharedWriter::new(capture.clone()),
-            crate::terminal::StatusMode::Silent,
+            StatusMode::Silent,
         );
         let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator));
         for index in 0..20 {
@@ -891,9 +926,9 @@ mod tests {
     #[cfg(all(feature = "render", feature = "structured"))]
     #[test]
     fn a_stream_route_never_replaces_a_writer_the_caller_supplied() {
-        let coordinator = crate::status::StatusCoordinator::new(
+        let coordinator = StatusCoordinator::new(
             SharedWriter::new(Capture::default()),
-            crate::terminal::StatusMode::Silent,
+            StatusMode::Silent,
         );
         let around = || PresentationRoute::Around(coordinator.clone());
 
@@ -910,9 +945,9 @@ mod tests {
     #[test]
     fn queued_route_defers_writes_while_the_coordinator_is_leased() {
         let capture = Capture::default();
-        let coordinator = crate::status::StatusCoordinator::new(
+        let coordinator = StatusCoordinator::new(
             SharedWriter::new(capture.clone()),
-            crate::terminal::StatusMode::Silent,
+            StatusMode::Silent,
         );
         let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator.clone()));
 
@@ -921,9 +956,9 @@ mod tests {
         assert!(capture.text().is_empty());
 
         drop(guard);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while capture.text().is_empty() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while capture.text().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(capture.text(), "heads up\n");
     }

@@ -263,7 +263,14 @@ impl Widget for Select {
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_by(1, self.wrap),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
-            _ => Reaction::Ignored,
+            Key::Char(_)
+            | Key::Tab
+            | Key::Backtab
+            | Key::Backspace
+            | Key::Delete
+            | Key::Left
+            | Key::Right
+            | Key::Function(_) => Reaction::Ignored,
         }
     }
 
@@ -403,7 +410,19 @@ impl Widget for MultiSelect {
             Key::Char('n' | 'N') if no_modifiers(key) => self.set_all(false),
             Key::Enter => Reaction::Submit(Value::List(self.checked_values())),
             Key::Esc => Reaction::Cancel,
-            _ => self.select.handle(event, cx),
+            Key::Char(_)
+            | Key::Backtab
+            | Key::Backspace
+            | Key::Delete
+            | Key::Up
+            | Key::Down
+            | Key::Left
+            | Key::Right
+            | Key::Home
+            | Key::End
+            | Key::PageUp
+            | Key::PageDown
+            | Key::Function(_) => self.select.handle(event, cx),
         }
     }
 

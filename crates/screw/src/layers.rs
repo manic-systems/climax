@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    fmt,
+use core::{
+    fmt, iter,
     marker::PhantomData,
     ops::{BitOr, BitOrAssign},
 };
@@ -117,9 +117,8 @@ pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
 }
 
 impl<B, H> fmt::Debug for Layers<'_, B, H> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Layers")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Layers")
             .field("floating", &self.floating.len())
             .finish()
     }
@@ -204,7 +203,7 @@ where
 
     fn tick_interest(&self) -> TickInterest {
         combine_tick_interest(
-            std::iter::once(self.base.tick_interest()).chain(
+            iter::once(self.base.tick_interest()).chain(
                 self.floating
                     .iter()
                     .map(|child| child.widget.tick_interest()),
@@ -307,12 +306,9 @@ fn resolve_axis(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::RefCell,
-        rc::Rc,
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    use alloc::{rc::Rc, sync::Arc};
+    use core::{cell::RefCell, time::Duration};
+    use std::sync::Mutex;
 
     use crate::{Color, LayoutMode, Position, Style, Theme, Viewport};
 
@@ -384,7 +380,7 @@ mod tests {
             .with_layout_mode(LayoutMode::Wrap)
             .with_theme(Theme::DEFAULT);
         layers.render(&ctx, &mut surface);
-        let wrapped = crate::renderer::layout_surface(surface, Some(4), LayoutMode::Wrap);
+        let wrapped = layout_surface(surface, Some(4), LayoutMode::Wrap);
         assert_eq!(wrapped.rows()[0].cells().len(), 3);
         assert_eq!(wrapped.rows()[1].cells()[0].text, "X");
     }
@@ -401,7 +397,7 @@ mod tests {
     fn local_layers_accept_rc_refcell_widgets() {
         let value = Rc::new(RefCell::new("x".to_owned()));
         let layers = Layers::local("base").float(
-            LocalOverlay(value.clone()),
+            LocalOverlay(Rc::clone(&value)),
             Floating::new(Edge::TOP | Edge::RIGHT),
         );
         let mut surface = Surface::new();
@@ -409,9 +405,9 @@ mod tests {
         assert_eq!(surface.plain_text(), "base   x");
 
         *value.borrow_mut() = "yz".to_owned();
-        let mut surface = Surface::new();
-        layers.render(&context(8, 2), &mut surface);
-        assert_eq!(surface.plain_text(), "base  yz");
+        let mut updated = Surface::new();
+        layers.render(&context(8, 2), &mut updated);
+        assert_eq!(updated.plain_text(), "base  yz");
     }
 
     struct BorrowedOverlay<'a>(&'a str);
@@ -438,7 +434,7 @@ mod tests {
     fn bottom_right_child_receives_exact_local_constraints() {
         let seen = Arc::new(Mutex::new(None));
         let layers = Layers::new(Base).float(
-            Probe(seen.clone()),
+            Probe(Arc::clone(&seen)),
             Floating::new(Edge::BOTTOM | Edge::RIGHT)
                 .margin(Insets::bottom(1))
                 .max_size(Size::new(6, 3)),
@@ -482,7 +478,7 @@ mod tests {
         let mut surface = Surface::new();
         Layers::new(Base)
             .float(
-                ContextProbe(seen.clone()),
+                ContextProbe(Arc::clone(&seen)),
                 Floating::new(Edge::RIGHT).max_size(Size::new(4, 3)),
             )
             .render(&ctx, &mut surface);

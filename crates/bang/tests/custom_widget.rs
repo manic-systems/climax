@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
 use bang::advanced::{
     Event, Key, KeyEvent, Reaction, Value, Widget, WidgetContext, WidgetId, replay_events,
 };
-use bang::screw::{RenderCtx, Role, Surface};
+use bang::screw::{RenderCtx, Role, Surface, Widget as ScreenWidget};
 
 struct Echo {
     typed: String,
 }
 
-impl bang::screw::Widget for Echo {
+impl ScreenWidget for Echo {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         out.write(&self.typed, ctx.theme().style(Role::Prompt));
     }
@@ -32,7 +34,9 @@ impl Widget for Echo {
             Event::Key(KeyEvent {
                 key: Key::Enter, ..
             }) => Reaction::Submit(Value::from(self.typed.clone())),
-            _ => Reaction::Ignored,
+            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick | _ => {
+                Reaction::Ignored
+            },
         }
     }
 }

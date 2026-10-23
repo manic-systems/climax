@@ -14,11 +14,13 @@ pub(crate) fn stderr_size() -> (usize, Option<usize>) {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use super::*;
 
     #[test]
     fn measuring_a_non_terminal_fails() {
-        let null = std::fs::File::open("/dev/null").unwrap();
-        assert!(Viewport::of(&null).is_err());
+        let null = File::open("/dev/null").unwrap();
+        Viewport::of(&null).unwrap_err();
     }
 }

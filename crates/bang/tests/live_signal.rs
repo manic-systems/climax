@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
+use core::{mem, ptr, time::Duration};
 use std::{
     fs::File,
     io::{self, Read as _, Write as _},
     os::fd::{FromRawFd as _, RawFd},
     sync::mpsc,
     thread,
-    time::Duration,
 };
 
 use bang::{ErrorKind, PromptOutcome, terminal::Signal};
@@ -42,7 +44,7 @@ fn a_signal_interrupts_one_prompt(raw: libc::c_int, signal: Signal) {
         let outcome = bang::text("name")
             .interaction(bang::Interaction::live_on(slave))
             .interact();
-        let _ = results_tx.send(outcome);
+        let _sent = results_tx.send(outcome);
     });
 
     wait_for_first_frame(&mut master);
@@ -66,7 +68,7 @@ fn a_signal_the_host_ignored_does_not_interrupt_the_prompt() {
         let outcome = bang::text("name")
             .interaction(bang::Interaction::live_on(slave))
             .interact();
-        let _ = results_tx.send(outcome);
+        let _sent = results_tx.send(outcome);
     });
 
     wait_for_first_frame(&mut master);
@@ -92,23 +94,23 @@ struct DefaultDispositions(Vec<(libc::c_int, libc::sighandler_t)>);
 
 impl DefaultDispositions {
     fn reset() -> Self {
-        // SAFETY: SIG_DFL is a valid disposition and the set is initialised
-        // before pthread_sigmask reads it.
-        unsafe {
-            let mut set = std::mem::zeroed::<libc::sigset_t>();
-            libc::sigemptyset(&raw mut set);
-            let previous = TERMINAL_SIGNALS
-                .map(|signal| {
-                    libc::sigaddset(&raw mut set, signal);
-                    (signal, libc::signal(signal, libc::SIG_DFL))
-                })
-                .to_vec();
-            assert_eq!(
-                libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, std::ptr::null_mut()),
-                0
-            );
-            Self(previous)
-        }
+        // SAFETY: a zeroed sigset_t is plain data that sigemptyset initialises.
+        let mut set = unsafe { mem::zeroed::<libc::sigset_t>() };
+        // SAFETY: set is a valid sigset_t for the call.
+        unsafe { libc::sigemptyset(&raw mut set); }
+        let previous = TERMINAL_SIGNALS
+            .map(|signal| {
+                // SAFETY: set was initialised by sigemptyset above.
+                unsafe { libc::sigaddset(&raw mut set, signal); }
+                // SAFETY: SIG_DFL is a valid disposition.
+                (signal, unsafe { libc::signal(signal, libc::SIG_DFL) })
+            })
+            .to_vec();
+        // SAFETY: set is initialised and a null old set is allowed.
+        let status =
+            unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const set, ptr::null_mut()) };
+        assert_eq!(status, 0, "unblock the terminal signals");
+        Self(previous)
     }
 }
 
@@ -116,7 +118,7 @@ impl Drop for DefaultDispositions {
     fn drop(&mut self) {
         for &(signal, previous) in &self.0 {
             // SAFETY: restoring the disposition read in reset.
-            unsafe { libc::signal(signal, previous) };
+            unsafe { libc::signal(signal, previous); }
         }
     }
 }
@@ -131,36 +133,40 @@ fn wait_for_first_frame(master: &mut File) {
     assert_ne!(master.read(&mut buffer).expect("read the first frame"), 0);
 }
 
-fn termios(file: &File) -> Vec<u8> {
+fn termios(file: &File) -> Vec<u64> {
     use std::os::fd::AsRawFd as _;
 
     // SAFETY: a zeroed termios is overwritten by tcgetattr.
-    let mut state = unsafe { std::mem::zeroed::<libc::termios>() };
+    let mut state = unsafe { mem::zeroed::<libc::termios>() };
     // SAFETY: the descriptor is open and state is valid for the call.
-    assert_eq!(unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) }, 0);
-    let mut flags = Vec::new();
-    for value in [state.c_iflag, state.c_oflag, state.c_cflag, state.c_lflag] {
-        flags.extend(value.to_ne_bytes());
-    }
-    flags.extend(state.c_cc);
+    let status = unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) };
+    assert_eq!(status, 0);
+    let mut flags: Vec<u64> = [state.c_iflag, state.c_oflag, state.c_cflag, state.c_lflag]
+        .into_iter()
+        .map(u64::from)
+        .collect();
+    flags.extend(state.c_cc.into_iter().map(u64::from));
     flags
 }
 
 fn open_pty() -> (File, File) {
-    let mut master: RawFd = -1;
-    let mut slave: RawFd = -1;
+    let mut master_fd: RawFd = -1;
+    let mut slave_fd: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null termios/winsize
     // ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            &raw mut master_fd,
+            &raw mut slave_fd,
+            ptr::null_mut(),
+            ptr::null(),
+            ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned two newly owned file descriptors.
-    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
+    // SAFETY: successful openpty returned a newly owned master descriptor.
+    let master = unsafe { File::from_raw_fd(master_fd) };
+    // SAFETY: successful openpty returned a newly owned slave descriptor.
+    let slave = unsafe { File::from_raw_fd(slave_fd) };
+    (master, slave)
 }

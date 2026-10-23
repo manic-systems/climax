@@ -44,7 +44,7 @@ fn serde_derive_names(args: TokenStream2) -> Result<Vec<proc_macro2::Ident>, (Sp
     while let Some(token) = tokens.next() {
         match token {
             TokenTree::Ident(name) => names.push(name),
-            other => {
+            other @ (TokenTree::Group(_) | TokenTree::Punct(_) | TokenTree::Literal(_)) => {
                 return Err((
                     other.span(),
                     "expected the name of a serde derive, such as `Serialize`".to_owned(),
@@ -74,7 +74,7 @@ fn serde_derive_names(args: TokenStream2) -> Result<Vec<proc_macro2::Ident>, (Sp
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
+    use core::str::FromStr as _;
 
     use super::*;
 

@@ -1,13 +1,37 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{io, process::ExitCode};
+use alloc::rc;
+use core::fmt;
+#[cfg(any(feature = "parse", feature = "interactive"))]
+use core::str;
+use core::marker::PhantomData;
+#[cfg(feature = "render")]
+use core::mem;
+#[cfg(feature = "parse")]
+use core::result;
+#[cfg(any(feature = "render", feature = "interactive"))]
+use std::fs;
+#[cfg(feature = "render")]
+use std::io::Error as IoError;
+use std::io;
+use std::process::ExitCode;
 #[cfg(all(feature = "render", feature = "structured"))]
 use std::io::IsTerminal as _;
-use std::marker::PhantomData;
 #[cfg(any(feature = "render", feature = "interactive"))]
 use std::os::fd::OwnedFd;
 
-use crate::Result;
+use crate::error::ErrorKind;
+#[cfg(feature = "render")]
+use crate::status::{Status, StatusCoordinator, TransientNotice, WidthSource};
+#[cfg(all(feature = "render", feature = "structured"))]
+use crate::output::PresentationRoute;
+#[cfg(all(feature = "interactive", feature = "render"))]
+use crate::terminal::{TerminalApplication, TerminalInput};
+use crate::{
+    Result,
+    output::{Format, Output, SharedWriter},
+    terminal::{InteractionMode, StatusMode, TerminalCapabilities, TerminalPolicy},
+};
 
 /// Run a parsed command-line application and report its process outcome.
 ///
@@ -32,12 +56,12 @@ use crate::Result;
 /// signal comes from `Context::with_terminal_application` or a direct
 /// `bang` dependency that builds a cancelled error.
 #[cfg(feature = "parse")]
-pub fn main<C, F>(f: F) -> ExitCode
+pub fn main<C, F>(application: F) -> ExitCode
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    complete(parse_env::<C>(), f).report()
+    complete(parse_env::<C>(), application).report()
 }
 
 /// Run an application that takes no arguments and report its process outcome.
@@ -56,35 +80,45 @@ where
 ///     })
 /// }
 /// ```
-pub fn main_with<F>(f: F) -> ExitCode
+pub fn main_with<F>(application: F) -> ExitCode
 where
     F: FnOnce(Context) -> Result<()>,
 {
-    finish(&run_with((), |context, ()| f(context))).report()
+    finish(&run_with((), |context, ()| application(context))).report()
 }
 
 /// Run a parsed application without handling output or process exit status.
 ///
 /// With the `complete` feature a shell completion request answers and exits the
 /// process, as `main` does.
+///
+/// # Errors
+///
+/// Fails with the parse error when the arguments are invalid or help was requested, and
+/// otherwise with whatever the application returns.
 #[cfg(feature = "parse")]
-pub fn try_run<C, F>(f: F) -> Result<()>
+pub fn try_run<C, F>(application: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
 {
-    run_with(parse_env::<C>()?, f)
+    run_with(parse_env::<C>()?, application)
 }
 
 /// Run an application from supplied arguments without handling process output.
+///
+/// # Errors
+///
+/// Fails with the parse error when the arguments are invalid or help was requested, and
+/// otherwise with whatever the application returns.
 #[cfg(feature = "parse")]
-pub fn try_run_from<'a, C, F, I>(args: I, f: F) -> Result<()>
+pub fn try_run_from<'a, C, F, I>(args: I, application: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
     I: IntoIterator<Item = &'a str>,
 {
-    run_with(C::try_parse_from(args)?, f)
+    run_with(C::try_parse_from(args)?, application)
 }
 
 /// Run an application from an already built command and report its result.
@@ -94,14 +128,19 @@ where
 /// they are discarded and its error is returned, with any cleanup failure attached
 /// as a related error. Nothing is parsed and no process exit status is chosen,
 /// which `main` does for a parsed command.
-pub fn run_with<C, F>(command: C, f: F) -> Result<()>
+///
+/// # Errors
+///
+/// Fails with whatever `application` returns, or with the failure to close the output and
+/// status lifecycles it opened.
+pub fn run_with<C, F>(command: C, application: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
-    execute(Context::new(), command, f)
+    execute(Context::new(), command, application)
 }
 
-pub(crate) fn execute<C, F>(context: Context, command: C, f: F) -> Result<()>
+pub(crate) fn execute<C, F>(context: Context, command: C, application: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
@@ -109,7 +148,7 @@ where
     let diagnostic = context.diagnostic();
     #[cfg(feature = "render")]
     let transient = context.transient.clone();
-    match f(context, command) {
+    match application(context, command) {
         Ok(()) => {
             // Both lifecycles must close: `diagnostic` owns its own result slot,
             // so committing only `output` would silently drop diagnostic results.
@@ -119,33 +158,33 @@ where
             collect_related(&mut failure, transient.flush_transient());
             failure.map_or(Ok(()), Err)
         },
-        Err(error) => {
+        #[cfg_attr(not(feature = "render"), expect(unused_mut, reason = "only render mutates the error"))]
+        Err(mut error) => {
             output.discard();
             diagnostic.discard();
             #[cfg(feature = "render")]
-            let error = match transient.flush_transient() {
-                Ok(()) => error,
-                Err(cleanup) => error.with_related(cleanup),
-            };
+            if let Err(cleanup) = transient.flush_transient() {
+                error = error.with_related(cleanup);
+            }
             Err(error)
         },
     }
 }
 
 #[cfg(feature = "parse")]
-fn parse_env<C: pound::Parse>() -> std::result::Result<C, pound::Error> {
+fn parse_env<C: pound::Parse>() -> result::Result<C, pound::Error> {
     #[cfg(feature = "complete")]
     caress::handle(C::SPEC);
     C::try_parse()
 }
 
 #[cfg(feature = "parse")]
-fn complete<C, F>(parsed: std::result::Result<C, pound::Error>, f: F) -> Completion
+fn complete<C, F>(parsed: result::Result<C, pound::Error>, application: F) -> Completion
 where
     F: FnOnce(Context, C) -> Result<()>,
 {
     match parsed {
-        Ok(command) => finish(&run_with(command, f)),
+        Ok(command) => finish(&run_with(command, application)),
         Err(error) => parse_completion(&error, pound::Term::stdout(), pound::Term::stderr()),
     }
 }
@@ -170,7 +209,7 @@ pub(crate) fn parse_completion(
 pub(crate) fn finish(result: &Result<()>) -> Completion {
     match result {
         Ok(()) => Completion::success(),
-        Err(error) if error.kind() == crate::error::ErrorKind::Cancelled => {
+        Err(error) if error.kind() == ErrorKind::Cancelled => {
             let code = error.exit_code().unwrap_or_else(|| cancelled_code(error));
             if error.related_errors().is_empty() {
                 Completion::cancelled(code)
@@ -222,7 +261,7 @@ impl Completion {
         }
     }
 
-    fn error(code: u8, error: impl std::fmt::Display) -> Self {
+    fn error(code: u8, error: impl fmt::Display) -> Self {
         Self {
             code,
             stream: Some(CompletionStream::Stderr),
@@ -235,6 +274,10 @@ impl Completion {
         (self.code, self.stream.zip(self.message))
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "a completion with a stream always carries its message"
+    )]
     fn report(self) -> ExitCode {
         let Some(stream) = self.stream else {
             return ExitCode::from(self.code);
@@ -287,9 +330,9 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 /// ```
 #[derive(Debug)]
 pub struct Context {
-    output: crate::output::Output,
-    diagnostic: crate::output::Output,
-    terminal: crate::terminal::TerminalPolicy,
+    output: Output,
+    diagnostic: Output,
+    terminal: TerminalPolicy,
     #[cfg(feature = "interactive")]
     interaction: bang::Interaction,
     #[cfg(feature = "interactive")]
@@ -297,10 +340,10 @@ pub struct Context {
     #[cfg(feature = "interactive")]
     prompt_summaries: Option<bool>,
     #[cfg(feature = "render")]
-    transient:          crate::status::StatusCoordinator,
+    transient:          StatusCoordinator,
     #[cfg(any(feature = "render", feature = "interactive"))]
     terminal_handle: Option<OwnedFd>,
-    _not_send: PhantomData<std::rc::Rc<()>>,
+    _not_send: PhantomData<rc::Rc<()>>,
 }
 
 impl Default for Context {
@@ -315,31 +358,35 @@ impl Context {
     ///
     /// Terminal capabilities are detected once here, and output starts in text mode.
     pub fn new() -> Self {
-        let terminal = crate::terminal::TerminalPolicy::process();
+        let terminal = TerminalPolicy::process();
         #[cfg(feature = "render")]
-        let transient = crate::status::StatusCoordinator::new(
-            crate::output::SharedWriter::stderr(),
+        let transient = StatusCoordinator::new(
+            SharedWriter::stderr(),
             terminal.effective_status_mode(),
         );
         #[cfg(feature = "interactive")]
         let interaction = interaction_for(terminal);
         #[cfg(all(feature = "render", feature = "structured"))]
-        let output_route = if std::io::stdout().is_terminal() && terminal.capabilities().transient_terminal() {
-            crate::output::PresentationRoute::Around(transient.clone())
+        let output_route = if io::stdout().is_terminal() && terminal.capabilities().transient_terminal() {
+            PresentationRoute::Around(transient.clone())
         } else {
-            crate::output::PresentationRoute::Direct
+            PresentationRoute::Direct
         };
-        let diagnostic = crate::output::Output::new(crate::output::Format::Text)
-            .with_shared_writer(crate::output::SharedWriter::stderr());
+        let routed_diagnostic = Output::new(Format::Text)
+            .with_shared_writer(SharedWriter::stderr());
         #[cfg(all(feature = "render", feature = "structured"))]
-        let diagnostic = diagnostic.with_route(crate::output::PresentationRoute::Queued(transient.clone()));
+        let diagnostic = routed_diagnostic.with_route(PresentationRoute::Queued(transient.clone()));
+        #[cfg(not(all(feature = "render", feature = "structured")))]
+        let diagnostic = routed_diagnostic;
         #[cfg(feature = "render")]
-        let output = crate::output::Output::new(crate::output::Format::Text)
-            .with_transient(crate::status::TransientNotice::coordinator(transient.clone()));
+        let transient_output = Output::new(Format::Text)
+            .with_transient(TransientNotice::coordinator(transient.clone()));
         #[cfg(all(feature = "render", feature = "structured"))]
-        let output = output.with_route(output_route);
+        let output = transient_output.with_route(output_route);
+        #[cfg(all(feature = "render", not(feature = "structured")))]
+        let output = transient_output;
         #[cfg(not(feature = "render"))]
-        let output = crate::output::Output::new(crate::output::Format::Text);
+        let output = Output::new(Format::Text);
         Self {
             output,
             diagnostic,
@@ -428,8 +475,8 @@ impl Context {
     #[must_use]
     pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
     where
-        T: std::str::FromStr + 'static,
-        T::Err: std::fmt::Display,
+        T: str::FromStr + 'static,
+        T::Err: fmt::Display,
     {
         bang::number(prompt).interaction(self.prompt_interaction())
     }
@@ -448,8 +495,8 @@ impl Context {
     /// disposition, so the process dies and the spinner line is left on the screen.
     /// Only a prompt installs the handlers that restore the terminal and turn the
     /// signal into an error.
-    pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
-        crate::status::Status::new(message, self.transient.clone())
+    pub fn status(&self, message: impl Into<String>) -> Status {
+        Status::new(message, self.transient.clone())
     }
 
     #[must_use]
@@ -457,13 +504,13 @@ impl Context {
     ///
     /// Every handle shares one lifecycle, so a second finite result through any of them
     /// is an error. Take it after choosing a format with `Self::set_output_format`.
-    pub fn output(&self) -> crate::output::Output {
+    pub fn output(&self) -> Output {
         self.output.clone()
     }
 
     /// The format `output` handles from this context currently use.
     #[must_use]
-    pub const fn output_format(&self) -> crate::output::Format {
+    pub const fn output_format(&self) -> Format {
         self.output.format()
     }
 
@@ -474,7 +521,7 @@ impl Context {
     /// format, so change it before asking for one. The crate docs have a
     /// recipe for a `--json` flag.
     #[must_use]
-    pub fn with_output_format(mut self, format: crate::output::Format) -> Self {
+    pub fn with_output_format(mut self, format: Format) -> Self {
         self.output = self.output.with_format(format);
         self
     }
@@ -483,7 +530,7 @@ impl Context {
     ///
     /// Notices are suppressed in JSON mode, registered results serialize as
     /// their natural JSON shape and streams write JSON Lines.
-    pub fn set_output_format(&mut self, format: crate::output::Format) {
+    pub fn set_output_format(&mut self, format: Format) {
         self.output = self.output.clone().with_format(format);
     }
 
@@ -496,14 +543,14 @@ impl Context {
     /// Notice routing and suppression always match [`Self::output`], since a
     /// separately tracked diagnostic notice policy could drift from it.
     #[must_use]
-    pub fn diagnostic(&self) -> crate::output::Output {
+    pub fn diagnostic(&self) -> Output {
         self.diagnostic.clone().with_notices_from(&self.output)
     }
 
     #[must_use]
     /// The terminal policy this context applies, with its capabilities and any mode
     /// overrides.
-    pub const fn terminal(&self) -> crate::terminal::TerminalPolicy {
+    pub const fn terminal(&self) -> TerminalPolicy {
         self.terminal
     }
 
@@ -523,19 +570,24 @@ impl Context {
     ///
     /// Reads from [`Self::with_terminal`]'s handle when one is configured,
     /// otherwise from process stdin.
+    ///
+    /// # Errors
+    ///
+    /// Fails when interaction is unavailable, another prompt or application holds the
+    /// terminal, or `operation` fails.
     #[cfg(all(feature = "interactive", feature = "render"))]
     pub fn with_terminal_application<T>(
         &self,
-        operation: impl FnOnce(&mut crate::terminal::TerminalApplication<'_>) -> Result<T>,
+        operation: impl FnOnce(&mut TerminalApplication<'_>) -> Result<T>,
     ) -> Result<T> {
         self.acquire_terminal_application()?;
         let _guard = self.transient.application_guard()?;
-        let stdin = std::io::stdin();
-        let input: Box<dyn crate::terminal::TerminalInput + '_> = match &self.terminal_handle {
-            Some(handle) => Box::new(std::fs::File::from(handle.try_clone()?)),
+        let stdin = io::stdin();
+        let input: Box<dyn TerminalInput + '_> = match &self.terminal_handle {
+            Some(handle) => Box::new(fs::File::from(handle.try_clone()?)),
             None => Box::new(stdin.lock()),
         };
-        let mut terminal = crate::terminal::TerminalApplication::new(
+        let mut terminal = TerminalApplication::new(
             input,
             Box::new(self.transient.writer()),
             self.terminal.capabilities(),
@@ -559,45 +611,49 @@ impl Context {
     /// live, because the coordinator's writer cannot change out from under it.
     /// A status started from another thread while the replacement runs may
     /// stay on the previous coordinator.
+    ///
+    /// # Errors
+    ///
+    /// Fails while a status is live or when the handle cannot be adopted.
     #[cfg(any(feature = "render", feature = "interactive"))]
     pub fn with_terminal(mut self, terminal: impl Into<OwnedFd>) -> Result<Self> {
         #[cfg(feature = "render")]
         if !self.transient.is_idle() {
             return Err(crate::Error::with_source(
-                crate::error::ErrorKind::Output,
-                std::io::Error::other(
+                ErrorKind::Output,
+                IoError::other(
                     "the terminal handle cannot change while status output is in use",
                 ),
             ));
         }
         let handle = terminal.into();
-        let capabilities = crate::terminal::TerminalCapabilities::detect_on(&handle);
+        let capabilities = TerminalCapabilities::detect_on(&handle);
         self.terminal.set_capabilities(capabilities);
 
         #[cfg(feature = "render")]
         {
-            let coordinator_writer = crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?));
+            let coordinator_writer = SharedWriter::new(fs::File::from(handle.try_clone()?));
             let mode = self.terminal.effective_status_mode();
-            let width = crate::status::WidthSource::Terminal(handle.try_clone()?);
-            let previous = std::mem::replace(
+            let width = WidthSource::Terminal(handle.try_clone()?);
+            let previous = mem::replace(
                 &mut self.transient,
-                crate::status::StatusCoordinator::with_width(coordinator_writer, mode, width),
+                StatusCoordinator::with_width(coordinator_writer, mode, width),
             );
             previous.supersede(&self.transient);
-            self.output = self.output.with_transient(crate::status::TransientNotice::coordinator(
+            self.output = self.output.with_transient(TransientNotice::coordinator(
                 self.transient.clone(),
             ));
             #[cfg(feature = "structured")]
             {
                 let around = |stream_is_terminal: bool| {
                     if stream_is_terminal && capabilities.transient_terminal() {
-                        crate::output::PresentationRoute::Around(self.transient.clone())
+                        PresentationRoute::Around(self.transient.clone())
                     } else {
-                        crate::output::PresentationRoute::Direct
+                        PresentationRoute::Direct
                     }
                 };
-                let output_route = around(std::io::stdout().is_terminal());
-                let diagnostic_route = around(std::io::stderr().is_terminal());
+                let output_route = around(io::stdout().is_terminal());
+                let diagnostic_route = around(io::stderr().is_terminal());
                 self.output = self.output.with_stream_route(output_route);
                 self.diagnostic = self.diagnostic.with_stream_route(diagnostic_route);
             }
@@ -606,7 +662,7 @@ impl Context {
         {
             self.output = self
                 .output
-                .with_notice_writer(crate::output::SharedWriter::new(std::fs::File::from(handle.try_clone()?)));
+                .with_notice_writer(SharedWriter::new(fs::File::from(handle.try_clone()?)));
         }
 
         #[cfg(feature = "interactive")]
@@ -620,20 +676,25 @@ impl Context {
 
     /// Run a custom terminal application on caller-supplied handles while
     /// prompts and live statuses are excluded from the transient region.
+    ///
+    /// # Errors
+    ///
+    /// Fails when interaction is unavailable, another prompt or application holds the
+    /// terminal, or `operation` fails.
     #[cfg(all(feature = "interactive", feature = "render"))]
     pub fn with_terminal_application_on<'a, T, I, O>(
         &self,
         input: I,
         output: O,
-        operation: impl FnOnce(&mut crate::terminal::TerminalApplication<'a>) -> Result<T>,
+        operation: impl FnOnce(&mut TerminalApplication<'a>) -> Result<T>,
     ) -> Result<T>
     where
-        I: crate::terminal::TerminalInput + 'a,
-        O: std::io::Write + 'a,
+        I: TerminalInput + 'a,
+        O: io::Write + 'a,
     {
         self.acquire_terminal_application()?;
         let _guard = self.transient.application_guard()?;
-        let mut terminal = crate::terminal::TerminalApplication::new(
+        let mut terminal = TerminalApplication::new(
             Box::new(input),
             Box::new(output),
             self.terminal.capabilities(),
@@ -651,16 +712,20 @@ impl Context {
 
     #[cfg_attr(
         not(any(feature = "interactive", feature = "render")),
-        allow(clippy::missing_const_for_fn)
+        expect(clippy::missing_const_for_fn, reason = "const only once the gated code is compiled in")
     )]
     /// Replace the detected terminal capabilities, for tests or for a host that knows
     /// better.
     ///
     /// The interaction driver is rederived unless one was injected, and the status mode
     /// is reapplied, which fails when the status coordinator cannot switch.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the status coordinator cannot switch to the resulting status mode.
     pub fn set_terminal_capabilities(
         &mut self,
-        capabilities: crate::terminal::TerminalCapabilities,
+        capabilities: TerminalCapabilities,
     ) -> Result<()> {
         self.terminal.set_capabilities(capabilities);
         // A caller who injected an interaction owns it; capability detection
@@ -677,8 +742,8 @@ impl Context {
 
     /// Prompt builders made earlier keep the driver they captured, so only builders
     /// made after this call see the new mode.
-    #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
-    pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
+    #[cfg_attr(not(feature = "interactive"), expect(clippy::missing_const_for_fn, reason = "const only once the gated code is compiled in"))]
+    pub fn set_interaction_mode(&mut self, mode: InteractionMode) {
         self.terminal.set_interaction_mode(mode);
         #[cfg(feature = "interactive")]
         {
@@ -692,17 +757,19 @@ impl Context {
         if let Some(handle) = &self.terminal_handle {
             return handle.try_clone().map_or_else(
                 |_| bang::Interaction::disabled(),
-                |handle| interaction_on(self.terminal, handle),
+                |duplicate| interaction_on(self.terminal, duplicate),
             );
         }
         interaction_for(self.terminal)
     }
 
-    #[cfg_attr(not(feature = "render"), allow(clippy::missing_const_for_fn))]
+    #[cfg_attr(not(feature = "render"), expect(clippy::missing_const_for_fn, reason = "const only once the gated code is compiled in"))]
     /// Override how statuses present, see [`StatusMode`](crate::terminal::StatusMode).
     ///
+    /// # Errors
+    ///
     /// Fails when the status coordinator cannot apply the resulting mode.
-    pub fn set_status_mode(&mut self, mode: crate::terminal::StatusMode) -> Result<()> {
+    pub fn set_status_mode(&mut self, mode: StatusMode) -> Result<()> {
         self.terminal.set_status_mode(mode);
         #[cfg(feature = "render")]
         self.transient
@@ -718,7 +785,7 @@ impl Context {
     /// driver they captured.
     pub fn set_interaction(&mut self, interaction: bang::Interaction) {
         self.terminal
-            .set_interaction_mode(crate::terminal::InteractionMode::Force);
+            .set_interaction_mode(InteractionMode::Force);
         self.interaction = interaction;
         self.custom_interaction = true;
     }
@@ -768,7 +835,7 @@ impl Context {
     #[must_use]
     /// Write finite results and streams to `writer` instead of stdout, directly and not
     /// around a live status. Notices keep their own destination.
-    pub fn with_output_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
+    pub fn with_output_writer(mut self, writer: impl io::Write + Send + 'static) -> Self {
         self.output = self.output.with_writer(writer);
         self
     }
@@ -776,18 +843,18 @@ impl Context {
     /// Without the `render` feature notices follow this writer too. With it
     /// they belong to the transient channel, moved by `with_transient_writer`.
     #[must_use]
-    pub fn with_diagnostic_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
-        let writer = crate::output::SharedWriter::new(writer);
+    pub fn with_diagnostic_writer(mut self, writer: impl io::Write + Send + 'static) -> Self {
+        let shared = SharedWriter::new(writer);
         #[cfg(not(feature = "render"))]
         {
-            self.output = self.output.with_notice_writer(writer.clone());
+            self.output = self.output.with_notice_writer(shared.clone());
         }
-        self.diagnostic = self.diagnostic.with_shared_writer(writer);
+        self.diagnostic = self.diagnostic.with_shared_writer(shared);
         #[cfg(all(feature = "render", feature = "structured"))]
         {
             self.diagnostic = self
                 .diagnostic
-                .with_route(crate::output::PresentationRoute::Direct);
+                .with_route(PresentationRoute::Direct);
         }
         self
     }
@@ -802,46 +869,55 @@ impl Context {
     /// lines are still queued, because those belong to the current writer.
     /// A status started from another thread while the replacement runs may
     /// stay on the previous coordinator.
+    ///
+    /// # Errors
+    ///
+    /// Fails while statuses are live, a prompt holds the terminal or failed transient
+    /// lines are still queued.
     #[cfg(feature = "render")]
     pub fn with_transient_writer(
         mut self,
-        writer: impl std::io::Write + Send + 'static,
+        writer: impl io::Write + Send + 'static,
     ) -> Result<Self> {
         if !self.transient.is_idle() {
             return Err(crate::Error::with_source(
-                crate::error::ErrorKind::Output,
-                std::io::Error::other(
+                ErrorKind::Output,
+                IoError::other(
                     "the transient writer cannot change while status output is in use",
                 ),
             ));
         }
         let mode = self.terminal.effective_status_mode();
-        let previous = std::mem::replace(
+        let previous = mem::replace(
             &mut self.transient,
-            crate::status::StatusCoordinator::with_width(
-                crate::output::SharedWriter::new(writer),
+            StatusCoordinator::with_width(
+                SharedWriter::new(writer),
                 mode,
-                crate::status::WidthSource::FALLBACK,
+                WidthSource::FALLBACK,
             ),
         );
         previous.supersede(&self.transient);
-        self.output = self.output.with_transient(crate::status::TransientNotice::coordinator(
+        self.output = self.output.with_transient(TransientNotice::coordinator(
             self.transient.clone(),
         ));
         #[cfg(feature = "structured")]
         {
-            self.output = self.output.with_route(crate::output::PresentationRoute::Direct);
+            self.output = self.output.with_route(PresentationRoute::Direct);
             self.diagnostic = self
                 .diagnostic
-                .with_route(crate::output::PresentationRoute::Direct);
+                .with_route(PresentationRoute::Direct);
         }
         Ok(self)
     }
 
     /// Builder form of [`Self::set_terminal_capabilities`].
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Self::set_terminal_capabilities`] does.
     pub fn with_terminal_capabilities(
         mut self,
-        capabilities: crate::terminal::TerminalCapabilities,
+        capabilities: TerminalCapabilities,
     ) -> Result<Self> {
         self.set_terminal_capabilities(capabilities)?;
         Ok(self)
@@ -849,23 +925,27 @@ impl Context {
 
     #[must_use]
     /// Builder form of [`Self::set_interaction_mode`].
-    pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
+    pub fn with_interaction_mode(mut self, mode: InteractionMode) -> Self {
         self.set_interaction_mode(mode);
         self
     }
 
     /// Builder form of [`Self::set_status_mode`], failing for the same reason.
-    pub fn with_status_mode(mut self, mode: crate::terminal::StatusMode) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Self::set_status_mode`] does.
+    pub fn with_status_mode(mut self, mode: StatusMode) -> Result<Self> {
         self.set_status_mode(mode)?;
         Ok(self)
     }
 
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
-        let interaction = match self.prompt_summaries {
-            Some(summaries) => self.interaction.clone().with_summaries(summaries),
-            None => self.interaction.clone(),
-        };
+        let interaction = self.prompt_summaries.map_or_else(
+            || self.interaction.clone(),
+            |summaries| self.interaction.clone().with_summaries(summaries),
+        );
         #[cfg(feature = "render")]
         {
             guarded_interaction(interaction, &self.transient)
@@ -886,54 +966,64 @@ fn collect_related(failure: &mut Option<crate::Error>, result: Result<()>) {
 }
 
 #[cfg(feature = "interactive")]
-fn interaction_for(terminal: crate::terminal::TerminalPolicy) -> bang::Interaction {
+fn interaction_for(terminal: TerminalPolicy) -> bang::Interaction {
     match terminal.interaction_mode() {
-        crate::terminal::InteractionMode::Auto if terminal.interaction_available() => {
+        InteractionMode::Auto if terminal.interaction_available() => {
             bang::Interaction::live()
         },
-        crate::terminal::InteractionMode::Auto | crate::terminal::InteractionMode::Disabled => {
+        InteractionMode::Auto | InteractionMode::Disabled => {
             bang::Interaction::disabled()
         },
-        crate::terminal::InteractionMode::Force => bang::Interaction::forced(),
+        InteractionMode::Force => bang::Interaction::forced(),
     }
 }
 
 #[cfg(feature = "interactive")]
-fn interaction_on(terminal: crate::terminal::TerminalPolicy, handle: OwnedFd) -> bang::Interaction {
+fn interaction_on(terminal: TerminalPolicy, handle: OwnedFd) -> bang::Interaction {
     match terminal.interaction_mode() {
-        crate::terminal::InteractionMode::Auto if terminal.interaction_available() => {
+        InteractionMode::Auto if terminal.interaction_available() => {
             bang::Interaction::live_on(handle)
         },
-        crate::terminal::InteractionMode::Auto | crate::terminal::InteractionMode::Disabled => {
+        InteractionMode::Auto | InteractionMode::Disabled => {
             bang::Interaction::disabled()
         },
-        crate::terminal::InteractionMode::Force => bang::Interaction::forced_on(handle),
+        InteractionMode::Force => bang::Interaction::forced_on(handle),
     }
 }
 
 #[cfg(all(feature = "interactive", feature = "render"))]
 fn guarded_interaction(
     interaction: bang::Interaction,
-    transient: &crate::status::StatusCoordinator,
+    transient: &StatusCoordinator,
 ) -> bang::Interaction {
-    let transient = transient.clone();
-    interaction.with_guard(move || transient.prompt_guard())
+    let shared = transient.clone();
+    interaction.with_guard(move || shared.prompt_guard())
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::sync::Arc;
+    #[cfg(any(
+        feature = "parse",
+        all(feature = "interactive", feature = "render", feature = "structured")
+    ))]
+    use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+    use std::sync::Mutex;
+
     use super::*;
+    #[cfg(feature = "interactive")]
+    use bang::advanced::{Event, Key, scripted_interaction};
 
     #[derive(Clone, Default)]
-    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    struct Sink(Arc<Mutex<Vec<u8>>>);
 
-    impl std::io::Write for Sink {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
+    impl io::Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.extend_from_slice(buf);
+            Ok(buf.len())
         }
 
-        fn flush(&mut self) -> std::io::Result<()> {
+        fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
     }
@@ -951,7 +1041,7 @@ mod tests {
         assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
 
         sink.0.lock().unwrap().clear();
-        context.set_output_format(crate::output::Format::Json);
+        context.set_output_format(Format::Json);
         context.diagnostic().notice("heads up").unwrap();
         assert!(sink.0.lock().unwrap().is_empty());
     }
@@ -965,7 +1055,7 @@ mod tests {
         assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
 
         sink.0.lock().unwrap().clear();
-        context.set_output_format(crate::output::Format::Json);
+        context.set_output_format(Format::Json);
         context.diagnostic().notice("heads up").unwrap();
         assert!(sink.0.lock().unwrap().is_empty());
     }
@@ -976,7 +1066,7 @@ mod tests {
         let context = Context::new().with_transient_writer(Sink::default()).unwrap();
         let status = context.status("working").start();
         let error = context.with_transient_writer(Sink::default()).unwrap_err();
-        assert_eq!(error.kind(), crate::error::ErrorKind::Output);
+        assert_eq!(error.kind(), ErrorKind::Output);
         status.finish().unwrap();
     }
 
@@ -985,9 +1075,9 @@ mod tests {
     fn terminal_handle_cannot_change_under_a_live_status() {
         let context = Context::new();
         let status = context.status("working").start();
-        let handle = OwnedFd::from(std::fs::File::open("/dev/null").unwrap());
+        let handle = OwnedFd::from(fs::File::open("/dev/null").unwrap());
         let error = context.with_terminal(handle).unwrap_err();
-        assert_eq!(error.kind(), crate::error::ErrorKind::Output);
+        assert_eq!(error.kind(), ErrorKind::Output);
         status.finish().unwrap();
     }
 
@@ -996,30 +1086,30 @@ mod tests {
     fn cleanup_reports_a_failed_notice_queued_on_a_replaced_coordinator() {
         struct BrokenPipe;
 
-        impl std::io::Write for BrokenPipe {
-            fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        impl io::Write for BrokenPipe {
+            fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+                Err(IoError::from(IoErrorKind::BrokenPipe))
             }
 
-            fn flush(&mut self) -> std::io::Result<()> {
+            fn flush(&mut self) -> io::Result<()> {
                 Ok(())
             }
         }
 
         let context = Context::new()
-            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(false, false, false))
+            .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
             .unwrap()
-            .with_interaction_mode(crate::terminal::InteractionMode::Force);
-        let result = execute(context, (), |context, ()| {
-            let context = context.with_transient_writer(BrokenPipe)?;
-            context.with_terminal_application(|_| context.diagnostic().notice("queued"))
+            .with_interaction_mode(InteractionMode::Force);
+        let result = execute(context, (), |scoped, ()| {
+            let piped = scoped.with_transient_writer(BrokenPipe)?;
+            piped.with_terminal_application(|_| piped.diagnostic().notice("queued"))
         });
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 
     #[cfg(any(feature = "structured", feature = "render"))]
     #[derive(Clone, Default)]
-    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    struct Capture(Arc<Mutex<Vec<u8>>>);
 
     #[cfg(any(feature = "structured", feature = "render"))]
     impl Capture {
@@ -1029,36 +1119,36 @@ mod tests {
     }
 
     #[cfg(any(feature = "structured", feature = "render"))]
-    impl std::io::Write for Capture {
-        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buffer);
-            Ok(buffer.len())
+    impl io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().map_err(|_poison| io::Error::other("sink lock poisoned"))?.extend_from_slice(buf);
+            Ok(buf.len())
         }
 
-        fn flush(&mut self) -> std::io::Result<()> {
+        fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
     }
 
     #[test]
     fn context_carries_output_policy() {
-        let context = Context::new().with_output_format(crate::output::Format::Json);
-        assert_eq!(context.output_format(), crate::output::Format::Json);
-        assert_eq!(context.output().format(), crate::output::Format::Json);
+        let context = Context::new().with_output_format(Format::Json);
+        assert_eq!(context.output_format(), Format::Json);
+        assert_eq!(context.output().format(), Format::Json);
     }
 
     #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
     #[test]
     fn terminal_application_uses_configured_output_and_excludes_nested_owners() {
-        use std::io::Write as _;
+        use io::Write as _;
 
         let capture = Capture::default();
         let context = Context::new()
-            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+            .with_terminal_capabilities(TerminalCapabilities::new(
                 false, false, false,
             ))
             .unwrap()
-            .with_interaction_mode(crate::terminal::InteractionMode::Force)
+            .with_interaction_mode(InteractionMode::Force)
             .with_transient_writer(capture.clone())
             .unwrap();
 
@@ -1068,7 +1158,7 @@ mod tests {
                 let nested = context.with_terminal_application(|_| Ok(()));
                 assert_eq!(
                     nested.unwrap_err().kind(),
-                    crate::error::ErrorKind::InteractionBusy,
+                    ErrorKind::InteractionBusy,
                 );
                 Ok(())
             })
@@ -1079,40 +1169,42 @@ mod tests {
     #[cfg(feature = "render")]
     #[test]
     fn auto_status_off_a_terminal_prints_plain_lines_and_silent_stays_explicit() {
-        let run = |mode: Option<crate::terminal::StatusMode>, fail: bool| {
+        let run = |requested: Option<StatusMode>, fail: bool| {
             let capture = Capture::default();
             let mut context = Context::new()
-                .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+                .with_terminal_capabilities(TerminalCapabilities::new(
                     false, false, false,
                 ))
                 .unwrap()
                 .with_transient_writer(capture.clone())
                 .unwrap();
-            if let Some(mode) = mode {
+            if let Some(mode) = requested {
                 context.set_status_mode(mode).unwrap();
             }
-            let _ = context
-                .status("working")
-                .final_message("done")
-                .failure_message("failed")
-                .during(|| if fail { Err(crate::Error::message("x")) } else { Ok(()) });
+            drop(
+                context
+                    .status("working")
+                    .final_message("done")
+                    .failure_message("failed")
+                    .during(|| if fail { Err(crate::Error::message("x")) } else { Ok(()) }),
+            );
             capture.text()
         };
         assert_eq!(run(None, false), "done\n");
         assert_eq!(run(None, true), "failed\n");
-        assert_eq!(run(Some(crate::terminal::StatusMode::Silent), false), "");
-        assert_eq!(run(Some(crate::terminal::StatusMode::Silent), true), "");
+        assert_eq!(run(Some(StatusMode::Silent), false), "");
+        assert_eq!(run(Some(StatusMode::Silent), true), "");
     }
 
     #[cfg(all(feature = "interactive", feature = "render"))]
     #[test]
     fn terminal_application_releases_exclusivity_after_an_error() {
         let context = Context::new()
-            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+            .with_terminal_capabilities(TerminalCapabilities::new(
                 false, false, false,
             ))
             .unwrap()
-            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+            .with_interaction_mode(InteractionMode::Force);
         let failed = context.with_terminal_application::<()>(|_| Err("failed".into()));
         assert!(failed.is_err());
         context.with_terminal_application(|_| Ok(())).unwrap();
@@ -1126,11 +1218,11 @@ mod tests {
         let (input, _peer) = UnixStream::pair().unwrap();
         let mut output = Vec::new();
         let context = Context::new()
-            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+            .with_terminal_capabilities(TerminalCapabilities::new(
                 false, false, false,
             ))
             .unwrap()
-            .with_interaction_mode(crate::terminal::InteractionMode::Force);
+            .with_interaction_mode(InteractionMode::Force);
 
         context
             .with_terminal_application_on(input, &mut output, |terminal| {
@@ -1146,10 +1238,10 @@ mod tests {
     fn run_with_supplies_the_command_and_context() {
         let result = run_with(42, |context, command| {
             assert_eq!(command, 42);
-            assert_eq!(context.output_format(), crate::output::Format::Text);
+            assert_eq!(context.output_format(), Format::Text);
             Ok(())
         });
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[cfg(feature = "structured")]
@@ -1157,8 +1249,8 @@ mod tests {
     fn lifecycle_commits_a_finite_result_after_success() {
         let capture = Capture::default();
         let context = Context::new().with_output_writer(capture.clone());
-        execute(context, (), |context, ()| {
-            context
+        execute(context, (), |scoped, ()| {
+            scoped
                 .output()
                 .result(&42)
                 .text(|value| format!("answer: {value}"))
@@ -1173,8 +1265,8 @@ mod tests {
     fn lifecycle_discards_a_finite_result_after_failure() {
         let capture = Capture::default();
         let context = Context::new().with_output_writer(capture.clone());
-        let error = execute(context, (), |context, ()| {
-            context.output().result(&42).text(|value| value).emit()?;
+        let error = execute(context, (), |scoped, ()| {
+            scoped.output().result(&42).text(|value| value).emit()?;
             Err(crate::Error::message("later failure"))
         })
         .unwrap_err();
@@ -1222,7 +1314,7 @@ mod tests {
         fn from_matches(
             _: &'static pound::CommandSpec,
             _: &pound::Matches<'_>,
-        ) -> std::result::Result<Self, pound::Error> {
+        ) -> result::Result<Self, pound::Error> {
             Ok(Self)
         }
 
@@ -1230,7 +1322,7 @@ mod tests {
             &mut self,
             _: &'static pound::CommandSpec,
             _: &pound::Matches<'_>,
-        ) -> std::result::Result<(), pound::Error> {
+        ) -> result::Result<(), pound::Error> {
             Ok(())
         }
     }
@@ -1285,8 +1377,8 @@ mod tests {
     fn lifecycle_reports_cancellation_with_signal_and_cleanup_codes() {
         let cancelled = complete(Ok(()), |_, ()| {
             Err(crate::Error::with_source(
-                crate::error::ErrorKind::Cancelled,
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"),
+                ErrorKind::Cancelled,
+                IoError::new(IoErrorKind::Interrupted, "cancelled"),
             ))
         });
         assert_eq!(cancelled.code, 130);
@@ -1294,8 +1386,8 @@ mod tests {
 
         let interrupted = complete(Ok(()), |_, ()| {
             let mut error = crate::Error::with_source(
-                crate::error::ErrorKind::Cancelled,
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "interrupted by signal SIGTERM"),
+                ErrorKind::Cancelled,
+                IoError::new(IoErrorKind::Interrupted, "interrupted by signal SIGTERM"),
             );
             error.signal = Some(15);
             Err(error)
@@ -1305,8 +1397,8 @@ mod tests {
 
         let cancelled_with_related = complete(Ok(()), |_, ()| {
             Err(crate::Error::with_source(
-                crate::error::ErrorKind::Cancelled,
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"),
+                ErrorKind::Cancelled,
+                IoError::new(IoErrorKind::Interrupted, "cancelled"),
             )
             .with_related(crate::Error::message("cleanup failed")))
         });
@@ -1316,8 +1408,8 @@ mod tests {
 
         let interrupted_with_cleanup = complete(Ok(()), |_, ()| {
             let mut error = crate::Error::with_source(
-                crate::error::ErrorKind::Cancelled,
-                std::io::Error::new(std::io::ErrorKind::Interrupted, "interrupted by signal SIGTERM"),
+                ErrorKind::Cancelled,
+                IoError::new(IoErrorKind::Interrupted, "interrupted by signal SIGTERM"),
             );
             error.signal = Some(15);
             Err(error.with_related(crate::Error::message("terminal cleanup failed, RawMode: EIO")))
@@ -1330,9 +1422,9 @@ mod tests {
     #[cfg(feature = "interactive")]
     #[test]
     fn context_injects_scripted_interaction_into_typed_prompts() {
-        let interaction = bang::advanced::scripted_interaction([[
-            bang::advanced::Event::key(bang::advanced::Key::Down),
-            bang::advanced::Event::key(bang::advanced::Key::Enter),
+        let interaction = scripted_interaction([[
+            Event::key(Key::Down),
+            Event::key(Key::Enter),
         ]]);
         let context = Context::new().with_interaction(interaction);
         assert!(context.interaction_available());
@@ -1351,7 +1443,7 @@ mod tests {
     #[test]
     fn auto_policy_rejects_interaction_when_capabilities_are_absent() {
         let context = Context::new()
-            .with_terminal_capabilities(crate::terminal::TerminalCapabilities::new(
+            .with_terminal_capabilities(TerminalCapabilities::new(
                 false, false, false,
             ))
             .unwrap();

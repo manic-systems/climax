@@ -119,6 +119,10 @@ where
     ///
     /// When the rollback fails as well, the returned error wraps
     /// [`CleanupFailures`] holding the original failure first.
+    ///
+    /// # Errors
+    ///
+    /// Fails when an escape sequence cannot be written to the output.
     pub fn enter(output: &'a mut W, options: ScreenOptions) -> io::Result<Self> {
         let mut guard = Self {
             output,
@@ -146,6 +150,10 @@ where
     }
 
     /// Undo every entered mode now and report any failure, which drop cannot.
+    ///
+    /// # Errors
+    ///
+    /// Fails when an undo sequence cannot be written to the output.
     pub fn leave(mut self) -> Result<(), CleanupFailures> {
         self.leave_active()
     }
@@ -366,14 +374,14 @@ mod tests {
     }
 
     impl Write for FailingWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             let attempt = self.attempts;
             self.attempts += 1;
             if attempt == self.fail_at {
                 return Err(io::Error::other("injected write failure"));
             }
-            self.bytes.extend_from_slice(bytes);
-            Ok(bytes.len())
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -393,19 +401,19 @@ mod tests {
     }
 
     impl Write for PartialWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             let write = self.writes;
             self.writes += 1;
             if write == 0 {
-                let partial = bytes.len().min(3);
-                self.bytes.extend_from_slice(&bytes[..partial]);
+                let partial = buf.len().min(3);
+                self.bytes.extend_from_slice(&buf[..partial]);
                 return Ok(partial);
             }
             if write == 1 {
                 return Err(io::Error::other("injected error after partial write"));
             }
-            self.bytes.extend_from_slice(bytes);
-            Ok(bytes.len())
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {

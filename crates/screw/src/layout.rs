@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::fmt;
+use core::fmt;
 
 use crate::{InputAnchor, Line, LocalWidgetRef, Stack, WidgetRef, local_widget, widget};
 
@@ -14,8 +14,8 @@ pub struct LayoutBuilder<H = WidgetRef> {
 }
 
 impl<H> fmt::Debug for LayoutBuilder<H> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f
             .debug_struct("LayoutBuilder")
             .field("rows", &self.rows.len())
             .finish()
@@ -106,7 +106,8 @@ pub fn local_layout<'a>() -> LayoutBuilder<LocalWidgetRef<'a>> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
 
     use super::*;
     use crate::{
@@ -166,7 +167,7 @@ mod tests {
     fn local_builder_composes_rc_refcell_widgets() {
         let value = Rc::new(RefCell::new("before".to_owned()));
         let app = local_layout()
-            .line(vec![local_widget(LocalText(value.clone()))])
+            .line(vec![local_widget(LocalText(Rc::clone(&value)))])
             .widget(local_widget("tail"))
             .build();
 

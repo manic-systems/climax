@@ -5,15 +5,17 @@
 //! constructors, since neither `ErrorKind` nor the fields of `Error` are
 //! constructible from outside the crate.
 
+use bang::advanced::interaction_from_runner;
+
 #[test]
 fn a_custom_runner_can_report_cancelled_and_input_ended() {
-    let cancelled = bang::advanced::interaction_from_runner(|_widget| Err(bang::Error::cancelled()));
+    let cancelled = interaction_from_runner(|_widget| Err(bang::Error::cancelled()));
     assert_eq!(
         bang::text("name").interaction(cancelled).interact().unwrap(),
         bang::PromptOutcome::Leave
     );
 
-    let input_ended = bang::advanced::interaction_from_runner(|_widget| Err(bang::Error::input_ended()));
+    let input_ended = interaction_from_runner(|_widget| Err(bang::Error::input_ended()));
     assert_eq!(
         bang::text("name")
             .interaction(input_ended)

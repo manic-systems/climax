@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::ops::Range;
+use core::ops::Range;
 
 use screw::{
     LocalWidgetRef, RenderCtx, Role, Span, Spans, Stack, Surface, VerticalSize, local_widget,
@@ -39,15 +39,15 @@ impl SearchSelect {
     where
         T: Into<SelectItem>,
     {
-        let id = id.into();
-        let items: Vec<_> = items.into_iter().map(Into::into).collect();
-        let matches = (0..items.len()).collect();
+        let owned_id = id.into();
+        let collected: Vec<_> = items.into_iter().map(Into::into).collect();
+        let matches = (0..collected.len()).collect();
         Self {
-            input: TextInput::new(WidgetId::owned(format!("{}/query", id.as_str())))
+            input: TextInput::new(WidgetId::owned(format!("{}/query", owned_id.as_str())))
                 .with_prompt("search: "),
             header: Vec::new(),
-            id,
-            items,
+            id: owned_id,
+            items: collected,
             matches,
             selected: 0,
             top: 0,
@@ -301,7 +301,16 @@ impl Widget for SearchSelect {
                 Key::End if only_control(key) => self.move_to(self.matches.len().saturating_sub(1)),
                 Key::Enter => self.submit(),
                 Key::Esc => Reaction::Cancel,
-                _ => self.handle_input(event, cx),
+                Key::Char(_)
+                | Key::Tab
+                | Key::Backtab
+                | Key::Backspace
+                | Key::Delete
+                | Key::Left
+                | Key::Right
+                | Key::Home
+                | Key::End
+                | Key::Function(_) => self.handle_input(event, cx),
             },
             Event::Paste(_) => self.handle_input(event, cx),
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
@@ -368,8 +377,8 @@ mod tests {
     use super::*;
     use crate::{KeyEvent, Modifiers};
 
-    fn ctrl(c: char) -> Event {
-        Event::Key(KeyEvent::with_modifiers(Key::Char(c), Modifiers::CONTROL))
+    fn ctrl(ch: char) -> Event {
+        Event::Key(KeyEvent::with_modifiers(Key::Char(ch), Modifiers::CONTROL))
     }
 
     #[test]

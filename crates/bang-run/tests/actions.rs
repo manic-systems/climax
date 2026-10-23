@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![cfg(test)]
+
 use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {

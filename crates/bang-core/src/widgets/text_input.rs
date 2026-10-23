@@ -123,12 +123,12 @@ impl TextInput {
     }
 
     fn insert_str(&mut self, value: &str) -> Reaction {
-        let value: String = value.chars().filter(|value| !value.is_control()).collect();
-        if value.is_empty() {
+        let cleaned: String = value.chars().filter(|ch| !ch.is_control()).collect();
+        if cleaned.is_empty() {
             return Reaction::Ignored;
         }
-        self.value.insert_str(self.cursor, &value);
-        self.cursor += value.len();
+        self.value.insert_str(self.cursor, &cleaned);
+        self.cursor += cleaned.len();
         self.snap_cursor();
         self.error = None;
         Reaction::Changed
@@ -264,7 +264,14 @@ impl Widget for TextInput {
                 Key::End => self.move_end(),
                 Key::Enter => self.submit(),
                 Key::Esc => Reaction::Cancel,
-                _ => Reaction::Ignored,
+                Key::Char(_)
+                | Key::Tab
+                | Key::Backtab
+                | Key::Up
+                | Key::Down
+                | Key::PageUp
+                | Key::PageDown
+                | Key::Function(_) => Reaction::Ignored,
             },
             Event::Paste(value) => self.insert_str(&value),
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
@@ -350,21 +357,21 @@ mod tests {
         assert_eq!(widget.value(), "\u{1f469}\u{200d}\u{1f4bb}");
         assert_eq!(widget.cursor_byte_index(), widget.value().len());
 
-        let mut widget = TextInput::new("t").with_value("\u{1f469}\u{1f4bb}");
-        widget.handle(left.clone(), &mut cx);
-        widget.handle(Event::Paste("\u{200d}".to_owned()), &mut cx);
-        assert_eq!(widget.cursor_byte_index(), widget.value().len());
+        let mut pasted = TextInput::new("t").with_value("\u{1f469}\u{1f4bb}");
+        pasted.handle(left.clone(), &mut cx);
+        pasted.handle(Event::Paste("\u{200d}".to_owned()), &mut cx);
+        assert_eq!(pasted.cursor_byte_index(), pasted.value().len());
 
-        let mut widget = TextInput::new("t").with_value("ex");
-        widget.handle(left, &mut cx);
-        type_str(&mut widget, "\u{301}");
-        assert_eq!(widget.cursor_byte_index(), "e\u{301}".len());
+        let mut combining = TextInput::new("t").with_value("ex");
+        combining.handle(left, &mut cx);
+        type_str(&mut combining, "\u{301}");
+        assert_eq!(combining.cursor_byte_index(), "e\u{301}".len());
 
-        let mut widget = TextInput::new("t").with_value("\u{301}");
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Home)), &mut cx);
-        type_str(&mut widget, "e");
-        assert_eq!(widget.value(), "e\u{301}");
-        assert_eq!(widget.cursor_byte_index(), widget.value().len());
+        let mut leading = TextInput::new("t").with_value("\u{301}");
+        leading.handle(Event::Key(crate::KeyEvent::new(Key::Home)), &mut cx);
+        type_str(&mut leading, "e");
+        assert_eq!(leading.value(), "e\u{301}");
+        assert_eq!(leading.cursor_byte_index(), leading.value().len());
     }
 
     #[test]
@@ -379,12 +386,12 @@ mod tests {
         assert_eq!(widget.value(), merged);
         assert_eq!(widget.cursor_byte_index(), merged.len());
 
-        let mut widget = TextInput::new("t").with_value(flags);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Home)), &mut cx);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Right)), &mut cx);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Delete)), &mut cx);
-        assert_eq!(widget.value(), merged);
-        assert_eq!(widget.cursor_byte_index(), merged.len());
+        let mut forward = TextInput::new("t").with_value(flags);
+        forward.handle(Event::Key(crate::KeyEvent::new(Key::Home)), &mut cx);
+        forward.handle(Event::Key(crate::KeyEvent::new(Key::Right)), &mut cx);
+        forward.handle(Event::Key(crate::KeyEvent::new(Key::Delete)), &mut cx);
+        assert_eq!(forward.value(), merged);
+        assert_eq!(forward.cursor_byte_index(), merged.len());
     }
 
     #[test]

@@ -36,8 +36,10 @@
     ),
     doc = include_str!("../README.md")
 )]
-#![doc = include_str!("../docs/facade.md")]
+#![cfg_attr(doc, doc = include_str!("../docs/facade.md"))]
 #![warn(missing_docs)]
+
+extern crate alloc;
 
 mod app;
 /// The application error type and its categories.

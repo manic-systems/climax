@@ -4,8 +4,11 @@ use std::io::{
     self,
     Read,
 };
-use std::os::fd::{AsFd, OwnedFd};
-use std::time::{Duration, Instant};
+use core::time::Duration;
+use std::{
+    os::fd::{AsFd, OwnedFd},
+    time::Instant,
+};
 
 use bang_core::{
     Event, Key, Modifiers, Session, SessionReaction, SessionStatus, Value, Widget,
@@ -214,9 +217,19 @@ fn outcome_from_status(status: &SessionStatus) -> RunOutcome {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use alloc::sync::Arc;
+    use std::{
+        fs::File,
+        io::Cursor,
+        sync::{Mutex, mpsc},
+        thread,
+    };
 
     use bang_core::{Reaction, WidgetId, widgets::TextInput};
+    use bang_terminal::{
+        SignalGuard,
+        testing::{SIGNAL_LOCK, pty},
+    };
     use screw::{RenderCtx, Surface};
 
     use super::*;
@@ -253,7 +266,7 @@ mod tests {
             columns: 80,
             rows: 24,
         };
-        let (_master, slave) = bang_terminal::testing::pty(80, 24).unwrap();
+        let (_master, slave) = pty(80, 24).unwrap();
         let mut events = TerminalEvents::blocking(Cursor::new(b"ab\r")).resize_from(slave);
         let mut renderer = FakeRenderer::default();
 
@@ -302,8 +315,8 @@ mod tests {
             RunOutcome::Cancelled,
         );
 
-        let _serial = bang_terminal::testing::SIGNAL_LOCK.lock().unwrap();
-        let guard = bang_terminal::SignalGuard::install_terminal_handlers().unwrap();
+        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let guard = SignalGuard::install_terminal_handlers().unwrap();
         let mut signal_events =
             TerminalEvents::blocking(Cursor::new(b"ignored")).signals(guard.poller());
         // SAFETY: raising a signal the guard has a handler for.
@@ -344,7 +357,12 @@ mod tests {
                         }
                         Reaction::Changed
                     },
-                    _ => Reaction::Ignored,
+                    Event::Key(_)
+                    | Event::Paste(_)
+                    | Event::UnknownEscape(_)
+                    | Event::Resize { .. }
+                    | Event::Tick
+                    | _ => Reaction::Ignored,
                 }
             }
         }
@@ -360,7 +378,7 @@ mod tests {
     #[test]
     fn reserved_keys_reach_the_widget_before_the_runner_acts_on_them() {
         #[derive(Clone, Default)]
-        struct SeenKeys(std::sync::Arc<std::sync::Mutex<Vec<char>>>);
+        struct SeenKeys(Arc<Mutex<Vec<char>>>);
 
         impl screw::Widget for SeenKeys {
             fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
@@ -388,7 +406,7 @@ mod tests {
             (4_u8, 'd', RunOutcome::InputEnded),
         ] {
             let widget = SeenKeys::default();
-            let seen = widget.0.clone();
+            let seen = Arc::clone(&widget.0);
             let mut events = TerminalEvents::blocking(Cursor::new([byte]));
 
             assert_eq!(
@@ -417,19 +435,21 @@ mod tests {
             fn handle(&mut self, event: Event, _cx: &mut bang_core::Context) -> Reaction {
                 match event {
                     Event::Resize { .. } => Reaction::Submit(Value::from("sized")),
-                    _ => Reaction::Ignored,
+                    Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Tick | _ => {
+                        Reaction::Ignored
+                    },
                 }
             }
         }
 
-        let (master, slave) = bang_terminal::testing::pty(80, 24).unwrap();
-        let input = std::fs::File::from(slave.try_clone().unwrap());
-        let (done, outcome) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let (master, slave) = pty(80, 24).unwrap();
+        let input = File::from(slave.try_clone().unwrap());
+        let (done, outcome) = mpsc::channel();
+        thread::spawn(move || {
             let options = SessionOptions::new().resize_from(slave);
-            let outcome =
+            let result =
                 drive_tty_session(SubmitsOnResize, input, &mut FakeRenderer::default(), options);
-            let _ = done.send(outcome.unwrap());
+            drop(done.send(result.unwrap()));
         });
 
         assert_eq!(

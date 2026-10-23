@@ -2,11 +2,17 @@
 
 //! command-line bridge
 
+extern crate alloc;
+
 mod config;
 
-use std::fmt;
+use core::{error::Error as StdError, fmt};
+use std::fs;
 
-use bang::terminal::Decoder;
+use bang::{
+    advanced::{LiveSessionError, interact_widget, replay_events},
+    terminal::Decoder,
+};
 use bang_core::{
     ActionBinding,
     ActionLayer,
@@ -66,6 +72,15 @@ impl CliError {
             Self::Failed(_) => 1,
         }
     }
+
+    /// teardown failures that accompanied an interruption
+    #[must_use]
+    pub fn cleanup_failures(&self) -> &[String] {
+        match self {
+            Self::Interrupted(_, failures) => failures,
+            Self::Usage(_) | Self::Cancelled | Self::Failed(_) => &[],
+        }
+    }
 }
 
 impl From<bang::Error> for CliError {
@@ -75,47 +90,41 @@ impl From<bang::Error> for CliError {
             bang::ErrorKind::Interrupted => error.signal().map_or_else(
                 || Self::Failed(error.to_string()),
                 |signal| {
-                    let source = std::error::Error::source(&error);
+                    let source = StdError::source(&error);
                     Self::Interrupted(signal.as_raw(), cleanup_failures(source))
                 },
             ),
             bang::ErrorKind::InvalidConfiguration => Self::Usage(error.to_string()),
-            _ => Self::Failed(error.to_string()),
+            bang::ErrorKind::InputEnded
+            | bang::ErrorKind::InteractionBusy
+            | bang::ErrorKind::InteractionUnavailable
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => Self::Failed(error.to_string()),
         }
     }
 }
 
-fn cleanup_failures(source: Option<&(dyn std::error::Error + 'static)>) -> Vec<String> {
+fn cleanup_failures(source: Option<&(dyn StdError + 'static)>) -> Vec<String> {
     source
-        .and_then(|source| source.downcast_ref::<bang::advanced::LiveSessionError>())
-        .map_or(&[][..], bang::advanced::LiveSessionError::cleanup_failures)
+        .and_then(|inner| inner.downcast_ref::<LiveSessionError>())
+        .map_or(&[][..], LiveSessionError::cleanup_failures)
         .iter()
         .map(|failure| format!("terminal cleanup failed, {failure}"))
         .collect()
 }
 
-impl CliError {
-    /// teardown failures that accompanied an interruption
-    #[must_use]
-    pub fn cleanup_failures(&self) -> &[String] {
-        match self {
-            Self::Interrupted(_, failures) => failures,
-            _ => &[],
-        }
-    }
-}
-
 impl fmt::Display for CliError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Usage(message) | Self::Failed(message) => formatter.write_str(message),
-            Self::Cancelled => formatter.write_str("cancelled"),
-            Self::Interrupted(signal, _) => write!(formatter, "interrupted by signal {signal}"),
+            Self::Usage(message) | Self::Failed(message) => f.write_str(message),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::Interrupted(signal, _) => write!(f, "interrupted by signal {signal}"),
         }
     }
 }
 
-impl std::error::Error for CliError {}
+impl StdError for CliError {}
 
 /// Run a single bang widget, or a widget config file, as a terminal prompt.
 #[derive(Debug, Parse)]
@@ -231,6 +240,12 @@ impl From<OutputFormat> for CoreOutputFormat {
     }
 }
 
+/// Run the parsed command line and return the text to print.
+///
+/// # Errors
+///
+/// Fails with a [`CliError`] when the invocation or config is invalid, the prompt is
+/// cancelled or interrupted, or the terminal or config file fails.
 pub fn run(cli: Cli) -> Result<String, CliError> {
     let output = cli.output;
     let result = match (cli.config, cli.command) {
@@ -238,7 +253,7 @@ pub fn run(cli: Cli) -> Result<String, CliError> {
             return Err(CliError::Usage("use either --config or a widget subcommand, not both".to_owned()));
         },
         (Some(config), None) => {
-            let source = std::fs::read_to_string(&config).map_err(|error| {
+            let source = fs::read_to_string(&config).map_err(|error| {
                 CliError::Failed(format!("failed to read config {config}: {error}"))
             })?;
             run_config(WidgetConfig::parse(&source).map_err(CliError::Usage)?)
@@ -602,14 +617,14 @@ fn run_widget(
     input_bytes: Option<String>,
     actions: Vec<ActionBinding>,
 ) -> Result<Value, CliError> {
-    if let Some(input_bytes) = input_bytes {
-        let widget = ActionLayer::new(widget).with_actions(actions);
-        let bytes = decode_escaped(&input_bytes).map_err(CliError::Usage)?;
+    if let Some(escaped) = input_bytes {
+        let layered = ActionLayer::new(widget).with_actions(actions);
+        let bytes = decode_escaped(&escaped).map_err(CliError::Usage)?;
         let mut decoder = Decoder::new();
         let events = decoder.feed(&bytes).into_iter().chain(decoder.flush());
-        bang::advanced::replay_events(widget, events).map_err(CliError::from)
+        replay_events(layered, events).map_err(CliError::from)
     } else {
-        bang::advanced::interact_widget(widget, actions).map_err(CliError::from)
+        interact_widget(widget, actions).map_err(CliError::from)
     }
 }
 
@@ -654,13 +669,14 @@ fn push_utf8(out: &mut Vec<u8>, value: char) {
 }
 
 fn hex_byte(high: char, low: char) -> Result<u8, String> {
-    let high = high
+    let high_nibble = high
         .to_digit(16)
         .ok_or_else(|| format!("invalid hex digit '{high}' in --input-bytes"))?;
-    let low = low
+    let low_nibble = low
         .to_digit(16)
         .ok_or_else(|| format!("invalid hex digit '{low}' in --input-bytes"))?;
-    u8::try_from((high << 4) | low).map_err(|_| "hex byte out of range".to_owned())
+    u8::try_from((high_nibble << 4) | low_nibble)
+        .map_err(|_overflow| "hex byte out of range".to_owned())
 }
 
 #[cfg(test)]
@@ -670,6 +686,8 @@ mod tests {
         terminal::{CleanupFailure, CleanupFailures, CleanupStage, Signal},
     };
 
+    use std::io;
+
     use super::{CliError, cleanup_failures};
 
     #[test]
@@ -678,7 +696,7 @@ mod tests {
             primary: Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
             failures: CleanupFailures::new(vec![CleanupFailure::new(
                 CleanupStage::RawMode,
-                std::io::Error::from_raw_os_error(5),
+                io::Error::from_raw_os_error(5),
             )]),
         };
         let failures = cleanup_failures(Some(&session));

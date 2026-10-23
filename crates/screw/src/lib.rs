@@ -135,6 +135,9 @@
 //! [`examples`]: https://github.com/manic-systems/climax/tree/main/crates/screw/examples
 
 #![warn(missing_docs)]
+#![expect(clippy::non_ascii_literal, reason = "terminal glyphs read better as themselves than as escapes")]
+
+extern crate alloc;
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
