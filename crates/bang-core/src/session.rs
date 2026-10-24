@@ -57,7 +57,7 @@ impl Session {
         let redraws = match event {
             Event::Resize { .. } => true,
             Event::Tick => !matches!(self.root.tick_interest(), TickInterest::Never),
-            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) => false,
+            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Row(_) => false,
         };
         let mut context = Context::new();
         let handled = self.root.handle(event, &mut context);
