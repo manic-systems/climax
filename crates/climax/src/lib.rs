@@ -20,9 +20,6 @@
 //! for the same reason.
 
 #![cfg_attr(
-
-extern crate alloc;
-
     all(
         feature = "derive",
         feature = "interactive",
@@ -84,6 +81,7 @@ pub use bang::{
     TextConfig,
     TextPrompt,
 };
+#[cfg(feature = "complete")] pub use caress;
 #[cfg(feature = "derive")]
 pub use climax_derive::{
     Parse,

@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 #![cfg(all(feature = "interactive", feature = "render"))]
-#![cfg(test)]
-#![expect(
-    clippy::non_ascii_literal,
-    reason = "terminal glyphs read better as themselves than as escapes"
-)]
 
-use core::{
-    ptr,
-    time::Duration,
-};
 use std::{
     fs::File,
     io::{
@@ -22,12 +13,11 @@ use std::{
         FromRawFd as _,
         RawFd,
     },
-    sync::{
-        Mutex,
-        PoisonError,
-    },
     thread,
-    time::Instant,
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use climax::{
@@ -118,9 +108,7 @@ fn set_nonblocking(file: &File) {
     // SAFETY: fd is owned by file for the duration of this call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     // SAFETY: fd and flags are valid.
-    unsafe {
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-    }
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
 }
 
 fn set_blocking(file: &File) {
@@ -129,31 +117,26 @@ fn set_blocking(file: &File) {
     // SAFETY: fd is owned by file for the duration of this call.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     // SAFETY: fd and flags are valid.
-    unsafe {
-        libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
-    }
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK) };
 }
 
 fn open_pty() -> (File, File) {
-    let mut master_fd: RawFd = -1;
-    let mut slave_fd: RawFd = -1;
+    let mut master: RawFd = -1;
+    let mut slave: RawFd = -1;
     // SAFETY: both fd pointers are valid for this call, and null
     // termios/winsize ask openpty for its own defaults.
     let result = unsafe {
         libc::openpty(
-            &raw mut master_fd,
-            &raw mut slave_fd,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
+            &raw mut master,
+            &raw mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
         )
     };
     assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned a newly owned master descriptor.
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: successful openpty returned a newly owned slave descriptor.
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    (master, slave)
+    // SAFETY: successful openpty returned two newly owned file descriptors.
+    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) }
 }
 
 /// redirects process stderr to a pipe for a test, to check that an operation
@@ -170,23 +153,21 @@ impl StderrCapture {
         assert!(saved >= 0, "dup stderr: {}", io::Error::last_os_error());
         let mut pipe = [-1_i32; 2];
         // SAFETY: pipe is a valid two-element buffer.
-        let created = unsafe { libc::pipe(pipe.as_mut_ptr()) };
-        assert_eq!(created, 0, "create pipe: {}", io::Error::last_os_error());
+        let result = unsafe { libc::pipe(pipe.as_mut_ptr()) };
+        assert_eq!(result, 0, "create pipe: {}", io::Error::last_os_error());
         let [read_fd, write_fd] = pipe;
         // SAFETY: write_fd is a valid, open fd; STDERR names the fd being
         // replaced.
-        let redirected = unsafe { libc::dup2(write_fd, STDERR) };
+        let result = unsafe { libc::dup2(write_fd, STDERR) };
         assert_eq!(
-            redirected,
+            result,
             STDERR,
             "redirect stderr: {}",
             io::Error::last_os_error()
         );
         // SAFETY: write_fd was just duplicated onto STDERR and its own copy is
         // unused.
-        unsafe {
-            libc::close(write_fd);
-        }
+        unsafe { libc::close(write_fd) };
         // SAFETY: read_fd was just returned by pipe above as a live, owned
         // descriptor.
         let read = unsafe { File::from_raw_fd(read_fd) };
@@ -198,13 +179,9 @@ impl StderrCapture {
         // SAFETY: self.saved is a live descriptor duplicated from stderr in
         // `install`, and dup2 closes the pipe's write end on STDERR
         // before replacing it.
-        unsafe {
-            libc::dup2(self.saved, STDERR);
-        }
+        unsafe { libc::dup2(self.saved, STDERR) };
         // SAFETY: self.saved is no longer needed once restored.
-        unsafe {
-            libc::close(self.saved);
-        }
+        unsafe { libc::close(self.saved) };
         set_nonblocking(&self.read);
         let mut buffer = Vec::new();
         let mut chunk = [0_u8; 4096];
