@@ -20,6 +20,23 @@ use toml::{
 /// screw-pty or a pound-derive cycle
 const PATH_ONLY_DEV_EDGES: &[(&str, &str)] = &[("pound-derive", "pound"), ("screw", "screw-pty")];
 
+/// crates released in lockstep with `climax`, pinned to one exact version,
+/// while `pound` and `caress` release on their own and keep caret requirements
+const CLIMAX_FAMILY: &[&str] = &[
+    "bang",
+    "bang-core",
+    "bang-run",
+    "bang-terminal",
+    "climax",
+    "climax-derive",
+    "screw",
+    "screw-pty",
+];
+
+/// pound's derive output calls its hidden internals, so the impl version
+/// follows pound's pin and not climax's
+const CARET_EDGES: &[(&str, &str)] = &[("climax-derive", "pound-derive-impl")];
+
 const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
 
 fn workspace_root() -> PathBuf {
@@ -64,7 +81,10 @@ fn workspace_dependencies_on_workspace_crates_are_exact_pins() {
         .expect("workspace dependencies");
 
     let mut failures = Vec::new();
-    for (name, _) in &crates {
+    for (name, _) in crates
+        .iter()
+        .filter(|(name, _)| CLIMAX_FAMILY.contains(&name.as_str()))
+    {
         let Some(entry) = shared.get(name) else {
             continue;
         };
@@ -107,6 +127,17 @@ fn workspace_dependencies_on_workspace_crates_are_exact_pins() {
                     }
                     continue;
                 }
+                if CARET_EDGES.contains(&(package.as_str(), name.as_str())) {
+                    let caret = entry
+                        .get("version")
+                        .and_then(Value::as_str)
+                        .is_some_and(|version| !version.starts_with('='))
+                        && entry.get("workspace").is_none();
+                    if !caret {
+                        failures.push(format!("{package} must require {name} at a caret range"));
+                    }
+                    continue;
+                }
                 let inherited = entry.get("workspace").and_then(Value::as_bool) == Some(true);
                 if !inherited {
                     failures.push(format!(
@@ -119,7 +150,7 @@ fn workspace_dependencies_on_workspace_crates_are_exact_pins() {
 
     assert!(
         failures.is_empty(),
-        "workspace crate dependencies are not exactly pinned:\n{}",
+        "climax family dependencies are not exactly pinned:\n{}",
         failures.join("\n"),
     );
 }
