@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 extern crate alloc;
 
 use alloc::sync::Arc;
