@@ -65,7 +65,7 @@ impl BangView {
 
 impl Widget for BangView {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        render_into_with_theme(&self.view, ctx.theme, out);
+        render_into_with_theme(&self.view, ctx.theme(), out);
     }
 }
 
@@ -77,7 +77,7 @@ impl<W> RetainedRenderer<W>
 where
     W: Write,
 {
-    pub const fn new(writer: W) -> Self {
+    pub fn new(writer: W) -> Self {
         Self {
             renderer: Renderer::new(writer),
         }

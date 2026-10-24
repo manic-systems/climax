@@ -1,38 +1,26 @@
-#[cfg(unix)] use core::mem::MaybeUninit;
-use std::io::{
-    self,
-    IsTerminal as _,
-};
+// SPDX-License-Identifier: EUPL-1.2
 
-pub const FALLBACK_WIDTH: usize = 80;
+use std::io;
 
-pub fn stderr_is_terminal() -> bool {
-    io::stderr().is_terminal()
+use crate::Viewport;
+
+/// columns and rows of standard error, width falls back to
+/// [`Viewport::FALLBACK`] off a terminal
+pub(crate) fn stderr_size() -> (usize, Option<usize>) {
+    Viewport::of(&io::stderr()).map_or((Viewport::FALLBACK.columns, None), |size| {
+        (size.columns, Some(size.rows))
+    })
 }
 
-pub fn terminal_width() -> Option<usize> {
-    terminal_width_from_stderr()
-}
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
 
-pub fn terminal_width_or_default() -> usize {
-    terminal_width().unwrap_or(FALLBACK_WIDTH)
-}
+    use super::*;
 
-#[cfg(unix)]
-fn terminal_width_from_stderr() -> Option<usize> {
-    let mut size = MaybeUninit::<libc::winsize>::zeroed();
-    // SAFETY: ioctl writes a winsize into the valid out pointer when stderr is
-    // tty
-    let result = unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
-    if result == 0 {
-        // SAFETY: ioctl returned success, this is init
-        let winsize = unsafe { size.assume_init() };
-        terminal_width_from_cols(winsize.ws_col)
-    } else {
-        None
+    #[test]
+    fn measuring_a_non_terminal_fails() {
+        let null = File::open("/dev/null").unwrap();
+        Viewport::of(&null).unwrap_err();
     }
-}
-
-fn terminal_width_from_cols(cols: u16) -> Option<usize> {
-    (cols > 0).then_some(usize::from(cols))
 }

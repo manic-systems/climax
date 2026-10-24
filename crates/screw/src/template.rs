@@ -1,4 +1,5 @@
-use alloc::sync::Arc;
+// SPDX-License-Identifier: EUPL-1.2
+
 use core::{
     error::Error,
     fmt,
@@ -8,17 +9,24 @@ use core::{
 
 use crate::{
     Line,
+    LocalWidgetRef,
     Stack,
     Text,
     WidgetRef,
+    local_widget,
     widget,
 };
 
+/// why a template failed to parse
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TemplateError {
+    /// a slot written as `{}`
     EmptySlotName,
+    /// a slot names a widget that was not provided
     MissingSlot(String),
+    /// a slot opened with `{` and never closed
     UnclosedSlot(String),
+    /// a lone `}` outside a slot
     UnmatchedCloseBrace,
 }
 
@@ -39,31 +47,58 @@ impl fmt::Display for TemplateError {
 
 impl Error for TemplateError {}
 
+/// parses a template into a [`Stack`] of lines
+///
 /// # Errors
 ///
-/// fails when `source` has an unmatched `}`, an empty or unclosed slot, or
-/// names a slot missing from `slots`.
+/// fails on an unbalanced brace, an empty slot name, or a slot with no binding
+/// in `slots`
 pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, TemplateError> {
-    let mut rows = Vec::new();
-    let mut row = Vec::new();
+    template_with(source, slots, widget, widget)
+}
+
+/// parses a template whose slots and result stay local to the current thread
+///
+/// # Errors
+///
+/// fails for the same reasons as [`template`]
+pub fn local_template<'a>(
+    source: &str,
+    slots: &[(&str, LocalWidgetRef<'a>)],
+) -> Result<Stack<LocalWidgetRef<'a>>, TemplateError> {
+    template_with(source, slots, local_widget, local_widget)
+}
+
+fn template_with<H, T, L>(
+    source: &str,
+    slots: &[(&str, H)],
+    wrap_text: T,
+    wrap_line: L,
+) -> Result<Stack<H>, TemplateError>
+where
+    H: Clone,
+    T: Fn(Text) -> H,
+    L: Fn(Line<H>) -> H,
+{
+    let mut rows = vec![Vec::new()];
     let mut text = String::new();
     let mut chars = source.chars().peekable();
 
     while let Some(ch) = chars.next() {
         match ch {
             '\n' => {
-                flush_text(&mut row, &mut text);
-                rows.push(mem::take(&mut row));
+                flush_text(&mut rows, &mut text, &wrap_text);
+                rows.push(Vec::new());
             },
             '{' if chars.peek() == Some(&'{') => {
                 chars.next();
                 text.push('{');
             },
             '{' => {
-                flush_text(&mut row, &mut text);
+                flush_text(&mut rows, &mut text, &wrap_text);
                 let name = parse_slot_name(&mut chars)?;
                 let slot = find_slot(slots, &name)?;
-                row.push(slot);
+                current_row_mut(&mut rows).push(slot);
             },
             '}' if chars.peek() == Some(&'}') => {
                 chars.next();
@@ -74,11 +109,10 @@ pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, Temp
         }
     }
 
-    flush_text(&mut row, &mut text);
-    rows.push(row);
+    flush_text(&mut rows, &mut text, &wrap_text);
     Ok(Stack::new(
         rows.into_iter()
-            .map(|cells| widget(Line::new(cells)))
+            .map(|row| wrap_line(Line::new(row)))
             .collect::<Vec<_>>(),
     ))
 }
@@ -99,16 +133,58 @@ fn parse_slot_name(
     Err(TemplateError::UnclosedSlot(name))
 }
 
-fn find_slot(slots: &[(&str, WidgetRef)], name: &str) -> Result<WidgetRef, TemplateError> {
+fn find_slot<H: Clone>(slots: &[(&str, H)], name: &str) -> Result<H, TemplateError> {
     slots
         .iter()
         .rev()
-        .find_map(|(slot_name, slot)| (*slot_name == name).then(|| Arc::clone(slot)))
+        .find_map(|(slot_name, slot)| (*slot_name == name).then(|| slot.clone()))
         .ok_or_else(|| TemplateError::MissingSlot(name.to_owned()))
 }
 
-fn flush_text(row: &mut Vec<WidgetRef>, text: &mut String) {
+fn flush_text<H>(rows: &mut [Vec<H>], text: &mut String, wrap: &impl Fn(Text) -> H) {
     if !text.is_empty() {
-        row.push(widget(Text::new(mem::take(text))));
+        current_row_mut(rows).push(wrap(Text::new(mem::take(text))));
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "rows starts non-empty and never shrinks"
+)]
+const fn current_row_mut<H>(rows: &mut [Vec<H>]) -> &mut Vec<H> {
+    rows.last_mut()
+        .expect("template parser always keeps a current row")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_template;
+    use crate::{
+        RenderCtx,
+        Style,
+        Surface,
+        Widget,
+        local_widget,
+        render_plain,
+    };
+
+    struct BorrowedText<'a>(&'a str);
+
+    impl Widget for BorrowedText<'_> {
+        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
+            out.write(self.0, Style::PLAIN);
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "template slots are named by braces, not format arguments"
+    )]
+    fn local_template_retains_borrowed_slots() {
+        let value = String::from("borrowed");
+        let slot = local_widget(BorrowedText(&value));
+        let rendered = local_template("{value}/{value}", &[("value", slot)]).unwrap();
+        assert_eq!(render_plain(&rendered), "borrowed/borrowed");
     }
 }

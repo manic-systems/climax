@@ -1,60 +1,205 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 use alloc::{
     collections::VecDeque,
+    rc::Rc,
     sync::Arc,
 };
 use core::{
+    fmt,
     hash::Hash,
     ops::Range,
+    sync::atomic::{
+        AtomicU32,
+        Ordering,
+    },
     time::Duration,
 };
 use std::{
     collections::HashMap,
-    sync::{
-        Mutex,
-        PoisonError,
-    },
+    sync::Mutex,
 };
 
-use unicode_width::UnicodeWidthChar as _;
-
 use crate::{
+    Align,
+    LayoutMode,
     Role,
     Style,
     Surface,
     Theme,
+    Viewport,
+    measure::{
+        expand_tabs,
+        first_segment_end,
+        split_padding,
+    },
+    renderer::layout_surface,
+    surface::append_surface,
+    sync::lock,
+    truncate,
+    width,
 };
 
+/// how a widget takes vertical space inside a [`Stack`]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VerticalSize {
+    /// measured from its content before flexible space is allocated
+    #[default]
+    Content,
+    /// shares the height left after content-sized siblings are measured
+    Flexible,
+}
+
+/// how often a widget needs a redraw without being marked dirty
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TickInterest {
+    /// changes only when the application marks the runtime dirty
     Never,
+    /// redraws on every frame, as an animation does, and [`RenderCtx::frame`]
+    /// advances each time
     EveryFrame,
+    /// redraws at most this often, for content such as a clock
     Every(Duration),
 }
 
+/// per-draw information passed to [`Widget::render`]
 #[derive(Clone, Copy, Debug)]
 pub struct RenderCtx {
-    pub frame: u64,
-    pub width: Option<usize>,
-    pub theme: Theme,
+    frame:       u64,
+    columns:     Option<usize>,
+    rows:        Option<usize>,
+    layout_mode: LayoutMode,
+    theme:       Theme,
 }
 
-pub trait Widget: Send + Sync {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface);
+impl RenderCtx {
+    /// frame zero, no size constraints, clipping and the default theme
+    pub const fn new() -> Self {
+        Self {
+            frame:       0,
+            columns:     None,
+            rows:        None,
+            layout_mode: LayoutMode::Clip,
+            theme:       Theme::DEFAULT,
+        }
+    }
 
-    fn tick_interest(&self) -> TickInterest {
-        TickInterest::Never
+    /// sets the frame counter
+    #[must_use]
+    pub const fn with_frame(mut self, frame: u64) -> Self {
+        self.frame = frame;
+        self
+    }
+
+    /// sets the columns and rows available to the widget, `None` means
+    /// unconstrained
+    #[must_use]
+    pub const fn with_constraints(mut self, columns: Option<usize>, rows: Option<usize>) -> Self {
+        self.columns = columns;
+        self.rows = rows;
+        self
+    }
+
+    /// sets whether overlong rows are clipped or wrapped
+    #[must_use]
+    pub const fn with_layout_mode(mut self, layout_mode: LayoutMode) -> Self {
+        self.layout_mode = layout_mode;
+        self
+    }
+
+    /// sets the theme that resolves [`Role`] styles
+    #[must_use]
+    pub const fn with_theme(mut self, theme: Theme) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    /// counter that advances on every draw, for animation
+    pub const fn frame(self) -> u64 {
+        self.frame
+    }
+
+    /// columns this widget may use, `None` when the width is unknown
+    pub const fn available_columns(self) -> Option<usize> {
+        self.columns
+    }
+
+    /// rows this widget may use, `None` when the height is unconstrained
+    pub const fn available_rows(self) -> Option<usize> {
+        self.rows
+    }
+
+    /// available columns and rows together, when both are known
+    pub const fn viewport(self) -> Option<Viewport> {
+        match (self.columns, self.rows) {
+            (Some(columns), Some(rows)) => Some(Viewport::new(columns, rows)),
+            _ => None,
+        }
+    }
+
+    /// whether overlong rows are clipped or wrapped after rendering
+    pub const fn layout_mode(self) -> LayoutMode {
+        self.layout_mode
+    }
+
+    /// theme that resolves [`Role`] styles
+    pub const fn theme(self) -> Theme {
+        self.theme
+    }
+
+    pub(crate) const fn with_rows(mut self, rows: Option<usize>) -> Self {
+        self.rows = rows;
+        self
     }
 }
 
-pub type WidgetRef = Arc<dyn Widget>;
+impl Default for RenderCtx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
+/// something that can draw itself into a [`Surface`]
+pub trait Widget {
+    /// writes the widget into `out`, a newline starts a new row, rendering must
+    /// not block
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface);
+
+    /// whether the widget changes on its own, [`TickInterest::Never`] by
+    /// default
+    fn tick_interest(&self) -> TickInterest {
+        TickInterest::Never
+    }
+
+    /// how a vertical container allocates height to this widget
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Content
+    }
+}
+
+/// cloneable widget reference that can be shared with a background renderer
+pub type WidgetRef = Arc<dyn Widget + Send + Sync>;
+
+/// cloneable widget reference for composition and rendering on one thread
+pub type LocalWidgetRef<'a> = Rc<dyn Widget + 'a>;
+
+/// erases a thread-safe widget into a shared reference
 pub fn widget<W>(widget: W) -> WidgetRef
 where
-    W: Widget + 'static,
+    W: Widget + Send + Sync + 'static,
 {
     Arc::new(widget)
 }
 
+/// erases a widget into a local reference, keeping any borrowed lifetime
+pub fn local_widget<'a, W>(widget: W) -> LocalWidgetRef<'a>
+where
+    W: Widget + 'a,
+{
+    Rc::new(widget)
+}
+
+/// run of text in one style or role
 #[derive(Clone, Debug)]
 pub struct Text {
     value: String,
@@ -68,6 +213,7 @@ enum TextStyle {
 }
 
 impl Text {
+    /// unstyled text
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -75,12 +221,14 @@ impl Text {
         }
     }
 
+    /// sets a concrete style, replacing any role
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = TextStyle::Concrete(style);
         self
     }
 
+    /// sets a role resolved through the active [`Theme`], replacing any style
     #[must_use]
     pub const fn role(mut self, role: Role) -> Self {
         self.style = TextStyle::Role(role);
@@ -92,12 +240,106 @@ impl Widget for Text {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let style = match self.style {
             TextStyle::Concrete(style) => style,
-            TextStyle::Role(role) => ctx.theme.style(role),
+            TextStyle::Role(role) => ctx.theme().style(role),
         };
         out.write(&self.value, style);
     }
 }
 
+/// run of text with one style or role, combined in [`Spans`]
+#[derive(Clone, Debug)]
+pub struct Span {
+    text: Text,
+}
+
+impl Span {
+    /// unstyled span
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            text: Text::new(value),
+        }
+    }
+
+    /// sets a concrete style, replacing any role
+    #[must_use]
+    pub fn style(mut self, style: Style) -> Self {
+        self.text = self.text.style(style);
+        self
+    }
+
+    /// sets a role resolved through the active [`Theme`], replacing any style
+    #[must_use]
+    pub fn role(mut self, role: Role) -> Self {
+        self.text = self.text.role(role);
+        self
+    }
+}
+
+impl From<Text> for Span {
+    fn from(text: Text) -> Self {
+        Self { text }
+    }
+}
+
+impl From<&str> for Span {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Span {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+/// several [`Span`]s written one after another
+#[derive(Clone, Debug, Default)]
+pub struct Spans {
+    spans: Vec<Span>,
+}
+
+impl Spans {
+    /// empty sequence
+    pub const fn empty() -> Self {
+        Self { spans: Vec::new() }
+    }
+
+    /// sequence of anything convertible to spans, including [`Text`] and plain
+    /// strings
+    pub fn new<I>(spans: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<Span>,
+    {
+        spans.into_iter().collect()
+    }
+
+    /// appends one span
+    #[must_use]
+    pub fn push(mut self, span: impl Into<Span>) -> Self {
+        self.spans.push(span.into());
+        self
+    }
+}
+
+impl<S: Into<Span>> FromIterator<S> for Spans {
+    fn from_iter<I: IntoIterator<Item = S>>(iter: I) -> Self {
+        Self {
+            spans: iter.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl Widget for Spans {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        for span in &self.spans {
+            span.text.render(ctx, out);
+        }
+    }
+}
+
+/// cycles through a list of frames, one per draw, such as a spinner
 #[derive(Clone, Debug)]
 pub struct Looping {
     frames: Arc<[String]>,
@@ -105,13 +347,18 @@ pub struct Looping {
 }
 
 impl Looping {
-    pub fn new<const N: usize>(frames: [&str; N]) -> Self {
+    /// loop over `frames`, renders nothing when there are none
+    pub fn new(frames: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Self {
-            frames: frames.map(ToOwned::to_owned).into(),
+            frames: frames
+                .into_iter()
+                .map(|frame| frame.as_ref().to_owned())
+                .collect(),
             style:  Style::default(),
         }
     }
 
+    /// sets the style of the frame
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = style;
@@ -125,7 +372,7 @@ impl Widget for Looping {
             return;
         }
         let frame_count = u64::try_from(self.frames.len()).unwrap_or(u64::MAX);
-        let index = usize::try_from(ctx.frame % frame_count).unwrap_or(0);
+        let index = usize::try_from(ctx.frame() % frame_count).unwrap_or(0);
         out.write(&self.frames[index], self.style);
     }
 
@@ -134,6 +381,8 @@ impl Widget for Looping {
     }
 }
 
+/// most recent lines pushed to it, clones share them, mark the runtime dirty
+/// after a push
 #[derive(Clone, Debug)]
 pub struct WindowedLines {
     capacity: usize,
@@ -142,6 +391,7 @@ pub struct WindowedLines {
 }
 
 impl WindowedLines {
+    /// empty window that keeps at most `capacity` lines
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -150,30 +400,29 @@ impl WindowedLines {
         }
     }
 
+    /// sets the style of every line
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
+    /// appends a line, discarding the oldest when the window is full
     pub fn push(&self, line: impl Into<String>) {
-        let mut lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
         if self.capacity == 0 {
             return;
         }
+        let text = line.into();
+        let mut lines = lock(&self.lines);
         if lines.len() == self.capacity {
             lines.pop_front();
         }
-        lines.push_back(line.into());
+        lines.push_back(text);
     }
 
+    /// copy of the lines currently held, oldest first
     pub fn lines(&self) -> Vec<String> {
-        self.lines
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .cloned()
-            .collect()
+        lock(&self.lines).iter().cloned().collect()
     }
 }
 
@@ -188,6 +437,7 @@ impl Widget for WindowedLines {
     }
 }
 
+/// list of rows with one selected, scrolled to keep the selection visible
 #[derive(Clone, Debug)]
 pub struct List {
     rows:          Arc<[String]>,
@@ -198,11 +448,12 @@ pub struct List {
 }
 
 impl List {
-    pub fn new(items: impl Into<Vec<String>>) -> Self {
-        let rows = items.into();
-        let height = rows.len().max(1);
+    /// list showing every row with the first one selected
+    pub fn new(rows: impl Into<Vec<String>>) -> Self {
+        let owned = rows.into();
+        let height = owned.len().max(1);
         Self {
-            rows: rows.into(),
+            rows: owned.into(),
             selected: 0,
             height,
             normal: Role::Normal,
@@ -210,18 +461,21 @@ impl List {
         }
     }
 
+    /// selects the row at `selected`, clamped to the last row
     #[must_use]
     pub const fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
         self
     }
 
+    /// limits the number of visible rows
     #[must_use]
     pub const fn height(mut self, height: usize) -> Self {
         self.height = height;
         self
     }
 
+    /// sets the roles of ordinary and selected rows
     #[must_use]
     pub const fn roles(mut self, normal: Role, selected: Role) -> Self {
         self.normal = normal;
@@ -229,6 +483,7 @@ impl List {
         self
     }
 
+    /// indices of the rows currently shown
     pub fn visible_range(&self) -> Range<usize> {
         if self.rows.is_empty() || self.height == 0 {
             return 0..0;
@@ -256,94 +511,257 @@ impl Widget for List {
             } else {
                 self.normal
             };
-            out.write(&self.rows[row_index], ctx.theme.style(role));
+            out.write(&self.rows[row_index], ctx.theme().style(role));
         }
     }
 }
 
+/// rows of [`Span`] cells in columns of a common width, the last cell of a row
+/// is never padded
 #[derive(Clone, Debug)]
-pub struct Grid {
-    rows: Arc<[Arc<[GridCell]>]>,
-    gap:  usize,
+pub struct Table {
+    header:       Option<Vec<String>>,
+    header_style: Style,
+    rows:         Vec<Vec<Span>>,
+    aligns:       Vec<Align>,
+    gap:          usize,
+    flexible:     Option<Vec<usize>>,
+    overflow:     CellOverflow,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GridCell {
-    text: String,
-    role: Role,
+/// what a [`Table`] does with a cell wider than its shrunk column
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum CellOverflow {
+    /// cuts the cell and ends it with an ellipsis
+    #[default]
+    Truncate,
+    /// continues the cell on the following rows of its column
+    Wrap,
 }
 
-impl Grid {
-    pub fn new(rows: impl Into<Vec<Vec<GridCell>>>) -> Self {
+impl Table {
+    /// table of rows of cells, where a cell is anything that converts into a
+    /// [`Span`]
+    pub fn new<R, C>(rows: R) -> Self
+    where
+        R: IntoIterator,
+        R::Item: IntoIterator<Item = C>,
+        C: Into<Span>,
+    {
         Self {
-            rows: rows
-                .into()
+            header:       None,
+            header_style: Style::new().bold(),
+            rows:         rows
                 .into_iter()
-                .map(|row| Arc::from(row.into_boxed_slice()))
-                .collect::<Vec<_>>()
-                .into(),
-            gap:  1,
+                .map(|row| row.into_iter().map(Into::into).collect())
+                .collect(),
+            aligns:       Vec::new(),
+            gap:          1,
+            flexible:     None,
+            overflow:     CellOverflow::Truncate,
         }
     }
 
+    /// adds a header row drawn above the others with the header style
+    #[must_use]
+    pub fn header<I>(mut self, cells: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<String>,
+    {
+        self.header = Some(cells.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// sets the style of the header row, bold by default
+    #[must_use]
+    pub const fn header_style(mut self, style: Style) -> Self {
+        self.header_style = style;
+        self
+    }
+
+    /// sets the alignment of each column in order, later columns stay
+    /// left-aligned
+    #[must_use]
+    pub fn aligns(mut self, aligns: impl IntoIterator<Item = Align>) -> Self {
+        self.aligns = aligns.into_iter().collect();
+        self
+    }
+
+    /// sets the number of spaces between columns, one by default
     #[must_use]
     pub const fn gap(mut self, gap: usize) -> Self {
         self.gap = gap;
         self
     }
-}
 
-impl GridCell {
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            role: Role::Normal,
-        }
-    }
-
+    /// limits shrinking to these columns when the table is too wide, instead of
+    /// every column
     #[must_use]
-    pub const fn role(mut self, role: Role) -> Self {
-        self.role = role;
+    pub fn flexible(mut self, columns: impl IntoIterator<Item = usize>) -> Self {
+        self.flexible = Some(columns.into_iter().collect());
         self
     }
+
+    /// sets how a cell wider than its shrunk column overflows
+    #[must_use]
+    pub const fn overflow(mut self, overflow: CellOverflow) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    fn fit(&self, widths: &mut [usize], available: usize) {
+        let gaps = self.gap * widths.len().saturating_sub(1);
+        let mut excess = (widths.iter().sum::<usize>() + gaps).saturating_sub(available);
+        while excess > 0 {
+            let widest = (0..widths.len())
+                .filter(|column| {
+                    self.flexible
+                        .as_ref()
+                        .is_none_or(|flexible| flexible.contains(column))
+                })
+                .filter(|&column| widths[column] > 1)
+                .max_by_key(|&column| widths[column]);
+            let Some(column) = widest else {
+                return;
+            };
+            widths[column] -= 1;
+            excess -= 1;
+        }
+    }
+
+    fn cell_lines(&self, value: &str, columns: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        for raw in value.split('\n') {
+            let expanded = expand_tabs(raw);
+            let line = expanded.as_ref();
+            if width(line) <= columns {
+                lines.push(line.to_owned());
+                continue;
+            }
+            match self.overflow {
+                CellOverflow::Truncate => {
+                    lines.push(format!("{}…", truncate(line, columns.saturating_sub(1))));
+                },
+                CellOverflow::Wrap => {
+                    let mut rest = line;
+                    while !rest.is_empty() {
+                        let head = truncate(rest, columns);
+                        if head.is_empty() {
+                            lines.push(if columns > 0 { "…" } else { "" }.to_owned());
+                            rest = &rest[first_segment_end(rest)..];
+                        } else {
+                            lines.push(head.to_owned());
+                            rest = &rest[head.len()..];
+                        }
+                    }
+                },
+            }
+        }
+        lines
+    }
 }
 
-impl Widget for Grid {
+impl Widget for Table {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        for (row_index, row) in self.rows.iter().enumerate() {
-            if row_index > 0 {
-                out.newline();
-            }
-            for (cell_index, cell) in row.iter().enumerate() {
-                if cell_index > 0 {
-                    for _ in 0..self.gap {
-                        out.write(" ", Style::default());
+        let header: Option<Vec<Span>> = self.header.as_ref().map(|cells| {
+            cells
+                .iter()
+                .map(|cell| Span::new(cell.as_str()).style(self.header_style))
+                .collect()
+        });
+        let lines: Vec<&[Span]> = header.iter().chain(&self.rows).map(Vec::as_slice).collect();
+
+        let columns = lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .rposition(|cell| !cell.text.value.is_empty())
+                    .map_or(0, |last| last + 1)
+            })
+            .max()
+            .unwrap_or(0);
+        let mut widths: Vec<usize> = (0..columns)
+            .map(|column| {
+                lines
+                    .iter()
+                    .filter_map(|line| line.get(column))
+                    .flat_map(|cell| cell.text.value.split('\n'))
+                    .map(|line| width(&expand_tabs(line)))
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let start = out.current_col();
+        if let Some(available) = ctx.available_columns() {
+            self.fit(&mut widths, available.saturating_sub(start));
+        }
+
+        let mut first = true;
+        for line in &lines {
+            let cells: Vec<Vec<String>> = line
+                .iter()
+                .enumerate()
+                .take(columns)
+                .map(|(column, cell)| self.cell_lines(&cell.text.value, widths[column]))
+                .collect();
+            let height = cells.iter().map(Vec::len).max().unwrap_or(0).max(1);
+            for row in 0..height {
+                if !first {
+                    out.newline();
+                    out.write(" ".repeat(start), Style::new());
+                }
+                first = false;
+                let filled = cells
+                    .iter()
+                    .rposition(|cell| cell.get(row).is_some_and(|text| !text.is_empty()))
+                    .map_or(0, |column| column + 1);
+                for (column, cell) in line.iter().enumerate().take(filled) {
+                    if column > 0 {
+                        out.write(" ".repeat(self.gap), Style::new());
+                    }
+                    let text = cells[column].get(row).map_or("", String::as_str);
+                    let missing = widths[column].saturating_sub(width(text));
+                    let align = self.aligns.get(column).copied().unwrap_or_default();
+                    let (before, after) = split_padding(missing, align);
+                    out.write(" ".repeat(before), Style::new());
+                    out.seal();
+                    Text {
+                        value: text.to_owned(),
+                        style: cell.text.style,
+                    }
+                    .render(ctx, out);
+                    if column + 1 < filled {
+                        out.write(" ".repeat(after), Style::new());
                     }
                 }
-                out.write(&cell.text, ctx.theme.style(cell.role));
             }
         }
     }
 }
 
+/// bar of fixed width filled by a fraction, clones share it, mark the runtime
+/// dirty after a change
 #[derive(Clone, Debug)]
 pub struct ProgressBar {
-    fraction: Arc<Mutex<f32>>,
+    fraction: Arc<AtomicU32>,
     width:    usize,
     filled:   Style,
     empty:    Style,
 }
 
 impl ProgressBar {
+    /// empty bar with `width` cells between its brackets
     pub fn new(width: usize) -> Self {
         Self {
-            fraction: Arc::new(Mutex::new(0.0)),
+            fraction: Arc::new(AtomicU32::new(0.0_f32.to_bits())),
             width,
             filled: Style::default(),
             empty: Style::default(),
         }
     }
 
+    /// sets the styles of the filled and the empty cells
     #[must_use]
     pub const fn styles(mut self, filled: Style, empty: Style) -> Self {
         self.filled = filled;
@@ -351,12 +769,15 @@ impl ProgressBar {
         self
     }
 
+    /// sets how much of the bar is filled, clamped to 0 to 1
     pub fn set_fraction(&self, fraction: f32) {
-        *self.fraction.lock().unwrap_or_else(PoisonError::into_inner) = fraction.clamp(0.0, 1.0);
+        self.fraction
+            .store(fraction.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
+    /// how much of the bar is filled, from 0 to 1
     pub fn fraction(&self) -> f32 {
-        *self.fraction.lock().unwrap_or_else(PoisonError::into_inner)
+        f32::from_bits(self.fraction.load(Ordering::Relaxed))
     }
 }
 
@@ -367,21 +788,23 @@ impl Widget for ProgressBar {
         clippy::cast_precision_loss,
         clippy::cast_sign_loss,
         clippy::float_arithmetic,
-        reason = "a fraction of the bar width has no exact integer form"
+        reason = "the fill count is a bounded display ratio"
     )]
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         let filled = (self.fraction() * self.width as f32).round() as usize;
         out.write("[", Style::default());
         for _ in 0..filled.min(self.width) {
-            out.write("\u{2501}", self.filled);
+            out.write("━", self.filled);
         }
         for _ in filled.min(self.width)..self.width {
-            out.write("\u{2500}", self.empty);
+            out.write("─", self.empty);
         }
         out.write("]", Style::default());
     }
 }
 
+/// prompt that places the terminal cursor after it, for input handled outside
+/// the renderer
 #[derive(Clone, Debug)]
 pub struct InputAnchor {
     prompt: String,
@@ -389,6 +812,7 @@ pub struct InputAnchor {
 }
 
 impl InputAnchor {
+    /// anchor that writes `prompt`
     pub fn prompt(prompt: impl Into<String>) -> Self {
         Self {
             prompt: prompt.into(),
@@ -396,6 +820,7 @@ impl InputAnchor {
         }
     }
 
+    /// sets the style of the prompt
     #[must_use]
     pub const fn style(mut self, style: Style) -> Self {
         self.style = style;
@@ -410,6 +835,7 @@ impl Widget for InputAnchor {
     }
 }
 
+/// prompt followed by editable text with the terminal cursor placed inside it
 #[derive(Clone, Debug)]
 pub struct TextInput {
     prompt:      String,
@@ -420,6 +846,7 @@ pub struct TextInput {
 }
 
 impl TextInput {
+    /// input showing `prompt` and `value` with the cursor at the start
     pub fn new(prompt: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             prompt:      prompt.into(),
@@ -430,12 +857,15 @@ impl TextInput {
         }
     }
 
+    /// places the cursor at char index `cursor`, clamped to the end and moved
+    /// past a split cluster
     #[must_use]
     pub const fn cursor(mut self, cursor: usize) -> Self {
         self.cursor = cursor;
         self
     }
 
+    /// sets the roles of the prompt and of the value
     #[must_use]
     pub const fn roles(mut self, prompt: Role, value: Role) -> Self {
         self.prompt_role = prompt;
@@ -446,39 +876,58 @@ impl TextInput {
 
 impl Widget for TextInput {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        out.write(&self.prompt, ctx.theme.style(self.prompt_role));
-        let prompt_width = out.current_col();
-        let cursor = self.cursor.min(self.value.chars().count());
-        let value_cursor_width: usize = self
+        use unicode_segmentation::UnicodeSegmentation as _;
+
+        let value_style = ctx.theme().style(self.value_role);
+        out.write(&self.prompt, ctx.theme().style(self.prompt_role));
+        let char_index = self
             .value
-            .chars()
-            .take(cursor)
-            .map(|ch| ch.width().unwrap_or(0))
-            .sum();
-        out.write(&self.value, ctx.theme.style(self.value_role));
-        out.set_cursor(crate::Position {
-            row: out.height().saturating_sub(1),
-            col: prompt_width + value_cursor_width,
-        });
+            .char_indices()
+            .nth(self.cursor)
+            .map_or(self.value.len(), |(index, _)| index);
+        let split = self
+            .value
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .chain([self.value.len()])
+            .find(|&index| index >= char_index)
+            .unwrap_or(self.value.len());
+        let (before, after) = self.value.split_at(split);
+        out.write(before, value_style);
+        out.set_cursor_here();
+        out.write(after, value_style);
     }
 }
 
+/// children written one after another on a single row
 #[derive(Clone)]
-pub struct Line {
-    children: Arc<[WidgetRef]>,
+pub struct Line<H = WidgetRef> {
+    children: Box<[H]>,
 }
 
-impl Line {
-    pub fn new(children: impl Into<Vec<WidgetRef>>) -> Self {
+impl<H> fmt::Debug for Line<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Line")
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
+impl<H> Line<H> {
+    /// line of `children`
+    pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
-            children: children.into().into(),
+            children: children.into().into_boxed_slice(),
         }
     }
 }
 
-impl Widget for Line {
+impl<H> Widget for Line<H>
+where
+    H: Widget,
+{
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        for child in self.children.iter() {
+        for child in &self.children {
             child.render(ctx, out);
         }
     }
@@ -486,23 +935,108 @@ impl Widget for Line {
     fn tick_interest(&self) -> TickInterest {
         combine_tick_interest(self.children.iter().map(Widget::tick_interest))
     }
+
+    fn vertical_size(&self) -> VerticalSize {
+        combine_vertical_size(self.children.iter())
+    }
 }
 
+/// children placed one below another, [`VerticalSize::Flexible`] ones sharing
+/// the leftover height
 #[derive(Clone)]
-pub struct Stack {
-    children: Arc<[WidgetRef]>,
+pub struct Stack<H = WidgetRef> {
+    children: Box<[H]>,
 }
 
-impl Stack {
-    pub fn new(children: impl Into<Vec<WidgetRef>>) -> Self {
+impl<H> fmt::Debug for Stack<H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Stack")
+            .field("children", &self.children.len())
+            .finish()
+    }
+}
+
+impl<H> Stack<H> {
+    /// stack of `children`
+    pub fn new(children: impl Into<Vec<H>>) -> Self {
         Self {
-            children: children.into().into(),
+            children: children.into().into_boxed_slice(),
         }
     }
 }
 
-impl Widget for Stack {
+impl<H> Widget for Stack<H>
+where
+    H: Widget,
+{
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        let flexible = self
+            .children
+            .iter()
+            .filter(|child| child.vertical_size() == VerticalSize::Flexible)
+            .count();
+        if ctx.available_rows().is_none() || flexible == 0 {
+            self.render_sequentially(ctx, out);
+            return;
+        }
+
+        let mut rendered = vec![None; self.children.len()];
+        let mut fixed_height = 0_usize;
+        for (index, child) in self.children.iter().enumerate() {
+            if child.vertical_size() == VerticalSize::Content {
+                let mut raw = Surface::new();
+                child.render(&ctx.with_rows(None), &mut raw);
+                let surface = layout_surface(raw, ctx.available_columns(), ctx.layout_mode());
+                fixed_height = fixed_height.saturating_add(surface.height());
+                let height = surface.height();
+                rendered[index] = Some((surface, height));
+            }
+        }
+
+        let available = ctx
+            .available_rows()
+            .unwrap_or_default()
+            .saturating_sub(out.height().saturating_sub(1))
+            .saturating_sub(fixed_height);
+        let each = available / flexible;
+        let mut extra = available % flexible;
+        let mut first = true;
+        for (index, child) in self.children.iter().enumerate() {
+            let (surface, limit) = rendered[index].take().unwrap_or_else(|| {
+                let allocation = each + usize::from(extra > 0);
+                extra = extra.saturating_sub(1);
+                let mut surface = Surface::new();
+                child.render(&ctx.with_rows(Some(allocation)), &mut surface);
+                (
+                    layout_surface(surface, ctx.available_columns(), ctx.layout_mode()),
+                    allocation,
+                )
+            });
+            if limit == 0 {
+                continue;
+            }
+            if !first {
+                out.newline();
+            }
+            append_surface(out, &surface, limit);
+            first = false;
+        }
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        combine_vertical_size(self.children.iter())
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        combine_tick_interest(self.children.iter().map(Widget::tick_interest))
+    }
+}
+
+impl<H> Stack<H>
+where
+    H: Widget,
+{
+    fn render_sequentially(&self, ctx: &RenderCtx, out: &mut Surface) {
         for (index, child) in self.children.iter().enumerate() {
             if index > 0 {
                 out.newline();
@@ -510,49 +1044,57 @@ impl Widget for Stack {
             child.render(ctx, out);
         }
     }
+}
 
-    fn tick_interest(&self) -> TickInterest {
-        combine_tick_interest(self.children.iter().map(Widget::tick_interest))
+/// shows one of several widgets by state, a state with no widget draws nothing
+pub struct Stateful<S, H = WidgetRef> {
+    state: Mutex<S>,
+    cases: HashMap<S, H>,
+}
+
+impl<S: fmt::Debug, H> fmt::Debug for Stateful<S, H> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Stateful")
+            .field("state", &*lock(&self.state))
+            .field("cases", &self.cases.len())
+            .finish()
     }
 }
 
-pub struct Stateful<S> {
-    state: Arc<Mutex<S>>,
-    cases: HashMap<S, WidgetRef>,
-}
-
-impl<S> Stateful<S>
+impl<S, H> Stateful<S, H>
 where
     S: Clone + Eq + Hash,
 {
+    /// switch in state `initial` with no cases
     pub fn new(initial: S) -> Self {
         Self {
-            state: Arc::new(Mutex::new(initial)),
+            state: Mutex::new(initial),
             cases: HashMap::new(),
         }
     }
 
+    /// shows `widget` while the state is `state`
     #[must_use]
-    pub fn case(mut self, state: S, widget: WidgetRef) -> Self {
+    pub fn case(mut self, state: S, widget: H) -> Self {
         self.cases.insert(state, widget);
         self
     }
 
+    /// changes the state, taking effect on the next draw
     pub fn set_state(&self, state: S) {
-        *self.state.lock().unwrap_or_else(PoisonError::into_inner) = state;
+        *lock(&self.state) = state;
     }
 
+    /// current state
     pub fn state(&self) -> S {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        lock(&self.state).clone()
     }
 }
 
-impl<S> Widget for Stateful<S>
+impl<S, H> Widget for Stateful<S, H>
 where
-    S: Clone + Eq + Hash + Send + Sync,
+    S: Clone + Eq + Hash,
+    H: Widget,
 {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         if let Some(widget) = self.cases.get(&self.state()) {
@@ -564,6 +1106,12 @@ where
         self.cases
             .get(&self.state())
             .map_or(TickInterest::Never, Widget::tick_interest)
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.cases
+            .get(&self.state())
+            .map_or(VerticalSize::Content, Widget::vertical_size)
     }
 }
 
@@ -578,6 +1126,44 @@ where
     fn tick_interest(&self) -> TickInterest {
         self.as_ref().tick_interest()
     }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
+}
+
+impl<T> Widget for Rc<T>
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.as_ref().render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.as_ref().tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
+}
+
+impl<T> Widget for Box<T>
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.as_ref().render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        self.as_ref().tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        self.as_ref().vertical_size()
+    }
 }
 
 impl Widget for String {
@@ -586,12 +1172,44 @@ impl Widget for String {
     }
 }
 
-impl Widget for &'static str {
+impl Widget for &str {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         out.write(*self, Style::default());
     }
 }
 
+impl<T> Widget for &T
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        (**self).render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        (**self).tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        (**self).vertical_size()
+    }
+}
+
+fn combine_vertical_size<'a, H: Widget + 'a>(
+    children: impl IntoIterator<Item = &'a H>,
+) -> VerticalSize {
+    if children
+        .into_iter()
+        .any(|child| child.vertical_size() == VerticalSize::Flexible)
+    {
+        VerticalSize::Flexible
+    } else {
+        VerticalSize::Content
+    }
+}
+
+/// combines child tick interests, [`TickInterest::EveryFrame`] wins, then the
+/// shortest interval
 pub fn combine_tick_interest(interests: impl IntoIterator<Item = TickInterest>) -> TickInterest {
     let mut every: Option<Duration> = None;
     for interest in interests {
@@ -604,4 +1222,323 @@ pub fn combine_tick_interest(interests: impl IntoIterator<Item = TickInterest>) 
         }
     }
     every.map_or(TickInterest::Never, TickInterest::Every)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::render_plain;
+
+    #[test]
+    fn spans_render_back_to_back_with_their_own_styles() {
+        let bold = Style::new().bold();
+        let red = Style::new().fg(crate::Color::Red);
+        let spans = Spans::new([
+            Span::new("ab").style(bold),
+            Span::new("cd"),
+            Span::new("ef").style(red),
+        ]);
+        let mut surface = Surface::new();
+        spans.render(&RenderCtx::new(), &mut surface);
+
+        let styles: Vec<Style> = surface.rows()[0]
+            .cells()
+            .iter()
+            .map(|cell| cell.style)
+            .collect();
+        assert_eq!(styles, [bold, bold, Style::new(), Style::new(), red, red]);
+        assert_eq!(surface.plain_text(), "abcdef");
+    }
+
+    #[test]
+    fn roles_resolve_through_the_context_theme() {
+        let theme = Theme::DEFAULT.with(Role::Error, Style::new().underline());
+        let spans = Spans::new([Span::new("bad").role(Role::Error)]);
+        let mut surface = Surface::new();
+        spans.render(&RenderCtx::new().with_theme(theme), &mut surface);
+        assert_eq!(surface.rows()[0].cells()[0].style, Style::new().underline());
+    }
+
+    #[test]
+    fn table_pads_columns_to_a_common_display_width() {
+        let table = Table::new([["name", "qty"], ["apple", "3"], ["fig", "12"]])
+            .header(["item", "count"])
+            .aligns([Align::Left, Align::Right])
+            .gap(2);
+        assert_eq!(
+            render_plain(&table),
+            "item   count\nname     qty\napple      3\nfig       12"
+        );
+    }
+
+    #[test]
+    fn table_measures_wide_cells_by_display_width() {
+        let table = Table::new([["世界", "a"], ["ab", "b"]]).aligns([Align::Right]);
+        assert_eq!(render_plain(&table), "世界 a\n  ab b");
+
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.row_width(0), surface.row_width(1));
+    }
+
+    #[test]
+    fn table_styles_the_header_and_leaves_no_trailing_padding() {
+        let table = Table::new([["a", "bb"]])
+            .header(["xxx", "y"])
+            .header_style(Style::new().underline());
+        let mut surface = Surface::new();
+        table.render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.plain_text(), "xxx y\na   bb");
+        assert_eq!(surface.rows()[0].cells()[0].style, Style::new().underline());
+        assert_eq!(surface.rows()[1].cells()[0].style, Style::new());
+    }
+
+    #[test]
+    fn table_centres_cells_and_tolerates_ragged_rows() {
+        let table = Table::new([vec!["ab", "x"], vec!["abcde"]]).aligns([Align::Center]);
+        assert_eq!(render_plain(&table), " ab   x\nabcde");
+        assert_eq!(render_plain(&Table::new(Vec::<Vec<Span>>::new())), "");
+    }
+
+    fn render_within(table: &Table, columns: usize) -> String {
+        let mut surface = Surface::new();
+        table.render(
+            &RenderCtx::new().with_constraints(Some(columns), None),
+            &mut surface,
+        );
+        surface.plain_text()
+    }
+
+    #[test]
+    fn table_spans_rows_for_multiline_cells() {
+        let table = Table::new([["a\nbb", "x"], ["c", "y\nz"]]);
+        assert_eq!(render_plain(&table), "a  x\nbb\nc  y\n   z");
+    }
+
+    #[test]
+    fn table_shrinks_the_widest_column_to_fit() {
+        let table = Table::new([["abcdefgh", "xy"]]);
+        assert_eq!(render_within(&table, 8), "abcd… xy");
+        assert_eq!(render_within(&table, 20), "abcdefgh xy");
+
+        let wrapped = table.overflow(CellOverflow::Wrap);
+        assert_eq!(render_within(&wrapped, 8), "abcde xy\nfgh");
+    }
+
+    #[test]
+    fn table_shrinks_only_flexible_columns() {
+        let table = Table::new([["abcdef", "ghijkl"]]).flexible([1]);
+        assert_eq!(render_within(&table, 10), "abcdef gh…");
+    }
+
+    fn row_widths(surface: &Surface) -> Vec<usize> {
+        (0..surface.height())
+            .map(|row| surface.row_width(row))
+            .collect()
+    }
+
+    #[test]
+    fn table_wrap_replaces_a_cluster_wider_than_its_column() {
+        let table = Table::new([["世界世界", "x"], ["ab", "y"]])
+            .overflow(CellOverflow::Wrap)
+            .flexible([0]);
+        let mut surface = Surface::new();
+        table.render(
+            &RenderCtx::new().with_constraints(Some(3), None),
+            &mut surface,
+        );
+        assert_eq!(surface.plain_text(), "… x\n…\n…\n…\na y\nb");
+        assert!(row_widths(&surface).iter().all(|&columns| columns <= 3));
+    }
+
+    #[test]
+    fn table_cell_starting_with_zero_width_content_does_not_widen_the_previous_cell() {
+        let table = Table::new([["❤", "\u{fe0f}", "B"]]).gap(0);
+        let mut surface = Surface::new();
+        table.render(
+            &RenderCtx::new().with_constraints(Some(2), None),
+            &mut surface,
+        );
+        assert_eq!(surface.plain_text(), "❤B");
+        assert_eq!(surface.display_width(), 2);
+    }
+
+    #[test]
+    fn table_cell_ending_in_a_joiner_does_not_join_the_next_cell() {
+        let table = Table::new([["👩\u{200d}", "💻", "B"], ["AA", "bb", "C"]]).gap(0);
+        let mut surface = Surface::new();
+        table.render(
+            &RenderCtx::new().with_constraints(Some(5), None),
+            &mut surface,
+        );
+        assert_eq!(surface.plain_text(), "👩\u{200d}💻B\nAAbbC");
+        assert_eq!(surface.rows()[0].cells().len(), 3);
+        assert_eq!(surface.display_width(), 5);
+    }
+
+    #[test]
+    fn table_wrap_ignores_a_dropped_control_before_a_wide_cluster() {
+        let table = Table::new([["\u{1b}世世", "x"]])
+            .overflow(CellOverflow::Wrap)
+            .flexible([0]);
+        let mut surface = Surface::new();
+        table.render(
+            &RenderCtx::new().with_constraints(Some(3), None),
+            &mut surface,
+        );
+        assert_eq!(surface.plain_text(), "… x\n…");
+    }
+
+    #[test]
+    fn text_input_cursor_follows_tab_stops_from_the_prompt() {
+        let mut surface = Surface::new();
+        TextInput::new("> ", "a\tb")
+            .cursor(2)
+            .render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 8 }));
+    }
+
+    #[test]
+    fn text_input_cursor_inside_a_cluster_moves_past_it() {
+        let mut surface = Surface::new();
+        TextInput::new("", "\u{2764}\u{fe0f}x")
+            .cursor(1)
+            .render(&RenderCtx::new(), &mut surface);
+        assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 2 }));
+        assert_eq!(surface.plain_text(), "\u{2764}\u{fe0f}x");
+    }
+
+    #[test]
+    fn table_keeps_emitted_rows_within_the_fitted_widths_for_clusters() {
+        for overflow in [CellOverflow::Truncate, CellOverflow::Wrap] {
+            let table = Table::new([
+                [
+                    "\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}\u{26a0}\u{fe0f}",
+                    "👩\u{200d}💻👩\u{200d}💻",
+                ],
+                ["a\tb", "🇯🇵🇺🇸"],
+            ])
+            .overflow(overflow);
+            for available in 2..14 {
+                let mut surface = Surface::new();
+                table.render(
+                    &RenderCtx::new().with_constraints(Some(available), None),
+                    &mut surface,
+                );
+                let widest = row_widths(&surface).into_iter().max().unwrap_or(0);
+                assert!(
+                    widest <= available.max(3),
+                    "{overflow:?} {available} {widest}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn table_ignores_trailing_columns_that_are_empty_in_every_row() {
+        let table = Table::new([["long", ""]]);
+        assert_eq!(render_within(&table, 4), "long");
+    }
+
+    #[test]
+    fn table_honours_the_column_it_starts_at() {
+        let table = Table::new([["a\nb", "c"]]);
+        let line = Line::new(vec![widget("pre: "), widget(table)]);
+        assert_eq!(render_plain(&line), "pre: a c\n     b");
+
+        let mut surface = Surface::new();
+        let wide = Table::new([["abcdefgh", "xy"]]);
+        surface.write("pre: ", Style::new());
+        wide.render(
+            &RenderCtx::new().with_constraints(Some(13), None),
+            &mut surface,
+        );
+        assert_eq!(surface.plain_text(), "pre: abcd… xy");
+    }
+
+    #[test]
+    fn borrowed_widgets_and_strings_render_without_a_static_lifetime() {
+        let owned = String::from("owned");
+        let borrowed: &str = &owned;
+        assert_eq!(render_plain(&borrowed), "owned");
+
+        let text = Text::new("text");
+        let reference: &dyn Widget = &text;
+        assert_eq!(render_plain(&reference), "text");
+        assert_eq!(render_plain(&&text), "text");
+
+        let dynamic: &dyn Widget = &text;
+        let stack = Stack::new(vec![dynamic, &"tail"]);
+        assert_eq!(render_plain(&stack), "text\ntail");
+    }
+
+    #[test]
+    fn looping_accepts_borrowed_arrays_vectors_and_iterators() {
+        let frames: &[&str] = &["a", "b"];
+        let render = |looping: Looping| {
+            let mut surface = Surface::new();
+            looping.render(&RenderCtx::new(), &mut surface);
+            surface.plain_text()
+        };
+        assert_eq!(render(Looping::new(frames)), "a");
+        assert_eq!(render(Looping::new(["a", "b"])), "a");
+        assert_eq!(render(Looping::new(vec!["a".to_owned()])), "a");
+        assert_eq!(render(Looping::new(frames.iter().copied())), "a");
+        assert_eq!(render(Looping::new(Vec::<String>::new())), "");
+    }
+
+    #[test]
+    fn reference_forwarding_keeps_tick_interest_and_vertical_size() {
+        let looping = Looping::new(["a", "b"]);
+        assert_eq!(looping.tick_interest(), TickInterest::EveryFrame);
+        assert_eq!((&&"x").vertical_size(), VerticalSize::Content);
+    }
+
+    #[test]
+    fn public_composite_types_implement_debug() {
+        fn debuggable<T: fmt::Debug>(_: &T) {}
+        debuggable(&Line::<WidgetRef>::new(Vec::new()));
+        debuggable(&Stack::<WidgetRef>::new(Vec::new()));
+        debuggable(&Stateful::<u8>::new(0));
+        debuggable(&crate::layout());
+        debuggable(&crate::VerticalViewport::<WidgetRef>::new(Vec::new()));
+        debuggable(&crate::Layers::new("base"));
+        debuggable(&crate::Renderer::new(Vec::new()));
+        debuggable(&crate::Runtime::new(Vec::new(), "root"));
+    }
+
+    #[test]
+    fn text_and_strings_convert_into_spans() {
+        let spans = Spans::new(["a"])
+            .push(String::from("b"))
+            .push(Text::new("c").role(Role::Dim));
+        assert_eq!(render_plain(&spans), "abc");
+        assert_eq!(render_plain(&Spans::empty()), "");
+        let from_text: Spans = [Text::new("x"), Text::new("y")].into_iter().collect();
+        assert_eq!(render_plain(&from_text), "xy");
+    }
+
+    #[test]
+    fn spans_wrap_and_clip_like_the_equivalent_text() {
+        let spans = Spans::new([
+            Span::new("ab").style(Style::new().bold()),
+            Span::new("世界cd"),
+        ]);
+        let text = Text::new("ab世界cd");
+
+        let laid_out = |widget: &dyn Widget, width, mode| {
+            let mut surface = Surface::new();
+            widget.render(&RenderCtx::new(), &mut surface);
+            layout_surface(surface, Some(width), mode).plain_text()
+        };
+        for mode in [LayoutMode::Wrap, LayoutMode::Clip] {
+            for width in [3, 4, 5] {
+                assert_eq!(
+                    laid_out(&spans, width, mode),
+                    laid_out(&text, width, mode),
+                    "{mode:?} at {width}"
+                );
+            }
+        }
+    }
 }

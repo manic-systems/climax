@@ -1,41 +1,129 @@
-use unicode_width::UnicodeWidthChar as _;
+// SPDX-License-Identifier: EUPL-1.2
 
-use crate::Style;
+use core::{
+    iter,
+    mem,
+};
 
+use unicode_segmentation::UnicodeSegmentation as _;
+use unicode_width::UnicodeWidthStr as _;
+
+use crate::{
+    Rect,
+    Style,
+    measure::{
+        JOIN_CELL_LIMIT,
+        Segment,
+        join_window_start,
+        segments,
+    },
+};
+
+/// how an overlaid widget treats the cells it covers
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fill {
+    /// cells the source leaves blank show the base underneath
+    Transparent,
+    /// the whole destination is blanked with this style before the source is
+    /// drawn
+    Opaque(Style),
+}
+
+/// how an overlay combines its cursor with the base cursor
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CursorMerge {
+    /// keep the base cursor
+    PreserveBase,
+    /// use the overlay cursor when it has one and it lands on the canvas
+    PreferOverlay,
+    /// remove the cursor
+    Hide,
+}
+
+/// what separates a row from the next one
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RowBreak {
+    /// the row is the last or no break was recorded
     #[default]
     None,
+    /// an explicit newline
     Hard,
+    /// a wrap point, the next row continues the same logical line
     Soft,
 }
 
+/// a cell coordinate
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Position {
+    /// zero-based row
     pub row: usize,
+    /// zero-based column
     pub col: usize,
 }
 
+/// one terminal cell, or the leading cell of a wide character
+#[expect(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "the renderer reads cells directly while the public API goes through getters"
+)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cell {
-    pub text:  String,
-    pub width: usize,
-    pub style: Style,
+    pub(crate) text:  String,
+    pub(crate) width: usize,
+    pub(crate) style: Style,
 }
 
 impl Cell {
-    pub fn new(ch: char, style: Style) -> Option<Self> {
-        let width = ch.width().unwrap_or(0);
-        (width > 0).then(|| {
+    /// the grapheme text, including any combining marks written after it
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// columns the cell occupies
+    #[must_use]
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    /// the style the cell was written with
+    #[must_use]
+    pub const fn style(&self) -> Style {
+        self.style
+    }
+
+    /// a cell for `text`, or `None` unless it is exactly one grapheme cluster
+    /// that takes columns
+    pub fn new(text: &str, style: Style) -> Option<Self> {
+        let mut clusters = segments(text);
+        let (_, Segment::Cluster { width, .. }) = clusters.next()? else {
+            return None;
+        };
+        (width > 0 && clusters.next().is_none() && text.graphemes(true).count() == 1).then(|| {
             Self {
-                text: ch.to_string(),
+                text: text.to_owned(),
                 width,
                 style,
             }
         })
     }
+
+    fn attach(&mut self, text: &str) {
+        let window = &self.text[join_window_start(&self.text)..];
+        let mut probe = String::with_capacity(window.len() + text.len());
+        probe.push_str(window);
+        probe.push_str(text);
+        self.width += probe.width().saturating_sub(window.width());
+        self.text.push_str(text);
+    }
+
+    fn extend_cluster(&mut self, text: &str, consumed: usize) {
+        self.text.push_str(&text[..consumed]);
+        self.width = self.text.width();
+    }
 }
 
+/// a line of cells and the break that follows it
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Row {
     cells:       Vec<Cell>,
@@ -43,6 +131,7 @@ pub struct Row {
 }
 
 impl Row {
+    /// an empty row
     pub const fn new() -> Self {
         Self {
             cells:       Vec::new(),
@@ -50,32 +139,24 @@ impl Row {
         }
     }
 
+    /// the cells of the row in order
     pub fn cells(&self) -> &[Cell] {
         &self.cells
     }
 
+    /// whether the row has no cells
     pub const fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
 
+    /// the break that follows this row
     pub const fn break_after(&self) -> RowBreak {
         self.break_after
     }
 
+    /// sets the break that follows this row
     pub const fn set_break_after(&mut self, row_break: RowBreak) {
         self.break_after = row_break;
-    }
-
-    fn push(&mut self, cell: Cell) {
-        self.cells.push(cell);
-    }
-
-    fn truncate(&mut self, len: usize) {
-        self.cells.truncate(len);
-    }
-
-    fn last_mut(&mut self) -> Option<&mut Cell> {
-        self.cells.last_mut()
     }
 }
 
@@ -85,10 +166,12 @@ impl Default for Row {
     }
 }
 
+/// a grid of styled rows that widgets render into, always at least one row
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Surface {
     rows:   Vec<Row>,
     cursor: Option<Position>,
+    sealed: bool,
 }
 
 impl Default for Surface {
@@ -98,29 +181,41 @@ impl Default for Surface {
 }
 
 impl Surface {
+    /// a surface holding one empty row
     pub fn new() -> Self {
         Self {
             rows:   vec![Row::new()],
             cursor: None,
+            sealed: false,
         }
     }
 
+    /// the rows from top to bottom
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
 
+    /// number of rows
     pub const fn height(&self) -> usize {
         self.rows.len()
     }
 
+    /// where the terminal cursor should rest, if a widget asked for one
     pub const fn cursor(&self) -> Option<Position> {
         self.cursor
     }
 
+    /// places the cursor at `position`
     pub const fn set_cursor(&mut self, position: Position) {
         self.cursor = Some(position);
     }
 
+    /// removes any cursor a widget placed
+    pub const fn clear_cursor(&mut self) {
+        self.cursor = None;
+    }
+
+    /// places the cursor at the end of the current row
     pub fn set_cursor_here(&mut self) {
         self.cursor = Some(Position {
             row: self.rows.len().saturating_sub(1),
@@ -128,41 +223,178 @@ impl Surface {
         });
     }
 
+    /// writes text per grapheme cluster, tabs expand to eight columns, other
+    /// controls are dropped
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
-        for ch in text.as_ref().chars() {
-            if ch == '\n' {
-                self.newline();
-            } else if let Some(cell) = Cell::new(ch, style) {
-                self.current_row_mut().push(cell);
-            } else if let Some(last) = self.current_row_mut().last_mut() {
-                last.text.push(ch);
+        let mut col = self.current_col();
+        let mut first = true;
+        let sealed = mem::take(&mut self.sealed);
+        let mut remaining = text.as_ref();
+        if !sealed && let Some(consumed) = self.extend_last_cell(remaining) {
+            remaining = &remaining[consumed..];
+            col = self.current_col();
+        }
+        for (_, segment) in segments(remaining) {
+            match segment {
+                Segment::Newline => self.newline(),
+                Segment::Tab => {
+                    for _ in col..segment.advance(col) {
+                        self.current_row_mut().cells.push(space(style));
+                    }
+                },
+                Segment::Cluster {
+                    text: cluster,
+                    width,
+                    ..
+                } => {
+                    let joined = width == 0
+                        && !(sealed && first)
+                        && self.current_row_mut().cells.last_mut().is_some_and(|last| {
+                            let before = last.width;
+                            last.attach(cluster);
+                            col = col + last.width - before;
+                            true
+                        });
+                    if !joined && width > 0 {
+                        self.current_row_mut().cells.push(Cell {
+                            text: cluster.to_owned(),
+                            width,
+                            style,
+                        });
+                    }
+                    if joined {
+                        first = false;
+                        continue;
+                    }
+                },
+            }
+            first = false;
+            col = segment.advance(col);
+        }
+    }
+
+    /// joins the start of `text` onto the last cell when the two form one
+    /// grapheme cluster, returning the bytes of `text` taken
+    fn extend_last_cell(&mut self, text: &str) -> Option<usize> {
+        let last = self.current_row_mut().cells.last_mut()?;
+        if last.text.len() > JOIN_CELL_LIMIT {
+            return None;
+        }
+        let mut combined = String::with_capacity(last.text.len() + text.len());
+        combined.push_str(&last.text);
+        combined.push_str(text);
+        let cluster = combined.graphemes(true).next()?;
+        let consumed = cluster
+            .len()
+            .checked_sub(last.text.len())
+            .filter(|&taken| taken > 0)?;
+        last.extend_cluster(text, consumed);
+        Some(consumed)
+    }
+
+    pub(crate) fn drop_colors(&mut self) {
+        for cell in self.rows.iter_mut().flat_map(|row| row.cells.iter_mut()) {
+            cell.style.fg = None;
+            cell.style.bg = None;
+        }
+    }
+
+    pub(crate) fn push_cell(&mut self, cell: &Cell) {
+        self.current_row_mut().cells.push(cell.clone());
+    }
+
+    pub(crate) fn harden_soft_breaks(&mut self) {
+        for row in &mut self.rows {
+            if row.break_after() == RowBreak::Soft {
+                row.set_break_after(RowBreak::Hard);
             }
         }
     }
 
+    pub(crate) const fn seal(&mut self) {
+        self.sealed = true;
+    }
+
+    /// ends the current row with a hard break and starts another
     pub fn newline(&mut self) {
         self.newline_with_break(RowBreak::Hard);
     }
 
+    /// ends the current row with a soft break, the next row continues it
     pub fn soft_wrap(&mut self) {
         self.newline_with_break(RowBreak::Soft);
     }
 
+    /// display width of the row being written
     pub fn current_col(&self) -> usize {
         self.rows
             .last()
             .map_or(0, |row| row.cells().iter().map(|cell| cell.width).sum())
     }
 
+    /// display width of row `row`, zero if it does not exist
     pub fn row_width(&self, row: usize) -> usize {
         self.rows
             .get(row)
             .map_or(0, |found| found.cells().iter().map(|cell| cell.width).sum())
     }
 
-    pub fn fit_width(&mut self, terminal_width: usize) {
-        let max_columns = fitted_columns(terminal_width);
+    /// display width of the widest row
+    pub fn display_width(&self) -> usize {
+        self.rows
+            .iter()
+            .map(|row| row.cells().iter().map(|cell| cell.width).sum())
+            .max()
+            .unwrap_or(0)
+    }
 
+    /// draws `source` at `destination`, clipped to `canvas`, `fill` and
+    /// `cursor` pick what survives
+    pub fn overlay(
+        &mut self,
+        source: &Self,
+        destination: Rect,
+        canvas: Rect,
+        fill: Fill,
+        cursor: CursorMerge,
+    ) {
+        let requested = destination.intersection(canvas);
+        if !requested.is_empty() {
+            for row in requested.origin.row..requested.bottom() {
+                let source_row = row.saturating_sub(destination.origin.row);
+                let writes = overlay_writes(source, source_row, destination, requested, fill);
+                let blank_bears_cursor = writes.is_empty()
+                    && matches!(cursor, CursorMerge::PreferOverlay)
+                    && overlay_cursor(source, destination, canvas)
+                        .is_some_and(|position| position.row == row);
+                if writes.is_empty() && !blank_bears_cursor {
+                    continue;
+                }
+                self.ensure_row(row);
+                if !writes.is_empty() {
+                    apply_writes(
+                        &mut self.rows[row],
+                        &writes,
+                        canvas.origin.col,
+                        canvas.right(),
+                    );
+                }
+            }
+        }
+
+        match cursor {
+            CursorMerge::PreserveBase => {},
+            CursorMerge::Hide => self.cursor = None,
+            CursorMerge::PreferOverlay => {
+                if let Some(position) = overlay_cursor(source, destination, canvas) {
+                    self.cursor = Some(position);
+                }
+            },
+        }
+    }
+
+    /// clips every row to `max_columns` and clamps the cursor to that width
+    pub fn fit_width(&mut self, max_columns: usize) {
         for row in &mut self.rows {
             let mut width = 0_usize;
             let keep = row
@@ -178,16 +410,26 @@ impl Surface {
                     }
                 })
                 .count();
-            row.truncate(keep);
+            row.cells.truncate(keep);
         }
 
         if let Some(cursor) = self.cursor {
             let row = cursor.row.min(self.rows.len().saturating_sub(1));
-            let col = cursor.col.min(self.row_width(row)).min(max_columns);
+            let col = cursor.col.min(max_columns);
             self.cursor = Some(Position { row, col });
         }
     }
 
+    /// clips physical rows to a terminal height and discards an outside cursor
+    pub fn fit_height(&mut self, terminal_height: usize) {
+        let height = terminal_height.max(1);
+        self.rows.truncate(height);
+        if self.cursor.is_some_and(|cursor| cursor.row >= height) {
+            self.cursor = None;
+        }
+    }
+
+    /// the text of every row without styles, joined by newlines
     pub fn plain_text(&self) -> String {
         self.rows
             .iter()
@@ -215,8 +457,725 @@ impl Surface {
             .last_mut()
             .expect("surface always contains at least one row")
     }
+
+    fn ensure_row(&mut self, row: usize) {
+        while self.rows.len() <= row {
+            self.rows.push(Row::new());
+        }
+    }
 }
 
-fn fitted_columns(terminal_width: usize) -> usize {
-    terminal_width.saturating_sub(1).max(1)
+#[derive(Clone)]
+enum Column {
+    Cell(Cell),
+    Continuation { start: usize },
+}
+
+#[derive(Clone)]
+struct PlacedCell {
+    start: usize,
+    cell:  Cell,
+}
+
+fn overlay_writes(
+    source: &Surface,
+    source_row: usize,
+    destination: Rect,
+    requested: Rect,
+    fill: Fill,
+) -> Vec<PlacedCell> {
+    let mut writes = Vec::new();
+    if let Fill::Opaque(style) = fill {
+        writes.extend((requested.origin.col..requested.right()).map(|start| {
+            PlacedCell {
+                start,
+                cell: Cell {
+                    text: " ".into(),
+                    width: 1,
+                    style,
+                },
+            }
+        }));
+    }
+
+    let Some(row) = source.rows().get(source_row) else {
+        return writes;
+    };
+    let mut source_col = 0_usize;
+    for cell in row.cells() {
+        let source_right = source_col.saturating_add(cell.width);
+        let target = destination.origin.col.saturating_add(source_col);
+        let target_right = target.saturating_add(cell.width);
+        let inside_source = source_right <= destination.size.width;
+        let inside_requested = target >= requested.origin.col && target_right <= requested.right();
+        if inside_source && inside_requested {
+            writes.retain(|write| write.start < target || write.start >= target_right);
+            writes.push(PlacedCell {
+                start: target,
+                cell:  cell.clone(),
+            });
+        }
+        source_col = source_right;
+    }
+    writes.sort_by_key(|write| write.start);
+    writes
+}
+
+fn apply_writes(row: &mut Row, writes: &[PlacedCell], canvas_left: usize, canvas_right: usize) {
+    let mut columns = columns(row);
+    for write in writes {
+        let end = write
+            .start
+            .saturating_add(write.cell.width)
+            .min(canvas_right);
+        if end.saturating_sub(write.start) != write.cell.width {
+            continue;
+        }
+        ensure_columns(&mut columns, end);
+        if (write.start..end)
+            .any(|column| !footprint_within(&columns, column, canvas_left, canvas_right))
+        {
+            continue;
+        }
+        for column in write.start..end {
+            clear_column(&mut columns, column);
+        }
+        columns[write.start] = Column::Cell(write.cell.clone());
+        for slot in columns
+            .iter_mut()
+            .take(end)
+            .skip(write.start.saturating_add(1))
+        {
+            *slot = Column::Continuation { start: write.start };
+        }
+    }
+    row.cells = rebuild(&columns);
+}
+
+fn footprint_within(columns: &[Column], column: usize, left: usize, right: usize) -> bool {
+    let Some(slot) = columns.get(column) else {
+        return true;
+    };
+    let start = match slot {
+        Column::Cell(_) => column,
+        Column::Continuation { start } => *start,
+    };
+    let Some(Column::Cell(cell)) = columns.get(start) else {
+        return true;
+    };
+    start >= left && start.saturating_add(cell.width) <= right
+}
+
+fn columns(row: &Row) -> Vec<Column> {
+    let mut columns = Vec::new();
+    for cell in row.cells() {
+        let start = columns.len();
+        columns.push(Column::Cell(cell.clone()));
+        columns.extend(iter::repeat_n(
+            Column::Continuation { start },
+            cell.width.saturating_sub(1),
+        ));
+    }
+    columns
+}
+
+fn ensure_columns(columns: &mut Vec<Column>, len: usize) {
+    columns.extend(
+        iter::repeat_with(|| Column::Cell(space(Style::PLAIN)))
+            .take(len.saturating_sub(columns.len())),
+    );
+}
+
+fn clear_column(columns: &mut [Column], column: usize) {
+    let Some(target) = columns.get(column) else {
+        return;
+    };
+    let start = match target {
+        Column::Cell(_) => column,
+        Column::Continuation { start } => *start,
+    };
+    let Some(Column::Cell(cell)) = columns.get(start) else {
+        return;
+    };
+    let width = cell.width;
+    let style = cell.style;
+    for slot in columns.iter_mut().skip(start).take(width) {
+        *slot = Column::Cell(space(style));
+    }
+}
+
+fn rebuild(columns: &[Column]) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let mut column = 0_usize;
+    while column < columns.len() {
+        match &columns[column] {
+            Column::Cell(cell) => {
+                let width = cell.width.max(1);
+                cells.push(cell.clone());
+                column = column.saturating_add(width);
+            },
+            Column::Continuation { .. } => {
+                cells.push(space(Style::PLAIN));
+                column += 1;
+            },
+        }
+    }
+    cells
+}
+
+fn space(style: Style) -> Cell {
+    Cell {
+        text: " ".into(),
+        width: 1,
+        style,
+    }
+}
+
+fn overlay_cursor(source: &Surface, destination: Rect, canvas: Rect) -> Option<Position> {
+    let source_cursor = source.cursor()?;
+    if source_cursor.row >= source.height()
+        || source_cursor.row >= destination.size.height
+        || source_cursor.col > source.row_width(source_cursor.row)
+        || source_cursor.col > destination.size.width
+    {
+        return None;
+    }
+    let position = Position {
+        row: destination.origin.row.checked_add(source_cursor.row)?,
+        col: destination.origin.col.checked_add(source_cursor.col)?,
+    };
+    (position.row >= canvas.origin.row
+        && position.row < canvas.bottom()
+        && position.col >= canvas.origin.col
+        && position.col <= canvas.right())
+    .then_some(position)
+}
+
+pub(crate) fn append_surface(out: &mut Surface, surface: &Surface, limit: usize) -> usize {
+    let rows = surface.rows().iter().take(limit);
+    let inlined_prefix = out.current_col();
+    let base_row = out.height().saturating_sub(1);
+    let mut written = 0_usize;
+    for (row_index, row) in rows.enumerate() {
+        if row_index > 0 {
+            let previous_break = surface.rows()[row_index - 1].break_after();
+            out.newline_with_break(previous_break);
+        }
+        for cell in row.cells() {
+            out.push_cell(cell);
+        }
+        out.current_row_mut().set_break_after(row.break_after());
+        written += 1;
+    }
+    if let Some(cursor) = surface.cursor()
+        && cursor.row < written
+    {
+        let col = if cursor.row == 0 {
+            inlined_prefix.saturating_add(cursor.col)
+        } else {
+            cursor.col
+        };
+        out.set_cursor(Position {
+            row: base_row + cursor.row,
+            col,
+        });
+    }
+    written
+}
+
+#[cfg(test)]
+mod tests {
+    use core::time::Duration;
+    use std::time::Instant;
+
+    use super::*;
+    use crate::Color;
+
+    fn surface(text: &str) -> Surface {
+        let mut surface = Surface::new();
+        surface.write(text, Style::PLAIN);
+        surface
+    }
+
+    #[test]
+    fn a_cluster_split_across_writes_is_measured_whole() {
+        for (first, second, text, width) in [
+            ("\u{2764}", "\u{fe0f}", "\u{2764}\u{fe0f}", 2),
+            ("e", "\u{301}", "e\u{301}", 1),
+            ("🇯", "🇵", "🇯🇵", 2),
+            ("👩\u{200d}", "💻", "👩\u{200d}💻", 2),
+        ] {
+            let mut split = Surface::new();
+            split.write(first, Style::PLAIN);
+            split.write(second, Style::PLAIN);
+            assert_eq!(split, surface(text), "{text:?}");
+            assert_eq!(split.display_width(), width, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_split_at_any_character_lays_out_like_the_whole_text() {
+        for text in [
+            "👩\u{200d}💻",
+            "👨\u{200d}👩\u{200d}👧\u{200d}👦x",
+            "🇯🇵🇺🇸",
+            "x🇯🇵🇺🇸🇩🇪y",
+            "\u{2764}\u{fe0f}x",
+            "1\u{fe0f}\u{20e3}2",
+            "👍🏽 ok",
+            "e\u{301}\u{302}x",
+            "한국어",
+            "a\u{200b}b",
+        ] {
+            let whole = surface(text);
+            for (at, _) in text.char_indices().skip(1) {
+                let mut split = Surface::new();
+                split.write(&text[..at], Style::PLAIN);
+                split.write(&text[at..], Style::PLAIN);
+                assert_eq!(split, whole, "{text:?} split at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_tab_after_a_joined_cluster_expands_from_the_widened_column() {
+        let mut split = Surface::new();
+        split.write("\u{2764}", Style::PLAIN);
+        split.write("\u{fe0f}\tX", Style::PLAIN);
+        assert_eq!(split, surface("\u{2764}\u{fe0f}\tX"));
+        assert_eq!(split.display_width(), 9);
+    }
+
+    #[test]
+    fn long_runs_of_zero_width_characters_are_laid_out_in_linear_time() {
+        let run = "\u{200b}".repeat(40_000);
+        let started = Instant::now();
+
+        let mut one = Surface::new();
+        one.write(format!("a{run}b"), Style::PLAIN);
+        let mut split = Surface::new();
+        split.write("a", Style::PLAIN);
+        for _ in 0..40_000 {
+            split.write("\u{200b}", Style::PLAIN);
+        }
+        let mut interleaved = Surface::new();
+        interleaved.write("ab\u{200b}".repeat(20_000), Style::PLAIN);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(one.display_width(), 2);
+        assert_eq!(split.display_width(), 1);
+        assert_eq!(interleaved.display_width(), 40_000);
+        assert_eq!(crate::width(&format!("a{run}b")), 2);
+    }
+
+    #[test]
+    fn a_second_cluster_does_not_join_the_first() {
+        let mut split = Surface::new();
+        split.write("a", Style::PLAIN);
+        split.write("b", Style::PLAIN);
+        assert_eq!(split.rows[0].cells().len(), 2);
+    }
+
+    #[test]
+    fn a_cell_is_built_from_exactly_one_cluster() {
+        let heart = Cell::new("\u{2764}\u{fe0f}", Style::PLAIN).unwrap();
+        assert_eq!((heart.text(), heart.width()), ("\u{2764}\u{fe0f}", 2));
+        assert!(Cell::new("ab", Style::PLAIN).is_none());
+        assert!(Cell::new("\u{301}", Style::PLAIN).is_none());
+        assert!(Cell::new("", Style::PLAIN).is_none());
+        assert!(Cell::new("\u{1b}", Style::PLAIN).is_none());
+    }
+
+    #[test]
+    fn transparent_and_opaque_gaps_have_distinct_semantics() {
+        let source = surface("XY");
+        let canvas = Rect::new(0, 0, 6, 1);
+
+        let mut transparent = surface("abcdef");
+        transparent.overlay(
+            &source,
+            Rect::new(0, 2, 4, 1),
+            canvas,
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(transparent.plain_text(), "abXYef");
+
+        let fill = Style::PLAIN.bg(Color::Blue);
+        let mut opaque = surface("abcdef");
+        opaque.overlay(
+            &source,
+            Rect::new(0, 2, 4, 1),
+            canvas,
+            Fill::Opaque(fill),
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(opaque.plain_text(), "abXY  ");
+        assert_eq!(opaque.rows()[0].cells().last().unwrap().style, fill);
+    }
+
+    #[test]
+    fn explicit_spaces_are_opaque_in_transparent_mode() {
+        let mut base = surface("abc");
+        base.overlay(
+            &surface(" "),
+            Rect::new(0, 1, 1, 1),
+            Rect::new(0, 0, 3, 1),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(base.plain_text(), "a c");
+    }
+
+    #[test]
+    fn overlay_repairs_an_intersected_wide_base_cell() {
+        let wide = Style::PLAIN.fg(Color::Magenta);
+        let mut base = Surface::new();
+        base.write("a", Style::PLAIN);
+        base.write("界", wide);
+        base.write("z", Style::PLAIN);
+        base.overlay(
+            &surface("X"),
+            Rect::new(0, 2, 1, 1),
+            Rect::new(0, 0, 4, 1),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+
+        assert_eq!(base.plain_text(), "a Xz");
+        assert_eq!(base.row_width(0), 4);
+        assert_eq!(base.rows()[0].cells()[1].style, wide);
+    }
+
+    #[test]
+    fn overlay_does_not_damage_a_wide_base_cell_across_the_canvas_edge() {
+        let mut base = surface("a界z");
+        base.overlay(
+            &surface("X"),
+            Rect::new(0, 2, 1, 1),
+            Rect::new(0, 2, 2, 1),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+
+        assert_eq!(base.plain_text(), "a界z");
+        assert_eq!(base.row_width(0), 4);
+    }
+
+    #[test]
+    fn clipped_wide_source_is_dropped_then_uses_fill_policy() {
+        let source = surface("界");
+        let destination = Rect::new(0, 1, 1, 1);
+        let canvas = Rect::new(0, 0, 3, 1);
+
+        let mut transparent = surface("abc");
+        transparent.overlay(
+            &source,
+            destination,
+            canvas,
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(transparent.plain_text(), "abc");
+
+        let mut opaque = surface("abc");
+        opaque.overlay(
+            &source,
+            destination,
+            canvas,
+            Fill::Opaque(Style::PLAIN),
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(opaque.plain_text(), "a c");
+    }
+
+    #[test]
+    fn combining_marks_copy_with_their_base() {
+        let source = surface("e\u{301}");
+        let mut base = surface("abc");
+        base.overlay(
+            &source,
+            Rect::new(0, 1, 1, 1),
+            Rect::new(0, 0, 3, 1),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(base.rows()[0].cells()[1].text, "e\u{301}");
+        assert_eq!(base.row_width(0), 3);
+    }
+
+    #[test]
+    fn overlay_materializes_blank_canvas_and_obeys_cursor_policy() {
+        let mut source = surface("x");
+        source.set_cursor(Position { row: 0, col: 0 });
+        let mut base = surface("a");
+        base.set_cursor(Position { row: 0, col: 1 });
+        base.overlay(
+            &source,
+            Rect::new(2, 3, 1, 1),
+            Rect::new(0, 0, 5, 4),
+            Fill::Transparent,
+            CursorMerge::PreferOverlay,
+        );
+        assert_eq!(base.height(), 3);
+        assert_eq!(base.plain_text(), "a\n\n   x");
+        assert_eq!(base.cursor(), Some(Position { row: 2, col: 3 }));
+
+        base.overlay(
+            &Surface::new(),
+            Rect::new(0, 0, 1, 1),
+            Rect::new(0, 0, 5, 4),
+            Fill::Transparent,
+            CursorMerge::Hide,
+        );
+        assert_eq!(base.cursor(), None);
+    }
+
+    #[test]
+    fn repeated_opaque_composition_is_idempotent() {
+        let source = surface("xy");
+        let mut base = surface("abcdef");
+        let destination = Rect::new(0, 1, 4, 1);
+        let canvas = Rect::new(0, 0, 6, 1);
+        base.overlay(
+            &source,
+            destination,
+            canvas,
+            Fill::Opaque(Style::PLAIN.bg(Color::Red)),
+            CursorMerge::PreserveBase,
+        );
+        let once = base.clone();
+        base.overlay(
+            &source,
+            destination,
+            canvas,
+            Fill::Opaque(Style::PLAIN.bg(Color::Red)),
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(base, once);
+    }
+
+    #[test]
+    fn ascii_overlays_clip_on_every_edge_and_compose_in_order() {
+        let mut base = surface("......\n......\n......");
+        let source = surface("abcd\nefgh");
+        base.overlay(
+            &source,
+            Rect::new(0, 0, 4, 2),
+            Rect::new(1, 1, 2, 1),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(base.plain_text(), "......\n.fg...\n......");
+
+        for (row, col) in [(0, 0), (0, 4), (2, 0), (2, 4)] {
+            base.overlay(
+                &surface("XY"),
+                Rect::new(row, col, 2, 1),
+                Rect::new(0, 0, 6, 3),
+                Fill::Transparent,
+                CursorMerge::PreserveBase,
+            );
+        }
+        base.overlay(
+            &surface("Z"),
+            Rect::new(2, 5, 1, 1),
+            Rect::new(0, 0, 6, 3),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(base.plain_text(), "XY..XY\n.fg...\nXY..XZ");
+    }
+
+    #[test]
+    fn wide_source_cells_are_copied_whole_or_not_at_all_at_each_boundary() {
+        for destination_width in 0..=3 {
+            for canvas_left in 0..=3 {
+                for canvas_width in 0..=4 {
+                    let mut base = surface(".....");
+                    let destination = Rect::new(0, 1, destination_width, 1);
+                    let canvas = Rect::new(0, canvas_left, canvas_width, 1);
+                    base.overlay(
+                        &surface("界"),
+                        destination,
+                        canvas,
+                        Fill::Transparent,
+                        CursorMerge::PreserveBase,
+                    );
+                    let copied = destination_width >= 2
+                        && canvas_left <= 1
+                        && canvas_left.saturating_add(canvas_width) >= 3;
+                    assert_eq!(
+                        base.plain_text().contains('界'),
+                        copied,
+                        "destination={destination:?}, canvas={canvas:?}",
+                    );
+                    assert_eq!(base.row_width(0), 5);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deterministic_composition_cases_preserve_surface_invariants() {
+        let texts = ["", "a", "界", "e\u{301}", "🙂x", "a界b"];
+        for base_text in texts {
+            for source_text in texts {
+                for row in 0..=2 {
+                    for col in 0..=4 {
+                        for width in 0..=4 {
+                            let mut base = surface(base_text);
+                            let original = base.clone();
+                            let empty = Surface::new();
+                            base.overlay(
+                                &empty,
+                                Rect::new(row, col, width, 2),
+                                Rect::new(0, 0, 6, 3),
+                                Fill::Transparent,
+                                CursorMerge::PreserveBase,
+                            );
+                            assert_eq!(base, original, "transparent empty source is identity");
+
+                            base.overlay(
+                                &surface(source_text),
+                                Rect::new(row, col, width, 2),
+                                Rect::new(0, 0, 6, 3),
+                                Fill::Opaque(Style::PLAIN.bg(Color::Blue)),
+                                CursorMerge::PreserveBase,
+                            );
+                            for (row_index, rendered) in base.rows().iter().enumerate() {
+                                assert!(rendered.cells().iter().all(|cell| cell.width > 0));
+                                assert_eq!(
+                                    rendered
+                                        .cells()
+                                        .iter()
+                                        .map(|cell| cell.width)
+                                        .sum::<usize>(),
+                                    base.row_width(row_index),
+                                );
+                            }
+                            let once = base.clone();
+                            base.overlay(
+                                &surface(source_text),
+                                Rect::new(row, col, width, 2),
+                                Rect::new(0, 0, 6, 3),
+                                Fill::Opaque(Style::PLAIN.bg(Color::Blue)),
+                                CursorMerge::PreserveBase,
+                            );
+                            assert_eq!(base, once, "opaque composition is idempotent");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_overlay_cursor_falls_back_to_the_base_cursor() {
+        let mut source = surface("x");
+        source.set_cursor(Position { row: 0, col: 0 });
+        let mut base = surface("base");
+        base.set_cursor(Position { row: 0, col: 2 });
+        base.overlay(
+            &source,
+            Rect::new(4, 4, 1, 1),
+            Rect::new(0, 0, 4, 2),
+            Fill::Transparent,
+            CursorMerge::PreferOverlay,
+        );
+        assert_eq!(base.cursor(), Some(Position { row: 0, col: 2 }));
+    }
+
+    #[test]
+    fn overlay_cursor_may_follow_the_final_child_cell() {
+        let mut source = surface("xy");
+        source.set_cursor(Position { row: 0, col: 2 });
+        let mut base = surface("....");
+        base.overlay(
+            &source,
+            Rect::new(0, 1, 2, 1),
+            Rect::new(0, 0, 4, 1),
+            Fill::Transparent,
+            CursorMerge::PreferOverlay,
+        );
+        assert_eq!(base.cursor(), Some(Position { row: 0, col: 3 }));
+    }
+
+    #[test]
+    fn append_surface_preserves_soft_row_boundaries() {
+        let mut source = surface("abc");
+        source.soft_wrap();
+        source.write("def", Style::PLAIN);
+        let mut output = Surface::new();
+
+        append_surface(&mut output, &source, source.height());
+
+        assert_eq!(output.rows()[0].break_after(), RowBreak::Soft);
+        assert_eq!(output.rows()[1].break_after(), RowBreak::None);
+    }
+
+    #[test]
+    fn overlay_keeps_base_row_break_metadata() {
+        let mut base = surface("abcd");
+        base.rows[0].set_break_after(RowBreak::Soft);
+        let mut source = surface("xy");
+        source.rows[0].set_break_after(RowBreak::Hard);
+        base.overlay(
+            &source,
+            Rect::new(0, 1, 2, 1),
+            Rect::new(0, 0, 4, 1),
+            Fill::Transparent,
+            CursorMerge::PreserveBase,
+        );
+        assert_eq!(base.rows()[0].break_after(), RowBreak::Soft);
+    }
+
+    #[test]
+    fn inline_appended_cursor_starts_after_the_destination_prefix() {
+        let mut output = surface("pre");
+        let mut appended = surface("ab");
+        appended.set_cursor(Position { row: 0, col: 1 });
+        append_surface(&mut output, &appended, appended.height());
+        assert_eq!(output.plain_text(), "preab");
+        assert_eq!(output.cursor(), Some(Position { row: 0, col: 4 }));
+    }
+
+    #[test]
+    fn transparent_blank_row_still_adopts_the_preferred_cursor() {
+        let mut overlay = Surface::new();
+        overlay.set_cursor(Position { row: 0, col: 0 });
+        let mut base = surface("base");
+        base.set_cursor(Position { row: 0, col: 2 });
+        base.overlay(
+            &overlay,
+            Rect::new(0, 1, 2, 1),
+            Rect::new(0, 0, 4, 1),
+            Fill::Transparent,
+            CursorMerge::PreferOverlay,
+        );
+        assert_eq!(base.plain_text(), "base");
+        assert_eq!(base.cursor(), Some(Position { row: 0, col: 1 }));
+    }
+
+    #[test]
+    fn fit_width_keeps_a_cursor_on_a_blank_row_past_column_zero() {
+        let mut surface = Surface::new();
+        surface.newline();
+        surface.set_cursor(Position { row: 1, col: 4 });
+        surface.fit_width(10);
+        assert_eq!(surface.cursor(), Some(Position { row: 1, col: 4 }));
+    }
+
+    #[test]
+    fn fit_width_still_clamps_a_blank_rows_cursor_to_max_columns() {
+        let mut surface = Surface::new();
+        surface.newline();
+        surface.set_cursor(Position { row: 1, col: 9 });
+        surface.fit_width(4);
+        assert_eq!(surface.cursor(), Some(Position { row: 1, col: 4 }));
+    }
 }
