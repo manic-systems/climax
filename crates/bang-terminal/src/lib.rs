@@ -2,11 +2,11 @@
 
 //! bang-terminal: terminal session toolkit behind the bang prompts
 //!
-//! install a [`SignalGuard`] first, then take the terminal out of line mode
-//! with a [`TerminalModeGuard`], claim the screen with a [`ScreenGuard`] and
-//! pull input from [`TerminalEvents`], each guard restores on drop or through
-//! `restore` or `leave`, drop them in reverse order so the signal handlers come
-//! back last
+//! take the terminal out of line mode with a [`TerminalModeGuard`], claim the
+//! screen with a [`ScreenGuard`] and pull input from [`TerminalEvents`], each
+//! guard restores on drop or through `restore` or `leave`, so restore them in
+//! reverse order. a [`SignalGuard`] is optional, install it first when signals
+//! must be handled and drop it last
 //!
 //! ```no_run
 //! use std::io::{
