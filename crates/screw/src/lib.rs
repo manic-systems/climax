@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! screw: a differential terminal renderer with composable widgets.
+//! screw: a differential terminal renderer with composable widgets
 //!
 //! a tree of [`Widget`]s draws into a [`Surface`] of styled rows. the
 //! [`Renderer`] remembers the previous frame and writes only the sequences that
