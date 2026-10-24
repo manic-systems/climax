@@ -44,6 +44,7 @@ pub struct SearchSelect {
     items:     Vec<SelectItem>,
     matches:   Vec<usize>,
     selected:  usize,
+    anchor:    Option<usize>,
     top:       usize,
     page_size: usize,
     layout:    PageLayout,
@@ -68,6 +69,7 @@ impl SearchSelect {
             items: collected,
             matches,
             selected: 0,
+            anchor: None,
             top: 0,
             page_size: navigation::DEFAULT_PAGE_SIZE,
             layout: PageLayout::default(),
@@ -183,6 +185,7 @@ impl SearchSelect {
     }
 
     fn recompute_matches(&mut self) {
+        let anchor = self.selected_item_index().or(self.anchor);
         let query = self.query();
         self.matches = self
             .items
@@ -190,8 +193,15 @@ impl SearchSelect {
             .enumerate()
             .filter_map(|(index, item)| matches_query(&item.label, query).then_some(index))
             .collect();
-        self.selected = self.selected.min(self.matches.len().saturating_sub(1));
+        self.selected = anchor
+            .and_then(|item| self.matches.iter().position(|index| *index == item))
+            .unwrap_or_else(|| self.selected.min(self.matches.len().saturating_sub(1)));
+        self.anchor = self.selected_item_index().or(anchor);
         self.ensure_visible();
+    }
+
+    fn selected_item_index(&self) -> Option<usize> {
+        self.matches.get(self.selected).copied()
     }
 
     fn move_by(&mut self, delta: isize, wrap: bool) -> Reaction {
@@ -302,10 +312,19 @@ impl Widget for SearchSelect {
         self.id.clone()
     }
 
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
         match &event {
             Event::Key(key) => {
+                let targets = self.layout.take_targets();
                 match key.key {
                     Key::Up => self.move_by(-1, self.wrap),
                     Key::Down => self.move_by(1, self.wrap),
@@ -313,7 +332,7 @@ impl Widget for SearchSelect {
                     Key::Char('n') if only_control(key) => self.move_by(1, self.wrap),
                     Key::PageUp => {
                         match navigation::page_action(
-                            self.layout.target(false),
+                            targets.target(false),
                             self.visible_len(),
                             false,
                         ) {
@@ -323,7 +342,7 @@ impl Widget for SearchSelect {
                     },
                     Key::PageDown => {
                         match navigation::page_action(
-                            self.layout.target(true),
+                            targets.target(true),
                             self.visible_len(),
                             true,
                         ) {
@@ -428,6 +447,21 @@ mod tests {
         assert_eq!(lines.next(), Some("pick one"));
         assert!(lines.next().unwrap().starts_with("search: "), "{plain}");
         assert!(lines.next().unwrap().contains("alpha"), "{plain}");
+    }
+
+    #[test]
+    fn the_selection_follows_its_item_through_a_filter() {
+        let mut select =
+            SearchSelect::new("s", ["bb", "ab", "aa", "cc"]).with_selected_match_index(1);
+        let mut cx = Context::new();
+
+        select.handle(Event::char('a'), &mut cx);
+        assert_eq!(select.selected_item().unwrap().label, "ab");
+
+        select.handle(Event::char('z'), &mut cx);
+        assert_eq!(select.selected_item(), None);
+        select.handle(Event::key(Key::Backspace), &mut cx);
+        assert_eq!(select.selected_item().unwrap().label, "ab");
     }
 
     #[test]

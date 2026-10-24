@@ -17,6 +17,8 @@ use crate::{
     Context,
     Event,
     Key,
+    KeyEvent,
+    Modifiers,
     Reaction,
     Value,
     Widget,
@@ -84,10 +86,11 @@ impl TextInput {
         self
     }
 
-    /// starts with `value` typed and the cursor after it
+    /// starts with `value` typed and the cursor after it, control characters
+    /// are dropped as they are when typing
     #[must_use]
     pub fn with_value(mut self, value: impl Into<String>) -> Self {
-        self.value = value.into();
+        self.value = value.into().chars().filter(|ch| !ch.is_control()).collect();
         self.cursor = self.value.len();
         self
     }
@@ -105,8 +108,16 @@ impl TextInput {
 
     /// renders every grapheme cluster of the value as `mask`, leaving the value
     /// itself untouched
+    ///
+    /// # Panics
+    ///
+    /// panics when `mask` is a control character or takes no columns
     #[must_use]
-    pub const fn with_mask(mut self, mask: char) -> Self {
+    pub fn with_mask(mut self, mask: char) -> Self {
+        assert!(
+            !mask.is_control() && screw::width(mask.encode_utf8(&mut [0; 4])) > 0,
+            "text input mask {mask:?} must be a visible character"
+        );
         self.mask = Some(mask);
         self
     }
@@ -179,6 +190,96 @@ impl TextInput {
         }
         let next = next_boundary(&self.value, self.cursor);
         self.value.replace_range(self.cursor..next, "");
+        self.snap_cursor();
+        self.error = None;
+        Reaction::Changed
+    }
+
+    fn word_start(&self) -> usize {
+        if self.mask.is_some() {
+            return 0;
+        }
+        let mut segments = self.value[..self.cursor]
+            .split_word_bound_indices()
+            .rev()
+            .peekable();
+        while segments
+            .next_if(|(_, text)| word_class(text) == WordClass::Space)
+            .is_some()
+        {}
+        let Some((mut start, first)) = segments.next() else {
+            return 0;
+        };
+        if word_class(first) == WordClass::Punctuation {
+            while let Some((index, _)) =
+                segments.next_if(|(_, text)| word_class(text) == WordClass::Punctuation)
+            {
+                start = index;
+            }
+        }
+        start
+    }
+
+    fn word_end(&self) -> usize {
+        if self.mask.is_some() {
+            return self.value.len();
+        }
+        let rest = &self.value[self.cursor..];
+        let mut segments = rest.split_word_bound_indices().peekable();
+        while segments
+            .next_if(|(_, text)| word_class(text) == WordClass::Space)
+            .is_some()
+        {}
+        let Some((index, first)) = segments.next() else {
+            return self.value.len();
+        };
+        let mut end = index + first.len();
+        if word_class(first) == WordClass::Punctuation {
+            while let Some((at, text)) =
+                segments.next_if(|(_, text)| word_class(text) == WordClass::Punctuation)
+            {
+                end = at + text.len();
+            }
+        }
+        self.cursor + end
+    }
+
+    fn move_word_left(&mut self) -> Reaction {
+        let target = self.word_start();
+        if target == self.cursor {
+            return Reaction::Ignored;
+        }
+        self.cursor = target;
+        Reaction::Changed
+    }
+
+    fn move_word_right(&mut self) -> Reaction {
+        let target = self.word_end();
+        if target == self.cursor {
+            return Reaction::Ignored;
+        }
+        self.cursor = target;
+        Reaction::Changed
+    }
+
+    fn delete_word_left(&mut self) -> Reaction {
+        let start = self.word_start();
+        if start == self.cursor {
+            return Reaction::Ignored;
+        }
+        self.value.replace_range(start..self.cursor, "");
+        self.cursor = start;
+        self.snap_cursor();
+        self.error = None;
+        Reaction::Changed
+    }
+
+    fn delete_word_right(&mut self) -> Reaction {
+        let end = self.word_end();
+        if end == self.cursor {
+            return Reaction::Ignored;
+        }
+        self.value.replace_range(self.cursor..end, "");
         self.snap_cursor();
         self.error = None;
         Reaction::Changed
@@ -275,6 +376,14 @@ impl Widget for TextInput {
             Event::Key(key) => {
                 match key.key {
                     Key::Char(value) if no_modifiers(&key) => self.insert_char(value),
+                    Key::Char('w') if key.modifiers == Modifiers::CONTROL => {
+                        self.delete_word_left()
+                    },
+                    Key::Char('d') if key.modifiers == Modifiers::ALT => self.delete_word_right(),
+                    Key::Backspace if key.modifiers == Modifiers::ALT => self.delete_word_left(),
+                    Key::Delete if key.modifiers == Modifiers::CONTROL => self.delete_word_right(),
+                    Key::Left if by_word(&key) => self.move_word_left(),
+                    Key::Right if by_word(&key) => self.move_word_right(),
                     Key::Backspace => self.backspace(),
                     Key::Delete => self.delete(),
                     Key::Left => self.move_left(),
@@ -302,6 +411,27 @@ impl Widget for TextInput {
     fn current_value(&self) -> Option<Value> {
         Some(Value::from(self.value.clone()))
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WordClass {
+    Space,
+    Word,
+    Punctuation,
+}
+
+fn word_class(segment: &str) -> WordClass {
+    if segment.chars().all(char::is_whitespace) {
+        WordClass::Space
+    } else if segment.chars().any(char::is_alphanumeric) {
+        WordClass::Word
+    } else {
+        WordClass::Punctuation
+    }
+}
+
+fn by_word(key: &KeyEvent) -> bool {
+    key.modifiers == Modifiers::CONTROL || key.modifiers == Modifiers::ALT
 }
 
 fn previous_boundary(value: &str, cursor: usize) -> usize {
@@ -433,6 +563,115 @@ mod tests {
         widget.handle(Event::Key(crate::KeyEvent::new(Key::Delete)), &mut cx);
         assert_eq!(widget.value(), "a");
         assert_eq!(draw(&widget).cursor(), Some(Position { row: 0, col: 1 }));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a visible character")]
+    fn a_newline_mask_is_refused() {
+        drop(TextInput::new("secret").with_mask('\n'));
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a visible character")]
+    fn a_zero_width_mask_is_refused() {
+        drop(TextInput::new("secret").with_mask('\u{200b}'));
+    }
+
+    #[test]
+    fn a_starting_value_loses_its_control_characters() {
+        let widget = TextInput::new("name").with_value("a\nb\u{1b}[2Jc");
+        assert_eq!(widget.value(), "ab[2Jc");
+        assert_eq!(widget.cursor_byte_index(), widget.value().len());
+    }
+
+    fn chord(widget: &mut TextInput, key: Key, modifiers: Modifiers) -> Reaction {
+        widget.handle(
+            Event::Key(KeyEvent::with_modifiers(key, modifiers)),
+            &mut Context::new(),
+        )
+    }
+
+    #[test]
+    fn control_and_alt_arrows_move_by_word() {
+        for modifiers in [Modifiers::CONTROL, Modifiers::ALT] {
+            let mut widget = TextInput::new("line").with_value("foo  bar, baz");
+            chord(&mut widget, Key::Left, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 10);
+            chord(&mut widget, Key::Left, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 8);
+            chord(&mut widget, Key::Left, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 5);
+            chord(&mut widget, Key::Left, modifiers);
+            chord(&mut widget, Key::Left, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 0);
+            assert_eq!(chord(&mut widget, Key::Left, modifiers), Reaction::Ignored);
+
+            chord(&mut widget, Key::Right, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 3);
+            chord(&mut widget, Key::Right, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 8);
+            chord(&mut widget, Key::Right, modifiers);
+            assert_eq!(widget.cursor_byte_index(), 9);
+            chord(&mut widget, Key::Right, modifiers);
+            chord(&mut widget, Key::Right, modifiers);
+            assert_eq!(widget.cursor_byte_index(), widget.value().len());
+            assert_eq!(chord(&mut widget, Key::Right, modifiers), Reaction::Ignored);
+        }
+    }
+
+    #[test]
+    fn word_deletion_works_in_both_directions() {
+        let mut widget = TextInput::new("line").with_value("foo bar baz");
+        chord(&mut widget, Key::Char('w'), Modifiers::CONTROL);
+        assert_eq!(widget.value(), "foo bar ");
+        chord(&mut widget, Key::Backspace, Modifiers::ALT);
+        assert_eq!(widget.value(), "foo ");
+
+        chord(&mut widget, Key::Home, Modifiers::empty());
+        chord(&mut widget, Key::Char('d'), Modifiers::ALT);
+        assert_eq!(widget.value(), " ");
+        let mut forward = TextInput::new("line").with_value("foo bar");
+        chord(&mut forward, Key::Home, Modifiers::empty());
+        chord(&mut forward, Key::Delete, Modifiers::CONTROL);
+        assert_eq!(forward.value(), " bar");
+        assert_eq!(forward.cursor_byte_index(), 0);
+    }
+
+    #[test]
+    fn a_word_never_splits_a_grapheme_cluster() {
+        let mut widget = TextInput::new("line").with_value("cafe\u{301} bar");
+        chord(&mut widget, Key::Left, Modifiers::CONTROL);
+        chord(&mut widget, Key::Left, Modifiers::CONTROL);
+        assert_eq!(widget.cursor_byte_index(), 0);
+        chord(&mut widget, Key::Right, Modifiers::CONTROL);
+        assert_eq!(widget.cursor_byte_index(), "cafe\u{301}".len());
+        chord(&mut widget, Key::Char('w'), Modifiers::CONTROL);
+        assert_eq!(widget.value(), " bar");
+    }
+
+    #[test]
+    fn wide_characters_and_punctuation_runs_move_like_words() {
+        let mut widget = TextInput::new("line").with_value("日本 x...y");
+        chord(&mut widget, Key::Left, Modifiers::ALT);
+        assert_eq!(widget.cursor_byte_index(), "日本 x...".len());
+        chord(&mut widget, Key::Left, Modifiers::ALT);
+        assert_eq!(widget.cursor_byte_index(), "日本 x".len());
+        chord(&mut widget, Key::Left, Modifiers::ALT);
+        chord(&mut widget, Key::Left, Modifiers::ALT);
+        assert_eq!(widget.cursor_byte_index(), "日".len());
+    }
+
+    #[test]
+    fn a_masked_value_is_one_word() {
+        let mut widget = TextInput::new("secret")
+            .with_mask('*')
+            .with_value("two words");
+        chord(&mut widget, Key::Left, Modifiers::CONTROL);
+        assert_eq!(widget.cursor_byte_index(), 0);
+        chord(&mut widget, Key::Right, Modifiers::CONTROL);
+        assert_eq!(widget.cursor_byte_index(), widget.value().len());
+        chord(&mut widget, Key::Char('w'), Modifiers::CONTROL);
+        assert_eq!(widget.value(), "");
     }
 
     #[test]
