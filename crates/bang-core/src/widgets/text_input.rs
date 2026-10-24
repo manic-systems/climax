@@ -290,6 +290,7 @@ impl Widget for TextInput {
                     | Key::Down
                     | Key::PageUp
                     | Key::PageDown
+                    | Key::Insert
                     | Key::Function(_) => Reaction::Ignored,
                 }
             },
