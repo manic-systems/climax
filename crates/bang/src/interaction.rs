@@ -441,7 +441,13 @@ pub(crate) fn scripted(
             .ok_or_else(Error::input_ended)?;
         let mut remaining = events.into_iter();
         let result = replay_events(InteractionWidget::new(widget), &mut remaining);
-        state.borrow_mut().unused_events += remaining.count();
+        let missing_row = matches!(
+            &result,
+            Err(error) if error.kind() == crate::ErrorKind::InvalidConfiguration
+        );
+        if !missing_row {
+            state.borrow_mut().unused_events += remaining.count();
+        }
         result
     });
     interaction.abandon = Some(Rc::new(move || abandon_state.borrow_mut().abandoned = true));
