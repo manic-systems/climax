@@ -7,7 +7,7 @@ description          = "Typed interactive terminal prompts such as select, searc
 edition.workspace    = true
 keywords             = [ "cli", "input", "terminal", "prompts" ]
 license.workspace    = true
-readme               = "../../README.md"
+readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
