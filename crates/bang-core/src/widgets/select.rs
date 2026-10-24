@@ -298,6 +298,7 @@ impl Widget for Select {
             | Key::Delete
             | Key::Left
             | Key::Right
+            | Key::Insert
             | Key::Function(_) => Reaction::Ignored,
         }
     }
@@ -452,6 +453,7 @@ impl Widget for MultiSelect {
             | Key::End
             | Key::PageUp
             | Key::PageDown
+            | Key::Insert
             | Key::Function(_) => self.select.handle(event, cx),
         }
     }

@@ -36,7 +36,7 @@ use crate::{
     decoder::EscapeState,
 };
 
-const DEFAULT_ESCAPE_TIMEOUT: Duration = Duration::from_millis(35);
+const DEFAULT_ESCAPE_TIMEOUT: Duration = Duration::from_millis(50);
 const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// one result of [`TerminalEvents::next_event`]
@@ -51,8 +51,8 @@ pub enum TerminalPoll {
     End,
 }
 
-enum WaitMode {
-    Sync,
+enum WaitMode<R> {
+    Sync(fn(&mut R, &mut [u8]) -> io::Result<usize>),
     Poll(OwnedFd),
 }
 
@@ -69,7 +69,7 @@ pub struct TerminalEvents<R> {
     signals:          Option<SignalPoller>,
     resize:           Option<OwnedFd>,
     clock:            fn() -> Instant,
-    wait:             WaitMode,
+    wait:             WaitMode<R>,
     decoder:          Decoder,
     pending:          VecDeque<TerminalPoll>,
     last_size:        Option<Viewport>,
@@ -81,16 +81,16 @@ pub struct TerminalEvents<R> {
 
 impl<R> TerminalEvents<R> {
     /// owns a blocking reader without a worker thread, a lone Escape waits for
-    /// the next byte or end
+    /// the next byte or end, and a signal is reported once a read returns
     #[must_use]
     pub const fn blocking(input: R) -> Self
     where
         R: Read,
     {
-        Self::new(input, WaitMode::Sync)
+        Self::new(input, WaitMode::Sync(R::read))
     }
 
-    const fn new(input: R, wait: WaitMode) -> Self {
+    const fn new(input: R, wait: WaitMode<R>) -> Self {
         Self {
             input,
             signals: None,
@@ -115,7 +115,8 @@ impl<R> TerminalEvents<R> {
     }
 
     /// reports `Event::Resize` whenever the terminal behind `terminal` changes
-    /// size
+    /// size, promptly on `SIGWINCH` when `signals` is set and on a 100
+    /// millisecond poll otherwise
     #[must_use]
     pub fn resize_from(mut self, terminal: OwnedFd) -> Self {
         self.resize = Some(terminal);
@@ -123,7 +124,8 @@ impl<R> TerminalEvents<R> {
         self
     }
 
-    /// how long a lone Escape waits for more bytes, 35 milliseconds by default
+    /// how long a pending Escape sequence waits for more bytes, counted from
+    /// its first byte, 50 milliseconds by default
     #[must_use]
     pub const fn escape_timeout(mut self, timeout: Duration) -> Self {
         self.escape_timeout = timeout;
@@ -135,27 +137,7 @@ impl<R> TerminalEvents<R> {
         self.clock = clock;
         self
     }
-}
 
-impl<R> TerminalEvents<R>
-where
-    R: AsFd,
-{
-    /// polls a descriptor for input and Escape deadlines without a worker
-    ///
-    /// # Errors
-    ///
-    /// fails when the descriptor is not open
-    pub fn pollable(input: R) -> io::Result<Self> {
-        let fd = input.as_fd().try_clone_to_owned()?;
-        Ok(Self::new(input, WaitMode::Poll(fd)))
-    }
-}
-
-impl<R> TerminalEvents<R>
-where
-    R: Read,
-{
     /// reads the terminal size once and treats it as reported, `None` without a
     /// resize terminal
     pub fn initial_terminal_size(&mut self) -> Option<Viewport> {
@@ -235,7 +217,7 @@ where
                 // resolve, an incomplete CSI has to wait for
                 // its final byte regardless
                 if self.decoder.escape_state() == EscapeState::Ambiguous
-                    && !matches!(self.wait, WaitMode::Sync)
+                    && !matches!(self.wait, WaitMode::Sync(_))
                 {
                     let now = (self.clock)();
                     self.escape_since.get_or_insert(now);
@@ -262,10 +244,10 @@ where
             || self.wait_timeout(),
             |limit| self.wait_timeout().min(limit),
         );
-        match &mut self.wait {
-            WaitMode::Sync => {
+        match &self.wait {
+            WaitMode::Sync(pull) => {
                 let mut buffer = [0_u8; 256];
-                match self.input.read(&mut buffer) {
+                match pull(&mut self.input, &mut buffer) {
                     Ok(0) => Ok(InputReadiness::End),
                     Ok(read) => Ok(InputReadiness::Bytes(buffer[..read].to_vec())),
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => {
@@ -274,7 +256,9 @@ where
                     Err(error) => Err(error),
                 }
             },
-            WaitMode::Poll(fd) => read_when_ready(fd, timeout),
+            WaitMode::Poll(fd) => {
+                read_when_ready(fd, self.signals.map(SignalPoller::read_fd), timeout)
+            },
         }
     }
 
@@ -306,7 +290,11 @@ where
             return None;
         }
         self.escape_since = None;
-        self.decoder.flush_escape()
+        let event = self.decoder.flush_escape()?;
+        while let Some(next) = self.decoder.flush_escape() {
+            self.pending.push_back(TerminalPoll::Event(next));
+        }
+        Some(event)
     }
 
     fn wait_timeout(&self) -> Duration {
@@ -315,6 +303,21 @@ where
                 .saturating_sub((self.clock)().saturating_duration_since(since))
                 .min(SOURCE_POLL_INTERVAL)
         })
+    }
+}
+
+impl<R> TerminalEvents<R>
+where
+    R: AsFd,
+{
+    /// polls a descriptor for input and Escape deadlines without a worker
+    ///
+    /// # Errors
+    ///
+    /// fails when the descriptor is not open
+    pub fn pollable(input: R) -> io::Result<Self> {
+        let fd = input.as_fd().try_clone_to_owned()?;
+        Ok(Self::new(input, WaitMode::Poll(fd)))
     }
 }
 
@@ -331,8 +334,12 @@ pub fn resize_event(size: Viewport) -> Event {
 // at a time, including inside a paste, so typeahead behind a key or a paste end
 // that finishes the session stays in the kernel queue for whoever reads the
 // terminal next
-fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness> {
-    if !wait_for_fd(fd, timeout)? {
+fn read_when_ready(
+    fd: &OwnedFd,
+    wake: Option<&OwnedFd>,
+    timeout: Duration,
+) -> io::Result<InputReadiness> {
+    if !wait_for_fd(fd, wake, timeout)? {
         return Ok(InputReadiness::Timeout);
     }
     let mut buffer = [0_u8; 1];
@@ -344,13 +351,17 @@ fn read_when_ready(fd: &OwnedFd, timeout: Duration) -> io::Result<InputReadiness
     }
 }
 
-fn wait_for_fd(fd: &OwnedFd, timeout: Duration) -> io::Result<bool> {
-    let mut descriptors = [PollFd::new(fd, PollFlags::IN)];
+fn wait_for_fd(fd: &OwnedFd, wake: Option<&OwnedFd>, timeout: Duration) -> io::Result<bool> {
+    let mut descriptors = [
+        PollFd::new(fd, PollFlags::IN),
+        PollFd::new(wake.unwrap_or(fd), PollFlags::IN),
+    ];
+    let watched = if wake.is_some() { 2 } else { 1 };
     let spec = Timespec {
         tv_sec:  i64::try_from(timeout.as_secs()).unwrap_or(i64::MAX),
         tv_nsec: timeout.subsec_nanos().into(),
     };
-    match poll(&mut descriptors, Some(&spec)) {
+    match poll(&mut descriptors[..watched], Some(&spec)) {
         Ok(0) | Err(Errno::INTR) => return Ok(false),
         Ok(_) => {},
         Err(errno) => return Err(errno.into()),
@@ -546,6 +557,89 @@ mod tests {
 
         // the peer is intentionally still open, resolving Escape did not depend
         // on EOF or a termios zero-byte timeout
+        drop(writer);
+    }
+
+    #[test]
+    fn an_arrow_key_split_by_a_gap_under_the_default_deadline_is_still_up() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let handle = thread::spawn(move || {
+            writer.write_all(b"\x1b").unwrap();
+            thread::sleep(Duration::from_millis(40));
+            writer.write_all(b"[A").unwrap();
+            writer
+        });
+        let mut events = TerminalEvents::pollable(reader).unwrap();
+        assert_eq!(
+            events.next_event().unwrap(),
+            TerminalPoll::Event(Event::key(Key::Up)),
+        );
+        drop(handle.join().unwrap());
+    }
+
+    #[test]
+    fn sigwinch_reports_a_resize_without_waiting_for_the_poll_tick() {
+        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        let (master, slave) = pty(80, 24).unwrap();
+        let (_peer, reader) = UnixStream::pair().unwrap();
+        let mut events = TerminalEvents::pollable(reader)
+            .unwrap()
+            .signals(guard.poller())
+            .resize_from(slave);
+        assert_eq!(
+            events.next_event().unwrap(),
+            TerminalPoll::Event(Event::Resize { cols: 80, rows: 24 }),
+        );
+
+        let (sent_tx, sent_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            resize_pty(&master, 100, 30).unwrap();
+            sent_tx.send(Instant::now()).unwrap();
+            // SAFETY: raising a signal that has a handler
+            assert_eq!(unsafe { libc::raise(libc::SIGWINCH) }, 0);
+            master
+        });
+        let polled = events.next_event().unwrap();
+        let arrived = Instant::now();
+        let sent = sent_rx.recv().unwrap();
+        assert_eq!(
+            polled,
+            TerminalPoll::Event(Event::Resize {
+                cols: 100,
+                rows: 30,
+            }),
+        );
+        assert!(arrived.duration_since(sent) < Duration::from_millis(40));
+        drop(handle.join().unwrap());
+        guard.restore().unwrap();
+    }
+
+    #[test]
+    fn a_pollable_owned_fd_needs_no_read_impl() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"a").unwrap();
+        let mut events = TerminalEvents::pollable(OwnedFd::from(reader)).unwrap();
+        assert_eq!(
+            events.next_event().unwrap(),
+            TerminalPoll::Event(Event::char('a')),
+        );
+    }
+
+    #[test]
+    fn pollable_source_times_each_of_two_escapes() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"\x1b\x1b").unwrap();
+        let mut events = TerminalEvents::pollable(reader)
+            .unwrap()
+            .escape_timeout(Duration::ZERO);
+        for _ in 0..2 {
+            assert_eq!(
+                events.next_event().unwrap(),
+                TerminalPoll::Event(Event::key(Key::Esc)),
+            );
+        }
         drop(writer);
     }
 

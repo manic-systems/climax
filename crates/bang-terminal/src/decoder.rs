@@ -39,7 +39,8 @@ impl Decoder {
         }
     }
 
-    /// feeds bytes and returns complete events, invalid input is dropped
+    /// feeds bytes and returns complete events, invalid bytes become
+    /// `UnknownEscape`
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Event> {
         self.pending.extend_from_slice(bytes);
         let mut events = Vec::new();
@@ -104,12 +105,9 @@ impl Decoder {
                     self.pending.drain(..1);
                     events.push(control_char('d'));
                 },
-                0x01..=0x1A => {
-                    self.pending.drain(..1);
-                    events.push(control_char(char::from(b'a' + first - 1)));
-                },
                 0x00..=0x1F => {
                     self.pending.drain(..1);
+                    events.push(control_char(control_symbol(first)));
                 },
                 _ => {
                     match decode_utf8_prefix(&self.pending) {
@@ -119,7 +117,7 @@ impl Decoder {
                         },
                         Utf8Result::Pending => break,
                         Utf8Result::Invalid => {
-                            self.pending.drain(..1);
+                            events.push(Event::UnknownEscape(self.pending.drain(..1).collect()));
                         },
                     }
                 },
@@ -174,6 +172,14 @@ impl Decoder {
             // a CSI with parameters but no final byte yet can only be finished by bytes still in
             // flight
             Some(b'[' | b'O') => EscapeState::Incomplete,
+            Some(&ESC) => {
+                match self.pending.get(2) {
+                    None => EscapeState::Ambiguous,
+                    Some(b'[' | b'O') if self.pending.len() == 3 => EscapeState::Ambiguous,
+                    Some(b'[' | b'O') => EscapeState::Incomplete,
+                    Some(_) => EscapeState::None,
+                }
+            },
             Some(_) => {
                 match decode_utf8_prefix(&self.pending[1..]) {
                     Utf8Result::Pending => EscapeState::Incomplete,
@@ -191,6 +197,10 @@ impl Decoder {
         }
         let event = match self.pending.get(1) {
             None => Event::key(Key::Esc),
+            Some(&ESC) => {
+                self.pending.drain(..1);
+                return Some(Event::key(Key::Esc));
+            },
             Some(&byte) => {
                 Event::Key(KeyEvent::with_modifiers(
                     Key::Char(char::from(byte)),
@@ -210,12 +220,12 @@ impl Decoder {
         match self.pending[1] {
             b'[' => self.decode_csi(),
             b'O' => self.decode_ss3(),
-            ESC => self.consume_modified_key(2, Key::Esc, Modifiers::ALT),
+            ESC => self.decode_double_escape(),
             CR | LF => self.consume_modified_key(2, Key::Enter, Modifiers::ALT),
             TAB => self.consume_modified_key(2, Key::Tab, Modifiers::ALT),
             BACKSPACE | CTRL_H => self.consume_modified_key(2, Key::Backspace, Modifiers::ALT),
-            0x01..=0x1A => {
-                let value = char::from(b'a' + self.pending[1] - 1);
+            0x00..=0x1F => {
+                let value = control_symbol(self.pending[1]);
                 self.consume_modified_key(2, Key::Char(value), Modifiers::ALT | Modifiers::CONTROL)
             },
             _ => {
@@ -226,6 +236,34 @@ impl Decoder {
                     Utf8Result::Pending => EscapeResult::Pending,
                     Utf8Result::Invalid => EscapeResult::Unknown(self.pending.drain(..1).collect()),
                 }
+            },
+        }
+    }
+
+    fn decode_double_escape(&mut self) -> EscapeResult {
+        match self.pending.get(2) {
+            None => EscapeResult::Pending,
+            Some(b'[' | b'O') => {
+                self.pending.remove(0);
+                match self.decode_escape() {
+                    EscapeResult::Event(Event::Key(mut key)) => {
+                        key.modifiers |= Modifiers::ALT;
+                        EscapeResult::Event(Event::Key(key))
+                    },
+                    EscapeResult::Pending => {
+                        self.pending.insert(0, ESC);
+                        EscapeResult::Pending
+                    },
+                    EscapeResult::Unknown(mut sequence) => {
+                        sequence.insert(0, ESC);
+                        EscapeResult::Unknown(sequence)
+                    },
+                    other @ EscapeResult::Event(_) => other,
+                }
+            },
+            Some(_) => {
+                self.pending.drain(..1);
+                EscapeResult::Event(Event::key(Key::Esc))
             },
         }
     }
@@ -270,21 +308,23 @@ impl Decoder {
     }
 
     fn decode_ss3(&mut self) -> EscapeResult {
-        if self.pending.len() < 3 {
-            return EscapeResult::Pending;
+        let mut index = 2;
+        loop {
+            let Some(&byte) = self.pending.get(index) else {
+                return EscapeResult::Pending;
+            };
+            if (0x30..=0x3F).contains(&byte) {
+                index += 1;
+                continue;
+            }
+            if !(0x40..=0x7E).contains(&byte) {
+                return EscapeResult::Unknown(self.pending.drain(..index).collect());
+            }
+            let Some((key, modifiers)) = ss3_key(&self.pending[2..index], byte) else {
+                return EscapeResult::Unknown(self.pending.drain(..=index).collect());
+            };
+            return self.consume_modified_key(index + 1, key, modifiers);
         }
-        let key = match self.pending[2] {
-            b'A' => Key::Up,
-            b'B' => Key::Down,
-            b'C' => Key::Right,
-            b'D' => Key::Left,
-            b'H' => Key::Home,
-            b'F' => Key::End,
-            _ => {
-                return EscapeResult::Unknown(self.pending.drain(..3).collect());
-            },
-        };
-        self.consume_key(3, key)
     }
 
     fn consume_modified_key(&mut self, len: usize, key: Key, modifiers: Modifiers) -> EscapeResult {
@@ -311,17 +351,36 @@ fn csi_key(parameters: &[u8], final_byte: u8) -> Option<(Key, Modifiers)> {
         .copied()
         .map_or(Some(Modifiers::empty()), xterm_modifiers)?;
     let key = match final_byte {
+        b'Z' if values.is_empty() => return Some((Key::Backtab, Modifiers::SHIFT)),
+        b'~' => tilde_key(*values.first()?)?,
+        _ => final_key(final_byte)?,
+    };
+    Some((key, modifier))
+}
+
+fn ss3_key(parameters: &[u8], final_byte: u8) -> Option<(Key, Modifiers)> {
+    let values = parse_parameters(parameters)?;
+    if values.len() > 1 {
+        return None;
+    }
+    let modifier = values
+        .first()
+        .copied()
+        .map_or(Some(Modifiers::empty()), xterm_modifiers)?;
+    Some((final_key(final_byte)?, modifier))
+}
+
+const fn final_key(final_byte: u8) -> Option<Key> {
+    Some(match final_byte {
         b'A' => Key::Up,
         b'B' => Key::Down,
         b'C' => Key::Right,
         b'D' => Key::Left,
         b'H' => Key::Home,
         b'F' => Key::End,
-        b'Z' if values.is_empty() => return Some((Key::Backtab, Modifiers::SHIFT)),
-        b'~' => tilde_key(*values.first()?)?,
+        b'P'..=b'S' => Key::Function(final_byte - b'P' + 1),
         _ => return None,
-    };
-    Some((key, modifier))
+    })
 }
 
 fn parse_parameters(bytes: &[u8]) -> Option<Vec<u16>> {
@@ -349,15 +408,26 @@ fn xterm_modifiers(parameter: u16) -> Option<Modifiers> {
     Some(bits)
 }
 
-const fn tilde_key(parameter: u16) -> Option<Key> {
+fn tilde_key(parameter: u16) -> Option<Key> {
     Some(match parameter {
         1 | 7 => Key::Home,
+        2 => Key::Insert,
         3 => Key::Delete,
         4 | 8 => Key::End,
         5 => Key::PageUp,
         6 => Key::PageDown,
+        11..=15 | 17..=21 | 23 | 24 => Key::Function(function_number(parameter)?),
         _ => return None,
     })
+}
+
+fn function_number(parameter: u16) -> Option<u8> {
+    let gap = match parameter {
+        11..=15 => 10,
+        17..=21 => 11,
+        _ => 12,
+    };
+    u8::try_from(parameter - gap).ok()
 }
 
 #[cfg(test)]
@@ -366,6 +436,14 @@ fn decode_all(bytes: &[u8]) -> Vec<Event> {
     let mut events = decoder.feed(bytes);
     events.extend(decoder.flush());
     events
+}
+
+fn control_symbol(byte: u8) -> char {
+    match byte {
+        0 => ' ',
+        0x01..=0x1A => char::from(b'a' + byte - 1),
+        _ => char::from(byte + 0x40),
+    }
 }
 
 const fn control_char(value: char) -> Event {
@@ -404,13 +482,16 @@ fn decode_utf8_prefix(bytes: &[u8]) -> Utf8Result {
     if width == 0 {
         return Utf8Result::Invalid;
     }
-    if bytes.len() < width {
-        return Utf8Result::Pending;
+    match str::from_utf8(&bytes[..bytes.len().min(width)]) {
+        Ok(value) => {
+            value
+                .chars()
+                .next()
+                .map_or(Utf8Result::Invalid, |first| Utf8Result::Char(first, width))
+        },
+        Err(error) if error.error_len().is_none() => Utf8Result::Pending,
+        Err(_) => Utf8Result::Invalid,
     }
-    str::from_utf8(&bytes[..width])
-        .ok()
-        .and_then(|value| value.chars().next())
-        .map_or(Utf8Result::Invalid, |first| Utf8Result::Char(first, width))
 }
 
 const fn utf8_width(first: u8) -> usize {
@@ -620,7 +701,7 @@ mod tests {
 
     #[test]
     fn complete_unknown_sequences_are_not_reported_as_escape_keys() {
-        for bytes in [b"\x1b[15~".as_slice(), b"\x1bOP".as_slice()] {
+        for bytes in [b"\x1b[16~".as_slice(), b"\x1bOZ".as_slice()] {
             assert_eq!(decode_all(bytes), vec![Event::UnknownEscape(
                 bytes.to_vec()
             )],);
@@ -638,6 +719,111 @@ mod tests {
                 ],
                 "chunk_size={chunk_size}",
             );
+        }
+    }
+
+    #[test]
+    fn xterm_function_keys_insert_and_modified_ss3_decode() {
+        let none = Modifiers::empty();
+        let cases = [
+            (b"\x1bOP".as_slice(), Key::Function(1), none),
+            (b"\x1bOS".as_slice(), Key::Function(4), none),
+            (b"\x1b[11~".as_slice(), Key::Function(1), none),
+            (b"\x1b[15~".as_slice(), Key::Function(5), none),
+            (b"\x1b[17~".as_slice(), Key::Function(6), none),
+            (b"\x1b[21~".as_slice(), Key::Function(10), none),
+            (b"\x1b[23~".as_slice(), Key::Function(11), none),
+            (b"\x1b[24~".as_slice(), Key::Function(12), none),
+            (b"\x1b[2~".as_slice(), Key::Insert, none),
+            (
+                b"\x1b[1;5P".as_slice(),
+                Key::Function(1),
+                Modifiers::CONTROL,
+            ),
+            (b"\x1b[15;2~".as_slice(), Key::Function(5), Modifiers::SHIFT),
+            (b"\x1bO5A".as_slice(), Key::Up, Modifiers::CONTROL),
+            (b"\x1bO2Q".as_slice(), Key::Function(2), Modifiers::SHIFT),
+        ];
+        for (bytes, key, modifiers) in cases {
+            for chunk_size in 1..=bytes.len() {
+                assert_eq!(
+                    decode_in_chunks(bytes, chunk_size),
+                    vec![modified(key.clone(), modifiers)],
+                    "bytes={bytes:?}, chunk_size={chunk_size}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_is_reported_without_holding_back_the_next_key() {
+        for (bytes, expected) in [
+            (b"\xe2a".as_slice(), vec![
+                Event::UnknownEscape(vec![0xE2]),
+                Event::char('a'),
+            ]),
+            (b"\xf0\x9fa".as_slice(), vec![
+                Event::UnknownEscape(vec![0xF0]),
+                Event::UnknownEscape(vec![0x9F]),
+                Event::char('a'),
+            ]),
+            (b"\x80a".as_slice(), vec![
+                Event::UnknownEscape(vec![0x80]),
+                Event::char('a'),
+            ]),
+        ] {
+            for chunk_size in 1..=bytes.len() {
+                assert_eq!(
+                    decode_in_chunks(bytes, chunk_size),
+                    expected,
+                    "bytes={bytes:?}, chunk_size={chunk_size}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn double_escape_is_alt_for_a_following_csi_and_two_escapes_otherwise() {
+        let bytes = b"\x1b\x1b[A";
+        for chunk_size in 1..=bytes.len() {
+            assert_eq!(
+                decode_in_chunks(bytes, chunk_size),
+                vec![modified(Key::Up, Modifiers::ALT)],
+                "chunk_size={chunk_size}",
+            );
+        }
+        assert_eq!(decode_all(b"\x1b\x1b"), vec![
+            Event::key(Key::Esc),
+            Event::key(Key::Esc)
+        ]);
+        assert_eq!(decode_all(b"\x1b\x1bx"), vec![
+            Event::key(Key::Esc),
+            modified(Key::Char('x'), Modifiers::ALT)
+        ]);
+
+        let mut decoder = Decoder::new();
+        assert!(decoder.feed(b"\x1b\x1b").is_empty());
+        assert_eq!(decoder.escape_state(), EscapeState::Ambiguous);
+        assert_eq!(decoder.flush_escape(), Some(Event::key(Key::Esc)));
+        assert_eq!(decoder.escape_state(), EscapeState::Ambiguous);
+        assert_eq!(decoder.flush_escape(), Some(Event::key(Key::Esc)));
+        assert_eq!(decoder.escape_state(), EscapeState::None);
+    }
+
+    #[test]
+    fn nul_and_the_last_control_bytes_are_ctrl_keys() {
+        let ctrl = |value| modified(Key::Char(value), Modifiers::CONTROL);
+        let alt_ctrl = |value| modified(Key::Char(value), Modifiers::ALT | Modifiers::CONTROL);
+        for (bytes, expected) in [
+            (b"\x00".as_slice(), ctrl(' ')),
+            (b"\x1c".as_slice(), ctrl('\\')),
+            (b"\x1d".as_slice(), ctrl(']')),
+            (b"\x1e".as_slice(), ctrl('^')),
+            (b"\x1f".as_slice(), ctrl('_')),
+            (b"\x1b\x00".as_slice(), alt_ctrl(' ')),
+            (b"\x1b\x1f".as_slice(), alt_ctrl('_')),
+        ] {
+            assert_eq!(decode_all(bytes), vec![expected], "bytes={bytes:?}");
         }
     }
 

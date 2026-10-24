@@ -342,6 +342,7 @@ impl Widget for SearchSelect {
                     | Key::Right
                     | Key::Home
                     | Key::End
+                    | Key::Insert
                     | Key::Function(_) => self.handle_input(event, cx),
                 }
             },
