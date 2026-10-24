@@ -12,34 +12,72 @@ members = [
   "crates/pound-derive-impl",
   "crates/screw",
   "crates/screw-pty",
+  "tests/compile-fixtures/bang-core-only",
+  "tests/compile-fixtures/bang-only",
+  "tests/compile-fixtures/bang-terminal-only",
+  "tests/compile-fixtures/caress-only",
+  "tests/compile-fixtures/climax-derive-only",
+  "tests/compile-fixtures/climax-interactive-only",
+  "tests/compile-fixtures/climax-no-default-features",
+  "tests/compile-fixtures/climax-only",
+  "tests/compile-fixtures/climax-parse-only",
+  "tests/compile-fixtures/climax-render-only",
+  "tests/compile-fixtures/climax-structured-only",
+  "tests/compile-fixtures/climax-with-components",
+  "tests/compile-fixtures/pound-color-only",
+  "tests/compile-fixtures/pound-no-derive",
+  "tests/compile-fixtures/pound-no-help",
+  "tests/compile-fixtures/pound-no-std",
+  "tests/compile-fixtures/pound-only",
+  "tests/compile-fixtures/pound-unicode-only",
+  "tests/compile-fixtures/screw-only",
+]
+default-members = [
+  "crates/bang",
+  "crates/bang-core",
+  "crates/bang-run",
+  "crates/bang-terminal",
+  "crates/caress",
+  "crates/climax",
+  "crates/climax-derive",
+  "crates/pound",
+  "crates/pound-derive",
+  "crates/pound-derive-impl",
+  "crates/screw",
+  "crates/screw-pty",
 ]
 resolver = "3"
 
 [workspace.package]
-authors    = [ "atagen" ]
-edition    = "2024"
-license    = "EUPL-1.2"
-repository = "https://github.com/manic-systems/climax"
+authors      = [ "atagen" ]
+edition      = "2024"
+license      = "EUPL-1.2"
+repository   = "https://github.com/manic-systems/climax"
+rust-version = "1.89"
 
 [workspace.dependencies]
-bang              = { path = "crates/bang", version = "0.0.1" }
-bang-core         = { path = "crates/bang-core", version = "0.0.1" }
-bang-terminal     = { path = "crates/bang-terminal", version = "0.0.1" }
+bang              = { path = "crates/bang", version = "=0.1.0" }
+bang-core         = { path = "crates/bang-core", version = "=0.1.0" }
+bang-terminal     = { path = "crates/bang-terminal", version = "=0.1.0" }
 caress            = { path = "crates/caress", version = "0.3.0" }
-climax            = { path = "crates/climax", version = "0.0.1" }
+climax            = { path = "crates/climax", version = "=0.1.0" }
+climax-derive     = { path = "crates/climax-derive", version = "=0.1.0" }
 pound             = { path = "crates/pound", version = "0.6.0", default-features = false }
 pound-derive      = { path = "crates/pound-derive", version = "=0.6.0" }
 pound-derive-impl = { path = "crates/pound-derive-impl", version = "=0.6.0" }
-screw             = { path = "crates/screw", version = "0.0.1" }
-screw-pty         = { path = "crates/screw-pty", version = "0.0.1" }
+screw             = { path = "crates/screw", version = "=0.1.0" }
+screw-pty         = { path = "crates/screw-pty", version = "=0.1.0" }
 
-libc          = "0.2.191"
-proc-macro2   = "1.0.107"
-quote         = "1.0.47"
-serde         = { version = "1.0.229", features = [ "derive" ] }
-toml          = "1.1.8"
-unicode-width = { version = "0.2.2", default-features = false }
-venial        = "0.6.1"
+libc                 = "0.2.191"
+proc-macro2          = "1.0.107"
+quote                = "1.0.47"
+rustix               = { version = "1.1", default-features = false }
+serde                = { version = "1.0.229", features = [ "derive" ] }
+serde_json           = "1"
+toml                 = "1.1.8"
+unicode-segmentation = "1.13"
+unicode-width        = { version = "0.2.2", default-features = false }
+venial               = "0.6.1"
 
 [workspace.lints.clippy]
 cargo       = { level = "warn", priority = -1 }

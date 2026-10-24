@@ -1,18 +1,21 @@
 [package]
-name        = "climax"
-version     = "0.0.1"
-edition     = "2024"
-license     = "EUPL-1.2"
-description = "batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
-repository  = "https://github.com/manic-systems/climax"
-readme      = "README.md"
-keywords    = [ "cli", "terminal", "prompts", "args", "tui" ]
-categories  = [ "command-line-interface", "command-line-utilities" ]
+name                   = "climax"
+version                = "0.1.0"
+authors.workspace      = true
+categories             = [ "command-line-interface", "command-line-utilities" ]
+description            = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
+edition.workspace      = true
+exclude                = [ "tests/dependency_fixtures.rs", "tests/workspace_pins.rs" ]
+keywords               = [ "cli", "terminal", "prompts", "args", "tui" ]
+license.workspace      = true
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
 
 [features]
 complete    = [ "parse", "dep:caress" ]
 default     = [ "complete", "derive", "interactive", "parse", "render", "structured" ]
-derive      = [ "parse", "dep:climax-derive" ]
+derive      = [ "parse", "dep:climax-derive", "pound/derive" ]
 interactive = [ "dep:bang" ]
 parse       = [ "dep:pound" ]
 render      = [ "dep:screw" ]
@@ -27,21 +30,17 @@ name              = "status"
 required-features = [ "render" ]
 
 [dependencies]
-bang = { path = "../bang", version = "=0.0.1", optional = true }
-caress = { path = "../caress", version = "0.3.0", optional = true }
-climax-derive = { path = "../climax-derive", version = "0.0.1", optional = true }
-pound = { path = "../pound", version = "0.6.0", optional = true, default-features = false, features = [
-	"std",
-	"help",
-	"unicode",
-	"color",
-] }
-screw = { path = "../screw", version = "0.0.1", optional = true }
-serde = { version = "1", optional = true, features = [ "derive" ] }
-serde_json = { version = "1", optional = true }
+bang          = { workspace = true, optional = true }
+caress        = { workspace = true, optional = true }
+climax-derive = { workspace = true, optional = true }
+pound         = { workspace = true, optional = true, features = [ "std", "help", "unicode", "color" ] }
+screw         = { workspace = true, optional = true }
+serde         = { workspace = true, optional = true, features = [ "derive" ] }
+serde_json    = { workspace = true, optional = true }
 
 [dev-dependencies]
-libc = "0.2"
+libc.workspace = true
+toml.workspace = true
 
 [lints.clippy]
 cargo    = { level = "warn", priority = -1 }
