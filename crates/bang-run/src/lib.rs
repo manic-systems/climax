@@ -154,7 +154,7 @@ pub enum Command {
     /// choose one option
     Select {
         /// option label/value, may be repeated
-        #[pound(short, long)]
+        #[pound(long)]
         option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -169,7 +169,7 @@ pub enum Command {
     /// choose zero or more options
     MultiSelect {
         /// option label/value, may be repeated
-        #[pound(short, long)]
+        #[pound(long)]
         option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -199,7 +199,7 @@ pub enum Command {
     /// filter options and choose one
     Search {
         /// option label/value, may be repeated
-        #[pound(short, long)]
+        #[pound(long)]
         option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -214,7 +214,7 @@ pub enum Command {
     /// review options with confirmed/denied/unconfirmed row state
     ReviewList {
         /// option label/value, may be repeated
-        #[pound(short, long)]
+        #[pound(long)]
         option:        Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -289,6 +289,7 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action,
         } => {
             run_widget(
+                "select",
                 Select::new("select", choice_items(option).map_err(CliError::Usage)?)
                     .with_page_size(page_size),
                 input_bytes,
@@ -302,6 +303,7 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action,
         } => {
             run_widget(
+                "multi-select",
                 MultiSelect::new(
                     "multi-select",
                     choice_items(option).map_err(CliError::Usage)?,
@@ -318,6 +320,7 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action,
         } => {
             run_widget(
+                "text",
                 TextInput::new("text").with_prompt(prompt).with_value(value),
                 input_bytes,
                 action_bindings(action).map_err(CliError::Usage)?,
@@ -330,6 +333,7 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             action,
         } => {
             run_widget(
+                "search",
                 SearchSelect::new("search", choice_items(option).map_err(CliError::Usage)?)
                     .with_page_size(page_size),
                 input_bytes,
@@ -347,6 +351,7 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             let actions = review_action_bindings_with_defaults(action, action_output)
                 .map_err(CliError::Usage)?;
             run_widget(
+                "review-list",
                 ReviewList::new(
                     "review-list",
                     choice_items(option).map_err(CliError::Usage)?,
@@ -363,6 +368,10 @@ fn run_command(command: Command) -> Result<Value, CliError> {
 }
 
 fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
+    let name = config
+        .prompt
+        .clone()
+        .unwrap_or_else(|| config.kind.name().to_owned());
     match config.kind {
         WidgetKind::Select => {
             let mut widget = Select::new("select", config.options)
@@ -374,7 +383,7 @@ fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
             if let Some(selected) = config.selected_indices.first() {
                 widget = widget.with_selected_index(*selected);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::MultiSelect => {
             let first_selected = config.selected_indices.first().copied();
@@ -388,10 +397,11 @@ fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::Text => {
             run_widget(
+                &name,
                 text_from_config(&config),
                 config.input_bytes,
                 config.actions,
@@ -410,13 +420,13 @@ fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
             if let Some(selected) = config.selected_indices.first() {
                 widget = widget.with_selected_match_index(*selected);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::Form => {
             let input_bytes = config.input_bytes.clone();
             let actions = config.actions.clone();
             let widget = form_from_config(config).map_err(CliError::Usage)?;
-            run_widget(widget, input_bytes, actions)
+            run_widget(&name, widget, input_bytes, actions)
         },
         WidgetKind::Date => {
             let mut widget = DatePicker::new(
@@ -429,7 +439,7 @@ fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
             if let Some(today) = config.today {
                 widget = widget.with_today(today);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::ReviewList => {
             let first_selected = config.selected_indices.first().copied();
@@ -451,7 +461,7 @@ fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
             }
-            run_widget(widget, config.input_bytes, Vec::new())
+            run_widget(&name, widget, config.input_bytes, Vec::new())
         },
     }
 }
@@ -576,6 +586,9 @@ fn choice_items(options: Vec<String>) -> Result<Vec<SelectItem>, String> {
     if options.is_empty() {
         return Err("at least one --option is required".to_owned());
     }
+    if options.iter().any(String::is_empty) {
+        return Err("--option cannot be empty".to_owned());
+    }
     Ok(options
         .into_iter()
         .map(|option| SelectItem::new(option.clone(), option))
@@ -638,6 +651,7 @@ fn default_review_actions() -> Vec<ReviewActionBinding> {
 }
 
 fn run_widget(
+    name: &str,
     widget: impl Widget + 'static,
     input_bytes: Option<String>,
     actions: Vec<ActionBinding>,
@@ -647,9 +661,9 @@ fn run_widget(
         let bytes = decode_escaped(&escaped).map_err(CliError::Usage)?;
         let mut decoder = Decoder::new();
         let events = decoder.feed(&bytes).into_iter().chain(decoder.flush());
-        replay_events(layered, events).map_err(CliError::from)
+        replay_events(layered, events).map_err(|error| CliError::from(error.naming_prompt(name)))
     } else {
-        interact_widget(widget, actions).map_err(CliError::from)
+        interact_widget(widget, actions).map_err(|error| CliError::from(error.naming_prompt(name)))
     }
 }
 

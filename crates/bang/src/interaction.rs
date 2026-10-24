@@ -8,6 +8,8 @@ use core::{
     any::Any,
     cell::RefCell,
     fmt,
+    iter::Peekable,
+    str::Chars,
 };
 use std::{
     fs::File,
@@ -52,6 +54,7 @@ type Runner = dyn Fn(Box<dyn Widget>) -> Result<Value>;
 type GuardFactory = dyn Fn() -> Result<Box<dyn Any>>;
 type SummarySink = dyn Fn(&str) -> io::Result<()>;
 type SummaryAnswer<'a> = &'a dyn Fn(&Value) -> Option<String>;
+type Abandon = dyn Fn();
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
@@ -103,6 +106,7 @@ pub struct Interaction {
     guards:       Vec<Rc<GuardFactory>>,
     summary_sink: Option<Rc<SummarySink>>,
     summaries:    bool,
+    abandon:      Option<Rc<Abandon>>,
 }
 
 impl Interaction {
@@ -220,7 +224,7 @@ impl Interaction {
             } else {
                 format!("{label} › {answer}")
             };
-            Some(screw::single_line(&line).into_owned())
+            Some(sanitised_line(&line))
         };
         let enabled = summary.enabled.unwrap_or(self.summaries);
         let answer_line: SummaryAnswer<'_> = &line;
@@ -239,7 +243,15 @@ impl Interaction {
             guards:       Vec::new(),
             summary_sink: None,
             summaries:    true,
+            abandon:      None,
         }
+    }
+
+    pub(crate) fn rejected(&self, error: Error) -> Error {
+        if let Some(abandon) = &self.abandon {
+            abandon();
+        }
+        error
     }
 
     /// run a custom widget on this driver, with `actions` bound as extra keys
@@ -300,6 +312,56 @@ pub(crate) struct Summary<'a> {
 impl<'a> Summary<'a> {
     pub(crate) const fn new(enabled: Option<bool>, answer: SummaryAnswer<'a>) -> Self {
         Self { enabled, answer }
+    }
+}
+
+fn sanitised_line(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' => skip_escape(&mut chars),
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{90}' | '\u{98}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => skip_string(&mut chars),
+            '\u{2028}' | '\u{2029}' => plain.push(' '),
+            '\u{61c}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}' => {},
+            _ => plain.push(ch),
+        }
+    }
+    screw::single_line(&plain).into_owned()
+}
+
+fn skip_escape(chars: &mut Peekable<Chars<'_>>) {
+    match chars.next() {
+        Some('[') => skip_csi(chars),
+        Some(']' | 'P' | 'X' | '^' | '_') => skip_string(chars),
+        Some(' '..='/') => {
+            while chars.next_if(|ch| matches!(ch, ' '..='/')).is_some() {}
+            chars.next_if(|ch| matches!(ch, '0'..='~'));
+        },
+        _ => {},
+    }
+}
+
+fn skip_csi(chars: &mut Peekable<Chars<'_>>) {
+    while chars.next_if(|ch| matches!(ch, ' '..='?')).is_some() {}
+    chars.next_if(|ch| matches!(ch, '@'..='~'));
+}
+
+fn skip_string(chars: &mut Peekable<Chars<'_>>) {
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x07' | '\u{9c}' => return,
+            '\x1b' if chars.next_if_eq(&'\\').is_some() => return,
+            _ => {},
+        }
     }
 }
 
@@ -368,8 +430,10 @@ pub(crate) fn scripted(
     let state = Rc::new(RefCell::new(Script {
         scripts:       queued,
         unused_events: 0,
+        abandoned:     false,
     }));
-    Interaction::from_runner(move |widget| {
+    let abandon_state = Rc::clone(&state);
+    let mut interaction = Interaction::from_runner(move |widget| {
         let events = state
             .borrow_mut()
             .scripts
@@ -379,17 +443,20 @@ pub(crate) fn scripted(
         let result = replay_events(InteractionWidget::new(widget), &mut remaining);
         state.borrow_mut().unused_events += remaining.count();
         result
-    })
+    });
+    interaction.abandon = Some(Rc::new(move || abandon_state.borrow_mut().abandoned = true));
+    interaction
 }
 
 struct Script {
     scripts:       VecDeque<Vec<Event>>,
     unused_events: usize,
+    abandoned:     bool,
 }
 
 impl Drop for Script {
     fn drop(&mut self) {
-        if thread::panicking() {
+        if self.abandoned || thread::panicking() {
             return;
         }
         assert!(
@@ -419,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_lines_drop_escapes_and_collapse_line_breaks() {
+    fn summary_lines_drop_whole_escape_sequences_and_collapse_line_breaks() {
         let lines = Rc::new(RefCell::new(Vec::new()));
         let sink_lines = Rc::clone(&lines);
         let interaction = Interaction::from_runner(|_widget| Ok(Value::from("done")))
@@ -438,7 +505,31 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(*lines.borrow(), ["Pick]0;title one › red[31m blue green"]);
+        assert_eq!(*lines.borrow(), ["Pick one › red blue green"]);
+    }
+
+    #[test]
+    fn summary_lines_drop_every_escape_family_and_hiding_format_characters() {
+        for (raw, plain) in [
+            ("a\x1b[31mb", "ab"),
+            ("a\x1b[?25;1:2 qb", "ab"),
+            ("a\x1b]0;t\x07b", "ab"),
+            ("a\x1b]8;;http://x\x1b\\b\x1b]8;;\x1b\\c", "abc"),
+            ("a\x1bPq#0\x1b\\b", "ab"),
+            ("a\x1b(Bb", "ab"),
+            ("a\x1bcb", "ab"),
+            ("a\u{9b}31mb", "ab"),
+            ("a\u{9d}0;t\u{9c}b", "ab"),
+            ("a\u{202e}b\u{2066}c\u{2069}d", "abcd"),
+            ("a\u{200b}b\u{feff}c\u{200e}d", "abcd"),
+            ("a\u{2028}b\u{2029}c", "a b c"),
+            (
+                "a\u{1f469}\u{200d}\u{1f4bb}b",
+                "a\u{1f469}\u{200d}\u{1f4bb}b",
+            ),
+        ] {
+            assert_eq!(sanitised_line(raw), plain, "{raw:?}");
+        }
     }
 
     #[test]

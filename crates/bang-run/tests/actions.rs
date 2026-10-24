@@ -20,7 +20,9 @@ fn stderr(output: &Output) -> String {
 
 #[test]
 fn a_plain_action_key_error_uses_generic_wording() {
-    let output = run(&["select", "-o", "a", "-o", "b", "--action", "ab:foo"]);
+    let output = run(&[
+        "select", "--option", "a", "--option", "b", "--action", "ab:foo",
+    ]);
     assert_eq!(output.status.code(), Some(2));
     let message = stderr(&output);
     assert!(
@@ -33,7 +35,7 @@ fn a_plain_action_key_error_uses_generic_wording() {
 #[test]
 fn duplicate_plain_action_keys_are_rejected() {
     let output = run(&[
-        "select", "-o", "a", "-o", "b", "--action", "x:one", "--action", "x:two",
+        "select", "--option", "a", "--option", "b", "--action", "x:one", "--action", "x:two",
     ]);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("duplicate action key 'x'"));
@@ -41,7 +43,7 @@ fn duplicate_plain_action_keys_are_rejected() {
 
 #[test]
 fn a_review_action_key_reserved_by_built_in_controls_is_rejected() {
-    let output = run(&["review-list", "-o", "a", "--action", "c:custom"]);
+    let output = run(&["review-list", "--option", "a", "--action", "c:custom"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(
         stderr(&output).contains("review action key 'c' is reserved by built-in review controls")
@@ -52,7 +54,7 @@ fn a_review_action_key_reserved_by_built_in_controls_is_rejected() {
 fn duplicate_review_action_keys_against_the_defaults_are_rejected() {
     let output = run(&[
         "review-list",
-        "-o",
+        "--option",
         "a",
         "--action-output",
         "--action",

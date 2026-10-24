@@ -14,8 +14,8 @@ use crate::live::LiveSessionError;
 /// broad failure category for a prompt interaction
 ///
 /// typed prompts resolve [`ErrorKind::Cancelled`] to
-/// [`crate::PromptOutcome::Leave`] themselves, so it only reaches a caller
-/// through [`crate::advanced`]
+/// [`crate::PromptOutcome::Leave`] themselves, so it reaches a caller through
+/// [`crate::advanced`] or [`crate::PromptOutcome::or_cancel`]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum ErrorKind {
@@ -124,11 +124,20 @@ impl Error {
         };
         let message = match kind {
             ErrorKind::InteractionUnavailable => {
-                "interactive terminal input is unavailable".to_owned()
+                "interactive terminal input is unavailable, so pass the answer another way or run \
+                 in a terminal"
+                    .to_owned()
             },
-            ErrorKind::InteractionBusy => "terminal signal handlers are already claimed".to_owned(),
+            ErrorKind::InteractionBusy => {
+                "terminal signal handlers are already claimed, so wait for the other prompt to \
+                 finish"
+                    .to_owned()
+            },
             ErrorKind::Cancelled => "prompt was cancelled".to_owned(),
-            ErrorKind::InputEnded => "input ended before the prompt was submitted".to_owned(),
+            ErrorKind::InputEnded => {
+                "input ended before the prompt was submitted, so submit an answer or cancel"
+                    .to_owned()
+            },
             ErrorKind::Interrupted => error.to_string(),
             ErrorKind::InvalidConfiguration | ErrorKind::Terminal | ErrorKind::UnexpectedValue => {
                 "terminal failure".to_owned()
@@ -142,7 +151,11 @@ impl Error {
         }
     }
 
-    pub(crate) fn naming_prompt(mut self, prompt: &str) -> Self {
+    /// names `prompt` in an unavailable, busy or input-ended message, for
+    /// callers of [`crate::Interaction::interact`] that know what they
+    /// asked
+    #[must_use]
+    pub fn naming_prompt(mut self, prompt: &str) -> Self {
         let trimmed = prompt.trim().trim_end_matches(':').trim_end();
         if trimmed.is_empty() {
             return self;
@@ -154,14 +167,24 @@ impl Error {
                      the answer another way or run in a terminal"
                 );
             },
+            ErrorKind::InputEnded if self.source.is_some() => {
+                self.message = format!(
+                    "input ended before \"{trimmed}\" was answered, so submit an answer or cancel"
+                );
+            },
             ErrorKind::InputEnded => {
                 self.message = format!(
                     "input ended before \"{trimmed}\" was answered, so supply the answer or run \
                      in a terminal"
                 );
             },
+            ErrorKind::InteractionBusy => {
+                self.message = format!(
+                    "cannot ask \"{trimmed}\" because another interaction owns the terminal, so \
+                     wait for it to finish"
+                );
+            },
             ErrorKind::Cancelled
-            | ErrorKind::InteractionBusy
             | ErrorKind::InvalidConfiguration
             | ErrorKind::Interrupted
             | ErrorKind::Terminal
@@ -189,7 +212,9 @@ impl Error {
     pub fn input_ended() -> Self {
         Self {
             kind:    ErrorKind::InputEnded,
-            message: "input ended before the prompt was submitted".to_owned(),
+            message: "input ended before the prompt was submitted, so supply the answer or run in \
+                      a terminal"
+                .to_owned(),
             signal:  None,
             source:  None,
         }
@@ -200,7 +225,8 @@ impl Error {
     pub fn interaction_busy() -> Self {
         Self {
             kind:    ErrorKind::InteractionBusy,
-            message: "another interaction already owns the terminal".to_owned(),
+            message: "another interaction already owns the terminal, so wait for it to finish"
+                .to_owned(),
             signal:  None,
             source:  None,
         }
@@ -211,7 +237,9 @@ impl Error {
     pub fn interaction_unavailable() -> Self {
         Self {
             kind:    ErrorKind::InteractionUnavailable,
-            message: "interactive terminal input is unavailable".to_owned(),
+            message: "interactive terminal input is unavailable, so pass the answer another way \
+                      or run in a terminal"
+                .to_owned(),
             signal:  None,
             source:  None,
         }
@@ -267,6 +295,56 @@ mod tests {
         ErrorKind,
         LiveSessionError,
     };
+
+    #[test]
+    fn unnamed_errors_give_a_remedy() {
+        for (error, kind, remedy) in [
+            (
+                Error::interaction_unavailable(),
+                ErrorKind::InteractionUnavailable,
+                "run in a terminal",
+            ),
+            (
+                Error::input_ended(),
+                ErrorKind::InputEnded,
+                "supply the answer",
+            ),
+            (
+                Error::interaction_busy(),
+                ErrorKind::InteractionBusy,
+                "wait for it",
+            ),
+        ] {
+            assert_eq!(error.kind(), kind);
+            assert!(error.to_string().contains(remedy), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_live_input_end_tells_the_user_to_submit_or_cancel() {
+        let live = Error::from_live(LiveSessionError::InputEnded).naming_prompt("Name:");
+
+        assert_eq!(
+            live.to_string(),
+            "input ended before \"Name\" was answered, so submit an answer or cancel"
+        );
+        assert!(
+            !Error::from_live(LiveSessionError::InputEnded)
+                .to_string()
+                .contains("run in")
+        );
+    }
+
+    #[test]
+    fn a_busy_interaction_can_be_named() {
+        let error = Error::interaction_busy().naming_prompt("Pick:");
+
+        assert_eq!(
+            error.to_string(),
+            "cannot ask \"Pick\" because another interaction owns the terminal, so wait for it to \
+             finish"
+        );
+    }
 
     #[test]
     fn a_signal_is_an_interruption_with_its_cause() {
