@@ -1,59 +1,67 @@
-#[cfg(feature = "interactive")]
-pub use bang_core::{
-    ActionBinding,
-    Date,
-    Event,
-    Key,
-    KeyEvent,
-    Modifiers,
-    Number,
-    Reaction,
-    Session,
-    SessionStatus,
-    Value,
-    Widget,
-    widgets::{
-        DatePicker,
-        Form,
-        MultiSelect,
-        ReviewList,
-        ReviewState,
-        SearchSelect,
-        Select,
-        SelectItem,
-        TextInput,
-    },
-};
-#[cfg(feature = "parse")]
-pub use pound::{
-    FromArg,
-    Parse as ParseTrait,
-};
-#[cfg(feature = "derive")]
-pub use pound::{
-    Parse,
-    ValueEnum,
-};
-#[cfg(feature = "render")]
-pub use screw::{
-    Color,
-    Role,
-    Style,
-    Theme,
-};
+// SPDX-License-Identifier: EUPL-1.2
 
-#[cfg(feature = "interactive")] pub use crate::output;
-#[cfg(feature = "interactive")] pub use crate::prompt;
-#[cfg(feature = "parse")] pub use crate::run;
-#[cfg(feature = "render")] pub use crate::status;
+//! prelude: imports for the ordinary `climax` application path
+
+#[cfg(feature = "parse")]
+pub use crate::pound::{
+    FromArg,
+    Parse as _,
+    ValueError,
+};
+#[cfg(feature = "interactive")]
+pub use crate::{
+    Configurable,
+    ConfirmConfig,
+    Date,
+    DateConfig,
+    MultiSelectConfig,
+    NumberConfig,
+    PasswordConfig,
+    PromptOutcome,
+    ReviewConfig,
+    ReviewExit,
+    ReviewOutcome,
+    ReviewState,
+    Reviewed,
+    SearchConfig,
+    SelectConfig,
+    TextConfig,
+};
 pub use crate::{
     Context,
     Error,
+    ErrorKind,
     Result,
+    output::Format,
     run_with,
+    terminal::{
+        InteractionMode,
+        StatusMode,
+        TerminalCapabilities,
+        TerminalPolicy,
+    },
 };
-#[cfg(feature = "interactive")]
+#[cfg(feature = "derive")]
 pub use crate::{
-    OutputContext,
-    PromptContext,
+    Parse,
+    ValueEnum,
 };
+#[cfg(feature = "parse")]
+pub use crate::{
+    main,
+    try_run,
+    try_run_from,
+};
+
+#[cfg(all(test, feature = "interactive"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_prelude_names_dates_and_error_kinds() {
+        let date = Date::new(2026, 10, 10).expect("a valid date");
+        assert_eq!(date, crate::Date::new(2026, 10, 10).unwrap());
+        assert_eq!(Error::message("x").kind(), ErrorKind::Message);
+        let _: crate::ErrorKind = ErrorKind::Parse;
+    }
+}

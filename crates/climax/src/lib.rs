@@ -1,31 +1,97 @@
-//! batteries-included CLI facade over `pound`, `screw`, and `bang`
+// SPDX-License-Identifier: EUPL-1.2
 
-extern crate alloc;
+//! climax: application facade over `pound`, `screw` and `bang`.
+//!
+//! The crate root and [`prelude`] contain the ordinary application workflow.
+//! Each component is also re-exported whole behind the feature that enables
+//! it, as `climax::pound` under `parse`, `climax::bang` under `interactive`,
+//! `climax::screw` under `render`, and `climax::serde` under `structured`. An
+//! application needs no direct dependency on any of them, and the versions it
+//! sees are the ones `climax` was tested against.
+//!
+//! The prompt builders on [`Context`] return the prompt types, which are
+//! re-exported at the root next to their config types, `PromptOutcome` and
+//! the review types, so a signature such as `fn ask(cx: &Context) ->
+//! SelectPrompt<String>` needs no path through `climax::bang`.
+//!
+//! The `derive` feature provides `#[derive(climax::Parse)]` and
+//! `#[derive(climax::ValueEnum)]`, whose expansion refers to
+//! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
+//! for the same reason.
 
-pub mod app;
+#![cfg_attr(
+    all(
+        feature = "derive",
+        feature = "interactive",
+        feature = "render",
+        feature = "structured"
+    ),
+    doc = include_str!("../README.md")
+)]
+
+mod app;
 pub mod error;
 #[cfg(feature = "complete")] pub mod install;
 pub mod output;
 pub mod prelude;
-
-#[cfg(feature = "interactive")] pub mod prompt;
+mod sync;
+pub mod terminal;
 
 #[cfg(feature = "render")] pub mod status;
 
-#[cfg(feature = "parse")] pub use app::run;
 pub use app::{
     Context,
     run_with,
 };
-#[cfg(feature = "interactive")]
+#[cfg(feature = "parse")]
 pub use app::{
-    OutputContext,
-    PromptContext,
+    main,
+    try_run,
+    try_run_from,
 };
-#[cfg(feature = "interactive")] pub use bang_core as bang;
+#[cfg(feature = "interactive")] pub use bang;
+/// presentation settings for a review prompt, passed to `with_config`
+#[cfg(feature = "interactive")]
+pub use bang::ReviewConfig;
+#[cfg(feature = "interactive")]
+pub use bang::{
+    Configurable,
+    ConfirmConfig,
+    ConfirmPrompt,
+    Date,
+    DateConfig,
+    DatePrompt,
+    MultiSelectConfig,
+    MultiSelectPrompt,
+    NumberConfig,
+    NumberPrompt,
+    PasswordConfig,
+    PasswordPrompt,
+    PromptOutcome,
+    ReviewExit,
+    ReviewOutcome,
+    ReviewPrompt,
+    ReviewPromptWithActions,
+    ReviewState,
+    Reviewed,
+    SearchConfig,
+    SearchPrompt,
+    SelectConfig,
+    SelectPrompt,
+    TextConfig,
+    TextPrompt,
+};
+#[cfg(feature = "complete")] pub use caress;
+#[cfg(feature = "derive")]
+pub use climax_derive::{
+    Parse,
+    ValueEnum,
+};
 pub use error::{
     Error,
+    ErrorKind,
     Result,
 };
 #[cfg(feature = "parse")] pub use pound;
 #[cfg(feature = "render")] pub use screw;
+#[cfg(feature = "structured")] pub use serde;
