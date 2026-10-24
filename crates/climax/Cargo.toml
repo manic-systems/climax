@@ -12,8 +12,9 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [features]
-default     = [ "derive", "interactive", "parse", "render", "structured" ]
-derive      = [ "parse", "dep:climax-derive" ]
+complete    = [ "parse", "dep:caress" ]
+default     = [ "complete", "derive", "interactive", "parse", "render", "structured" ]
+derive      = [ "parse", "dep:climax-derive", "pound/derive" ]
 interactive = [ "dep:bang" ]
 parse       = [ "dep:pound" ]
 render      = [ "dep:screw" ]
@@ -29,8 +30,9 @@ required-features = [ "render" ]
 
 [dependencies]
 bang          = { workspace = true, optional = true }
+caress        = { workspace = true, optional = true }
 climax-derive = { workspace = true, optional = true }
-pound         = { workspace = true, optional = true, features = [ "std", "help" ] }
+pound         = { workspace = true, optional = true, features = [ "std", "help", "unicode", "color" ] }
 screw         = { workspace = true, optional = true }
 serde         = { workspace = true, optional = true, features = [ "derive" ] }
 serde_json    = { workspace = true, optional = true }
@@ -39,5 +41,25 @@ serde_json    = { workspace = true, optional = true }
 libc.workspace = true
 toml.workspace = true
 
-[lints]
-workspace = true
+[lints.clippy]
+cargo    = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+arbitrary_source_item_ordering = "allow"
+else_if_without_else           = "allow"
+exhaustive_enums               = "allow"
+exhaustive_structs             = "allow"
+implicit_return                = "allow"
+min_ident_chars                = "allow"
+missing_docs_in_private_items  = "allow"
+missing_errors_doc             = "allow"
+missing_inline_in_public_items = "allow"
+mod_module_files               = "allow"
+module_name_repetitions        = "allow"
+must_use_candidate             = "allow"
+option_if_let_else             = "allow"
+question_mark_used             = "allow"
+redundant_pub_crate            = "allow"
+single_call_fn                 = "allow"
+single_char_lifetime_names     = "allow"
