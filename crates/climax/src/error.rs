@@ -14,7 +14,7 @@ use bang::{
 };
 
 /// result type used across `climax`, with [`Error`] as the error
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T, E = Error> = result::Result<T, E>;
 
 /// stable, high-level category of an application error
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,6 +168,24 @@ impl Error {
     #[must_use]
     pub fn related_errors(&self) -> &[Self] {
         &self.related
+    }
+
+    pub(crate) fn is_closed_pipe(&self) -> bool {
+        self.kind == ErrorKind::Output
+            && self
+                .source
+                .as_deref()
+                .and_then(|source| source.downcast_ref::<io::Error>())
+                .is_some_and(|error| error.kind() == io::ErrorKind::BrokenPipe)
+    }
+
+    pub(crate) fn report(&self) -> String {
+        let mut report = format!("error: {self}");
+        for text in self.chain_texts() {
+            report.push_str("\n  caused by: ");
+            report.push_str(&text);
+        }
+        report
     }
 
     pub(crate) fn with_related(mut self, other: Self) -> Self {
@@ -570,5 +588,26 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Application);
         assert_eq!(error.to_string(), "cannot query history: closed");
         assert!(error.source_error().is_some());
+    }
+}
+
+#[cfg(test)]
+mod prelude_result {
+    use core::num::ParseIntError;
+
+    use crate::prelude::*;
+
+    fn two_parameters(text: &str) -> Result<u32, ParseIntError> {
+        text.parse()
+    }
+
+    fn one_parameter(text: &str) -> Result<u32> {
+        two_parameters(text).map_err(Error::application)
+    }
+
+    #[test]
+    fn the_prelude_result_takes_one_or_two_parameters() {
+        assert_eq!(one_parameter("4").unwrap(), 4);
+        two_parameters("x").unwrap_err();
     }
 }

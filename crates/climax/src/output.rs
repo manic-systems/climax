@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! output: routing of application results and notices.
+//! output: routing of application results and notices
 
 use alloc::sync::Arc;
 use core::fmt;
@@ -162,11 +162,19 @@ impl Output {
 
     /// write a message in the configured format
     ///
+    /// a live status is cleared first and redrawn after when this handle writes
+    /// to a terminal stdout
+    ///
     /// # Errors
     ///
     /// fails with `ErrorKind::Output` when the writer rejects the message or
     /// cannot flush
     pub fn write_message(&self, mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
+        #[cfg(all(feature = "render", feature = "structured"))]
+        let _hold = match &self.route {
+            PresentationRoute::Around(coordinator) => coordinator.hold().ok(),
+            PresentationRoute::Direct | PresentationRoute::Queued(_) => None,
+        };
         writer
             .write_all(self.format_message(message).as_bytes())
             .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
@@ -608,12 +616,15 @@ mod tests {
         time::Duration,
     };
     #[cfg(feature = "structured")] use std::thread;
-    #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
+    #[cfg(all(feature = "render", feature = "structured"))]
     use std::time::Instant;
 
     use super::*;
     #[cfg(all(feature = "render", feature = "structured"))]
-    use crate::terminal::StatusMode;
+    use crate::{
+        status::Status,
+        terminal::StatusMode,
+    };
 
     #[derive(Clone, Default)]
     struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -926,6 +937,34 @@ mod tests {
 
         let process = Output::new(Format::Text).with_stream_route(around());
         assert!(matches!(process.route, PresentationRoute::Around(_)));
+    }
+
+    #[cfg(all(feature = "render", feature = "structured"))]
+    #[test]
+    fn write_message_under_a_live_status_clears_the_region_first() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while capture.text().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let before = capture.text().len();
+
+        let output = Output::new(Format::Text).with_route(PresentationRoute::Around(coordinator));
+        output
+            .write_message(capture.clone(), "via write_message")
+            .unwrap();
+        let appended = capture.text()[before..].to_owned();
+        assert!(appended.ends_with("via write_message\n"), "{appended:?}");
+        assert!(
+            appended.len() > "via write_message\n".len(),
+            "a clear sequence must precede the message: {appended:?}"
+        );
+        status.finish().unwrap();
     }
 
     #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]

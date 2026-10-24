@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! climax: application facade over `pound`, `screw` and `bang`.
+//! climax: application facade over `pound`, `screw` and `bang`
 //!
 //! the crate root and [`prelude`] hold the ordinary application workflow. each
 //! component is also re-exported whole behind the feature that enables it, as

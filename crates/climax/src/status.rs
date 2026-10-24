@@ -10,10 +10,12 @@ use alloc::{
 #[cfg(feature = "interactive")] use core::result;
 use core::{
     any::Any,
+    cell::RefCell,
     fmt,
     mem,
     panic::AssertUnwindSafe,
     sync::atomic::{
+        AtomicBool,
         AtomicU64,
         Ordering,
     },
@@ -121,7 +123,8 @@ impl Status {
     /// the widget is drawn on the coordinator's thread, so it must be quick and
     /// must not block, and shared state it reads needs
     /// [`StatusRuntime::mark_dirty`] after changing. a widget that panics
-    /// is removed and the failure is reported by that status's `finish`
+    /// is removed and the failure is reported by that status's `finish`, the
+    /// panic hook prints the panic itself once
     #[must_use]
     pub fn widget(mut self, widget: WidgetRef) -> Self {
         self.widget = Some(widget);
@@ -297,8 +300,9 @@ struct StatusEntry {
 /// thread holds it
 ///
 /// every request gives up after `REQUEST_TIMEOUT` when a widget blocks the
-/// thread, and the final join stops waiting after the same bound. a request
-/// made from the actor thread itself fails at once
+/// thread. the final join waits at most that long too, and not at all once a
+/// request has timed out, so a blocked widget delays shutdown by one bound. a
+/// request made from the actor thread itself fails at once
 #[derive(Clone)]
 pub(crate) struct StatusCoordinator {
     inner: Arc<Inner>,
@@ -325,11 +329,14 @@ impl WidthSource {
         }
     }
 
-    fn columns(&self) -> usize {
+    fn viewport(&self) -> (usize, Option<usize>) {
         match self {
-            Self::Fixed(columns) => *columns,
+            Self::Fixed(columns) => (*columns, None),
             Self::Stderr | Self::Terminal(_) => {
-                self.measure().unwrap_or(screw::Viewport::FALLBACK).columns
+                self.measure()
+                    .map_or((screw::Viewport::FALLBACK.columns, None), |viewport| {
+                        (viewport.columns, Some(viewport.rows))
+                    })
             },
         }
     }
@@ -365,6 +372,7 @@ struct Inner {
     request_timeout: Duration,
     channel:         OnceLock<Channel>,
     successor:       OnceLock<StatusCoordinator>,
+    stalled:         AtomicBool,
 }
 
 struct Channel {
@@ -429,6 +437,9 @@ impl Drop for Inner {
             let (done, stopped) = mpsc::channel();
             drop(channel.sender.send(Command::Stop { done }));
             drop(channel.sender);
+            if self.stalled.load(Ordering::Acquire) {
+                return;
+            }
             match stopped.recv_timeout(self.request_timeout) {
                 Err(RecvTimeoutError::Timeout) => {},
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => {
@@ -505,6 +516,12 @@ enum Command {
     CancelLease {
         token: u64,
     },
+    #[cfg(feature = "structured")]
+    Hold {
+        reply: Sender<Result<()>>,
+    },
+    #[cfg(feature = "structured")]
+    Unhold,
     SetMode {
         stamp: u64,
         reply: Sender<Result<()>>,
@@ -583,6 +600,7 @@ impl StatusCoordinator {
                 request_timeout,
                 channel: OnceLock::new(),
                 successor: OnceLock::new(),
+                stalled: AtomicBool::new(false),
             }),
         }
     }
@@ -604,7 +622,10 @@ impl StatusCoordinator {
         drop(channel.sender.send(command(reply)));
         match receiver.recv_timeout(self.inner.request_timeout) {
             Ok(value) => value,
-            Err(RecvTimeoutError::Timeout) => failed(Failure::TimedOut),
+            Err(RecvTimeoutError::Timeout) => {
+                self.inner.stalled.store(true, Ordering::Release);
+                failed(Failure::TimedOut)
+            },
             Err(RecvTimeoutError::Disconnected) => failed(Failure::Stopped),
         }
     }
@@ -683,6 +704,20 @@ impl StatusCoordinator {
             },
             |failure| Err(failure.into()),
         )
+    }
+
+    /// clear the live region and keep it from redrawing until the guard drops,
+    /// so a caller can write to the terminal itself
+    #[cfg(feature = "structured")]
+    pub(crate) fn hold(&self) -> Result<HoldGuard> {
+        let this = self.current();
+        this.request(
+            |reply| Command::Hold { reply },
+            |failure| Err(failure.into()),
+        )?;
+        Ok(HoldGuard {
+            coordinator: this.clone(),
+        })
     }
 
     /// no live status, prompt lease or unwritten transient line depends on this
@@ -824,6 +859,18 @@ impl fmt::Debug for StatusCoordinator {
     }
 }
 
+#[cfg(feature = "structured")]
+pub(crate) struct HoldGuard {
+    coordinator: StatusCoordinator,
+}
+
+#[cfg(feature = "structured")]
+impl Drop for HoldGuard {
+    fn drop(&mut self) {
+        self.coordinator.send(Command::Unhold);
+    }
+}
+
 #[cfg(feature = "interactive")]
 pub(crate) struct PromptGuard {
     coordinator: StatusCoordinator,
@@ -916,6 +963,7 @@ struct Actor {
     mode_stamp:       u64,
     width:            WidthSource,
     columns:          usize,
+    rows:             Option<usize>,
     last_width_check: Instant,
     fps:              u16,
     entries:          BTreeMap<u64, StatusEntry>,
@@ -927,6 +975,8 @@ struct Actor {
     lease:            Option<Lease>,
     #[cfg(feature = "structured")]
     deferred:         VecDeque<DeferredAround>,
+    #[cfg(feature = "structured")]
+    holds:            usize,
     dead:             bool,
     errors:           ErrorLog,
     panicked:         BTreeMap<u64, Error>,
@@ -935,14 +985,20 @@ struct Actor {
 impl Actor {
     fn new(config: ActorConfig) -> Self {
         let width = config.width.resolved();
-        let columns = width.columns();
+        let (columns, rows) = width.viewport();
+        let unbounded = Renderer::new(config.writer.clone()).width(columns);
+        let renderer = match rows {
+            Some(height) => unbounded.height(height),
+            None => unbounded,
+        };
         Self {
-            renderer: Renderer::new(config.writer.clone()).width(columns),
+            renderer,
             writer: config.writer,
             mode: mode_from_stamp(config.stamp),
             mode_stamp: config.stamp,
             width,
             columns,
+            rows,
             last_width_check: Instant::now(),
             fps: 15,
             entries: BTreeMap::new(),
@@ -954,6 +1010,8 @@ impl Actor {
             lease: None,
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
+            #[cfg(feature = "structured")]
+            holds: 0,
             dead: false,
             errors: ErrorLog::default(),
             panicked: BTreeMap::new(),
@@ -1049,7 +1107,7 @@ impl Actor {
                 (StatusMode::Silent | StatusMode::Auto, _) => None,
             };
             if let Some(text) = line {
-                self.enqueue(format!("{text}\n").into_bytes());
+                self.enqueue(format!("{}\n", sanitised(&text)).into_bytes());
             }
             self.drain_pending();
         }
@@ -1114,6 +1172,16 @@ impl Actor {
                 {
                     self.release_lease();
                 }
+            },
+            #[cfg(feature = "structured")]
+            Command::Hold { reply } => {
+                self.holds += 1;
+                drop(reply.send(self.clear_immediate()));
+            },
+            #[cfg(feature = "structured")]
+            Command::Unhold => {
+                self.holds = self.holds.saturating_sub(1);
+                self.dirty = true;
             },
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
@@ -1194,29 +1262,11 @@ impl Actor {
         }
     }
 
-    /// remove every entry whose widget panics when probed, or all of them when
-    /// the panic cannot be pinned on one, so the next draw cannot panic
-    /// again
-    fn remove_panicking_entries(&mut self, what: &str, payload: &(dyn Any + Send)) {
-        let culprits: Vec<u64> = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| {
-                catch_unwind(AssertUnwindSafe(|| {
-                    drop(screw::render_plain(&*entry.widget));
-                    let _interest = entry.widget.tick_interest();
-                }))
-                .is_err()
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        let doomed = if culprits.is_empty() {
-            self.entries.keys().copied().collect()
-        } else {
-            culprits
-        };
-        self.record_widget_panic(&doomed, what, payload);
-        for id in doomed {
+    /// remove the entries `ids`, whose widgets panicked, so the next draw
+    /// cannot panic again
+    fn remove_panicked(&mut self, ids: &[u64], what: &str, payload: &(dyn Any + Send)) {
+        self.record_widget_panic(ids, what, payload);
+        for id in ids.iter().copied() {
             if let Some(entry) = self.entries.remove(&id) {
                 self.discard_widget(id, entry.widget);
             }
@@ -1330,10 +1380,14 @@ impl Actor {
 
     fn refresh_width(&mut self) {
         self.last_width_check = Instant::now();
-        let columns = self.width.columns();
-        if columns != self.columns {
+        let (columns, rows) = self.width.viewport();
+        if columns != self.columns || rows != self.rows {
             self.columns = columns;
-            self.renderer.resize(columns);
+            self.rows = rows;
+            match rows {
+                Some(height) => self.renderer.resize_viewport(columns, height),
+                None => self.renderer.resize(columns),
+            }
             self.dirty = true;
         }
     }
@@ -1351,26 +1405,43 @@ impl Actor {
         if self.width.follows_terminal() {
             self.refresh_width();
         }
-        let widgets: Vec<WidgetRef> = self
-            .entries
-            .values()
-            .map(|entry| Arc::clone(&entry.widget))
-            .collect();
-        match catch_unwind(AssertUnwindSafe(|| {
-            self.renderer.draw(&StatusStack(widgets))
-        })) {
-            Ok(Ok(_)) => self.dirty = false,
-            Ok(Err(error)) => {
-                self.record_transient_failure(error);
-                self.dirty = false;
+        let stack = StatusStack::new(
+            self.entries
+                .iter()
+                .map(|(id, entry)| (*id, Arc::clone(&entry.widget)))
+                .collect(),
+        );
+        match catch_unwind(AssertUnwindSafe(|| self.renderer.draw(&stack))) {
+            Ok(drawn) => {
+                match drawn {
+                    Ok(_) => self.dirty = false,
+                    Err(error) => {
+                        self.record_transient_failure(error);
+                        self.dirty = false;
+                    },
+                }
+                for (id, payload) in stack.into_panics() {
+                    self.remove_panicked(&[id], "rendering", payload.as_ref());
+                }
             },
-            Err(payload) => self.remove_panicking_entries("rendering", payload.as_ref()),
+            Err(payload) => {
+                let ids: Vec<u64> = self.entries.keys().copied().collect();
+                self.remove_panicked(&ids, "rendering", payload.as_ref());
+            },
         }
         self.last_draw = Some(Instant::now());
     }
 
     fn wants_periodic_ticks(&self) -> bool {
-        self.mode == StatusMode::Live && !self.leased() && !self.dead && !self.entries.is_empty()
+        #[cfg(feature = "structured")]
+        let held = self.holds > 0;
+        #[cfg(not(feature = "structured"))]
+        let held = false;
+        self.mode == StatusMode::Live
+            && !self.leased()
+            && !held
+            && !self.dead
+            && !self.entries.is_empty()
     }
 
     fn frame_interval(&self) -> Duration {
@@ -1378,13 +1449,18 @@ impl Actor {
     }
 
     fn tick_interest(&mut self) -> TickInterest {
-        match catch_unwind(AssertUnwindSafe(|| combined_tick_interest(&self.entries))) {
-            Ok(interest) => interest,
-            Err(payload) => {
-                self.remove_panicking_entries("reporting its tick interest", payload.as_ref());
-                TickInterest::Never
-            },
+        let mut interests = Vec::new();
+        let mut panicked = Vec::new();
+        for (id, entry) in &self.entries {
+            match catch_unwind(AssertUnwindSafe(|| entry.widget.tick_interest())) {
+                Ok(interest) => interests.push(interest),
+                Err(payload) => panicked.push((*id, payload)),
+            }
         }
+        for (id, payload) in panicked {
+            self.remove_panicked(&[id], "reporting its tick interest", payload.as_ref());
+        }
+        screw::combine_tick_interest(interests)
     }
 
     fn should_draw(&mut self) -> bool {
@@ -1463,6 +1539,13 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
     }
 }
 
+fn sanitised(text: &str) -> String {
+    text.split('\n')
+        .map(screw::single_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn collect_reports(errors: impl IntoIterator<Item = Error>) -> Result<()> {
     let mut remaining = errors.into_iter();
     remaining.next().map_or(Ok(()), |first| {
@@ -1478,25 +1561,35 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         .unwrap_or_else(|| "with a non-string payload".to_owned())
 }
 
-struct StatusStack(Vec<WidgetRef>);
+struct StatusStack {
+    widgets:  Vec<(u64, WidgetRef)>,
+    panicked: RefCell<Vec<(u64, Box<dyn Any + Send>)>>,
+}
 
-impl Widget for StatusStack {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        for (index, widget) in self.0.iter().enumerate() {
-            if index > 0 {
-                out.newline();
-            }
-            widget.render(ctx, out);
+impl StatusStack {
+    const fn new(widgets: Vec<(u64, WidgetRef)>) -> Self {
+        Self {
+            widgets,
+            panicked: RefCell::new(Vec::new()),
         }
+    }
+
+    fn into_panics(self) -> Vec<(u64, Box<dyn Any + Send>)> {
+        self.panicked.into_inner()
     }
 }
 
-fn combined_tick_interest(entries: &BTreeMap<u64, StatusEntry>) -> TickInterest {
-    screw::combine_tick_interest(
-        entries
-            .values()
-            .map(|entry| entry.widget.as_ref().tick_interest()),
-    )
+impl Widget for StatusStack {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        for (index, (id, widget)) in self.widgets.iter().enumerate() {
+            if index > 0 {
+                out.newline();
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| widget.render(ctx, out))) {
+                self.panicked.borrow_mut().push((*id, payload));
+            }
+        }
+    }
 }
 
 fn wants_frame_tick(interest: TickInterest, elapsed: Duration) -> bool {
@@ -1577,7 +1670,10 @@ mod tests {
 
     #[test]
     fn status_stack_composes_multiple_animating_widgets() {
-        let stack = StatusStack(vec![entry("first").widget, entry("second").widget]);
+        let stack = StatusStack::new(vec![
+            (0, entry("first").widget),
+            (1, entry("second").widget),
+        ]);
         assert_eq!(screw::render_plain(&stack), "first\nsecond");
     }
 
@@ -1729,6 +1825,30 @@ mod tests {
         first.finish().unwrap();
         second.finish().unwrap();
         assert_eq!(capture.text(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn final_and_plain_messages_drop_control_sequences() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        Status::new("plain \x1b[31mred", coordinator.clone())
+            .finish()
+            .unwrap();
+        Status::new("working", coordinator.clone())
+            .final_message("first\nsecond \x1b[31mred\x1b[0m")
+            .finish()
+            .unwrap();
+        drop(
+            Status::new("working", coordinator)
+                .failure_message("failed \x07\x1b[2J")
+                .start(),
+        );
+        wait_for(|| capture.text().ends_with("failed [2J\n"));
+        assert_eq!(
+            capture.text(),
+            "plain [31mred\nfirst\nsecond [31mred[0m\nfailed [2J\n"
+        );
     }
 
     #[test]
@@ -2210,6 +2330,28 @@ mod tests {
         status.finish().unwrap();
     }
 
+    #[cfg(feature = "structured")]
+    #[test]
+    fn a_hold_clears_the_region_and_stops_redraws_until_it_drops() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        wait_for(|| !capture.text().is_empty());
+
+        let guard = coordinator.hold().unwrap();
+        let cleared = capture.text().len();
+        coordinator.mark_dirty().unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(capture.text().len(), cleared);
+
+        drop(guard);
+        wait_for(|| capture.text().len() > cleared);
+        status.finish().unwrap();
+    }
+
     #[test]
     fn a_notice_under_a_live_status_clears_the_region_before_it_is_written() {
         let capture = Capture::default();
@@ -2429,6 +2571,29 @@ mod tests {
     }
 
     #[test]
+    fn a_panicking_widget_is_rendered_once_so_the_panic_hook_fires_once() {
+        struct CountsAndPanics(Arc<AtomicUsize>);
+
+        impl Widget for CountsAndPanics {
+            fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("widget exploded");
+            }
+        }
+
+        let renders = Arc::new(AtomicUsize::new(0));
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let broken = Status::new("broken", coordinator.clone())
+            .widget(widget(CountsAndPanics(Arc::clone(&renders))))
+            .start();
+        coordinator.is_idle();
+        let error = broken.finish().unwrap_err();
+        assert!(error.to_string().contains("widget exploded"), "{error}");
+        assert_eq!(renders.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn a_stale_widget_panic_report_reaches_no_other_call() {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
@@ -2568,6 +2733,36 @@ mod tests {
         );
         release.wait();
         drop(status);
+    }
+
+    #[test]
+    fn a_stalled_actor_does_not_delay_the_final_drop() {
+        struct Blocks(Arc<Barrier>);
+
+        impl Widget for Blocks {
+            fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {
+                self.0.wait();
+                thread::sleep(Duration::from_secs(3));
+            }
+        }
+
+        let started = Arc::new(Barrier::new(2));
+        let coordinator = StatusCoordinator::build(
+            SharedWriter::new(Capture::default()),
+            StatusMode::Live,
+            WidthSource::Fixed(40),
+            Duration::from_millis(500),
+        );
+        let status = Status::new("blocked", coordinator.clone())
+            .widget(widget(Blocks(Arc::clone(&started))))
+            .start();
+        started.wait();
+
+        coordinator.notice(b"stuck\n").unwrap_err();
+        drop(status);
+        let before = Instant::now();
+        drop(coordinator);
+        assert!(before.elapsed() < Duration::from_millis(250));
     }
 
     #[test]

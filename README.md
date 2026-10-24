@@ -12,11 +12,9 @@ five libraries, each usable on its own
 
 depend on `climax` alone, it re-exports each component whole behind its feature
 
-## The Climax application path
+## The climax application path
 
 ```rust,no_run
-use climax::prelude::*;
-
 fn main() -> std::process::ExitCode {
     climax::main_with(|cx| {
         let shell = cx
@@ -78,4 +76,4 @@ fastest completion
 
 ## Platforms
 
-unix only, tested on Linux and macOS, minimum Rust version 1.88, edition 2024
+unix only, tested on Linux and macOS, minimum Rust version 1.89, edition 2024

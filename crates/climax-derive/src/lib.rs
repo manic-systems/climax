@@ -2,7 +2,7 @@
 
 //! climax-derive: pound's `Parse` and `ValueEnum` derives rooted at
 //! `::climax::pound`, plus the `serde` attribute that roots serde's derives at
-//! `::climax::serde`.
+//! `::climax::serde`
 //!
 //! re-exported from `climax` behind its `derive` feature
 

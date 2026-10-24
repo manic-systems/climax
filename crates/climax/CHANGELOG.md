@@ -6,17 +6,20 @@ the argument parser has its own changelog in `crates/pound/CHANGELOG.md`
 
 ## [0.1.0] - Unreleased
 
-the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-terminal`, `bang-run`) releases at one version, 0.0.1 was an early cut
+the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-terminal`, `bang-run`) releases at one version, 0.0.1 was an early cut. `pound` and `caress` release on their own
 
 ### Added
 
 #### climax
 
 - application facade that re-exports each component whole, `climax::pound` under `parse`, `climax::bang` under `interactive`, `climax::screw` under `render`, `climax::caress` under `complete` and `climax::serde` under `structured`
-- exact pins on every climax-family dependency, with `pound` and `caress` at the range climax was tested against
+- exact pins between the climax family crates, `pound` and `caress` at the caret range climax was tested against and `climax-derive` taking `pound-derive-impl` at a caret range, and the dev edge from `pound-derive` to `pound` is path-only
 - `main` and `main_with` report and return an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
 - `try_run`, `try_run_from` and `run_with` skip the reporting
-- `main` exits 141 on a closed stdout pipe, and prints a parse error as pound's full report
+- `main` exits 141 on a closed stdout pipe everywhere, prints a parse error as pound's full report and prints the cause chain of an application error
+- `Result<T, E = Error>` alias
+- `Status::widget` reports a panicking widget once through `finish`
+- minimum Rust version 1.89
 - typed prompts on `Context` returning `PromptOutcome`, with the config types and review types re-exported
 - structured output through `Context::output` with `result`, `stream` and `notice`, and `Context::diagnostic` for a second handle
 - `Context::status` coordinator, `Status::during`, `Status::widget` and `StatusMode`
@@ -39,10 +42,14 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `ReviewPromptWithActions` once a review gains its first action
 - `bang::Error` with `ErrorKind`, and a signal during a prompt returns `Interrupted` without re-raising
 - `bang::advanced`, `bang::terminal` and `bang::screw`
-- `bang-core` gains `Reaction::Action`, `Event::UnknownEscape`, `Key::Function`, `SessionReaction`, `TextInput::with_mask`, `Date::unix_days`, `ReviewList::with_exit_output` and `with_leave_output`
+- `bang-core` gains `Reaction::Action`, `Event::UnknownEscape`, `Key::Function`, `Key::Insert`, `SessionReaction`, `TextInput::with_mask`, `Date::unix_days`, `ReviewList::with_exit_output` and `with_leave_output`
+- word movement and deletion in `TextInput`
+- action help on the key help line
+- named errors with remedies, and escape sequences and bidi controls stripped from summaries
 
 #### screw
 
+- a widget panic is reported once and `finish()` returns only `a widget panicked on the render thread`
 - text laid out per grapheme cluster, tabs to eight columns, `width`, `truncate`, `pad` and `Align` agree with `Surface::write`
 - `Table` with `header`, `aligns`, `gap`, `flexible` and `overflow`
 - `Span`, `Spans`, and `Style` gains `italic`, `underline` and `strikethrough`
@@ -58,11 +65,17 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 
 - `ScreenGuard` with `ScreenOptions`, `TerminalEvents`, `TerminalPoll` and `RawModeOptions`
 - `CleanupFailures`, `CleanupFailure` and `CleanupStage` report each failed restore step
+- xterm function keys and `Insert` decode, invalid UTF-8 is reported at once and a double escape decodes
+- Ctrl keys decode for NUL and 0x1C to 0x1F
+- handlers install with `SA_RESTART`, `SIGWINCH` wakes resize at once with a 100ms poll as fallback
+- an ambiguous escape resolves 50ms after its first byte
 
 #### bang-run
 
-- duplicate form field names are rejected
-- exit 2 for usage or configuration errors, 130 for cancellation, 128 plus the signal number, 141 on a closed pipe and 1 otherwise
+- unknown config keys, duplicate form field names, empty names and labels and malformed dates are rejected
+- a failed final write exits 1 and a closed pipe exits 141
+- config parsing uses the workspace `toml`
+- exit 2 for usage or configuration errors, 130 for cancellation, 128 plus the signal number and 1 otherwise
 
 ### Changed
 
@@ -74,7 +87,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - **Breaking** `write_value`, `print_value`, `text` and `json` are removed for `cx.output().result(&value).text(..).emit()`
 - **Breaking** `climax::bang` is the `bang` crate, and the prelude no longer re-exports `bang_core` and `screw` items, use `climax::bang::advanced` and `climax::screw`
 - **Breaking** `pty-overlay` and `climax::overlay` are removed
-- **Breaking** `interactive` no longer implies `render`, and `parse` and `structured` are in the defaults
+- **Breaking** `interactive` no longer implies `render`, `structured` is in the defaults and `climax::prompt` is removed
 - **Breaking** `Context` is not `Send`, `Sync` or `Clone`, its setters take `&mut self` and `Context::new` is not `const`
 - **Breaking** `climax::app` is private, use `climax::Context`
 - **Breaking** `Status::new` is removed, use `cx.status(..)`
@@ -88,14 +101,19 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 #### bang-run
 
 - **Breaking** the command-line tool is the `bang-run` package and still installs `bang`, `run` returns `Result<String, CliError>` and `run_from_env` and `run_from_args` are removed
+- **Breaking** `-o` always means `--output`, `--option` has no short flag
 
 #### bang-core
 
-- `Form::push_field` and `with_field` panic on a repeated name
+- `Form::push_field` and `with_field` panic on a repeated name, an empty select is refused
+- `Form` delivers ticks and resizes to every field and the active field sees Esc, Tab and Backtab first
+- `ReviewList` refuses custom keys that collide with built-ins
+- `format_output` writes non-finite floats as `NaN`, `Infinity` and `-Infinity`, strings in JSON and plain in text, and an empty list prints nothing in text
+- `DatePicker` header alignment, `Date` parsing and saturation
 - `ReviewList::selected_index` returns `None` when every row is removed
 - **Breaking** the View layer is removed, widgets draw through `screw::Widget`
 - **Breaking** `Session::handle` returns `SessionReaction`
-- **Breaking** `Event`, `Reaction` and `Key` are `#[non_exhaustive]`
+- **Breaking** `Event`, `Reaction`, `Key`, `SessionReaction`, `SessionStatus`, `FocusTarget`, `OutputFormat` and `ReviewState` are `#[non_exhaustive]`
 - **Breaking** `ReviewAction`, and `with_prompt` on `Select`, `MultiSelect` and `ReviewList` are removed, `with_action_output` becomes `with_exit_output` and `with_leave_output`, `cursor_char_index` becomes `cursor_grapheme_index`
 
 #### bang-terminal

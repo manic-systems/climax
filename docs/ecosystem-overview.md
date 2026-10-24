@@ -34,6 +34,8 @@ climax  ----> pound* ------> pound-derive* ----> pound-derive-impl
    |                                                    ^
    +--------> climax-derive* ---------------------------+
    |
+   +--------> caress* -----> pound
+   |
    +--------> screw*
    |
    +--------> bang* ------> bang-core -------> screw
@@ -54,10 +56,11 @@ an asterisk marks an optional dependency. `screw` has no normal dependency on ou
 
 ## Pins
 
-every edge to a climax-family crate, dev-dependencies included, is pinned exactly (`=x.y.z`) and
+every edge to a climax-family crate is pinned exactly (`=x.y.z`) and
 `crates/climax/tests/workspace_pins.rs` enforces it, so one `climax` release names one tested set
-of `bang` and `screw` versions. `pound` and `caress` release on their own and are required at the
-range `climax` was tested against. `climax-derive` requires `pound-derive-impl` at a caret range
+of `bang` and `screw` versions. the dev edge from `pound-derive` to `pound` is the exception, it
+stays path-only. `pound` and `caress` release on their own and are required at the range
+`climax` was tested against. `climax-derive` requires `pound-derive-impl` at a caret range
 that resolves to the version `pound` pins
 
 ## Derive paths

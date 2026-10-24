@@ -5,15 +5,15 @@ re-exports each component whole, so an application needs no other dependency
 
 ## Features
 
-| feature       | provides                                                   | component       |
-|---------------|------------------------------------------------------------|-----------------|
-| `parse`       | `main`, `try_run`, `try_run_from`                          | `climax::pound` |
-| `derive`      | `#[derive(climax::Parse)]`, `#[derive(climax::ValueEnum)]` | `climax::pound` |
-| `render`      | `status`                                                   | `climax::screw` |
-| `interactive` | typed prompts on `Context`, `PromptOutcome`                | `climax::bang`  |
-| `structured`  | json results, `#[climax::serde(..)]`                       | `climax::serde` |
+| feature       | provides                                                   | component        |
+|---------------|------------------------------------------------------------|------------------|
+| `parse`       | `main`, `try_run`, `try_run_from`                          | `climax::pound`  |
+| `derive`      | `#[derive(climax::Parse)]`, `#[derive(climax::ValueEnum)]` | `climax::pound`  |
+| `render`      | `status`                                                   | `climax::screw`  |
+| `interactive` | typed prompts on `Context`, `PromptOutcome`                | `climax::bang`   |
+| `structured`  | json results, `#[climax::serde(..)]`                       | `climax::serde`  |
 | `complete`    | shell completion in `main`, `climax::install`              | `climax::caress` |
-| `anyhow`      | `From<anyhow::Error>`, off by default                      |                 |
+| `anyhow`      | `From<anyhow::Error>`, off by default                      |                  |
 
 `derive` implies `parse`, and every feature but `anyhow` is on by default
 
@@ -23,7 +23,14 @@ re-exports each component whole, so an application needs no other dependency
 `try_run_from` report nothing, for embedding and tests, and `run_with` starts from a command you
 already built
 
-```rust,ignore
+```rust,no_run
+# use climax::prelude::*;
+# #[cfg_attr(feature = "derive", derive(Parse))]
+# struct Cli {}
+# fn run(_: Context, _: Cli) -> climax::Result<()> { Ok(()) }
+# #[cfg(not(all(feature = "parse", feature = "derive")))]
+# fn main() {}
+# #[cfg(all(feature = "parse", feature = "derive"))]
 fn main() -> std::process::ExitCode {
     climax::main::<Cli, _>(run)
 }
@@ -31,15 +38,15 @@ fn main() -> std::process::ExitCode {
 
 ### Exit codes
 
-| code        | meaning                                                                    |
-|-------------|----------------------------------------------------------------------------|
-| 0           | success, help and version                                                  |
-| 1           | application error, printed to stderr as `error: ...`                       |
-| 2           | parse failure (`main` only)                                                |
-| 141         | help or version hit a closed stdout pipe (`main` only), other write failures exit 1 |
-| 130         | cancellation, silent unless related errors are attached                    |
-| 128 + n     | prompt interrupted by signal `n`, silent like 130                          |
-| `with_exit_code` | the given code for an error of any kind, 0 becomes 1                  |
+| code             | meaning                                                                          |
+|------------------|----------------------------------------------------------------------------------|
+| 0                | success, help and version                                                        |
+| 1                | application error, printed to stderr as `error: ...`                             |
+| 2                | parse failure (`main` only)                                                      |
+| 141              | stdout closed (`main`, including help and version), a failed final write exits 1 |
+| 130              | cancellation, silent unless related errors are attached                          |
+| 128 + n          | prompt interrupted by signal `n`, silent like 130                                |
+| `with_exit_code` | the given code for an error of any kind, 0 becomes 1                             |
 
 `Error::cancelled()` is a cancellation of your own, and an explicit code keeps it silent
 
@@ -62,21 +69,38 @@ durable results go to stdout, and notices, status and prompts go to stderr
 - `notice` writes human-only context and is suppressed in json mode
 - `Context::diagnostic` is a second handle that defaults to stderr
 
-```rust,ignore
+`stream` and `result` cannot be mixed, a second `result` is an error, and json writes a non-finite
+float as `null`
+
+```rust,no_run
+# use climax::prelude::*;
+# fn scan_view(result: &String) -> String { result.clone() }
+# #[cfg(feature = "structured")]
+# fn run(cx: Context) -> climax::Result<()> {
+# let scan_result = String::new();
 cx.output()
     .result(&scan_result)
     .text(|result| scan_view(result))
     .emit()?;
+# Ok(())
+# }
 ```
 
 ## Status
 
 `StatusMode::Auto` animates on a terminal and prints one plain line per finished status
-elsewhere, `Silent` prints nothing and suits a `--quiet` flag. every status shares one renderer,
-and a prompt suspends them while it holds the terminal
+elsewhere, except a failed status without a `failure_message`, which prints nothing. `Silent`
+prints nothing and suits a `--quiet` flag. every status shares one renderer, and a prompt
+suspends them while it holds the terminal
 
-```rust,ignore
+```rust,no_run
+# use climax::prelude::*;
+# fn scan() -> climax::Result<u32> { Ok(0) }
+# #[cfg(feature = "render")]
+# fn run(cx: Context) -> climax::Result<()> {
 let value = cx.status("scanning").spinner().during(|| scan())?;
+# Ok(())
+# }
 ```
 
 ## Errors
@@ -89,11 +113,13 @@ let value = cx.status("scanning").spinner().during(|| scan())?;
 
 `climax::testing::run` runs an application in process with the reporting and exit codes of `main`,
 and returns an `Outcome` with `exit_code`, `stdout`, `stderr` and `error`. a `Script` answers
-prompts in order and fails the run when input is left over
+prompts in order, panics when input is left over and fails the run with `InputEnded` when it runs out
 
 ## Dependencies
 
 every dependency on a climax-family crate is pinned exactly in `[workspace.dependencies]`, and
-`crates/climax/tests/workspace_pins.rs` fails on any edge that is not. `pound` and `caress` release
-on their own, so `climax` requires them at the range it was tested against. the fixtures under
+`crates/climax/tests/workspace_pins.rs` fails on any edge that is not, except the path-only dev
+edge from `pound-derive` to `pound`. `pound` and `caress` release
+on their own, so `climax` requires them at the range it was tested against, and `climax-derive`
+requires `pound-derive-impl` at a caret range. the fixtures under
 `tests/compile-fixtures` build `climax` with no default features and with each feature alone

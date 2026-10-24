@@ -59,6 +59,8 @@ use crate::{
 /// [`crate::Error::signal`]. [`crate::Error::with_exit_code`] overrides any
 /// code
 ///
+/// a closed pipe while writing output exits 141 without a message
+///
 /// with `complete`, a shell completion request is answered and exits before
 /// parsing
 #[cfg(feature = "parse")]
@@ -96,6 +98,9 @@ where
 ///
 /// fails with the parse error when the arguments are invalid or help was
 /// requested, and otherwise with whatever the application returns
+///
+/// with `complete`, a shell completion request is answered and the process
+/// exits before this returns, `try_run_from` never does
 #[cfg(feature = "parse")]
 pub fn try_run<C, F>(application: F) -> Result<()>
 where
@@ -216,6 +221,7 @@ pub(crate) fn finish(result: &Result<()>) -> Completion {
                 Completion::error(code, error)
             }
         },
+        Err(error) if error.is_closed_pipe() => Completion::cancelled(141),
         Err(error) => Completion::error(error.exit_code().unwrap_or(1), error),
     }
 }
@@ -260,11 +266,11 @@ impl Completion {
         }
     }
 
-    fn error(code: u8, error: impl fmt::Display) -> Self {
+    fn error(code: u8, error: &crate::Error) -> Self {
         Self {
             code,
             stream: Some(CompletionStream::Stderr),
-            message: Some(format!("error: {error}")),
+            message: Some(error.report()),
         }
     }
 
@@ -322,6 +328,10 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 /// not cloneable, since interaction and terminal policy share one owner, and
 /// not `Send` in any feature configuration, so it stays on the thread that
 /// built it
+///
+/// a prompt builder from `Context::select` and the other prompt methods
+/// keeps the interaction driver held when it is built, ignoring later mode or
+/// terminal changes
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
@@ -402,72 +412,63 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks one of several choices
     #[must_use]
     pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
         bang::select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks any number of choices
     #[must_use]
     pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
         bang::multi_select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that filters its choices as the user types
     #[must_use]
     pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
         bang::search(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that confirms, changes or rejects a list of items
     #[must_use]
     pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
         bang::review(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a line of text
     #[must_use]
     pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
         bang::text(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a line of text without echoing it
     #[must_use]
     pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
         bang::password(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that asks a yes or no question
     #[must_use]
     pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
         bang::confirm(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks a calendar date
     #[must_use]
     pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
         bang::date(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a number of type `T`
     #[must_use]
     pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
     where
@@ -481,9 +482,11 @@ impl Context {
     #[must_use]
     /// starts building a transient status line for a long operation
     ///
-    /// off a terminal `Auto` prints one plain line per outcome and `Silent`
-    /// prints nothing. Ctrl-C during a live status with no prompt open
-    /// keeps the default disposition and leaves the spinner line on screen
+    /// off a terminal `Auto` prints one plain line for a success and for a
+    /// failure with a `failure_message`, a failure without one prints
+    /// nothing, and `Silent` prints nothing. Ctrl-C during a live status
+    /// with no prompt open keeps the default disposition and leaves the
+    /// spinner line on screen
     pub fn status(&self, message: impl Into<String>) -> Status {
         Status::new(message, self.transient.clone())
     }
@@ -503,7 +506,7 @@ impl Context {
     }
 
     /// builds this context with `format`, so results and streams are written as
-    /// JSON under [`Format::Json`](crate::output::Format::Json)
+    /// JSON under [`Format::Json`]
     ///
     /// handles taken before the change keep the old format
     #[must_use]
@@ -519,13 +522,17 @@ impl Context {
         self.output = self.output.clone().with_format(format);
     }
 
-    /// sideband output for human-facing context, stderr in text mode
+    /// sideband output for human-facing context on stderr, in the format of
+    /// [`Self::output`]
     ///
     /// has its own result slot, committed together with [`Self::output`] when
     /// the handler returns
     #[must_use]
     pub fn diagnostic(&self) -> Output {
-        self.diagnostic.clone().with_notices_from(&self.output)
+        self.diagnostic
+            .clone()
+            .with_format(self.output.format())
+            .with_notices_from(&self.output)
     }
 
     #[must_use]
@@ -743,7 +750,7 @@ impl Context {
         )
     )]
     /// overrides how statuses present, see
-    /// [`StatusMode`](crate::terminal::StatusMode)
+    /// [`StatusMode`]
     ///
     /// # Errors
     ///
@@ -942,6 +949,7 @@ fn guarded_interaction(
 #[cfg(test)]
 mod tests {
     use alloc::sync::Arc;
+    use core::error::Error as StdError;
     #[cfg(any(
         feature = "parse",
         all(feature = "interactive", feature = "render", feature = "structured")
@@ -1248,6 +1256,77 @@ mod tests {
             Completion::code_after_write(0, CompletionStream::Stderr, &broken),
             1
         );
+    }
+
+    struct Failing(io::ErrorKind);
+
+    impl io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finish_reports_the_cause_chain() {
+        #[derive(Debug)]
+        struct Layered(io::Error);
+
+        impl fmt::Display for Layered {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("could not save")
+            }
+        }
+
+        impl StdError for Layered {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let completion = finish(&Err(crate::Error::application(Layered(io::Error::other(
+            "disk full",
+        )))));
+        assert_eq!(
+            completion.message.as_deref(),
+            Some("error: could not save\n  caused by: disk full")
+        );
+    }
+
+    #[cfg(feature = "anyhow")]
+    #[test]
+    fn finish_reports_an_anyhow_chain() {
+        let error = anyhow::anyhow!("root").context("mid").context("top");
+        let completion = finish(&Err(error.into()));
+        assert_eq!(
+            completion.message.as_deref(),
+            Some("error: top\n  caused by: mid\n  caused by: root")
+        );
+    }
+
+    #[test]
+    fn diagnostic_follows_the_output_format() {
+        let context = Context::new().with_output_format(Format::Json);
+        assert_eq!(context.diagnostic().format(), Format::Json);
+        assert_eq!(Context::new().diagnostic().format(), Format::Text);
+    }
+
+    #[test]
+    fn a_closed_pipe_while_writing_output_exits_141_silently() {
+        let output = Context::new().output();
+        let closed = output
+            .write_message(Failing(io::ErrorKind::BrokenPipe), "hello")
+            .unwrap_err();
+        let completion = finish(&Err(closed));
+        assert_eq!((completion.code, completion.stream), (141, None));
+
+        let full = output
+            .write_message(Failing(io::ErrorKind::StorageFull), "hello")
+            .unwrap_err();
+        assert_eq!(finish(&Err(full)).code, 1);
     }
 
     #[test]

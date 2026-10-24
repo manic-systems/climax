@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 //! testing: runs an application in-process with scripted input and captured
-//! output.
+//! output
 //!
-//! [`run`] and [`run_with`] do what `climax::main` and `climax::main_with` do
-//! without touching the process. prompts read from a [`Script`], results and
+//! `run` and `run_with` do what `climax::main` and `climax::main_with` do
+//! without touching the process. prompts read from a `Script`, results and
 //! diagnostics land in [`Capture`] buffers, and the exit code and error come
-//! back in an [`Outcome`], reported and mapped by the code `main` uses.
+//! back in an [`Outcome`], reported and mapped by the code `main` uses
 //!
-//! [`Capture`] needs no feature, [`Script`] and [`run_with`] need
-//! `interactive`, and [`run`] needs `interactive` and `parse`. leftover script
-//! input fails the run, see [`Script`].
+//! [`Capture`] needs no feature, `Script` and `run_with` need
+//! `interactive`, and `run` needs `interactive` and `parse`. leftover script
+//! input panics, see `Script`
 
 use alloc::sync::Arc;
 #[cfg(feature = "interactive")] use core::iter;
@@ -49,7 +49,7 @@ use crate::{
 /// cloneable in-memory `Write + Send + 'static` sink
 ///
 /// give a clone to `Context::with_output_writer` or `with_diagnostic_writer`
-/// and read the original, while [`run`] and [`run_with`] capture for you
+/// and read the original, while `run` and `run_with` capture for you
 #[derive(Clone, Debug, Default)]
 pub struct Capture(Arc<Mutex<Vec<u8>>>);
 
@@ -181,7 +181,9 @@ impl Script {
     /// answers a text, password or number prompt by typing `text` and
     /// submitting
     ///
-    /// a date prompt takes no typed text, use [`Script::date`]
+    /// a date prompt takes no typed text, use [`Script::date`]. control
+    /// characters are typed as key presses, so `text("\n")` submits an empty
+    /// answer
     #[must_use]
     pub fn text(self, text: &str) -> Self {
         self.text_attempts([text])
@@ -236,7 +238,8 @@ impl Script {
     /// typing and submitting each in turn
     ///
     /// the prompt keeps a rejected input, so one Backspace per grapheme cluster
-    /// erases it before the next attempt
+    /// erases it before the next attempt. with no attempts the prompt gets no
+    /// input and fails with `ErrorKind::InputEnded`
     #[must_use]
     pub fn text_attempts<'a>(self, attempts: impl IntoIterator<Item = &'a str>) -> Self {
         let mut keys = Vec::new();
