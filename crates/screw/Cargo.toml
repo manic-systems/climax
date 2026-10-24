@@ -15,8 +15,5 @@ rustix               = { version = "1.1", default-features = false, features = [
 unicode-segmentation = "1.13"
 unicode-width        = "0.2.2"
 
-[dev-dependencies]
-screw-pty = { path = "../screw-pty" }
-
 [lints]
 workspace = true
