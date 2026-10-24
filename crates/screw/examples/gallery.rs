@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
+
 extern crate alloc;
 
 use alloc::sync::Arc;
@@ -136,7 +141,8 @@ impl DraftInput {
     }
 
     fn set(&self, value: &str) {
-        value.clone_into(&mut self.value.lock().unwrap_or_else(PoisonError::into_inner));
+        let mut guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
+        value.clone_into(&mut guard);
     }
 }
 
@@ -173,7 +179,7 @@ impl Gallery {
                 .case(
                     Phase::Busy,
                     widget(
-                        Looping::new(["\u{2801}", "\u{2802}", "\u{2804}", "\u{2802}"])
+                        Looping::new(["⠁", "⠂", "⠄", "⠂"])
                             .style(Style::default().fg(Color::Yellow).bold()),
                     ),
                 )
