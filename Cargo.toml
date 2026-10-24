@@ -1,8 +1,11 @@
 [workspace]
 members = [
+  "crates/bang",
   "crates/bang-core",
+  "crates/bang-run",
   "crates/bang-terminal",
   "crates/caress",
+  "crates/climax",
   "crates/pound",
   "crates/pound-derive",
   "crates/pound-derive-impl",
@@ -18,10 +21,8 @@ license    = "EUPL-1.2"
 repository = "https://github.com/manic-systems/climax"
 
 [workspace.dependencies]
-bang              = { path = "crates/bang-cli", version = "0.0.1" }
+bang              = { path = "crates/bang", version = "0.0.1" }
 bang-core         = { path = "crates/bang-core", version = "0.0.1" }
-bang-screw        = { path = "crates/bang-screw", version = "0.0.1" }
-bang-screw-pty    = { path = "crates/bang-screw-pty", version = "0.0.1" }
 bang-terminal     = { path = "crates/bang-terminal", version = "0.0.1" }
 caress            = { path = "crates/caress", version = "0.3.0" }
 climax            = { path = "crates/climax", version = "0.0.1" }

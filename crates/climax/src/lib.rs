@@ -23,8 +23,6 @@ pub use app::{
     PromptContext,
 };
 #[cfg(feature = "interactive")] pub use bang_core as bang;
-#[cfg(feature = "pty-overlay")]
-pub use bang_screw_pty as overlay;
 pub use error::{
     Error,
     Result,

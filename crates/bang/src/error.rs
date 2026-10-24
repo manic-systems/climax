@@ -1,0 +1,399 @@
+// SPDX-License-Identifier: EUPL-1.2
+
+use core::{
+    error,
+    fmt,
+    result,
+};
+use std::io;
+
+use bang_terminal::Signal;
+
+use crate::live::LiveSessionError;
+
+/// broad failure category for a prompt interaction
+///
+/// typed prompts resolve [`ErrorKind::Cancelled`] to
+/// [`crate::PromptOutcome::Leave`] themselves, so it reaches a caller through
+/// [`crate::advanced`] or [`crate::PromptOutcome::or_cancel`]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorKind {
+    /// the user cancelled the interaction
+    Cancelled,
+    /// input ended before the prompt was submitted
+    InputEnded,
+    /// the process-wide signal handlers are already claimed, by a live prompt
+    /// on another handle or the application's own signal guard
+    ///
+    /// prompts on the default driver never see this, they wait on the stdin
+    /// lock instead
+    InteractionBusy,
+    /// the driver's terminal is not interactive, such as stdin being a pipe or
+    /// `TERM=dumb`
+    InteractionUnavailable,
+    /// the prompt was built with settings that cannot run, such as no choices
+    InvalidConfiguration,
+    /// a signal ended the interaction, the terminal is restored and the process
+    /// still runs
+    ///
+    /// [`Error::signal`] names the signal, the application decides whether to
+    /// exit
+    Interrupted,
+    /// terminal setup, rendering or cleanup failed, the source holds the cause
+    Terminal,
+    /// a widget returned a value of an unexpected shape, an internal invariant
+    UnexpectedValue,
+}
+
+/// error returned by a bang prompt
+///
+/// the underlying cause is available through [`error::Error::source`]
+#[derive(Debug)]
+pub struct Error {
+    kind:    ErrorKind,
+    message: String,
+    signal:  Option<Signal>,
+    source:  Option<Box<dyn error::Error + Send + Sync>>,
+}
+
+impl Error {
+    /// the failure category
+    #[must_use]
+    pub const fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    /// the signal that interrupted the prompt, set for
+    /// [`ErrorKind::Interrupted`]
+    #[must_use]
+    pub const fn signal(&self) -> Option<Signal> {
+        self.signal
+    }
+
+    pub(crate) fn unexpected(expected: &'static str) -> Self {
+        Self {
+            kind:    ErrorKind::UnexpectedValue,
+            message: format!("prompt returned an unexpected value, expected {expected}"),
+            signal:  None,
+            source:  None,
+        }
+    }
+
+    pub(crate) fn invalid_configuration(message: impl Into<String>) -> Self {
+        Self {
+            kind:    ErrorKind::InvalidConfiguration,
+            message: message.into(),
+            signal:  None,
+            source:  None,
+        }
+    }
+
+    pub(crate) fn from_live(error: LiveSessionError) -> Self {
+        let primary = error.primary().unwrap_or(&error);
+        let signal = match primary {
+            LiveSessionError::Signalled(signal) => Some(*signal),
+            LiveSessionError::Unavailable
+            | LiveSessionError::RawMode(_)
+            | LiveSessionError::Signals(_)
+            | LiveSessionError::TerminalIo(_)
+            | LiveSessionError::Cancelled
+            | LiveSessionError::InputEnded
+            | LiveSessionError::Cleanup { .. } => None,
+        };
+        let kind = if signal.is_some() {
+            ErrorKind::Interrupted
+        } else if !error.cleanup_failures().is_empty() {
+            ErrorKind::Terminal
+        } else {
+            match primary {
+                LiveSessionError::Unavailable => ErrorKind::InteractionUnavailable,
+                LiveSessionError::Cancelled => ErrorKind::Cancelled,
+                LiveSessionError::InputEnded => ErrorKind::InputEnded,
+                LiveSessionError::Signals(source)
+                    if source.kind() == io::ErrorKind::AlreadyExists =>
+                {
+                    ErrorKind::InteractionBusy
+                },
+                LiveSessionError::RawMode(_)
+                | LiveSessionError::Signals(_)
+                | LiveSessionError::TerminalIo(_)
+                | LiveSessionError::Signalled(_)
+                | LiveSessionError::Cleanup { .. } => ErrorKind::Terminal,
+            }
+        };
+        let message = match kind {
+            ErrorKind::InteractionUnavailable => {
+                "interactive terminal input is unavailable, so pass the answer another way or run \
+                 in a terminal"
+                    .to_owned()
+            },
+            ErrorKind::InteractionBusy => {
+                "terminal signal handlers are already claimed, so wait for the other prompt to \
+                 finish"
+                    .to_owned()
+            },
+            ErrorKind::Cancelled => "prompt was cancelled".to_owned(),
+            ErrorKind::InputEnded => {
+                "input ended before the prompt was submitted, so submit an answer or cancel"
+                    .to_owned()
+            },
+            ErrorKind::Interrupted => error.to_string(),
+            ErrorKind::InvalidConfiguration | ErrorKind::Terminal | ErrorKind::UnexpectedValue => {
+                "terminal failure".to_owned()
+            },
+        };
+        Self {
+            kind,
+            message,
+            signal,
+            source: Some(Box::new(error)),
+        }
+    }
+
+    /// names `prompt` in an unavailable, busy or input-ended message, for
+    /// callers of [`crate::Interaction::interact`] that know what they
+    /// asked
+    #[must_use]
+    pub fn naming_prompt(mut self, prompt: &str) -> Self {
+        let trimmed = prompt.trim().trim_end_matches(':').trim_end();
+        if trimmed.is_empty() {
+            return self;
+        }
+        match self.kind {
+            ErrorKind::InteractionUnavailable => {
+                self.message = format!(
+                    "cannot ask \"{trimmed}\" because there is no interactive terminal, so pass \
+                     the answer another way or run in a terminal"
+                );
+            },
+            ErrorKind::InputEnded if self.source.is_some() => {
+                self.message = format!(
+                    "input ended before \"{trimmed}\" was answered, so submit an answer or cancel"
+                );
+            },
+            ErrorKind::InputEnded => {
+                self.message = format!(
+                    "input ended before \"{trimmed}\" was answered, so supply the answer or run \
+                     in a terminal"
+                );
+            },
+            ErrorKind::InteractionBusy => {
+                self.message = format!(
+                    "cannot ask \"{trimmed}\" because another interaction owns the terminal, so \
+                     wait for it to finish"
+                );
+            },
+            ErrorKind::Cancelled
+            | ErrorKind::InvalidConfiguration
+            | ErrorKind::Interrupted
+            | ErrorKind::Terminal
+            | ErrorKind::UnexpectedValue => {},
+        }
+        self
+    }
+
+    /// for a driver built on [`crate::advanced::interaction_from_runner`],
+    /// resolves a prompt to [`crate::PromptOutcome::Leave`] as a live
+    /// session's own cancel does
+    #[must_use]
+    pub fn cancelled() -> Self {
+        Self {
+            kind:    ErrorKind::Cancelled,
+            message: "prompt was cancelled".to_owned(),
+            signal:  None,
+            source:  None,
+        }
+    }
+
+    /// for a driver built on [`crate::advanced::interaction_from_runner`],
+    /// input ended before the prompt was submitted
+    #[must_use]
+    pub fn input_ended() -> Self {
+        Self {
+            kind:    ErrorKind::InputEnded,
+            message: "input ended before the prompt was submitted, so supply the answer or run in \
+                      a terminal"
+                .to_owned(),
+            signal:  None,
+            source:  None,
+        }
+    }
+
+    /// another interaction already owns the terminal
+    #[must_use]
+    pub fn interaction_busy() -> Self {
+        Self {
+            kind:    ErrorKind::InteractionBusy,
+            message: "another interaction already owns the terminal, so wait for it to finish"
+                .to_owned(),
+            signal:  None,
+            source:  None,
+        }
+    }
+
+    /// the driver's terminal is not interactive
+    #[must_use]
+    pub fn interaction_unavailable() -> Self {
+        Self {
+            kind:    ErrorKind::InteractionUnavailable,
+            message: "interactive terminal input is unavailable, so pass the answer another way \
+                      or run in a terminal"
+                .to_owned(),
+            signal:  None,
+            source:  None,
+        }
+    }
+
+    /// a terminal lifecycle or rendering failure, the display text includes
+    /// `source`
+    #[must_use]
+    pub fn terminal(source: impl error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            kind:    ErrorKind::Terminal,
+            message: "terminal failure".to_owned(),
+            signal:  None,
+            source:  Some(Box::new(source)),
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)?;
+        if let (ErrorKind::Terminal, Some(source)) = (self.kind, &self.source) {
+            write!(f, ": {source}")?;
+        }
+        Ok(())
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| -> &(dyn error::Error + 'static) { source })
+    }
+}
+
+/// a result whose error is a bang [`Error`]
+pub type Result<T> = result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use bang_terminal::{
+        CleanupFailure,
+        CleanupFailures,
+        CleanupStage,
+        Signal,
+    };
+
+    use super::{
+        Error,
+        ErrorKind,
+        LiveSessionError,
+    };
+
+    #[test]
+    fn unnamed_errors_give_a_remedy() {
+        for (error, kind, remedy) in [
+            (
+                Error::interaction_unavailable(),
+                ErrorKind::InteractionUnavailable,
+                "run in a terminal",
+            ),
+            (
+                Error::input_ended(),
+                ErrorKind::InputEnded,
+                "supply the answer",
+            ),
+            (
+                Error::interaction_busy(),
+                ErrorKind::InteractionBusy,
+                "wait for it",
+            ),
+        ] {
+            assert_eq!(error.kind(), kind);
+            assert!(error.to_string().contains(remedy), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_live_input_end_tells_the_user_to_submit_or_cancel() {
+        let live = Error::from_live(LiveSessionError::InputEnded).naming_prompt("Name:");
+
+        assert_eq!(
+            live.to_string(),
+            "input ended before \"Name\" was answered, so submit an answer or cancel"
+        );
+        assert!(
+            !Error::from_live(LiveSessionError::InputEnded)
+                .to_string()
+                .contains("run in")
+        );
+    }
+
+    #[test]
+    fn a_busy_interaction_can_be_named() {
+        let error = Error::interaction_busy().naming_prompt("Pick:");
+
+        assert_eq!(
+            error.to_string(),
+            "cannot ask \"Pick\" because another interaction owns the terminal, so wait for it to \
+             finish"
+        );
+    }
+
+    #[test]
+    fn a_signal_is_an_interruption_with_its_cause() {
+        let error = Error::from_live(LiveSessionError::Signalled(Signal::INT));
+
+        assert_eq!(error.kind(), ErrorKind::Interrupted);
+        assert_eq!(error.signal(), Some(Signal::INT));
+        assert_eq!(error.to_string(), "interrupted by signal SIGINT");
+    }
+
+    #[test]
+    fn a_signal_outranks_a_cleanup_failure() {
+        let error = Error::from_live(LiveSessionError::Cleanup {
+            primary:  Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
+            failures: CleanupFailures::new(vec![CleanupFailure::new(
+                CleanupStage::RawMode,
+                io::Error::from_raw_os_error(5),
+            )]),
+        });
+
+        assert_eq!(error.kind(), ErrorKind::Interrupted);
+        assert_eq!(error.signal(), Some(Signal::TERM));
+    }
+
+    #[test]
+    fn claimed_signal_handlers_are_busy() {
+        let error = Error::from_live(LiveSessionError::Signals(io::Error::from(
+            io::ErrorKind::AlreadyExists,
+        )));
+
+        assert_eq!(error.kind(), ErrorKind::InteractionBusy);
+    }
+
+    #[test]
+    fn a_terminal_error_displays_its_cause() {
+        let error = Error::terminal(io::Error::other("pty closed"));
+
+        assert_eq!(error.to_string(), "terminal failure: pty closed");
+    }
+
+    #[test]
+    fn a_cleanup_failure_after_cancel_is_a_terminal_error() {
+        let error = Error::from_live(LiveSessionError::Cleanup {
+            primary:  Some(Box::new(LiveSessionError::Cancelled)),
+            failures: CleanupFailures::new(vec![CleanupFailure::new(
+                CleanupStage::RawMode,
+                io::Error::from_raw_os_error(5),
+            )]),
+        });
+        assert_eq!(error.kind(), ErrorKind::Terminal);
+    }
+}

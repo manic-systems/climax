@@ -1,12 +1,12 @@
-use core::{
-    error,
-    fmt,
-    result::Result as CoreResult,
-};
 #[cfg(any(feature = "render", feature = "interactive"))]
 use std::io;
+use std::{
+    error,
+    fmt,
+    result,
+};
 
-pub type Result<T> = CoreResult<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 pub enum Error {
     /// argument parsing failed
@@ -17,7 +17,7 @@ pub enum Error {
     Draw(io::Error),
     /// interactive terminal session failed
     #[cfg(feature = "interactive")]
-    Interact(bang_screw::LiveSessionError),
+    Interact(::bang::Error),
     /// prompt was cancelled
     #[cfg(feature = "interactive")]
     Cancelled,
@@ -100,16 +100,12 @@ impl From<pound::Error> for Error {
 }
 
 #[cfg(feature = "interactive")]
-impl From<bang_screw::LiveSessionError> for Error {
-    fn from(value: bang_screw::LiveSessionError) -> Self {
-        match value {
-            bang_screw::LiveSessionError::Cancelled => Self::Cancelled,
-            bang_screw::LiveSessionError::InputEnded => Self::InputEnded,
-            other @ (bang_screw::LiveSessionError::RawMode(_)
-            | bang_screw::LiveSessionError::Signals(_)
-            | bang_screw::LiveSessionError::TerminalIo(_)
-            | bang_screw::LiveSessionError::Signalled(_)
-            | bang_screw::LiveSessionError::ReraiseSignal { .. }) => Self::Interact(other),
+impl From<::bang::Error> for Error {
+    fn from(value: ::bang::Error) -> Self {
+        match value.kind() {
+            ::bang::ErrorKind::Cancelled => Self::Cancelled,
+            ::bang::ErrorKind::InputEnded => Self::InputEnded,
+            _ => Self::Interact(value),
         }
     }
 }

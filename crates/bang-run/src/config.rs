@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::collections::BTreeMap;
-use std::{
-    fs,
-    path::Path,
-};
+use core::fmt;
 
 use bang_core::{
     ActionBinding,
@@ -21,7 +18,16 @@ use bang_core::{
         TextInput,
     },
 };
-use serde::Deserialize;
+use serde::{
+    Deserialize,
+    Deserializer,
+    de::{
+        self,
+        MapAccess,
+        Visitor,
+        value::MapAccessDeserializer,
+    },
+};
 
 /// parsed widget config
 #[derive(Clone, Debug, PartialEq)]
@@ -67,13 +73,6 @@ pub struct FieldConfig {
 }
 
 impl WidgetConfig {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
-        let config_path = path.as_ref();
-        let source = fs::read_to_string(config_path)
-            .map_err(|error| format!("failed to read config {}: {error}", config_path.display()))?;
-        Self::parse(&source)
-    }
-
     pub fn parse(source: &str) -> Result<Self, String> {
         toml::from_str::<RawConfig>(source)
             .map_err(|error| format!("failed to parse config: {error}"))?
@@ -92,7 +91,22 @@ pub enum WidgetKind {
     ReviewList,
 }
 
+impl WidgetKind {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Select => "select",
+            Self::MultiSelect => "multi-select",
+            Self::Text => "text",
+            Self::Search => "search",
+            Self::Form => "form",
+            Self::Date => "date",
+            Self::ReviewList => "review-list",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(rename = "type")]
     kind:          RawWidgetKind,
@@ -146,6 +160,14 @@ impl RawConfig {
             .into_iter()
             .map(RawFieldConfig::finish)
             .collect::<Result<Vec<_>, _>>()?;
+        for (index, field) in fields.iter().enumerate() {
+            if fields[..index]
+                .iter()
+                .any(|earlier| earlier.name == field.name)
+            {
+                return Err(format!("duplicate form field name '{}'", field.name));
+            }
+        }
 
         let is_review_list = self.kind == RawWidgetKind::ReviewList;
         let (actions, review_actions) = finish_actions(self.actions, is_review_list)?;
@@ -213,6 +235,7 @@ impl From<RawWidgetKind> for WidgetKind {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawFieldConfig {
     name:          String,
     #[serde(rename = "type")]
@@ -234,6 +257,9 @@ struct RawFieldConfig {
 
 impl RawFieldConfig {
     fn finish(self) -> Result<FieldConfig, String> {
+        if self.name.is_empty() {
+            return Err("form field name cannot be empty".to_owned());
+        }
         if self.kind == RawWidgetKind::Form {
             return Err("nested form fields are not supported yet".to_owned());
         }
@@ -290,16 +316,43 @@ impl RawFieldConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum OptionEntry {
     Label(String),
     Detailed(DetailedOption),
 }
 
+impl<'de> Deserialize<'de> for OptionEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntryVisitor;
+
+        impl<'de> Visitor<'de> for EntryVisitor {
+            type Value = OptionEntry;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an option label or a table with a label")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<OptionEntry, E> {
+                Ok(OptionEntry::Label(v.to_owned()))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<OptionEntry, A::Error> {
+                DetailedOption::deserialize(MapAccessDeserializer::new(map))
+                    .map(OptionEntry::Detailed)
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
+    }
+}
+
 impl OptionEntry {
     fn finish(self) -> Result<FinishedOption, String> {
         match self {
+            Self::Label(label) if label.is_empty() => {
+                Err("option label cannot be empty".to_owned())
+            },
             Self::Label(label) => {
                 Ok(FinishedOption {
                     item:         SelectItem::new(label.clone(), label),
@@ -313,6 +366,7 @@ impl OptionEntry {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DetailedOption {
     label:    String,
     value:    Option<toml::Value>,
@@ -322,6 +376,7 @@ struct DetailedOption {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawAction {
     key:  String,
     name: String,
@@ -330,7 +385,7 @@ struct RawAction {
 
 impl RawAction {
     fn finish_review(self) -> Result<ReviewActionBinding, String> {
-        let key = parse_action_key(&self.key)?;
+        let key = parse_action_key(&self.key, "review action")?;
         if self.name.is_empty() {
             return Err("review action name cannot be empty".to_owned());
         }
@@ -356,6 +411,9 @@ impl RawAction {
 
 impl DetailedOption {
     fn finish(self) -> Result<FinishedOption, String> {
+        if self.label.is_empty() {
+            return Err("option label cannot be empty".to_owned());
+        }
         let review_state = self
             .state
             .as_deref()
@@ -395,12 +453,12 @@ fn finish_options(options: Vec<OptionEntry>) -> Result<FinishedOptions, String> 
     let mut items = Vec::new();
     let mut review_states = Vec::new();
     for (index, option) in options.into_iter().enumerate() {
-        let finished_option = option.finish()?;
-        if finished_option.selected {
+        let finished = option.finish()?;
+        if finished.selected {
             selected_indices.push(index);
         }
-        review_states.push(finished_option.review_state);
-        items.push(finished_option.item);
+        review_states.push(finished.review_state);
+        items.push(finished.item);
     }
     Ok(FinishedOptions {
         items,
@@ -414,9 +472,9 @@ fn finish_actions(
     review_list: bool,
 ) -> Result<(Vec<ActionBinding>, Vec<ReviewActionBinding>), String> {
     if review_list {
-        finish_review_actions(actions).map(|finished_actions| (Vec::new(), finished_actions))
+        finish_review_actions(actions).map(|resolved| (Vec::new(), resolved))
     } else {
-        finish_widget_actions(actions).map(|finished_actions| (finished_actions, Vec::new()))
+        finish_widget_actions(actions).map(|resolved| (resolved, Vec::new()))
     }
 }
 
@@ -424,21 +482,10 @@ fn finish_review_actions(actions: Vec<RawAction>) -> Result<Vec<ReviewActionBind
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        let finished_action = action.finish_review()?;
-        if is_reserved_action_key(finished_action.key()) {
-            return Err(format!(
-                "review action key '{}' is reserved by built-in review controls",
-                finished_action.key()
-            ));
-        }
-        if seen.contains(&finished_action.key()) {
-            return Err(format!(
-                "duplicate review action key '{}'",
-                finished_action.key()
-            ));
-        }
-        seen.push(finished_action.key());
-        finished.push(finished_action);
+        finished.push(push_unique_review_action(
+            &mut seen,
+            action.finish_review()?,
+        )?);
     }
     Ok(finished)
 }
@@ -447,57 +494,81 @@ fn finish_widget_actions(actions: Vec<RawAction>) -> Result<Vec<ActionBinding>, 
     let mut seen = Vec::new();
     let mut finished = Vec::new();
     for action in actions {
-        let finished_action = action.finish_action()?;
-        if seen.contains(finished_action.key_event()) {
-            return Err(format!(
-                "duplicate action key '{}'",
-                format_action_key_event(finished_action.key_event())
-            ));
-        }
-        seen.push(finished_action.key_event().clone());
-        finished.push(finished_action);
+        finished.push(push_unique_action(&mut seen, action.finish_action()?)?);
     }
     Ok(finished)
 }
 
+/// the one place bang-run enforces that an [`ActionBinding`] key is unused so
+/// far in the list being built, shared by the `--action` and config paths
+pub(crate) fn push_unique_action(
+    seen: &mut Vec<KeyEvent>,
+    action: ActionBinding,
+) -> Result<ActionBinding, String> {
+    if seen.contains(action.key_event()) {
+        return Err(format!(
+            "duplicate action key '{}'",
+            format_action_key_event(action.key_event())
+        ));
+    }
+    seen.push(action.key_event().clone());
+    Ok(action)
+}
+
+/// the one place bang-run enforces that a [`ReviewActionBinding`] key is
+/// neither reserved nor already used, shared by the `--action` and config
+/// paths
+pub(crate) fn push_unique_review_action(
+    seen: &mut Vec<char>,
+    action: ReviewActionBinding,
+) -> Result<ReviewActionBinding, String> {
+    if is_reserved_action_key(action.key()) {
+        return Err(format!(
+            "review action key '{}' is reserved by built-in review controls",
+            action.key()
+        ));
+    }
+    let key = action.key().to_ascii_lowercase();
+    if seen
+        .iter()
+        .any(|existing: &char| existing.eq_ignore_ascii_case(&key))
+    {
+        return Err(format!("duplicate review action key '{key}'"));
+    }
+    seen.push(key);
+    Ok(action)
+}
+
 pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
-    let Some((key, name)) = value.split_once(':') else {
+    let Some((key_text, name)) = value.split_once(':') else {
         return Err("action must use key:name syntax".to_owned());
     };
-    let parsed_key = parse_action_key_event(key)?;
+    let key = parse_action_key_event(key_text)?;
     if name.is_empty() {
         return Err("action name cannot be empty".to_owned());
     }
-    Ok(ActionBinding::new(parsed_key, name))
+    Ok(ActionBinding::new(key, name))
 }
 
 pub fn parse_review_action_binding(value: &str) -> Result<ReviewActionBinding, String> {
-    let Some((key, name)) = value.split_once(':') else {
+    let Some((key_text, name)) = value.split_once(':') else {
         return Err("review action must use key:name syntax".to_owned());
     };
-    let parsed_key = parse_action_key(key)?;
-    if is_reserved_action_key(parsed_key) {
-        return Err(format!(
-            "review action key '{parsed_key}' is reserved by built-in review controls"
-        ));
-    }
+    let key = parse_action_key(key_text, "review action")?;
     if name.is_empty() {
         return Err("review action name cannot be empty".to_owned());
     }
-    Ok(ReviewActionBinding::new(parsed_key, name))
+    Ok(ReviewActionBinding::new(key, name))
 }
 
 fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
     let normalized = value.to_ascii_lowercase();
-    if let Some(key) = normalized
+    if let Some(stripped) = normalized
         .strip_prefix("ctrl-")
         .or_else(|| normalized.strip_prefix("control-"))
     {
-        let control_key = parse_control_action_key(key, value)?;
-        return Ok(KeyEvent::with_modifiers(
-            Key::Char(control_key),
-            Modifiers::CONTROL,
-        ));
+        let key = parse_control_action_key(stripped, value)?;
+        return Ok(KeyEvent::with_modifiers(Key::Char(key), Modifiers::CONTROL));
     }
 
     let key = match normalized.as_str() {
@@ -515,32 +586,32 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
         "end" => Key::End,
         "page-up" | "pageup" => Key::PageUp,
         "page-down" | "pagedown" => Key::PageDown,
-        _ => Key::Char(parse_action_key(value)?),
+        _ => Key::Char(parse_action_key(value, "action")?),
     };
     Ok(KeyEvent::new(key))
 }
 
 fn parse_control_action_key(key: &str, original: &str) -> Result<char, String> {
     let mut chars = key.chars();
-    let Some(first_key) = chars.next() else {
+    let Some(letter) = chars.next() else {
         return Err("control action key cannot be empty".to_owned());
     };
-    if chars.next().is_some() || !first_key.is_ascii_alphabetic() {
+    if chars.next().is_some() || !letter.is_ascii_alphabetic() {
         return Err(format!(
             "control action key '{original}' must use ctrl- plus one letter"
         ));
     }
-    Ok(first_key.to_ascii_lowercase())
+    Ok(letter.to_ascii_lowercase())
 }
 
-fn parse_action_key(value: &str) -> Result<char, String> {
+fn parse_action_key(value: &str, label: &str) -> Result<char, String> {
     let mut chars = value.chars();
     let Some(key) = chars.next() else {
-        return Err("review action key cannot be empty".to_owned());
+        return Err(format!("{label} key cannot be empty"));
     };
     if chars.next().is_some() || key.is_control() {
         return Err(format!(
-            "review action key '{value}' must be one printable character"
+            "{label} key '{value}' must be one printable character"
         ));
     }
     Ok(key)
@@ -552,12 +623,8 @@ fn format_action_key_event(key: &KeyEvent) -> String {
             format!("ctrl-{value}")
         },
         (Key::Char(value), modifiers) if modifiers.bits() == 0 => value.to_string(),
-        (key_value, modifiers) if modifiers.bits() == 0 => {
-            format!("{key_value:?}").to_ascii_lowercase()
-        },
-        (key_value, modifiers) => {
-            format!("{key_value:?}+{}", modifiers.bits()).to_ascii_lowercase()
-        },
+        (code, modifiers) if modifiers.bits() == 0 => format!("{code:?}").to_ascii_lowercase(),
+        (code, modifiers) => format!("{code:?}+{}", modifiers.bits()).to_ascii_lowercase(),
     }
 }
 
@@ -565,12 +632,8 @@ const fn is_reserved_action_key(key: char) -> bool {
     matches!(
         key,
         ' ' | '\t'
-            | 'a'
-            | 'A'
             | 'c'
             | 'C'
-            | 'g'
-            | 'G'
             | 'j'
             | 'J'
             | 'k'
@@ -579,8 +642,6 @@ const fn is_reserved_action_key(key: char) -> bool {
             | 'N'
             | 'r'
             | 'R'
-            | 's'
-            | 'S'
             | 'u'
             | 'U'
             | 'x'
@@ -592,11 +653,11 @@ const fn is_reserved_action_key(key: char) -> bool {
 
 fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
     Ok(match value {
-        toml::Value::String(string_value) => Value::String(string_value),
-        toml::Value::Integer(integer_value) => Value::Number(Number::Integer(integer_value)),
-        toml::Value::Float(float_value) => Value::Number(Number::Float(float_value)),
-        toml::Value::Boolean(boolean_value) => Value::Bool(boolean_value),
-        toml::Value::Datetime(datetime_value) => Value::String(datetime_value.to_string()),
+        toml::Value::String(text) => Value::String(text),
+        toml::Value::Integer(integer) => Value::Number(Number::Integer(integer)),
+        toml::Value::Float(float) => Value::Number(Number::Float(float)),
+        toml::Value::Boolean(flag) => Value::Bool(flag),
+        toml::Value::Datetime(moment) => Value::String(moment.to_string()),
         toml::Value::Array(values) => {
             Value::List(
                 values
@@ -609,9 +670,7 @@ fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
             Value::Object(
                 values
                     .into_iter()
-                    .map(|(table_key, table_value)| {
-                        Ok((table_key, toml_value_to_bang(table_value)?))
-                    })
+                    .map(|(key, field)| Ok((key, toml_value_to_bang(field)?)))
                     .collect::<Result<BTreeMap<_, _>, String>>()?,
             )
         },
@@ -619,6 +678,16 @@ fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
 }
 
 fn parse_date(value: &str) -> Result<Date, String> {
+    let digits = |part: &str, len: usize| {
+        part.len() == len && part.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    let well_formed = matches!(
+        value.split('-').collect::<Vec<_>>()[..],
+        [year, month, day] if digits(year, 4) && digits(month, 2) && digits(day, 2) && year != "0000"
+    );
+    if !well_formed {
+        return Err(format!("invalid date '{value}', expected YYYY-MM-DD"));
+    }
     value.parse()
 }
 
@@ -636,4 +705,98 @@ pub fn text_from_config(config: &WidgetConfig) -> TextInput {
         input = input.with_value(value.clone());
     }
     input
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_form_field_names_are_rejected() {
+        let error = WidgetConfig::parse(
+            r#"
+type = "form"
+
+[[fields]]
+name = "who"
+type = "text"
+
+[[fields]]
+name = "who"
+type = "text"
+"#,
+        )
+        .expect_err("duplicate names should be rejected");
+        assert!(error.contains("duplicate form field name 'who'"), "{error}");
+    }
+
+    #[test]
+    fn empty_names_and_labels_are_rejected() {
+        for (source, message) in [
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"\"\ntype = \"text\"\n",
+                "form field name cannot be empty",
+            ),
+            (
+                "type = \"select\"\noptions = [\"\"]\n",
+                "option label cannot be empty",
+            ),
+            (
+                "type = \"select\"\noptions = [{ label = \"\" }]\n",
+                "option label cannot be empty",
+            ),
+        ] {
+            let error = WidgetConfig::parse(source).expect_err("empty names should be rejected");
+            assert!(error.contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn malformed_dates_are_rejected() {
+        for date in [
+            "2024-2-9",
+            "99999-01-01",
+            "0000-01-01",
+            "-2024-01-01",
+            "24-01-01",
+            "2024-01-1x",
+        ] {
+            let source = format!("type = \"date\"\nselected_date = \"{date}\"\n");
+            let error =
+                WidgetConfig::parse(&source).expect_err("malformed dates should be rejected");
+            assert!(error.contains("expected YYYY-MM-DD"), "{date} {error}");
+        }
+        WidgetConfig::parse("type = \"date\"\nselected_date = \"2024-02-29\"\n").unwrap();
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected_with_the_key_and_its_line() {
+        for (source, key, line) in [
+            (
+                "type = \"select\"\npromt = \"Pick\"\noptions = [\"a\"]\n",
+                "promt",
+                "line 2",
+            ),
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"a\"\ntype = \"text\"\nplaceholdr = \
+                 \"x\"\n",
+                "placeholdr",
+                "line 6",
+            ),
+            (
+                "type = \"select\"\noptions = [{ label = \"a\", selectd = true }]\n",
+                "selectd",
+                "line 2",
+            ),
+            (
+                "type = \"text\"\n\n[[actions]]\nkey = \"a\"\nname = \"go\"\nhelp2 = \"x\"\n",
+                "help2",
+                "line 6",
+            ),
+        ] {
+            let error = WidgetConfig::parse(source).expect_err("unknown keys should be rejected");
+            assert!(error.contains(key), "{error}");
+            assert!(error.contains(line), "{error}");
+        }
+    }
 }

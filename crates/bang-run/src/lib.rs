@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! command-line bridge
+//! bang-run: command-line bridge from argv or a config file to a bang prompt
 
 extern crate alloc;
 
 mod config;
 
+use core::{
+    error::Error as StdError,
+    fmt,
+};
+use std::fs;
+
+use bang::{
+    advanced::{
+        LiveSessionError,
+        interact_widget,
+        replay_events,
+    },
+    terminal::Decoder,
+};
 use bang_core::{
     ActionBinding,
     ActionLayer,
     OutputFormat as CoreOutputFormat,
-    Reaction,
-    Session,
-    SessionStatus,
     Value,
     Widget,
     format_output,
@@ -28,13 +39,14 @@ use bang_core::{
         TextInput,
     },
 };
-use bang_terminal::Decoder;
 use config::{
     FieldConfig,
     WidgetConfig,
     WidgetKind,
     parse_action_binding,
     parse_review_action_binding,
+    push_unique_action,
+    push_unique_review_action,
     text_from_config,
 };
 use pound::{
@@ -42,12 +54,95 @@ use pound::{
     ValueEnum,
 };
 
-/// toplevel CLI
+/// failure from [`run`]
+#[derive(Debug)]
+pub enum CliError {
+    /// invalid invocation or widget configuration
+    Usage(String),
+    /// the user cancelled the prompt
+    Cancelled,
+    /// a signal ended the prompt, carrying its number and any terminal
+    /// cleanup failures reported alongside it
+    Interrupted(i32, Vec<String>),
+    /// terminal, input, or file failure
+    Failed(String),
+}
+
+impl CliError {
+    /// process exit status for this failure
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
+        match self {
+            Self::Usage(_) => 2,
+            Self::Cancelled => 130,
+            Self::Interrupted(signal, _) => 128 + *signal,
+            Self::Failed(_) => 1,
+        }
+    }
+
+    /// teardown failures that accompanied an interruption
+    #[must_use]
+    pub fn cleanup_failures(&self) -> &[String] {
+        match self {
+            Self::Interrupted(_, failures) => failures,
+            Self::Usage(_) | Self::Cancelled | Self::Failed(_) => &[],
+        }
+    }
+}
+
+impl From<bang::Error> for CliError {
+    fn from(error: bang::Error) -> Self {
+        match error.kind() {
+            bang::ErrorKind::Cancelled => Self::Cancelled,
+            bang::ErrorKind::Interrupted => {
+                error.signal().map_or_else(
+                    || Self::Failed(error.to_string()),
+                    |signal| {
+                        let source = StdError::source(&error);
+                        Self::Interrupted(signal.as_raw(), cleanup_failures(source))
+                    },
+                )
+            },
+            bang::ErrorKind::InvalidConfiguration => Self::Usage(error.to_string()),
+            bang::ErrorKind::InputEnded
+            | bang::ErrorKind::InteractionBusy
+            | bang::ErrorKind::InteractionUnavailable
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+fn cleanup_failures(source: Option<&(dyn StdError + 'static)>) -> Vec<String> {
+    source
+        .and_then(|inner| inner.downcast_ref::<LiveSessionError>())
+        .map_or(&[][..], LiveSessionError::cleanup_failures)
+        .iter()
+        .map(|failure| format!("terminal cleanup failed, {failure}"))
+        .collect()
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Usage(message) | Self::Failed(message) => f.write_str(message),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::Interrupted(signal, _) => write!(f, "interrupted by signal {signal}"),
+        }
+    }
+}
+
+impl StdError for CliError {}
+
+/// run a single bang widget, or a widget config file, as a terminal prompt
 #[derive(Debug, Parse)]
-#[pound(name = "bang", version = "0.1.0")]
+#[pound(name = "bang", version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
+    /// path to a widget config file, instead of a subcommand
     #[pound(short, long)]
     config:  Option<String>,
+    /// result encoding
     #[pound(short, long, global, default = "text")]
     output:  OutputFormat,
     #[pound(subcommand)]
@@ -58,8 +153,8 @@ pub struct Cli {
 pub enum Command {
     /// choose one option
     Select {
-        /// option label/value; may be repeated
-        #[pound(short, long)]
+        /// option label/value, may be repeated
+        #[pound(long)]
         option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -67,14 +162,14 @@ pub enum Command {
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:   usize,
-        /// app action key in key:name form; may be repeated
+        /// app action key in key:name form, may be repeated
         #[pound(long)]
         action:      Vec<String>,
     },
     /// choose zero or more options
     MultiSelect {
-        /// option label/value; may be repeated
-        #[pound(short, long)]
+        /// option label/value, may be repeated
+        #[pound(long)]
         option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -82,7 +177,7 @@ pub enum Command {
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:   usize,
-        /// app action key in key:name form; may be repeated
+        /// app action key in key:name form, may be repeated
         #[pound(long)]
         action:      Vec<String>,
     },
@@ -97,14 +192,14 @@ pub enum Command {
         /// prompt shown in logical views
         #[pound(long, default = "text: ")]
         prompt:      String,
-        /// app action key in key:name form; may be repeated
+        /// app action key in key:name form, may be repeated
         #[pound(long)]
         action:      Vec<String>,
     },
     /// filter options and choose one
     Search {
-        /// option label/value; may be repeated
-        #[pound(short, long)]
+        /// option label/value, may be repeated
+        #[pound(long)]
         option:      Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -112,14 +207,14 @@ pub enum Command {
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:   usize,
-        /// app action key in key:name form; may be repeated
+        /// app action key in key:name form, may be repeated
         #[pound(long)]
         action:      Vec<String>,
     },
     /// review options with confirmed/denied/unconfirmed row state
     ReviewList {
-        /// option label/value; may be repeated
-        #[pound(short, long)]
+        /// option label/value, may be repeated
+        #[pound(long)]
         option:        Vec<String>,
         /// escaped terminal bytes for deterministic non-TTY execution
         #[pound(long)]
@@ -130,10 +225,10 @@ pub enum Command {
         /// hide rows whose initial review state is denied
         #[pound(long)]
         hide_removed:  bool,
-        /// return an object with action and rows; enables g/s/a action keys
+        /// return a structured exit and rows, enables g/s/a action keys
         #[pound(long)]
         action_output: bool,
-        /// extra action key in key:name form; may be repeated
+        /// extra action key in key:name form, may be repeated
         #[pound(long)]
         action:        Vec<String>,
     },
@@ -154,44 +249,38 @@ impl From<OutputFormat> for CoreOutputFormat {
     }
 }
 
+/// run the parsed command line and return the text to print
+///
 /// # Errors
 ///
-/// fails with the rendered parse error, which carries help and version text
-/// too, or whatever [`run`] fails with.
-pub fn run_from_env() -> Result<String, String> {
-    let cli = Cli::try_parse().map_err(|error| error.to_string())?;
-    run(cli)
-}
-
-/// # Errors
-///
-/// fails with the rendered parse error, which carries help and version text
-/// too, or whatever [`run`] fails with.
-pub fn run_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Result<String, String> {
-    let cli = Cli::try_parse_from(args).map_err(|error| error.to_string())?;
-    run(cli)
-}
-
-/// # Errors
-///
-/// fails when both or neither of `--config` and a subcommand are given, the
-/// config or an option is invalid, or the session is cancelled or its input
-/// ends before a value is submitted.
-pub fn run(cli: Cli) -> Result<String, String> {
+/// fails with a [`CliError`] when the invocation or config is invalid, the
+/// prompt is cancelled or interrupted, or the terminal or config file fails
+pub fn run(cli: Cli) -> Result<String, CliError> {
     let output = cli.output;
     let result = match (cli.config, cli.command) {
         (Some(_config), Some(_command)) => {
-            return Err("use either --config or a widget subcommand, not both".to_owned());
+            return Err(CliError::Usage(
+                "use either --config or a widget subcommand, not both".to_owned(),
+            ));
         },
-        (Some(config), None) => run_config(WidgetConfig::load(config)?),
-        (None, None) => return Err("expected --config or a widget subcommand".to_owned()),
+        (Some(config), None) => {
+            let source = fs::read_to_string(&config).map_err(|error| {
+                CliError::Failed(format!("failed to read config {config}: {error}"))
+            })?;
+            run_config(WidgetConfig::parse(&source).map_err(CliError::Usage)?)
+        },
+        (None, None) => {
+            return Err(CliError::Usage(
+                "expected --config or a widget subcommand".to_owned(),
+            ));
+        },
         (None, Some(command)) => run_command(command),
     }?;
 
     Ok(format_output(&result, output.into()))
 }
 
-fn run_command(command: Command) -> Result<Value, String> {
+fn run_command(command: Command) -> Result<Value, CliError> {
     match command {
         Command::Select {
             option,
@@ -200,9 +289,11 @@ fn run_command(command: Command) -> Result<Value, String> {
             action,
         } => {
             run_widget(
-                Select::new("select", choice_items(option)?).with_page_size(page_size),
+                "select",
+                Select::new("select", choice_items(option).map_err(CliError::Usage)?)
+                    .with_page_size(page_size),
                 input_bytes,
-                action_bindings(action)?,
+                action_bindings(action).map_err(CliError::Usage)?,
             )
         },
         Command::MultiSelect {
@@ -212,9 +303,14 @@ fn run_command(command: Command) -> Result<Value, String> {
             action,
         } => {
             run_widget(
-                MultiSelect::new("multi-select", choice_items(option)?).with_page_size(page_size),
+                "multi-select",
+                MultiSelect::new(
+                    "multi-select",
+                    choice_items(option).map_err(CliError::Usage)?,
+                )
+                .with_page_size(page_size),
                 input_bytes,
-                action_bindings(action)?,
+                action_bindings(action).map_err(CliError::Usage)?,
             )
         },
         Command::Text {
@@ -224,9 +320,10 @@ fn run_command(command: Command) -> Result<Value, String> {
             action,
         } => {
             run_widget(
+                "text",
                 TextInput::new("text").with_prompt(prompt).with_value(value),
                 input_bytes,
-                action_bindings(action)?,
+                action_bindings(action).map_err(CliError::Usage)?,
             )
         },
         Command::Search {
@@ -236,9 +333,11 @@ fn run_command(command: Command) -> Result<Value, String> {
             action,
         } => {
             run_widget(
-                SearchSelect::new("search", choice_items(option)?).with_page_size(page_size),
+                "search",
+                SearchSelect::new("search", choice_items(option).map_err(CliError::Usage)?)
+                    .with_page_size(page_size),
                 input_bytes,
-                action_bindings(action)?,
+                action_bindings(action).map_err(CliError::Usage)?,
             )
         },
         Command::ReviewList {
@@ -249,12 +348,18 @@ fn run_command(command: Command) -> Result<Value, String> {
             action_output,
             action,
         } => {
+            let actions = review_action_bindings_with_defaults(action, action_output)
+                .map_err(CliError::Usage)?;
             run_widget(
-                ReviewList::new("review-list", choice_items(option)?)
-                    .with_page_size(page_size)
-                    .with_show_removed(!hide_removed)
-                    .with_action_output(action_output || !action.is_empty())
-                    .with_custom_actions(review_action_bindings(action)?),
+                "review-list",
+                ReviewList::new(
+                    "review-list",
+                    choice_items(option).map_err(CliError::Usage)?,
+                )
+                .with_page_size(page_size)
+                .with_show_removed(!hide_removed)
+                .with_exit_output(action_output || !actions.is_empty())
+                .with_custom_actions(actions),
                 input_bytes,
                 Vec::new(),
             )
@@ -262,19 +367,23 @@ fn run_command(command: Command) -> Result<Value, String> {
     }
 }
 
-fn run_config(config: WidgetConfig) -> Result<Value, String> {
+fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
+    let name = config
+        .prompt
+        .clone()
+        .unwrap_or_else(|| config.kind.name().to_owned());
     match config.kind {
         WidgetKind::Select => {
             let mut widget = Select::new("select", config.options)
                 .with_page_size(config.page_size.unwrap_or(9))
                 .with_wrap(config.wrap.unwrap_or(true));
             if let Some(prompt) = config.prompt {
-                widget = widget.with_prompt(prompt);
+                widget = widget.with_header(prompt);
             }
             if let Some(selected) = config.selected_indices.first() {
                 widget = widget.with_selected_index(*selected);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::MultiSelect => {
             let first_selected = config.selected_indices.first().copied();
@@ -283,15 +392,16 @@ fn run_config(config: WidgetConfig) -> Result<Value, String> {
                 .with_wrap(config.wrap.unwrap_or(true))
                 .with_checked_indices(config.selected_indices);
             if let Some(prompt) = config.prompt {
-                widget = widget.with_prompt(prompt);
+                widget = widget.with_header(prompt);
             }
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::Text => {
             run_widget(
+                &name,
                 text_from_config(&config),
                 config.input_bytes,
                 config.actions,
@@ -310,44 +420,48 @@ fn run_config(config: WidgetConfig) -> Result<Value, String> {
             if let Some(selected) = config.selected_indices.first() {
                 widget = widget.with_selected_match_index(*selected);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::Form => {
             let input_bytes = config.input_bytes.clone();
             let actions = config.actions.clone();
-            let widget = form_from_config(config)?;
-            run_widget(widget, input_bytes, actions)
+            let widget = form_from_config(config).map_err(CliError::Usage)?;
+            run_widget(&name, widget, input_bytes, actions)
         },
         WidgetKind::Date => {
             let mut widget = DatePicker::new(
                 "date",
                 config
                     .selected_date
-                    .ok_or_else(|| "date config requires selected_date".to_owned())?,
+                    .ok_or_else(|| "date config requires selected_date".to_owned())
+                    .map_err(CliError::Usage)?,
             );
             if let Some(today) = config.today {
                 widget = widget.with_today(today);
             }
-            run_widget(widget, config.input_bytes, config.actions)
+            run_widget(&name, widget, config.input_bytes, config.actions)
         },
         WidgetKind::ReviewList => {
             let first_selected = config.selected_indices.first().copied();
+            let actions = review_actions_with_defaults(
+                config.review_actions,
+                config.action_output.unwrap_or(false),
+            )
+            .map_err(CliError::Usage)?;
             let mut widget = ReviewList::new("review-list", config.options)
                 .with_page_size(config.page_size.unwrap_or(9))
                 .with_wrap(config.wrap.unwrap_or(true))
                 .with_states(config.review_states)
                 .with_show_removed(config.show_removed.unwrap_or(true))
-                .with_action_output(
-                    config.action_output.unwrap_or(false) || !config.review_actions.is_empty(),
-                )
-                .with_custom_actions(config.review_actions);
+                .with_exit_output(config.action_output.unwrap_or(false) || !actions.is_empty())
+                .with_custom_actions(actions);
             if let Some(prompt) = config.prompt {
-                widget = widget.with_prompt(prompt);
+                widget = widget.with_header(prompt);
             }
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
             }
-            run_widget(widget, config.input_bytes, Vec::new())
+            run_widget(&name, widget, config.input_bytes, Vec::new())
         },
     }
 }
@@ -367,7 +481,7 @@ fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
                 .with_page_size(field.page_size.unwrap_or(9))
                 .with_wrap(field.wrap.unwrap_or(true));
             if let Some(prompt) = field.prompt {
-                widget = widget.with_prompt(prompt);
+                widget = widget.with_header(prompt);
             }
             if let Some(selected) = field.selected_indices.first() {
                 widget = widget.with_selected_index(*selected);
@@ -381,7 +495,7 @@ fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
                 .with_wrap(field.wrap.unwrap_or(true))
                 .with_checked_indices(field.selected_indices);
             if let Some(prompt) = field.prompt {
-                widget = widget.with_prompt(prompt);
+                widget = widget.with_header(prompt);
             }
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
@@ -432,17 +546,20 @@ fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
         },
         WidgetKind::ReviewList => {
             let first_selected = field.selected_indices.first().copied();
+            let actions = review_actions_with_defaults(
+                field.review_actions,
+                field.action_output.unwrap_or(false),
+            )?;
             let mut widget = ReviewList::new(field.name.clone(), field.options)
                 .with_page_size(field.page_size.unwrap_or(9))
                 .with_wrap(field.wrap.unwrap_or(true))
                 .with_states(field.review_states)
                 .with_show_removed(field.show_removed.unwrap_or(true))
-                .with_action_output(
-                    field.action_output.unwrap_or(false) || !field.review_actions.is_empty(),
-                )
-                .with_custom_actions(field.review_actions);
+                .with_exit_output(field.action_output.unwrap_or(false) || !actions.is_empty())
+                .with_custom_actions(actions)
+                .with_leave_output(false);
             if let Some(prompt) = field.prompt {
-                widget = widget.with_prompt(prompt);
+                widget = widget.with_header(prompt);
             }
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
@@ -469,6 +586,9 @@ fn choice_items(options: Vec<String>) -> Result<Vec<SelectItem>, String> {
     if options.is_empty() {
         return Err("at least one --option is required".to_owned());
     }
+    if options.iter().any(String::is_empty) {
+        return Err("--option cannot be empty".to_owned());
+    }
     Ok(options
         .into_iter()
         .map(|option| SelectItem::new(option.clone(), option))
@@ -479,80 +599,71 @@ fn action_bindings(actions: Vec<String>) -> Result<Vec<ActionBinding>, String> {
     let mut seen = Vec::new();
     let mut bindings = Vec::new();
     for action in actions {
-        let binding = parse_action_binding(&action)?;
-        if seen.contains(binding.key_event()) {
-            return Err(format!(
-                "duplicate action key '{}'",
-                action_key_label(binding.key_event())
-            ));
-        }
-        seen.push(binding.key_event().clone());
-        bindings.push(binding);
+        bindings.push(push_unique_action(
+            &mut seen,
+            parse_action_binding(&action)?,
+        )?);
     }
     Ok(bindings)
 }
 
-fn review_action_bindings(actions: Vec<String>) -> Result<Vec<ReviewActionBinding>, String> {
-    let mut seen = Vec::new();
-    let mut bindings = Vec::new();
+fn review_action_bindings_with_defaults(
+    actions: Vec<String>,
+    defaults: bool,
+) -> Result<Vec<ReviewActionBinding>, String> {
+    let mut bindings = if defaults {
+        default_review_actions()
+    } else {
+        Vec::new()
+    };
+    let mut seen: Vec<char> = bindings.iter().map(ReviewActionBinding::key).collect();
     for action in actions {
-        let binding = parse_review_action_binding(&action)?;
-        if seen.contains(&binding.key()) {
-            return Err(format!("duplicate review action key '{}'", binding.key()));
-        }
-        seen.push(binding.key());
-        bindings.push(binding);
+        bindings.push(push_unique_review_action(
+            &mut seen,
+            parse_review_action_binding(&action)?,
+        )?);
     }
     Ok(bindings)
 }
 
-fn action_key_label(key: &bang_core::KeyEvent) -> String {
-    match (&key.key, key.modifiers) {
-        (bang_core::Key::Char(value), modifiers) if modifiers == bang_core::Modifiers::CONTROL => {
-            format!("ctrl-{value}")
-        },
-        (bang_core::Key::Char(value), modifiers) if modifiers.bits() == 0 => value.to_string(),
-        (key_value, modifiers) if modifiers.bits() == 0 => {
-            format!("{key_value:?}").to_ascii_lowercase()
-        },
-        (key_value, modifiers) => {
-            format!("{key_value:?}+{}", modifiers.bits()).to_ascii_lowercase()
-        },
+fn review_actions_with_defaults(
+    actions: Vec<ReviewActionBinding>,
+    defaults: bool,
+) -> Result<Vec<ReviewActionBinding>, String> {
+    let mut bindings = if defaults {
+        default_review_actions()
+    } else {
+        Vec::new()
+    };
+    let mut seen: Vec<char> = bindings.iter().map(ReviewActionBinding::key).collect();
+    for action in actions {
+        bindings.push(push_unique_review_action(&mut seen, action)?);
     }
+    Ok(bindings)
+}
+
+fn default_review_actions() -> Vec<ReviewActionBinding> {
+    vec![
+        ReviewActionBinding::new('g', "regen").with_help("regenerate"),
+        ReviewActionBinding::new('s', "search"),
+        ReviewActionBinding::new('a', "add"),
+    ]
 }
 
 fn run_widget(
+    name: &str,
     widget: impl Widget + 'static,
     input_bytes: Option<String>,
     actions: Vec<ActionBinding>,
-) -> Result<Value, String> {
-    let layered_widget = ActionLayer::new(widget).with_actions(actions);
-    if let Some(replay_input) = input_bytes {
-        run_replayed_session(layered_widget, &replay_input)
+) -> Result<Value, CliError> {
+    if let Some(escaped) = input_bytes {
+        let layered = ActionLayer::new(widget).with_actions(actions);
+        let bytes = decode_escaped(&escaped).map_err(CliError::Usage)?;
+        let mut decoder = Decoder::new();
+        let events = decoder.feed(&bytes).into_iter().chain(decoder.flush());
+        replay_events(layered, events).map_err(|error| CliError::from(error.naming_prompt(name)))
     } else {
-        bang_screw::run_live_session(layered_widget).map_err(|error| error.to_string())
-    }
-}
-
-fn run_replayed_session(widget: impl Widget + 'static, input_bytes: &str) -> Result<Value, String> {
-    let mut session = Session::new(widget);
-    let mut decoder = Decoder::new();
-    let bytes = decode_escaped(input_bytes)?;
-    for event in decoder.feed(&bytes).into_iter().chain(decoder.flush()) {
-        match session.handle(event) {
-            Reaction::Submit(value) => return Ok(value),
-            Reaction::Cancel => return Err("cancelled".to_owned()),
-            Reaction::Ignored | Reaction::Changed | Reaction::Focus(_) => {},
-        }
-        if !matches!(session.status(), SessionStatus::Running) {
-            break;
-        }
-    }
-
-    match session.status() {
-        SessionStatus::Submitted(value) => Ok(value.clone()),
-        SessionStatus::Cancelled => Err("cancelled".to_owned()),
-        SessionStatus::Running => Err("input ended before submit".to_owned()),
+        interact_widget(widget, actions).map_err(|error| CliError::from(error.naming_prompt(name)))
     }
 }
 
@@ -597,12 +708,48 @@ fn push_utf8(out: &mut Vec<u8>, value: char) {
 }
 
 fn hex_byte(high: char, low: char) -> Result<u8, String> {
-    let high_digit = high
+    let high_nibble = high
         .to_digit(16)
         .ok_or_else(|| format!("invalid hex digit '{high}' in --input-bytes"))?;
-    let low_digit = low
+    let low_nibble = low
         .to_digit(16)
         .ok_or_else(|| format!("invalid hex digit '{low}' in --input-bytes"))?;
-    u8::try_from((high_digit << 4) | low_digit)
-        .map_err(|conversion_error| format!("hex byte out of range: {conversion_error}"))
+    u8::try_from((high_nibble << 4) | low_nibble)
+        .map_err(|_overflow| "hex byte out of range".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use bang::{
+        advanced::LiveSessionError,
+        terminal::{
+            CleanupFailure,
+            CleanupFailures,
+            CleanupStage,
+            Signal,
+        },
+    };
+
+    use super::{
+        CliError,
+        cleanup_failures,
+    };
+
+    #[test]
+    fn an_interruption_keeps_its_cleanup_failures() {
+        let session = LiveSessionError::Cleanup {
+            primary:  Some(Box::new(LiveSessionError::Signalled(Signal::TERM))),
+            failures: CleanupFailures::new(vec![CleanupFailure::new(
+                CleanupStage::RawMode,
+                io::Error::from_raw_os_error(5),
+            )]),
+        };
+        let failures = cleanup_failures(Some(&session));
+
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].starts_with("terminal cleanup failed, raw mode failed"));
+        assert_eq!(CliError::Interrupted(15, failures).exit_code(), 143);
+    }
 }
