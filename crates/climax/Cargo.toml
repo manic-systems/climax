@@ -5,6 +5,7 @@ authors.workspace      = true
 categories             = [ "command-line-interface", "command-line-utilities" ]
 description            = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
 edition.workspace      = true
+exclude                = [ "tests/dependency_fixtures.rs", "tests/workspace_pins.rs" ]
 keywords               = [ "cli", "terminal", "prompts", "args", "tui" ]
 license.workspace      = true
 readme                 = "README.md"

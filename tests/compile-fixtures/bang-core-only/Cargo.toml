@@ -1,0 +1,8 @@
+[package]
+name              = "fixture-bang-core-only"
+version           = "0.0.0"
+edition.workspace = true
+publish           = false
+
+[dependencies]
+bang-core.workspace = true
