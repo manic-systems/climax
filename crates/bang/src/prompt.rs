@@ -359,7 +359,7 @@ impl<T> PromptOutcome<T> {
     /// [`ErrorKind::Cancelled`](crate::ErrorKind::Cancelled) error when the
     /// user left
     ///
-    /// for ending through `?`, `climax` applications exit with status 130 on it
+    /// for ending a prompt through `?` when leaving is a failure
     ///
     /// ```
     /// use bang::{
@@ -639,7 +639,10 @@ impl<T> ReviewPrompt<T> {
         let header = self.core.config.list.header.clone();
         let summary = self.core.config.list.summary;
         let no_actions: [ReviewPromptAction<Infallible>; 0] = [];
-        let (widget, choices) = self.core.into_widget(&no_actions)?;
+        let (widget, choices) = self
+            .core
+            .into_widget(&no_actions)
+            .map_err(|error| interaction.rejected(error))?;
         let value = match interaction.interact_named(
             header.as_deref(),
             widget,
@@ -711,11 +714,14 @@ impl<T, A> ReviewPromptWithActions<T, A> {
     /// action key is reserved or repeated, and with `ErrorKind::InputEnded`
     /// or `ErrorKind::InteractionUnavailable`
     pub fn interact(self) -> Result<ReviewOutcome<T, A>> {
-        validate_review_actions(&self.actions)?;
         let interaction = self.core.interaction.clone();
+        validate_review_actions(&self.actions).map_err(|error| interaction.rejected(error))?;
         let header = self.core.config.list.header.clone();
         let summary = self.core.config.list.summary;
-        let (widget, choices) = self.core.into_widget(&self.actions)?;
+        let (widget, choices) = self
+            .core
+            .into_widget(&self.actions)
+            .map_err(|error| interaction.rejected(error))?;
         match interaction.interact_named(
             header.as_deref(),
             widget,
@@ -820,7 +826,9 @@ impl<T> SelectPrompt<T> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
         let summary = self.config.list.summary;
-        let (widget, choices) = self.into_widget()?;
+        let (widget, choices) = self
+            .into_widget()
+            .map_err(|error| interaction.rejected(error))?;
         let labels = choice_labels(&choices);
         resolve_prompt(
             interaction.interact_named(
@@ -920,7 +928,9 @@ impl<T> MultiSelectPrompt<T> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
         let summary = self.config.list.summary;
-        let (widget, choices) = self.into_widget()?;
+        let (widget, choices) = self
+            .into_widget()
+            .map_err(|error| interaction.rejected(error))?;
         let labels = choice_labels(&choices);
         resolve_prompt(
             interaction.interact_named(
@@ -1019,7 +1029,9 @@ impl<T> SearchPrompt<T> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
         let summary = self.config.list.summary;
-        let (widget, choices) = self.into_widget()?;
+        let (widget, choices) = self
+            .into_widget()
+            .map_err(|error| interaction.rejected(error))?;
         let labels = choice_labels(&choices);
         resolve_prompt(
             interaction.interact_named(
@@ -1577,6 +1589,23 @@ mod tests {
                 .kind(),
             crate::ErrorKind::InvalidConfiguration
         );
+    }
+
+    #[test]
+    fn a_prompt_rejected_before_the_driver_leaves_the_script_unchecked() {
+        let interaction = scripted_interaction([Vec::new()]);
+        let error = select::<u8>("shell")
+            .interaction(interaction.clone())
+            .interact()
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::InvalidConfiguration);
+        let reserved = review::<()>("review")
+            .item("one", (), ReviewState::Unconfirmed)
+            .action('j', "jump", 1)
+            .interaction(interaction)
+            .interact()
+            .unwrap_err();
+        assert_eq!(reserved.kind(), crate::ErrorKind::InvalidConfiguration);
     }
 
     #[test]

@@ -167,6 +167,10 @@ fn tick_interval(interest: TickInterest) -> Option<Duration> {
 ///
 /// ctrl-c and ctrl-d are offered to the widget first, and an ignored ctrl-c
 /// cancels while an ignored ctrl-d ends input
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the session enums are non-exhaustive"
+)]
 fn handle_event(
     session: &mut Session,
     event: Event,
@@ -187,12 +191,12 @@ fn handle_event(
     Ok(match reaction {
         SessionReaction::Submit(value) => Some(RunOutcome::Submitted(value)),
         SessionReaction::Cancel => Some(RunOutcome::Cancelled),
-        SessionReaction::Ignored | SessionReaction::Changed | SessionReaction::Focus(_) => {
+        _ => {
             match session.status() {
                 SessionStatus::Submitted(value) => Some(RunOutcome::Submitted(value.clone())),
                 SessionStatus::Cancelled => Some(RunOutcome::Cancelled),
                 SessionStatus::Running if ignored => unhandled,
-                SessionStatus::Running => None,
+                _ => None,
             }
         },
     })
@@ -224,11 +228,15 @@ fn is_control_char(event: &Event, value: char) -> bool {
     )
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the session enums are non-exhaustive"
+)]
 fn outcome_from_status(status: &SessionStatus) -> RunOutcome {
     match status {
         SessionStatus::Submitted(value) => RunOutcome::Submitted(value.clone()),
         SessionStatus::Cancelled => RunOutcome::Cancelled,
-        SessionStatus::Running => RunOutcome::InputEnded,
+        _ => RunOutcome::InputEnded,
     }
 }
 

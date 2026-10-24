@@ -722,6 +722,7 @@ impl<W: Widget> Widget for YesNoKeys<W> {
                     | Key::End
                     | Key::PageUp
                     | Key::PageDown
+                    | Key::Insert
                     | Key::Function(_)
                     | _ => {},
                 }
