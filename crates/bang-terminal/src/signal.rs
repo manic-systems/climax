@@ -423,7 +423,7 @@ mod tests {
     use rustix::io::write;
 
     use super::*;
-    use crate::testing::SIGNAL_LOCK;
+    use crate::testing::serialise_signals;
 
     fn raise(signal: libc::c_int) {
         // SAFETY: raising a signal that has a handler or is ignored
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn terminal_signal_handlers_are_a_process_singleton() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         let error = SignalGuard::install_terminal_handlers().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn successive_guards_share_one_queue() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         for signal in [libc::SIGTERM, libc::SIGHUP] {
             let mut guard = SignalGuard::install_terminal_handlers().unwrap();
             raise(signal);
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn a_stale_handler_write_never_reaches_a_later_guard() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let first = SignalGuard::install_terminal_handlers().unwrap();
         let stale = handlers::generation();
         first.restore().unwrap();
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn restore_polling_returns_a_signal_queued_before_release() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         raise(libc::SIGTERM);
         let (result, late) = guard.restore_polling();
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn handlers_restart_interrupted_syscalls() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
             // SAFETY: a zeroed sigaction is valid storage for the query
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn an_ignored_signal_stays_ignored_and_is_not_queued() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         // SAFETY: SIG_IGN is a valid disposition
         let before = unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
         let mut guard = SignalGuard::install_terminal_handlers().unwrap();

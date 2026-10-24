@@ -7,7 +7,7 @@ description          = "Terminal input decoding, raw mode and event loop behind 
 edition.workspace    = true
 keywords             = [ "cli", "input", "terminal", "ansi" ]
 license.workspace    = true
-readme               = "../../README.md"
+readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
