@@ -6,94 +6,84 @@ use core::{
     str::FromStr,
 };
 
+/// a value a widget submits
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Value {
+    /// no value
     Null,
+    /// a yes or no answer
     Bool(bool),
+    /// text
     String(String),
+    /// an integer or floating point number
     Number(Number),
+    /// a calendar date
     Date(Date),
+    /// an ordered list of values
     List(Vec<Self>),
+    /// named values, ordered by name
     Object(BTreeMap<String, Self>),
 }
 
 impl Value {
+    /// the boolean, if this is a `Bool`
     #[must_use]
     pub const fn as_bool(&self) -> Option<bool> {
-        match self {
-            Self::Bool(value) => Some(*value),
-            Self::Null
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+        if let Self::Bool(value) = self {
+            Some(*value)
+        } else {
+            None
         }
     }
 
+    /// the text, if this is a `String`
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(value) => Some(value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+        if let Self::String(value) = self {
+            Some(value)
+        } else {
+            None
         }
     }
 
+    /// the number, if this is a `Number`
     #[must_use]
     pub const fn as_number(&self) -> Option<Number> {
-        match self {
-            Self::Number(value) => Some(*value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Date(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+        if let Self::Number(value) = self {
+            Some(*value)
+        } else {
+            None
         }
     }
 
+    /// the date, if this is a `Date`
     #[must_use]
     pub const fn as_date(&self) -> Option<Date> {
-        match self {
-            Self::Date(value) => Some(*value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::List(_)
-            | Self::Object(_) => None,
+        if let Self::Date(value) = self {
+            Some(*value)
+        } else {
+            None
         }
     }
 
+    /// the items, if this is a `List`
     #[must_use]
     pub fn as_list(&self) -> Option<&[Self]> {
-        match self {
-            Self::List(value) => Some(value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::Object(_) => None,
+        if let Self::List(value) = self {
+            Some(value)
+        } else {
+            None
         }
     }
 
+    /// the fields, if this is an `Object`
     #[must_use]
     pub const fn as_object(&self) -> Option<&BTreeMap<String, Self>> {
-        match self {
-            Self::Object(value) => Some(value),
-            Self::Null
-            | Self::Bool(_)
-            | Self::String(_)
-            | Self::Number(_)
-            | Self::Date(_)
-            | Self::List(_) => None,
+        if let Self::Object(value) = self {
+            Some(value)
+        } else {
+            None
         }
     }
 }
@@ -128,21 +118,53 @@ impl From<f64> for Value {
     }
 }
 
+/// a number that keeps whether it was an integer
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Number {
+    /// a whole number
     Integer(i64),
+    /// a floating point number
     Float(f64),
 }
 
+impl fmt::Display for Number {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integer(value) => write!(f, "{value}"),
+            Self::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                write!(f, "{value}.0")
+            },
+            Self::Float(value) => write!(f, "{value}"),
+        }
+    }
+}
+
+/// a proleptic Gregorian calendar date
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Date {
+    /// the year, negative before year zero
     pub year:  i32,
+    /// the month from 1 to 12
     pub month: u8,
+    /// the day of the month from 1
     pub day:   u8,
 }
 
 impl Date {
+    pub(crate) const MIN: Self = Self {
+        year:  i32::MIN,
+        month: 1,
+        day:   1,
+    };
+
+    pub(crate) const MAX: Self = Self {
+        year:  i32::MAX,
+        month: 12,
+        day:   31,
+    };
+
+    /// the date, or `None` when the month or day is out of range for that year
     #[must_use]
     pub const fn new(year: i32, month: u8, day: u8) -> Option<Self> {
         if month < 1 || month > 12 {
@@ -153,6 +175,50 @@ impl Date {
             return None;
         }
         Some(Self { year, month, day })
+    }
+
+    /// the date `days` after 1970-01-01, negative for earlier dates, a year
+    /// beyond `i32` saturates
+    #[must_use]
+    pub fn from_unix_days(days: i64) -> Self {
+        let shifted = days.saturating_add(719_468);
+        let era = shifted.div_euclid(146_097);
+        let day_of_era = shifted.rem_euclid(146_097);
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_index = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+        let month = if month_index < 10 {
+            month_index + 3
+        } else {
+            month_index - 9
+        };
+        let year = (year_of_era + era * 400).saturating_add(i64::from(month <= 2));
+        match i32::try_from(year) {
+            Ok(fits) => {
+                Self {
+                    year:  fits,
+                    month: u8::try_from(month).unwrap_or(1),
+                    day:   u8::try_from(day).unwrap_or(1),
+                }
+            },
+            Err(_) if year < 0 => Self::MIN,
+            Err(_) => Self::MAX,
+        }
+    }
+
+    /// days since 1970-01-01, negative for earlier dates
+    #[must_use]
+    pub fn unix_days(self) -> i64 {
+        let year = i64::from(self.year) - i64::from(self.month <= 2);
+        let era = year.div_euclid(400);
+        let year_of_era = year - era * 400;
+        let month = i64::from(self.month);
+        let day_of_year =
+            (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(self.day) - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
     }
 }
 
@@ -166,12 +232,17 @@ impl FromStr for Date {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut parts = value.split('-');
+        let (negative, unsigned) = value
+            .strip_prefix('-')
+            .map_or((false, value), |rest| (true, rest));
+        let mut parts = unsigned.split('-');
         let year = parts
             .next()
             .ok_or_else(|| invalid_date(value))?
-            .parse::<i32>()
-            .map_err(|_error| invalid_date(value))?;
+            .parse::<i64>()
+            .ok()
+            .and_then(|year| i32::try_from(if negative { -year } else { year }).ok())
+            .ok_or_else(|| invalid_date(value))?;
         let month = parts
             .next()
             .ok_or_else(|| invalid_date(value))?
@@ -185,7 +256,9 @@ impl FromStr for Date {
         if parts.next().is_some() {
             return Err(invalid_date(value));
         }
-        Self::new(year, month, day).ok_or_else(|| invalid_date(value))
+        Self::new(year, month, day)
+            .filter(|date| date.to_string() == value)
+            .ok_or_else(|| invalid_date(value))
     }
 }
 
@@ -193,7 +266,7 @@ fn invalid_date(value: &str) -> String {
     format!("invalid date '{value}', expected YYYY-MM-DD")
 }
 
-const fn days_in_month(year: i32, month: u8) -> u8 {
+pub(crate) const fn days_in_month(year: i32, month: u8) -> u8 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -205,4 +278,82 @@ const fn days_in_month(year: i32, month: u8) -> u8 {
 
 const fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_whole_float_still_reads_as_a_float() {
+        assert_eq!(Number::Float(1.0).to_string(), "1.0");
+        assert_eq!(Number::Float(-0.0).to_string(), "-0.0");
+        assert_eq!(Number::Float(2.5).to_string(), "2.5");
+        assert_eq!(Number::Float(f64::INFINITY).to_string(), "inf");
+        assert_eq!(Number::Integer(1).to_string(), "1");
+    }
+
+    #[test]
+    fn unix_days_follow_the_epoch() {
+        for (days, candidate) in [
+            (0, Date::new(1970, 1, 1)),
+            (19_723, Date::new(2024, 1, 1)),
+            (19_782, Date::new(2024, 2, 29)),
+            (-1, Date::new(1969, 12, 31)),
+        ] {
+            let date = candidate.unwrap();
+            assert_eq!(Date::from_unix_days(days), date);
+            assert_eq!(date.unix_days(), days);
+        }
+    }
+
+    #[test]
+    fn extreme_years_saturate_instead_of_overflowing() {
+        let late = Date::new(6_000_000, 3, 1).unwrap();
+        assert_eq!(Date::from_unix_days(late.unix_days()), late);
+        assert_eq!(Date::from_unix_days(i64::MAX).year, i32::MAX);
+        assert_eq!(Date::from_unix_days(i64::MIN).year, i32::MIN);
+    }
+
+    #[test]
+    fn only_the_printed_form_of_a_date_parses() {
+        for text in [
+            "+2024-+1-+1",
+            "2024-1-1",
+            "00002024-01-01",
+            "2024-01-+1",
+            "-0-01-01",
+        ] {
+            text.parse::<Date>().unwrap_err();
+        }
+        assert_eq!(
+            "2024-02-29".parse::<Date>(),
+            Ok(Date::new(2024, 2, 29).unwrap())
+        );
+        assert_eq!(
+            "12345-01-01".parse::<Date>(),
+            Ok(Date::new(12345, 1, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn the_smallest_year_round_trips_through_text() {
+        let date = Date::new(i32::MIN, 1, 1).unwrap();
+        assert_eq!(date.to_string().parse::<Date>(), Ok(date));
+    }
+
+    #[test]
+    fn day_arithmetic_stops_at_the_last_date() {
+        let last = Date::new(i32::MAX, 12, 31).unwrap();
+        assert_eq!(Date::from_unix_days(last.unix_days() + 1), last);
+        let first = Date::new(i32::MIN, 1, 1).unwrap();
+        assert_eq!(Date::from_unix_days(first.unix_days() - 1), first);
+    }
+
+    #[test]
+    fn a_negative_year_round_trips_through_text() {
+        let date = Date::new(-5, 3, 1).unwrap();
+        assert_eq!(date.to_string().parse::<Date>(), Ok(date));
+        "--5-03-01".parse::<Date>().unwrap_err();
+    }
 }

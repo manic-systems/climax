@@ -1,32 +1,46 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use screw::{
+    RenderCtx,
+    Role,
+    Span,
+    Surface,
+    VerticalSize,
+};
+
+use super::navigation::{
+    self,
+    ListFrame,
+    ListRow,
+    PageLayout,
+    move_index,
+    no_modifiers,
+    page_move,
+};
 use crate::{
     Context,
     Event,
     Key,
-    KeyEvent,
-    ListRow,
-    ListView,
     Reaction,
-    Role,
-    Span,
     Value,
-    View,
-    ViewContext,
-    ViewId,
     Widget,
     WidgetId,
 };
 
-const DEFAULT_PAGE_SIZE: usize = 9;
+const HELP: &str = "up/down move | enter submit | esc cancel";
+const MULTI_HELP: &str = "space toggle | a all | n none | up/down move | enter submit | esc cancel";
 
+/// one choice, shown as `label` and submitted as `value`
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectItem {
+    /// the text shown for the choice
     pub label: String,
+    /// the value submitted when the choice is picked
     pub value: Value,
 }
 
 impl SelectItem {
+    /// a choice shown as `label` that submits `value`
     #[must_use]
     pub fn new(label: impl Into<String>, value: impl Into<Value>) -> Self {
         Self {
@@ -48,7 +62,7 @@ impl From<String> for SelectItem {
     }
 }
 
-/// A single-choice list widget.
+/// a single-choice list widget
 #[derive(Clone, Debug)]
 pub struct Select {
     id:        WidgetId,
@@ -57,10 +71,12 @@ pub struct Select {
     selected:  usize,
     top:       usize,
     page_size: usize,
+    layout:    PageLayout,
     wrap:      bool,
 }
 
 impl Select {
+    /// a list over `items` with the first choice selected
     #[must_use]
     pub fn new<T>(id: impl Into<WidgetId>, items: impl IntoIterator<Item = T>) -> Self
     where
@@ -72,11 +88,13 @@ impl Select {
             items:     items.into_iter().map(Into::into).collect(),
             selected:  0,
             top:       0,
-            page_size: DEFAULT_PAGE_SIZE,
+            page_size: navigation::DEFAULT_PAGE_SIZE,
+            layout:    PageLayout::default(),
             wrap:      true,
         }
     }
 
+    /// shows at most `page_size` rows at once
     #[must_use]
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         self.page_size = page_size.max(1);
@@ -84,37 +102,38 @@ impl Select {
         self
     }
 
+    /// whether moving past either end wraps around, defaults to `true`
     #[must_use]
     pub const fn with_wrap(mut self, wrap: bool) -> Self {
         self.wrap = wrap;
         self
     }
 
+    /// shows `header` above the list
     #[must_use]
     pub fn with_header(mut self, header: impl Into<String>) -> Self {
         self.set_header(header);
         self
     }
 
+    /// shows `header` above the list
     pub fn set_header(&mut self, header: impl Into<String>) {
-        self.header = vec![Span::new(header, Role::Prompt)];
+        self.header = vec![Span::new(header).role(Role::Prompt)];
     }
 
+    /// shows styled `header` spans above the list
     #[must_use]
     pub fn with_header_spans(mut self, header: impl Into<Vec<Span>>) -> Self {
         self.set_header_spans(header);
         self
     }
 
+    /// shows styled `header` spans above the list
     pub fn set_header_spans(&mut self, header: impl Into<Vec<Span>>) {
         self.header = header.into();
     }
 
-    #[must_use]
-    pub fn with_prompt(self, prompt: impl Into<String>) -> Self {
-        self.with_header(prompt)
-    }
-
+    /// starts with the choice at `selected`, clamped to the last choice
     #[must_use]
     pub fn with_selected_index(mut self, selected: usize) -> Self {
         if !self.items.is_empty() {
@@ -124,6 +143,7 @@ impl Select {
         self
     }
 
+    /// the index of the selected choice, or `None` for an empty list
     #[must_use]
     pub const fn selected_index(&self) -> Option<usize> {
         if self.items.is_empty() {
@@ -133,18 +153,20 @@ impl Select {
         }
     }
 
+    /// the selected choice, or `None` for an empty list
     #[must_use]
     pub fn selected_item(&self) -> Option<&SelectItem> {
         self.selected_index().map(|index| &self.items[index])
     }
 
+    /// the index of the first visible row
     #[must_use]
     pub const fn top(&self) -> usize {
         self.top
     }
 
-    fn move_by(&mut self, delta: isize) -> Reaction {
-        let Some(next) = move_index(self.selected, self.items.len(), delta, self.wrap) else {
+    fn move_by(&mut self, delta: isize, wrap: bool) -> Reaction {
+        let Some(next) = move_index(self.selected, self.items.len(), delta, wrap) else {
             return Reaction::Ignored;
         };
         if next == self.selected {
@@ -155,40 +177,31 @@ impl Select {
         Reaction::Changed
     }
 
-    fn move_to(&mut self, requested_selected: usize) -> Reaction {
-        if self.items.is_empty() {
-            return Reaction::Ignored;
-        }
-        let selected_index = requested_selected.min(self.items.len() - 1);
-        if selected_index == self.selected {
-            return Reaction::Ignored;
-        }
-        self.selected = selected_index;
-        self.ensure_visible();
-        Reaction::Changed
+    fn move_to(&mut self, selected: usize) -> Reaction {
+        navigation::move_to(
+            &mut self.selected,
+            &mut self.top,
+            selected,
+            self.items.len(),
+            self.page_size,
+        )
+    }
+
+    fn move_page(&mut self, target: usize) -> Reaction {
+        page_move(&mut self.top, &mut self.selected, target, self.items.len())
     }
 
     fn ensure_visible(&mut self) {
-        if self.items.is_empty() {
-            self.selected = 0;
-            self.top = 0;
-            return;
-        }
-
-        self.selected = self.selected.min(self.items.len() - 1);
-        let visible = self.visible_len();
-        if self.selected < self.top {
-            self.top = self.selected;
-        } else if self.selected >= self.top + visible {
-            self.top = self.selected + 1 - visible;
-        }
-
-        let max_top = self.items.len().saturating_sub(visible);
-        self.top = self.top.min(max_top);
+        navigation::ensure_visible(
+            &mut self.selected,
+            &mut self.top,
+            self.items.len(),
+            self.page_size,
+        );
     }
 
     fn visible_len(&self) -> usize {
-        self.page_size.min(self.items.len()).max(1)
+        navigation::visible_len(self.items.len(), self.page_size)
     }
 
     fn submit(&self) -> Reaction {
@@ -197,19 +210,17 @@ impl Select {
         })
     }
 
-    fn list_view(&self, checked: Option<&[bool]>) -> ListView {
-        let visible = self.visible_len();
-        let rows = self
-            .items
+    fn render_list(&self, checked: Option<&[bool]>, ctx: &RenderCtx, out: &mut Surface) {
+        let window_size = self.page_size;
+        let window = navigation::window_range(self.top, window_size, self.items.len());
+        let rows = self.items[window.clone()]
             .iter()
             .enumerate()
-            .skip(self.top)
-            .take(visible)
-            .map(|(index, item)| {
+            .map(|(offset, item)| {
+                let index = window.start + offset;
                 let selected = Some(index) == self.selected_index();
                 ListRow {
-                    id: Some(ViewId::owned(format!("{}/row/{index}", self.id.as_str()))),
-                    spans: vec![Span::new(
+                    spans: vec![(
                         item.label.clone(),
                         if selected {
                             Role::Selected
@@ -217,24 +228,36 @@ impl Select {
                             Role::Normal
                         },
                     )],
-                    value: item.value.clone(),
                     selected,
                     checked: checked.map(|values| values[index]),
                 }
             })
             .collect();
 
-        ListView {
-            id: Some(ViewId::owned(format!("{}/list", self.id.as_str()))),
-            header: self.header.clone(),
-            rows,
-            selected: self
-                .selected_index()
-                .map(|index| index.saturating_sub(self.top)),
-            offset: self.top,
-            total: self.items.len(),
-            help: vec![Span::new("enter submit | esc cancel", Role::Dim)],
-        }
+        navigation::render_list(
+            ListFrame {
+                header: &self.header,
+                rows,
+                window_offset: window.start,
+                selected: self.selected_index(),
+                top: self.top,
+                max_visible: self.page_size,
+                help: if checked.is_some() { MULTI_HELP } else { HELP },
+            },
+            &self.layout,
+            ctx,
+            out,
+        );
+    }
+}
+
+impl screw::Widget for Select {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.render_list(None, ctx, out);
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Flexible
     }
 }
 
@@ -243,20 +266,40 @@ impl Widget for Select {
         self.id.clone()
     }
 
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
+        self.layout.sync_top(&mut self.top);
         let Event::Key(key) = event else {
             return Reaction::Ignored;
         };
+        let targets = self.layout.take_targets();
 
         match key.key {
-            Key::Up => self.move_by(-1),
-            Key::Down => self.move_by(1),
+            Key::Up => self.move_by(-1, self.wrap),
+            Key::Down => self.move_by(1, self.wrap),
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.items.len().saturating_sub(1)),
-            Key::PageUp => self.move_by(-visible_delta(self.visible_len())),
-            Key::PageDown => self.move_by(visible_delta(self.visible_len())),
-            Key::Char('k' | 'K') if no_modifiers(&key) => self.move_by(-1),
-            Key::Char('j' | 'J') if no_modifiers(&key) => self.move_by(1),
+            Key::PageUp => {
+                match navigation::page_action(targets.target(false), self.visible_len(), false) {
+                    navigation::PageAction::JumpTo(target) => self.move_page(target),
+                    navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
+                }
+            },
+            Key::PageDown => {
+                match navigation::page_action(targets.target(true), self.visible_len(), true) {
+                    navigation::PageAction::JumpTo(target) => self.move_page(target),
+                    navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
+                }
+            },
+            Key::Char('k' | 'K') if no_modifiers(&key) => self.move_by(-1, self.wrap),
+            Key::Char('j' | 'J') if no_modifiers(&key) => self.move_by(1, self.wrap),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
             Key::Char(_)
@@ -265,12 +308,10 @@ impl Widget for Select {
             | Key::Backspace
             | Key::Delete
             | Key::Left
-            | Key::Right => Reaction::Ignored,
+            | Key::Right
+            | Key::Insert
+            | Key::Function(_) => Reaction::Ignored,
         }
-    }
-
-    fn view(&self, _cx: &ViewContext) -> View {
-        View::List(self.list_view(None))
     }
 
     fn current_value(&self) -> Option<Value> {
@@ -278,7 +319,7 @@ impl Widget for Select {
     }
 }
 
-/// A multiple-choice list widget.
+/// a multiple-choice list widget
 #[derive(Clone, Debug)]
 pub struct MultiSelect {
     select:  Select,
@@ -286,6 +327,7 @@ pub struct MultiSelect {
 }
 
 impl MultiSelect {
+    /// a list over `items` with nothing checked and the first choice selected
     #[must_use]
     pub fn new<T>(id: impl Into<WidgetId>, items: impl IntoIterator<Item = T>) -> Self
     where
@@ -296,41 +338,43 @@ impl MultiSelect {
         Self { select, checked }
     }
 
+    /// shows at most `page_size` rows at once
     #[must_use]
     pub fn with_page_size(mut self, page_size: usize) -> Self {
         self.select = self.select.with_page_size(page_size);
         self
     }
 
+    /// whether moving past either end wraps around, defaults to `true`
     #[must_use]
     pub fn with_wrap(mut self, wrap: bool) -> Self {
         self.select = self.select.with_wrap(wrap);
         self
     }
 
+    /// shows `header` above the list
     #[must_use]
     pub fn with_header(mut self, header: impl Into<String>) -> Self {
         self.select = self.select.with_header(header);
         self
     }
 
+    /// shows styled `header` spans above the list
     #[must_use]
     pub fn with_header_spans(mut self, header: impl Into<Vec<Span>>) -> Self {
         self.select = self.select.with_header_spans(header);
         self
     }
 
-    #[must_use]
-    pub fn with_prompt(self, prompt: impl Into<String>) -> Self {
-        self.with_header(prompt)
-    }
-
+    /// starts with the choice at `selected`, clamped to the last choice
     #[must_use]
     pub fn with_selected_index(mut self, selected: usize) -> Self {
         self.select = self.select.with_selected_index(selected);
         self
     }
 
+    /// starts with the choices at `indices` checked, indices past the end are
+    /// ignored
     #[must_use]
     pub fn with_checked_indices(mut self, indices: impl IntoIterator<Item = usize>) -> Self {
         for index in indices {
@@ -339,6 +383,7 @@ impl MultiSelect {
         self
     }
 
+    /// the values of the checked choices in list order
     #[must_use]
     pub fn checked_values(&self) -> Vec<Value> {
         self.select
@@ -350,11 +395,14 @@ impl MultiSelect {
             .collect()
     }
 
+    /// the index of the highlighted choice, or `None` for an empty list
     #[must_use]
     pub const fn selected_index(&self) -> Option<usize> {
         self.select.selected_index()
     }
 
+    /// checks or unchecks the choice at `index`, an index past the end is
+    /// ignored
     pub fn set_checked(&mut self, index: usize, checked: bool) {
         if let Some(slot) = self.checked.get_mut(index) {
             *slot = checked;
@@ -378,9 +426,23 @@ impl MultiSelect {
     }
 }
 
+impl screw::Widget for MultiSelect {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.select.render_list(Some(&self.checked), ctx, out);
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Flexible
+    }
+}
+
 impl Widget for MultiSelect {
     fn id(&self) -> WidgetId {
         self.select.id()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
     }
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
@@ -405,12 +467,10 @@ impl Widget for MultiSelect {
             | Key::Home
             | Key::End
             | Key::PageUp
-            | Key::PageDown => self.select.handle(event, cx),
+            | Key::PageDown
+            | Key::Insert
+            | Key::Function(_) => self.select.handle(event, cx),
         }
-    }
-
-    fn view(&self, _cx: &ViewContext) -> View {
-        View::List(self.select.list_view(Some(&self.checked)))
     }
 
     fn current_value(&self) -> Option<Value> {
@@ -418,27 +478,24 @@ impl Widget for MultiSelect {
     }
 }
 
-fn move_index(current: usize, len: usize, delta: isize, wrap: bool) -> Option<usize> {
-    if len == 0 {
-        return None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rows_built_stay_bounded_regardless_of_item_count() {
+        let window = navigation::window_range(5_000, navigation::DEFAULT_PAGE_SIZE, 10_000);
+
+        assert!(window.len() <= 3 * navigation::DEFAULT_PAGE_SIZE);
     }
 
-    let bounded_current = current.min(len - 1);
-    if wrap {
-        let signed_len = isize::try_from(len).ok()?;
-        let signed_current = isize::try_from(bounded_current).ok()?;
-        let next = (signed_current + delta).rem_euclid(signed_len);
-        return usize::try_from(next).ok();
+    #[test]
+    fn rendering_shows_one_page_regardless_of_item_count() {
+        let items: Vec<String> = (0..10_000).map(|index| index.to_string()).collect();
+        let select = Select::new("s", items);
+
+        let plain = screw::render_plain(&select);
+
+        assert_eq!(plain.lines().count(), navigation::DEFAULT_PAGE_SIZE + 1);
     }
-
-    let next = bounded_current.saturating_add_signed(delta).min(len - 1);
-    Some(next)
-}
-
-fn visible_delta(value: usize) -> isize {
-    isize::try_from(value).unwrap_or(isize::MAX)
-}
-
-const fn no_modifiers(key: &KeyEvent) -> bool {
-    key.modifiers.bits() == 0
 }

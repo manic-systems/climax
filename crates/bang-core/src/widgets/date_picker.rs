@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use screw::{
+    RenderCtx,
+    Role,
+    Style,
+    Surface,
+};
+
+use super::navigation::no_modifiers;
 use crate::{
-    CalendarDay,
-    CalendarView,
-    CalendarWeek,
     Context,
     Date,
     Event,
     Key,
-    KeyEvent,
     Reaction,
-    Role,
-    Span,
     Value,
-    View,
-    ViewContext,
-    ViewId,
     Widget,
     WidgetId,
+    value::days_in_month,
 };
 
 const WEEKDAYS: [&str; 7] = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
@@ -36,6 +36,7 @@ const MONTHS: [&str; 12] = [
     "December",
 ];
 
+/// a calendar that picks one date with the arrow, page and home keys
 #[derive(Clone, Debug)]
 pub struct DatePicker {
     id:       WidgetId,
@@ -44,6 +45,8 @@ pub struct DatePicker {
 }
 
 impl DatePicker {
+    /// a picker with `selected` highlighted, out of range months and days are
+    /// clamped
     #[must_use]
     pub fn new(id: impl Into<WidgetId>, selected: Date) -> Self {
         Self {
@@ -53,12 +56,14 @@ impl DatePicker {
         }
     }
 
+    /// marks `today` in the calendar grid
     #[must_use]
     pub fn with_today(mut self, today: Date) -> Self {
         self.today = Some(clamp_date(today));
         self
     }
 
+    /// the date currently highlighted
     #[must_use]
     pub const fn selected(&self) -> Date {
         self.selected
@@ -102,8 +107,11 @@ impl DatePicker {
     const fn submit(&self) -> Reaction {
         Reaction::Submit(Value::Date(self.selected))
     }
+}
 
-    fn calendar_view(&self) -> CalendarView {
+impl screw::Widget for DatePicker {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        let theme = ctx.theme();
         let first = Date {
             year:  self.selected.year,
             month: self.selected.month,
@@ -112,48 +120,53 @@ impl DatePicker {
         let start_offset = i32::from(weekday_monday0(first));
         let grid_start = add_days(first, -start_offset);
 
-        let weeks = (0..6)
-            .map(|week| {
-                CalendarWeek {
-                    days: (0..7)
-                        .map(|weekday| {
-                            let date = add_days(grid_start, week * 7 + weekday);
-                            CalendarDay {
-                                date,
-                                label: date.day.to_string(),
-                                in_month: date.month == self.selected.month,
-                                selected: date == self.selected,
-                                today: self.today == Some(date),
-                            }
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-
-        CalendarView {
-            id: Some(ViewId::owned(format!("{}/calendar", self.id.as_str()))),
-            year: self.selected.year,
-            month: self.selected.month,
-            month_label: format!(
+        out.write(
+            format!(
                 "{} {}",
                 MONTHS[usize::from(self.selected.month - 1)],
                 self.selected.year
             ),
-            weekdays: WEEKDAYS.iter().map(ToString::to_string).collect(),
-            weeks,
-            selected: self.selected,
-            help: vec![Span::new(
-                "arrows move | pgup/pgdn month | home/end month edge | enter submit | esc cancel",
-                Role::Dim,
-            )],
+            theme.style(Role::Prompt),
+        );
+        out.newline();
+        let header: Vec<_> = WEEKDAYS.iter().map(|day| format!(" {day}")).collect();
+        out.write(header.join(" "), theme.style(Role::Dim));
+
+        for week in 0..6 {
+            out.newline();
+            for weekday in 0..7 {
+                if weekday > 0 {
+                    out.write(" ", Style::default());
+                }
+                let date = add_days(grid_start, week * 7 + weekday);
+                let (marker, role) = if date == self.selected {
+                    (">", Role::Selected)
+                } else if self.today == Some(date) {
+                    ("*", Role::Success)
+                } else if date.month == self.selected.month {
+                    (" ", Role::Normal)
+                } else {
+                    (".", Role::Dim)
+                };
+                out.write(format!("{marker}{:>2}", date.day), theme.style(role));
+            }
         }
+
+        out.newline();
+        out.write(
+            "arrows move | pgup/pgdn month | home/end month edge | enter submit | esc cancel",
+            theme.style(Role::Dim),
+        );
     }
 }
 
 impl Widget for DatePicker {
     fn id(&self) -> WidgetId {
         self.id.clone()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
     }
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
@@ -190,14 +203,14 @@ impl Widget for DatePicker {
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_days(7),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
-            Key::Char(_) | Key::Tab | Key::Backtab | Key::Backspace | Key::Delete => {
-                Reaction::Ignored
-            },
+            Key::Char(_)
+            | Key::Tab
+            | Key::Backtab
+            | Key::Backspace
+            | Key::Delete
+            | Key::Insert
+            | Key::Function(_) => Reaction::Ignored,
         }
-    }
-
-    fn view(&self, _cx: &ViewContext) -> View {
-        View::Calendar(self.calendar_view())
     }
 
     fn current_value(&self) -> Option<Value> {
@@ -215,13 +228,10 @@ fn clamp_date(date: Date) -> Date {
 }
 
 fn add_months(date: Date, months: i32) -> Date {
-    let zero_month = i32::from(date.month) - 1;
-    let total = date
-        .year
-        .saturating_mul(12)
-        .saturating_add(zero_month)
-        .saturating_add(months);
-    let year = total.div_euclid(12);
+    let total = i64::from(date.year) * 12 + i64::from(date.month) - 1 + i64::from(months);
+    let Ok(year) = i32::try_from(total.div_euclid(12)) else {
+        return if months < 0 { Date::MIN } else { Date::MAX };
+    };
     let month = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
     Date {
         year,
@@ -231,57 +241,108 @@ fn add_months(date: Date, months: i32) -> Date {
 }
 
 fn add_days(date: Date, days: i32) -> Date {
-    civil_from_days(days_from_civil(date.year, date.month, date.day).saturating_add(days))
-}
-
-fn days_from_civil(year: i32, month: u8, day: u8) -> i32 {
-    let adjusted_year = year - i32::from(month <= 2);
-    let era = adjusted_year.div_euclid(400);
-    let year_of_era = adjusted_year - era * 400;
-    let month_number = i32::from(month);
-    let day_number = i32::from(day);
-    let day_of_year =
-        (153 * (month_number + if month_number > 2 { -3 } else { 9 }) + 2) / 5 + day_number - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-fn civil_from_days(days: i32) -> Date {
-    let shifted_days = days + 719_468;
-    let era = shifted_days.div_euclid(146_097);
-    let day_of_era = shifted_days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    Date {
-        year:  year + i32::from(month <= 2),
-        month: u8::try_from(month).unwrap_or(1),
-        day:   u8::try_from(day).unwrap_or(1),
-    }
+    Date::from_unix_days(date.unix_days().saturating_add(i64::from(days)))
 }
 
 fn weekday_monday0(date: Date) -> u8 {
-    u8::try_from((days_from_civil(date.year, date.month, date.day) + 3).rem_euclid(7)).unwrap_or(0)
+    u8::try_from((date.unix_days() + 3).rem_euclid(7)).unwrap_or(0)
 }
 
-const fn days_in_month(year: i32, month: u8) -> u8 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap_year(year) => 29,
-        2 => 28,
-        _ => 0,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        KeyEvent,
+        Modifiers,
+    };
+
+    fn press(picker: &mut DatePicker, key: Key) -> Reaction {
+        picker.handle(Event::key(key), &mut Context::new())
     }
-}
 
-const fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
-}
+    #[test]
+    fn paging_stops_at_the_last_year() {
+        let last = Date::new(i32::MAX, 12, 31).unwrap();
+        let mut picker = DatePicker::new("when", last);
+        assert_eq!(press(&mut picker, Key::PageDown), Reaction::Ignored);
+        assert_eq!(press(&mut picker, Key::Right), Reaction::Ignored);
+        assert_eq!(picker.selected(), last);
 
-const fn no_modifiers(key: &KeyEvent) -> bool {
-    key.modifiers.bits() == 0
+        let first = Date::new(i32::MIN, 1, 1).unwrap();
+        let mut early = DatePicker::new("when", first);
+        assert_eq!(press(&mut early, Key::PageUp), Reaction::Ignored);
+        assert_eq!(press(&mut early, Key::Left), Reaction::Ignored);
+        assert_eq!(early.selected(), first);
+    }
+
+    fn at(year: i32, month: u8, day: u8) -> DatePicker {
+        DatePicker::new("when", Date::new(year, month, day).unwrap())
+    }
+
+    #[test]
+    fn days_step_across_month_and_year_ends() {
+        let mut picker = at(2023, 12, 31);
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(2024, 1, 1).unwrap());
+        press(&mut picker, Key::Left);
+        assert_eq!(picker.selected(), Date::new(2023, 12, 31).unwrap());
+        press(&mut picker, Key::Down);
+        assert_eq!(picker.selected(), Date::new(2024, 1, 7).unwrap());
+        press(&mut picker, Key::Up);
+        assert_eq!(picker.selected(), Date::new(2023, 12, 31).unwrap());
+    }
+
+    #[test]
+    fn leap_years_have_a_february_29th() {
+        let mut picker = at(2024, 2, 28);
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 29).unwrap());
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(2024, 3, 1).unwrap());
+
+        let mut common = at(2023, 2, 28);
+        press(&mut common, Key::Right);
+        assert_eq!(common.selected(), Date::new(2023, 3, 1).unwrap());
+
+        let mut century = at(1900, 2, 28);
+        press(&mut century, Key::Right);
+        assert_eq!(century.selected(), Date::new(1900, 3, 1).unwrap());
+    }
+
+    #[test]
+    fn month_steps_clamp_the_day() {
+        let mut picker = at(2024, 1, 31);
+        press(&mut picker, Key::PageDown);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 29).unwrap());
+        press(&mut picker, Key::PageUp);
+        assert_eq!(picker.selected(), Date::new(2024, 1, 29).unwrap());
+
+        let mut leap_day = at(2024, 2, 29);
+        leap_day.handle(
+            Event::Key(KeyEvent::with_modifiers(Key::PageDown, Modifiers::SHIFT)),
+            &mut Context::new(),
+        );
+        assert_eq!(leap_day.selected(), Date::new(2025, 2, 28).unwrap());
+    }
+
+    #[test]
+    fn home_and_end_stop_at_the_month_edges() {
+        let mut picker = at(2024, 2, 10);
+        press(&mut picker, Key::End);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 29).unwrap());
+        assert_eq!(press(&mut picker, Key::End), Reaction::Ignored);
+        press(&mut picker, Key::Home);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 1).unwrap());
+        assert_eq!(press(&mut picker, Key::Home), Reaction::Ignored);
+    }
+
+    #[test]
+    fn the_epoch_and_the_day_before_it_are_reachable() {
+        let mut picker = at(1970, 1, 1);
+        press(&mut picker, Key::Left);
+        assert_eq!(picker.selected(), Date::new(1969, 12, 31).unwrap());
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(1970, 1, 1).unwrap());
+        assert_eq!(weekday_monday0(picker.selected()), 3);
+    }
 }
