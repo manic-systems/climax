@@ -129,7 +129,8 @@ impl screw::Widget for DatePicker {
             theme.style(Role::Prompt),
         );
         out.newline();
-        out.write(WEEKDAYS.join(" "), theme.style(Role::Dim));
+        let header: Vec<_> = WEEKDAYS.iter().map(|day| format!(" {day}")).collect();
+        out.write(header.join(" "), theme.style(Role::Dim));
 
         for week in 0..6 {
             out.newline();
@@ -162,6 +163,10 @@ impl screw::Widget for DatePicker {
 impl Widget for DatePicker {
     fn id(&self) -> WidgetId {
         self.id.clone()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
     }
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
@@ -223,13 +228,10 @@ fn clamp_date(date: Date) -> Date {
 }
 
 fn add_months(date: Date, months: i32) -> Date {
-    let zero_month = i32::from(date.month) - 1;
-    let total = date
-        .year
-        .saturating_mul(12)
-        .saturating_add(zero_month)
-        .saturating_add(months);
-    let year = total.div_euclid(12);
+    let total = i64::from(date.year) * 12 + i64::from(date.month) - 1 + i64::from(months);
+    let Ok(year) = i32::try_from(total.div_euclid(12)) else {
+        return if months < 0 { Date::MIN } else { Date::MAX };
+    };
     let month = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
     Date {
         year,
@@ -244,4 +246,103 @@ fn add_days(date: Date, days: i32) -> Date {
 
 fn weekday_monday0(date: Date) -> u8 {
     u8::try_from((date.unix_days() + 3).rem_euclid(7)).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        KeyEvent,
+        Modifiers,
+    };
+
+    fn press(picker: &mut DatePicker, key: Key) -> Reaction {
+        picker.handle(Event::key(key), &mut Context::new())
+    }
+
+    #[test]
+    fn paging_stops_at_the_last_year() {
+        let last = Date::new(i32::MAX, 12, 31).unwrap();
+        let mut picker = DatePicker::new("when", last);
+        assert_eq!(press(&mut picker, Key::PageDown), Reaction::Ignored);
+        assert_eq!(press(&mut picker, Key::Right), Reaction::Ignored);
+        assert_eq!(picker.selected(), last);
+
+        let first = Date::new(i32::MIN, 1, 1).unwrap();
+        let mut early = DatePicker::new("when", first);
+        assert_eq!(press(&mut early, Key::PageUp), Reaction::Ignored);
+        assert_eq!(press(&mut early, Key::Left), Reaction::Ignored);
+        assert_eq!(early.selected(), first);
+    }
+
+    fn at(year: i32, month: u8, day: u8) -> DatePicker {
+        DatePicker::new("when", Date::new(year, month, day).unwrap())
+    }
+
+    #[test]
+    fn days_step_across_month_and_year_ends() {
+        let mut picker = at(2023, 12, 31);
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(2024, 1, 1).unwrap());
+        press(&mut picker, Key::Left);
+        assert_eq!(picker.selected(), Date::new(2023, 12, 31).unwrap());
+        press(&mut picker, Key::Down);
+        assert_eq!(picker.selected(), Date::new(2024, 1, 7).unwrap());
+        press(&mut picker, Key::Up);
+        assert_eq!(picker.selected(), Date::new(2023, 12, 31).unwrap());
+    }
+
+    #[test]
+    fn leap_years_have_a_february_29th() {
+        let mut picker = at(2024, 2, 28);
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 29).unwrap());
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(2024, 3, 1).unwrap());
+
+        let mut common = at(2023, 2, 28);
+        press(&mut common, Key::Right);
+        assert_eq!(common.selected(), Date::new(2023, 3, 1).unwrap());
+
+        let mut century = at(1900, 2, 28);
+        press(&mut century, Key::Right);
+        assert_eq!(century.selected(), Date::new(1900, 3, 1).unwrap());
+    }
+
+    #[test]
+    fn month_steps_clamp_the_day() {
+        let mut picker = at(2024, 1, 31);
+        press(&mut picker, Key::PageDown);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 29).unwrap());
+        press(&mut picker, Key::PageUp);
+        assert_eq!(picker.selected(), Date::new(2024, 1, 29).unwrap());
+
+        let mut leap_day = at(2024, 2, 29);
+        leap_day.handle(
+            Event::Key(KeyEvent::with_modifiers(Key::PageDown, Modifiers::SHIFT)),
+            &mut Context::new(),
+        );
+        assert_eq!(leap_day.selected(), Date::new(2025, 2, 28).unwrap());
+    }
+
+    #[test]
+    fn home_and_end_stop_at_the_month_edges() {
+        let mut picker = at(2024, 2, 10);
+        press(&mut picker, Key::End);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 29).unwrap());
+        assert_eq!(press(&mut picker, Key::End), Reaction::Ignored);
+        press(&mut picker, Key::Home);
+        assert_eq!(picker.selected(), Date::new(2024, 2, 1).unwrap());
+        assert_eq!(press(&mut picker, Key::Home), Reaction::Ignored);
+    }
+
+    #[test]
+    fn the_epoch_and_the_day_before_it_are_reachable() {
+        let mut picker = at(1970, 1, 1);
+        press(&mut picker, Key::Left);
+        assert_eq!(picker.selected(), Date::new(1969, 12, 31).unwrap());
+        press(&mut picker, Key::Right);
+        assert_eq!(picker.selected(), Date::new(1970, 1, 1).unwrap());
+        assert_eq!(weekday_monday0(picker.selected()), 3);
+    }
 }

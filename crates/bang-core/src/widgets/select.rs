@@ -27,6 +27,9 @@ use crate::{
     WidgetId,
 };
 
+const HELP: &str = "up/down move | enter submit | esc cancel";
+const MULTI_HELP: &str = "space toggle | a all | n none | up/down move | enter submit | esc cancel";
+
 /// one choice, shown as `label` and submitted as `value`
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectItem {
@@ -239,7 +242,7 @@ impl Select {
                 selected: self.selected_index(),
                 top: self.top,
                 max_visible: self.page_size,
-                help: "enter submit | esc cancel",
+                help: if checked.is_some() { MULTI_HELP } else { HELP },
             },
             &self.layout,
             ctx,
@@ -263,11 +266,20 @@ impl Widget for Select {
         self.id.clone()
     }
 
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
         let Event::Key(key) = event else {
             return Reaction::Ignored;
         };
+        let targets = self.layout.take_targets();
 
         match key.key {
             Key::Up => self.move_by(-1, self.wrap),
@@ -275,14 +287,13 @@ impl Widget for Select {
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.items.len().saturating_sub(1)),
             Key::PageUp => {
-                match navigation::page_action(self.layout.target(false), self.visible_len(), false)
-                {
+                match navigation::page_action(targets.target(false), self.visible_len(), false) {
                     navigation::PageAction::JumpTo(target) => self.move_page(target),
                     navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                 }
             },
             Key::PageDown => {
-                match navigation::page_action(self.layout.target(true), self.visible_len(), true) {
+                match navigation::page_action(targets.target(true), self.visible_len(), true) {
                     navigation::PageAction::JumpTo(target) => self.move_page(target),
                     navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                 }
@@ -428,6 +439,10 @@ impl screw::Widget for MultiSelect {
 impl Widget for MultiSelect {
     fn id(&self) -> WidgetId {
         self.select.id()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
     }
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {

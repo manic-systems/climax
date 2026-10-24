@@ -119,12 +119,33 @@ impl PageLayout {
         }
     }
 
-    pub(super) fn target(&self, down: bool) -> Option<usize> {
-        let recorded = self.page.borrow();
-        let page = recorded.as_ref()?;
-        if down { page.down } else { page.up }
+    /// the page jump targets of the last render, forgotten once read because a
+    /// key press makes them stale
+    pub(super) fn take_targets(&self) -> PageTargets {
+        self.page
+            .borrow_mut()
+            .take()
+            .map_or_else(PageTargets::default, |page| {
+                PageTargets {
+                    up:   page.up,
+                    down: page.down,
+                }
+            })
     }
 }
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct PageTargets {
+    up:   Option<usize>,
+    down: Option<usize>,
+}
+
+impl PageTargets {
+    pub(super) const fn target(self, down: bool) -> Option<usize> {
+        if down { self.down } else { self.up }
+    }
+}
+
 /// one logical row of a list, before it is clipped or wrapped
 pub(super) struct ListRow {
     pub spans:    Vec<(String, Role)>,

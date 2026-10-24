@@ -33,6 +33,7 @@ impl Context {
 
 /// focus request target
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum FocusTarget {
     /// the widget with this id
     Widget(WidgetId),
@@ -79,6 +80,18 @@ pub trait Widget: screw::Widget {
     /// handles `event`, using `cx` to request focus changes, and reports what
     /// happened
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction;
+
+    /// whether the last line a widget renders is a key help line, which an
+    /// enclosing [`ActionLayer`](crate::ActionLayer) extends, false by default
+    fn has_key_help(&self) -> bool {
+        false
+    }
+
+    /// whether the widget has nothing to pick and so can never submit, which a
+    /// [`Form`](crate::widgets::Form) refuses as a field, false by default
+    fn offers_nothing(&self) -> bool {
+        false
+    }
 
     /// the value the widget would submit now, none by default
     fn current_value(&self) -> Option<Value> {
