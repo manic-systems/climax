@@ -177,6 +177,14 @@ impl Select {
         Reaction::Changed
     }
 
+    fn jump_to(&mut self, row: usize) -> Reaction {
+        if row >= self.items.len() {
+            return Reaction::Ignored;
+        }
+        self.move_to(row);
+        Reaction::Changed
+    }
+
     fn move_to(&mut self, selected: usize) -> Reaction {
         navigation::move_to(
             &mut self.selected,
@@ -276,8 +284,12 @@ impl Widget for Select {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
-        let Event::Key(key) = event else {
-            return Reaction::Ignored;
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Row(row) => return self.jump_to(row),
+            Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
+                return Reaction::Ignored;
+            },
         };
         let targets = self.layout.take_targets();
 
@@ -446,8 +458,12 @@ impl Widget for MultiSelect {
     }
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
-        let Event::Key(key) = &event else {
-            return Reaction::Ignored;
+        let key = match &event {
+            Event::Key(key) => key,
+            Event::Row(_) => return self.select.handle(event, cx),
+            Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
+                return Reaction::Ignored;
+            },
         };
 
         match key.key {

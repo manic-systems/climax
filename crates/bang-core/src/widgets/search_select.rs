@@ -216,6 +216,16 @@ impl SearchSelect {
         Reaction::Changed
     }
 
+    fn move_to(&mut self, selected: usize) -> Reaction {
+        navigation::move_to(
+            &mut self.selected,
+            &mut self.top,
+            selected,
+            self.matches.len(),
+            self.page_size,
+        )
+    }
+
     fn move_page(&mut self, target: usize) -> Reaction {
         page_move(
             &mut self.top,
@@ -366,6 +376,13 @@ impl Widget for SearchSelect {
                 }
             },
             Event::Paste(_) => self.handle_input(event, cx),
+            Event::Row(row) => {
+                if *row >= self.matches.len() {
+                    return Reaction::Ignored;
+                }
+                self.move_to(*row);
+                Reaction::Changed
+            },
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
         }
     }

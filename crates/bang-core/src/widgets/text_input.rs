@@ -404,7 +404,9 @@ impl Widget for TextInput {
                 }
             },
             Event::Paste(value) => self.insert_str(&value),
-            Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
+            Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) | Event::Row(_) => {
+                Reaction::Ignored
+            },
         }
     }
 

@@ -25,6 +25,9 @@ pub enum Event {
     },
     /// animation tick
     Tick,
+    /// move a list to row `n` of the rows it offers, sent by scripted input
+    /// and never by a key. a list without that row ignores it
+    Row(usize),
 }
 
 impl Event {

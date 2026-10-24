@@ -238,9 +238,11 @@ impl Form {
                     | Key::Function(_) => Reaction::Ignored,
                 }
             },
-            Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
-                Reaction::Ignored
-            },
+            Event::Paste(_)
+            | Event::UnknownEscape(_)
+            | Event::Resize { .. }
+            | Event::Tick
+            | Event::Row(_) => Reaction::Ignored,
         }
     }
 
@@ -512,9 +514,11 @@ mod tests {
                     self.value = "new";
                     Reaction::Focus(FocusTarget::Next)
                 },
-                Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
-                    Reaction::Ignored
-                },
+                Event::Paste(_)
+                | Event::UnknownEscape(_)
+                | Event::Resize { .. }
+                | Event::Tick
+                | Event::Row(_) => Reaction::Ignored,
             }
         }
 
@@ -560,7 +564,8 @@ mod tests {
                 | Event::Paste(_)
                 | Event::UnknownEscape(_)
                 | Event::Resize { .. }
-                | Event::Tick => Reaction::Ignored,
+                | Event::Tick
+                | Event::Row(_) => Reaction::Ignored,
             }
         }
     }
@@ -589,7 +594,8 @@ mod tests {
                 | Event::Paste(_)
                 | Event::UnknownEscape(_)
                 | Event::Resize { .. }
-                | Event::Tick => Reaction::Ignored,
+                | Event::Tick
+                | Event::Row(_) => Reaction::Ignored,
             }
         }
     }
@@ -642,7 +648,8 @@ mod tests {
                 Event::Key(_)
                 | Event::Paste(_)
                 | Event::UnknownEscape(_)
-                | Event::Resize { .. } => Reaction::Ignored,
+                | Event::Resize { .. }
+                | Event::Row(_) => Reaction::Ignored,
             }
         }
     }
@@ -701,7 +708,8 @@ mod tests {
                 Event::Key(_)
                 | Event::Paste(_)
                 | Event::UnknownEscape(_)
-                | Event::Resize { .. } => Reaction::Ignored,
+                | Event::Resize { .. }
+                | Event::Row(_) => Reaction::Ignored,
             }
         }
 
