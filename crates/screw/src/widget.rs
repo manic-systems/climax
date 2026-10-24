@@ -314,9 +314,13 @@ pub struct Looping {
 }
 
 impl Looping {
-    pub fn new<const N: usize>(frames: [&str; N]) -> Self {
+    /// loop over `frames`, renders nothing when there are none
+    pub fn new(frames: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Self {
-            frames: frames.map(ToOwned::to_owned).into(),
+            frames: frames
+                .into_iter()
+                .map(|frame| frame.as_ref().to_owned())
+                .collect(),
             style:  Style::default(),
         }
     }
@@ -1332,6 +1336,21 @@ mod tests {
             &mut surface,
         );
         assert_eq!(surface.plain_text(), "pre: abcd… xy");
+    }
+
+    #[test]
+    fn looping_accepts_borrowed_arrays_vectors_and_iterators() {
+        let frames: &[&str] = &["a", "b"];
+        let render = |looping: Looping| {
+            let mut surface = Surface::new();
+            looping.render(&RenderCtx::new(), &mut surface);
+            surface.plain_text()
+        };
+        assert_eq!(render(Looping::new(frames)), "a");
+        assert_eq!(render(Looping::new(["a", "b"])), "a");
+        assert_eq!(render(Looping::new(vec!["a".to_owned()])), "a");
+        assert_eq!(render(Looping::new(frames.iter().copied())), "a");
+        assert_eq!(render(Looping::new(Vec::<String>::new())), "");
     }
 
     #[test]
