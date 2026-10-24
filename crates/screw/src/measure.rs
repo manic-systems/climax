@@ -22,8 +22,8 @@ pub enum Align {
 pub(crate) const TAB_STOP: usize = 8;
 
 /// whether a character has no cell representation and is dropped on write
-pub(crate) fn is_dropped_control(ch: char) -> bool {
-    ch.is_control() && ch != '\n' && ch != '\t'
+pub(crate) const fn is_dropped_control(ch: char) -> bool {
+    matches!(ch, '\0'..='\x08' | '\x0b'..='\x1f' | '\x7f'..='\u{9f}')
 }
 
 /// one unit of text as laid out on a row
