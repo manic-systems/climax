@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 //! render primitives
 #![expect(
     clippy::non_ascii_literal,
