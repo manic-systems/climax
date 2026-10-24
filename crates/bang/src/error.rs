@@ -32,7 +32,8 @@ pub enum ErrorKind {
     /// the driver's terminal is not interactive, such as stdin being a pipe or
     /// `TERM=dumb`
     InteractionUnavailable,
-    /// the prompt was built with settings that cannot run, such as no choices
+    /// the prompt was built with settings that cannot run, such as no choices,
+    /// or scripted input moved to a row the prompt does not have
     InvalidConfiguration,
     /// a signal ended the interaction, the terminal is restored and the process
     /// still runs

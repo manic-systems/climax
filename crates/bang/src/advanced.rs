@@ -74,13 +74,14 @@ pub fn interaction_from_runner(
 /// drive a custom widget with already-decoded events
 ///
 /// ctrl-c and ctrl-d are offered to the widget first, as in the live runner,
-/// and an ignored ctrl-c cancels while an ignored ctrl-d ends input
+/// and an ignored ctrl-c cancels while an ignored ctrl-d ends input. an
+/// ignored `Event::Row` names a row the prompt does not have
 ///
 /// # Errors
 ///
 /// fails with `ErrorKind::Cancelled` when the widget or an unclaimed ctrl-c
-/// cancels, and with `ErrorKind::InputEnded` when the events run out before the
-/// widget submits
+/// cancels, with `ErrorKind::InputEnded` when the events run out before the
+/// widget submits, and with `ErrorKind::InvalidConfiguration` for a missing row
 #[expect(
     clippy::wildcard_enum_match_arm,
     reason = "the session enums are non-exhaustive"
@@ -121,6 +122,11 @@ fn unhandled_error(event: &Event) -> Option<Error> {
     if is_control_char(event, 'd') {
         return Some(Error::input_ended());
     }
+    if let Event::Row(row) = event {
+        return Some(Error::invalid_configuration(format!(
+            "the prompt has no row {row} to move to"
+        )));
+    }
     None
 }
 
@@ -137,7 +143,10 @@ mod tests {
     use bang_core::{
         ActionBinding,
         ActionLayer,
-        widgets::TextInput,
+        widgets::{
+            Select,
+            TextInput,
+        },
     };
 
     use super::*;
@@ -176,5 +185,22 @@ mod tests {
             panic!("an action binding submits an object, got {value:?}");
         };
         assert_eq!(fields["action"], bang_core::Value::from("copy"));
+    }
+
+    #[test]
+    fn a_row_past_the_last_choice_fails_instead_of_wrapping() {
+        let select = || Select::new("pick", ["a", "b", "c"]);
+        let enter = Event::Key(KeyEvent::new(Key::Enter));
+
+        assert_eq!(
+            replay_events(select(), [Event::Row(2), enter.clone()]).unwrap(),
+            bang_core::Value::from("c"),
+        );
+        assert_eq!(
+            replay_events(select(), [Event::Row(3), enter])
+                .unwrap_err()
+                .kind(),
+            crate::ErrorKind::InvalidConfiguration,
+        );
     }
 }
