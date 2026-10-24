@@ -261,8 +261,8 @@ mod tests {
     use bang_terminal::{
         SignalGuard,
         testing::{
-            SIGNAL_LOCK,
             pty,
+            serialise_signals,
         },
     };
     use screw::{
@@ -352,7 +352,7 @@ mod tests {
             RunOutcome::Cancelled,
         );
 
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         let mut signal_events =
             TerminalEvents::blocking(Cursor::new(b"ignored")).signals(guard.poller());
