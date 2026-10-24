@@ -17,6 +17,7 @@ use super::{
         ListFrame,
         ListRow,
         PageLayout,
+        PageTargets,
         move_index,
         no_modifiers,
     },
@@ -33,13 +34,14 @@ use crate::{
 
 /// where one row of a review stands
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ReviewState {
     /// not looked at yet
     #[default]
     Unconfirmed,
     /// accepted
     Confirmed,
-    /// rejected, hides the row when removed rows are hidden
+    /// rejected, rows that started denied hide when removed rows are hidden
     Denied,
 }
 
@@ -147,6 +149,9 @@ impl ReviewActionBinding {
     }
 }
 
+/// keys the list handles itself, matched whatever their case
+const BUILT_IN_KEYS: [char; 9] = [' ', 'j', 'k', 'r', 'y', 'c', 'x', 'n', 'u'];
+
 /// a list where each row keeps an independent confirm, deny or unset state
 #[derive(Clone, Debug)]
 pub struct ReviewList {
@@ -161,17 +166,15 @@ pub struct ReviewList {
     layout:         PageLayout,
     wrap:           bool,
     show_removed:   bool,
-    output:         ReviewOutput,
+    exit_output:    bool,
+    leave_output:   LeaveOutput,
     custom_actions: Vec<ReviewActionBinding>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum ReviewOutput {
-    #[default]
-    Rows,
-    Exits {
-        leave: bool,
-    },
+#[derive(Clone, Copy, Debug)]
+enum LeaveOutput {
+    Exit,
+    Cancel,
 }
 
 impl ReviewList {
@@ -195,7 +198,8 @@ impl ReviewList {
             layout: PageLayout::default(),
             wrap: true,
             show_removed: true,
-            output: ReviewOutput::Rows,
+            exit_output: false,
+            leave_output: LeaveOutput::Exit,
             custom_actions: Vec::new(),
         }
     }
@@ -248,40 +252,53 @@ impl ReviewList {
     }
 
     /// submits how the review ended and every row's state, instead of only the
-    /// rows
+    /// rows, custom actions turn it on whatever its setting
     #[must_use]
     pub const fn with_exit_output(mut self, exit_output: bool) -> Self {
-        self.output = if exit_output {
-            ReviewOutput::Exits { leave: true }
-        } else {
-            ReviewOutput::Rows
-        };
+        self.exit_output = exit_output;
         self
     }
 
     /// whether leaving submits an exit result instead of cancelling, defaults
-    /// to `true` with exit output
+    /// to `true`, only used with exit output
     #[must_use]
     pub const fn with_leave_output(mut self, leave_output: bool) -> Self {
-        if matches!(self.output, ReviewOutput::Exits { .. }) {
-            self.output = ReviewOutput::Exits {
-                leave: leave_output,
-            };
-        }
+        self.leave_output = if leave_output {
+            LeaveOutput::Exit
+        } else {
+            LeaveOutput::Cancel
+        };
         self
     }
 
     /// replaces the extra action keys, any action turns on exit output
+    ///
+    /// # Panics
+    ///
+    /// panics when an action is bound to a key the list already uses, which are
+    /// space, j, k, r, y, c, x, n and u in either case
     #[must_use]
     pub fn with_custom_actions(
         mut self,
         actions: impl IntoIterator<Item = ReviewActionBinding>,
     ) -> Self {
         self.custom_actions = actions.into_iter().collect();
-        if !self.custom_actions.is_empty() && matches!(self.output, ReviewOutput::Rows) {
-            self.output = ReviewOutput::Exits { leave: true };
+        for action in &self.custom_actions {
+            assert!(
+                !BUILT_IN_KEYS.contains(&action.key.to_ascii_lowercase()),
+                "review action key {:?} is already used by the list",
+                action.key
+            );
         }
         self
+    }
+
+    const fn exits(&self) -> bool {
+        self.exit_output || !self.custom_actions.is_empty()
+    }
+
+    const fn leaves(&self) -> bool {
+        self.exits() && matches!(self.leave_output, LeaveOutput::Exit)
     }
 
     /// starts with the row at `selected`, clamped to the last row
@@ -430,8 +447,8 @@ impl ReviewList {
         self.selected = visible_indices[selected_position];
     }
 
-    fn page_target(&self, down: bool) -> Option<usize> {
-        let position = self.layout.target(down)?;
+    fn page_target(&self, targets: PageTargets, down: bool) -> Option<usize> {
+        let position = targets.target(down)?;
         self.visible_iter().nth(position)
     }
 
@@ -486,7 +503,7 @@ impl ReviewList {
     }
 
     fn submit(&self) -> Reaction {
-        if matches!(self.output, ReviewOutput::Exits { .. }) {
+        if self.exits() {
             Reaction::Submit(self.output_exit("submit", None))
         } else {
             Reaction::Submit(self.output_rows())
@@ -494,7 +511,7 @@ impl ReviewList {
     }
 
     fn leave(&self) -> Reaction {
-        if self.output == (ReviewOutput::Exits { leave: true }) {
+        if self.leaves() {
             Reaction::Action(self.output_exit("leave", None))
         } else {
             Reaction::Cancel
@@ -561,14 +578,14 @@ impl ReviewList {
             "r removed".to_owned(),
             "enter submit".to_owned(),
         ];
-        if matches!(self.output, ReviewOutput::Exits { .. }) {
+        if self.exits() {
             parts.extend(
                 self.custom_actions
                     .iter()
                     .map(ReviewActionBinding::help_text),
             );
         }
-        if self.output == (ReviewOutput::Exits { leave: true }) {
+        if self.leaves() {
             parts.push("esc leave".to_owned());
         } else {
             parts.push("esc cancel".to_owned());
@@ -592,11 +609,16 @@ impl Widget for ReviewList {
         self.id.clone()
     }
 
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
         let Event::Key(key) = event else {
             return Reaction::Ignored;
         };
+        let targets = self.layout.take_targets();
 
         match key.key {
             Key::Up => self.move_by(-1, self.wrap),
@@ -604,13 +626,21 @@ impl Widget for ReviewList {
             Key::Home => self.move_to(0),
             Key::End => self.move_to(self.items.len().saturating_sub(1)),
             Key::PageUp => {
-                match navigation::page_action(self.page_target(false), self.visible_len(), false) {
+                match navigation::page_action(
+                    self.page_target(targets, false),
+                    self.visible_len(),
+                    false,
+                ) {
                     navigation::PageAction::JumpTo(target) => self.move_page(target),
                     navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                 }
             },
             Key::PageDown => {
-                match navigation::page_action(self.page_target(true), self.visible_len(), true) {
+                match navigation::page_action(
+                    self.page_target(targets, true),
+                    self.visible_len(),
+                    true,
+                ) {
                     navigation::PageAction::JumpTo(target) => self.move_page(target),
                     navigation::PageAction::ScrollBy(delta) => self.move_by(delta, false),
                 }
@@ -628,9 +658,7 @@ impl Widget for ReviewList {
             Key::Char('u' | 'U') if no_modifiers(&key) => {
                 self.set_selected_state(ReviewState::Unconfirmed)
             },
-            Key::Char(value)
-                if no_modifiers(&key) && matches!(self.output, ReviewOutput::Exits { .. }) =>
-            {
+            Key::Char(value) if no_modifiers(&key) && self.exits() => {
                 self.custom_actions
                     .iter()
                     .find(|action| action.key.eq_ignore_ascii_case(&value))
@@ -674,6 +702,40 @@ mod tests {
         assert_exit(review(), Event::key(Key::Enter), "submit", None);
         assert_exit(review(), Event::key(Key::Esc), "leave", None);
         assert_exit(review(), Event::char('G'), "action", Some("regenerate"));
+    }
+
+    #[test]
+    fn the_exit_builders_give_the_same_result_in_any_order() {
+        let leave_first = ReviewList::new("review", ["alpha"])
+            .with_leave_output(false)
+            .with_exit_output(true);
+        let exit_first = ReviewList::new("review", ["alpha"])
+            .with_exit_output(true)
+            .with_leave_output(false);
+        for review in [leave_first, exit_first] {
+            let mut session = Session::new(review);
+            session.handle(Event::key(Key::Esc));
+            assert_eq!(session.status(), &SessionStatus::Cancelled);
+        }
+
+        let actions_first = ReviewList::new("review", ["alpha"])
+            .with_custom_actions([ReviewActionBinding::new('g', "regenerate")])
+            .with_exit_output(false);
+        assert_exit(
+            actions_first,
+            Event::char('g'),
+            "action",
+            Some("regenerate"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is already used by the list")]
+    fn a_custom_action_on_a_built_in_key_is_refused() {
+        drop(
+            ReviewList::new("review", ["alpha"])
+                .with_custom_actions([ReviewActionBinding::new('R', "regenerate")]),
+        );
     }
 
     #[test]

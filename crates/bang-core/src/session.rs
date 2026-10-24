@@ -148,6 +148,7 @@ fn redraw_reaction(reaction: Reaction, redraws: bool) -> Reaction {
 
 /// how far a [`Session`] has got
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum SessionStatus {
     /// still waiting for input
     Running,
@@ -160,6 +161,7 @@ pub enum SessionStatus {
 /// what a driver sees back from [`Session::handle`], [`Reaction`] without the
 /// `Action` variant
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum SessionReaction {
     /// the root did not use the event
     Ignored,

@@ -132,6 +132,9 @@ impl fmt::Display for Number {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Integer(value) => write!(f, "{value}"),
+            Self::Float(value) if value.is_finite() && value.fract() == 0.0 => {
+                write!(f, "{value}.0")
+            },
             Self::Float(value) => write!(f, "{value}"),
         }
     }
@@ -149,6 +152,18 @@ pub struct Date {
 }
 
 impl Date {
+    pub(crate) const MIN: Self = Self {
+        year:  i32::MIN,
+        month: 1,
+        day:   1,
+    };
+
+    pub(crate) const MAX: Self = Self {
+        year:  i32::MAX,
+        month: 12,
+        day:   31,
+    };
+
     /// the date, or `None` when the month or day is out of range for that year
     #[must_use]
     pub const fn new(year: i32, month: u8, day: u8) -> Option<Self> {
@@ -180,10 +195,16 @@ impl Date {
             month_index - 9
         };
         let year = (year_of_era + era * 400).saturating_add(i64::from(month <= 2));
-        Self {
-            year:  i32::try_from(year).unwrap_or(if year < 0 { i32::MIN } else { i32::MAX }),
-            month: u8::try_from(month).unwrap_or(1),
-            day:   u8::try_from(day).unwrap_or(1),
+        match i32::try_from(year) {
+            Ok(fits) => {
+                Self {
+                    year:  fits,
+                    month: u8::try_from(month).unwrap_or(1),
+                    day:   u8::try_from(day).unwrap_or(1),
+                }
+            },
+            Err(_) if year < 0 => Self::MIN,
+            Err(_) => Self::MAX,
         }
     }
 
@@ -218,15 +239,9 @@ impl FromStr for Date {
         let year = parts
             .next()
             .ok_or_else(|| invalid_date(value))?
-            .parse::<i32>()
+            .parse::<i64>()
             .ok()
-            .and_then(|year| {
-                if negative {
-                    year.checked_neg()
-                } else {
-                    Some(year)
-                }
-            })
+            .and_then(|year| i32::try_from(if negative { -year } else { year }).ok())
             .ok_or_else(|| invalid_date(value))?;
         let month = parts
             .next()
@@ -241,7 +256,9 @@ impl FromStr for Date {
         if parts.next().is_some() {
             return Err(invalid_date(value));
         }
-        Self::new(year, month, day).ok_or_else(|| invalid_date(value))
+        Self::new(year, month, day)
+            .filter(|date| date.to_string() == value)
+            .ok_or_else(|| invalid_date(value))
     }
 }
 
@@ -268,6 +285,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_whole_float_still_reads_as_a_float() {
+        assert_eq!(Number::Float(1.0).to_string(), "1.0");
+        assert_eq!(Number::Float(-0.0).to_string(), "-0.0");
+        assert_eq!(Number::Float(2.5).to_string(), "2.5");
+        assert_eq!(Number::Float(f64::INFINITY).to_string(), "inf");
+        assert_eq!(Number::Integer(1).to_string(), "1");
+    }
+
+    #[test]
     fn unix_days_follow_the_epoch() {
         for (days, candidate) in [
             (0, Date::new(1970, 1, 1)),
@@ -287,6 +313,41 @@ mod tests {
         assert_eq!(Date::from_unix_days(late.unix_days()), late);
         assert_eq!(Date::from_unix_days(i64::MAX).year, i32::MAX);
         assert_eq!(Date::from_unix_days(i64::MIN).year, i32::MIN);
+    }
+
+    #[test]
+    fn only_the_printed_form_of_a_date_parses() {
+        for text in [
+            "+2024-+1-+1",
+            "2024-1-1",
+            "00002024-01-01",
+            "2024-01-+1",
+            "-0-01-01",
+        ] {
+            text.parse::<Date>().unwrap_err();
+        }
+        assert_eq!(
+            "2024-02-29".parse::<Date>(),
+            Ok(Date::new(2024, 2, 29).unwrap())
+        );
+        assert_eq!(
+            "12345-01-01".parse::<Date>(),
+            Ok(Date::new(12345, 1, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn the_smallest_year_round_trips_through_text() {
+        let date = Date::new(i32::MIN, 1, 1).unwrap();
+        assert_eq!(date.to_string().parse::<Date>(), Ok(date));
+    }
+
+    #[test]
+    fn day_arithmetic_stops_at_the_last_date() {
+        let last = Date::new(i32::MAX, 12, 31).unwrap();
+        assert_eq!(Date::from_unix_days(last.unix_days() + 1), last);
+        let first = Date::new(i32::MIN, 1, 1).unwrap();
+        assert_eq!(Date::from_unix_days(first.unix_days() - 1), first);
     }
 
     #[test]

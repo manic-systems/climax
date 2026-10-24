@@ -74,6 +74,10 @@ impl ActionBinding {
         &self.help
     }
 
+    fn help_text(&self) -> String {
+        format!("{} {}", key_label(&self.key), self.help)
+    }
+
     fn matches(&self, key: &KeyEvent) -> bool {
         self.key == *key
     }
@@ -127,6 +131,22 @@ where
 {
     fn render(&self, ctx: &screw::RenderCtx, out: &mut screw::Surface) {
         self.widget.render(ctx, out);
+        if self.actions.is_empty() {
+            return;
+        }
+        let help = self
+            .actions
+            .iter()
+            .map(ActionBinding::help_text)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let style = ctx.theme().style(screw::Role::Dim);
+        if self.widget.has_key_help() {
+            out.write(format!(" | {help}"), style);
+        } else {
+            out.newline();
+            out.write(help, style);
+        }
     }
 
     fn tick_interest(&self) -> screw::TickInterest {
@@ -146,6 +166,14 @@ where
         self.widget.id()
     }
 
+    fn has_key_help(&self) -> bool {
+        self.widget.has_key_help() || !self.actions.is_empty()
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.widget.offers_nothing()
+    }
+
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         if let Event::Key(key) = &event
             && let Some(action) = self.actions.iter().find(|action| action.matches(key))
@@ -161,6 +189,44 @@ where
 
     fn current_value(&self) -> Option<Value> {
         self.widget.current_value()
+    }
+}
+
+fn key_label(key: &KeyEvent) -> String {
+    let mut parts = Vec::new();
+    for (modifier, name) in [
+        (Modifiers::CONTROL, "ctrl"),
+        (Modifiers::ALT, "alt"),
+        (Modifiers::SHIFT, "shift"),
+        (Modifiers::SUPER, "super"),
+    ] {
+        if key.modifiers.contains(modifier) {
+            parts.push(name.to_owned());
+        }
+    }
+    parts.push(key_name(&key.key));
+    parts.join("-")
+}
+
+fn key_name(key: &Key) -> String {
+    match key {
+        Key::Char(value) => value.to_string(),
+        Key::Function(number) => format!("f{number}"),
+        Key::Enter => "enter".to_owned(),
+        Key::Esc => "esc".to_owned(),
+        Key::Tab => "tab".to_owned(),
+        Key::Backtab => "backtab".to_owned(),
+        Key::Backspace => "backspace".to_owned(),
+        Key::Delete => "delete".to_owned(),
+        Key::Up => "up".to_owned(),
+        Key::Down => "down".to_owned(),
+        Key::Left => "left".to_owned(),
+        Key::Right => "right".to_owned(),
+        Key::Home => "home".to_owned(),
+        Key::End => "end".to_owned(),
+        Key::PageUp => "pgup".to_owned(),
+        Key::PageDown => "pgdn".to_owned(),
+        Key::Insert => "insert".to_owned(),
     }
 }
 
@@ -213,6 +279,40 @@ mod tests {
         };
         assert_eq!(value.get("action"), Some(&Value::from("save")));
         assert_eq!(value.get("value"), Some(&Value::from("Ada!")));
+    }
+
+    fn help_line(widget: &impl screw::Widget) -> String {
+        let mut surface = screw::Surface::new();
+        widget.render(
+            &screw::RenderCtx::new().with_constraints(Some(80), None),
+            &mut surface,
+        );
+        surface
+            .plain_text()
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[test]
+    fn bound_actions_extend_the_key_help_line() {
+        let layer = ActionLayer::new(Select::new("choice", ["alpha"])).with_actions([
+            ActionBinding::control_char('s', "save"),
+            ActionBinding::char('g', "go").with_help("regenerate"),
+        ]);
+        assert_eq!(
+            help_line(&layer),
+            "up/down move | enter submit | esc cancel | ctrl-s save | g regenerate"
+        );
+    }
+
+    #[test]
+    fn a_widget_without_key_help_gets_a_help_line_of_its_own() {
+        let layer = ActionLayer::new(TextInput::new("name"))
+            .with_actions([ActionBinding::control_char('s', "save")]);
+        assert_eq!(help_line(&layer), "ctrl-s save");
+        assert_eq!(help_line(&ActionLayer::new(TextInput::new("name"))), "");
     }
 
     #[test]

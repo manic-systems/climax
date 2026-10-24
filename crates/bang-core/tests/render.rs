@@ -70,10 +70,15 @@ fn a_list_keeps_plain_content_and_semantic_styles() {
         .with_header("Choose")
         .with_checked_indices([0]);
 
-    let surface = draw(&multi, None);
+    let mut surface = Surface::new();
+    multi.render(
+        &RenderCtx::new().with_constraints(Some(80), None),
+        &mut surface,
+    );
     assert_eq!(
         surface.plain_text(),
-        "Choose\n> [x] Alpha\n  [ ] Beta\nenter submit | esc cancel"
+        "Choose\n> [x] Alpha\n  [ ] Beta\nspace toggle | a all | n none | up/down move | enter \
+         submit | esc cancel"
     );
 
     let theme = Theme::default();
@@ -160,7 +165,7 @@ fn a_date_picker_marks_selected_today_and_outside_month_days() {
     let plain = surface.plain_text();
     let mut rows = plain.lines();
     assert_eq!(rows.next(), Some("July 2026"));
-    assert_eq!(rows.next(), Some("Mo Tu We Th Fr Sa Su"));
+    assert_eq!(rows.next(), Some(" Mo  Tu  We  Th  Fr  Sa  Su"));
     assert_eq!(rows.next(), Some(".29 .30 > 1 * 2   3   4   5"));
     let theme = Theme::default();
     let week = surface.rows()[2].cells();
@@ -188,7 +193,7 @@ fn physical_rows_drive_page_navigation() {
         "> one",
         "  two",
         "  continued",
-        "enter submit | esc cancel"
+        "up/down move | enter submit | esc cancel"
     ]);
 
     assert!(session.handle(page_key(Key::PageDown)).changed());
@@ -198,7 +203,7 @@ fn physical_rows_drive_page_navigation() {
         "> three",
         "  four",
         "  five",
-        "enter submit | esc cancel"
+        "up/down move | enter submit | esc cancel"
     ]);
 }
 
@@ -252,6 +257,29 @@ fn paging_without_a_rendered_frame_scrolls_by_the_page_size() {
     let shown = lines(&session, 12);
     assert_eq!(shown.first().map(String::as_str), Some("  item-01"));
     assert!(shown.iter().any(|line| line == "> item-05"));
+}
+
+#[test]
+fn page_keys_after_unrendered_moves_scroll_by_the_page_size() {
+    let mut select = Select::new("choices", items(50)).with_page_size(5);
+    let mut review = ReviewList::new("choices", items(50)).with_page_size(5);
+    let mut cx = Context::new();
+    drop(lines(&select, 12));
+    drop(lines(&review, 12));
+    for _ in 0..20 {
+        select.handle(page_key(Key::Down), &mut cx);
+        review.handle(page_key(Key::Down), &mut cx);
+    }
+
+    select.handle(page_key(Key::PageDown), &mut cx);
+    review.handle(page_key(Key::PageDown), &mut cx);
+
+    assert!(lines(&select, 12).iter().any(|line| line == "> item-25"));
+    assert!(
+        lines(&review, 12)
+            .iter()
+            .any(|line| line == "> [*] item-25")
+    );
 }
 
 #[test]

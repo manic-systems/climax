@@ -58,12 +58,25 @@ impl Form {
     ///
     /// # Panics
     ///
-    /// panics when a field called `name` already exists
+    /// panics when a field called `name` already exists, when `widget` has the
+    /// id of an existing field, or when `widget` offers nothing to pick
     pub fn push_field(&mut self, name: impl Into<String>, widget: impl Widget + 'static) {
         let owned = name.into();
         assert!(
             self.fields.iter().all(|field| field.name != owned),
             "form field name '{owned}' is already used"
+        );
+        assert!(
+            !widget.offers_nothing(),
+            "form field '{owned}' has nothing to pick"
+        );
+        let widget_id = widget.id();
+        assert!(
+            self.fields
+                .iter()
+                .all(|field| field.widget.id() != widget_id),
+            "form widget id '{}' is already used",
+            widget_id.as_str()
         );
         self.fields.push(FormField {
             name:     owned,
@@ -167,6 +180,70 @@ impl Form {
         Reaction::Submit(Value::Object(values))
     }
 
+    fn deliver(&mut self, index: usize, event: Event, cx: &mut Context) -> Reaction {
+        let field = &mut self.fields[index];
+        let edits = matches!(event, Event::Key(_) | Event::Paste(_));
+        let reaction = field.widget.handle(event, cx);
+        if !matches!(reaction, Reaction::Submit(_) | Reaction::Ignored) {
+            let moved = field
+                .widget
+                .current_value()
+                .is_some_and(|value| field.accepted.as_ref() != Some(&value));
+            if edits || moved {
+                field.accepted = None;
+            }
+        }
+        reaction
+    }
+
+    fn broadcast(&mut self, event: &Event, cx: &mut Context) -> Reaction {
+        let ticks = matches!(event, Event::Tick);
+        let mut result = Reaction::Ignored;
+        for index in 0..self.fields.len() {
+            if ticks && self.fields[index].widget.tick_interest() == TickInterest::Never {
+                continue;
+            }
+            match self.deliver(index, event.clone(), cx) {
+                reaction @ (Reaction::Action(_) | Reaction::Cancel) => return reaction,
+                Reaction::Ignored => {},
+                Reaction::Changed | Reaction::Submit(_) | Reaction::Focus(_) => {
+                    result = Reaction::Changed;
+                },
+            }
+        }
+        result
+    }
+
+    fn unhandled(&mut self, event: &Event) -> Reaction {
+        match event {
+            Event::Key(key) => {
+                match key.key {
+                    Key::Tab => self.move_focus(1),
+                    Key::Backtab => self.move_focus(-1),
+                    Key::Esc => Reaction::Cancel,
+                    Key::Enter if self.fields.is_empty() => Reaction::Submit(self.object_value()),
+                    Key::Enter
+                    | Key::Char(_)
+                    | Key::Backspace
+                    | Key::Delete
+                    | Key::Up
+                    | Key::Down
+                    | Key::Left
+                    | Key::Right
+                    | Key::Home
+                    | Key::End
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::Insert
+                    | Key::Function(_) => Reaction::Ignored,
+                }
+            },
+            Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
+                Reaction::Ignored
+            },
+        }
+    }
+
     fn refuse(&mut self, index: usize) -> Reaction {
         if index == self.active {
             return Reaction::Changed;
@@ -241,54 +318,20 @@ impl Widget for Form {
         self.id.clone()
     }
 
+    fn has_key_help(&self) -> bool {
+        !self.fields.is_empty()
+    }
+
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
-        match &event {
-            Event::Key(key) => {
-                match key.key {
-                    Key::Tab => return self.move_focus(1),
-                    Key::Backtab => return self.move_focus(-1),
-                    Key::Esc => return Reaction::Cancel,
-                    Key::Char(_)
-                    | Key::Enter
-                    | Key::Backspace
-                    | Key::Delete
-                    | Key::Up
-                    | Key::Down
-                    | Key::Left
-                    | Key::Right
-                    | Key::Home
-                    | Key::End
-                    | Key::PageUp
-                    | Key::PageDown
-                    | Key::Insert
-                    | Key::Function(_) => {},
-                }
-            },
-            Event::Resize { .. } | Event::Tick | Event::Paste(_) | Event::UnknownEscape(_) => {},
+        if matches!(event, Event::Resize { .. } | Event::Tick) {
+            return self.broadcast(&event, cx);
         }
 
-        let Some(field) = self.fields.get_mut(self.active) else {
-            return match event {
-                Event::Key(key) if key.key == Key::Enter => Reaction::Submit(self.object_value()),
-                Event::Key(_)
-                | Event::Paste(_)
-                | Event::UnknownEscape(_)
-                | Event::Resize { .. }
-                | Event::Tick => Reaction::Ignored,
-            };
+        let reaction = if self.fields.is_empty() {
+            Reaction::Ignored
+        } else {
+            self.deliver(self.active, event.clone(), cx)
         };
-
-        let edits = matches!(event, Event::Key(_) | Event::Paste(_));
-        let reaction = field.widget.handle(event, cx);
-        if !matches!(reaction, Reaction::Submit(_) | Reaction::Ignored) {
-            let moved = field
-                .widget
-                .current_value()
-                .is_some_and(|value| field.accepted.as_ref() != Some(&value));
-            if edits || moved {
-                field.accepted = None;
-            }
-        }
         match reaction {
             Reaction::Action(value) => Reaction::Action(value),
             Reaction::Submit(value) => self.submit_or_advance(value),
@@ -304,7 +347,7 @@ impl Widget for Form {
                     })
             },
             Reaction::Changed => Reaction::Changed,
-            Reaction::Ignored => Reaction::Ignored,
+            Reaction::Ignored => self.unhandled(&event),
         }
     }
 
@@ -351,8 +394,13 @@ mod tests {
 
     use super::*;
     use crate::{
+        ActionLayer,
         KeyEvent,
-        widgets::TextInput,
+        widgets::{
+            SearchSelect,
+            Select,
+            TextInput,
+        },
     };
 
     fn press(form: &mut Form, key: Key) -> Reaction {
@@ -367,6 +415,37 @@ mod tests {
                 .with_field("who", TextInput::new("first"))
                 .with_field("who", TextInput::new("second")),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "form widget id 'same' is already used")]
+    fn a_repeated_widget_id_is_refused() {
+        drop(
+            Form::new("form")
+                .with_field("first", TextInput::new("same"))
+                .with_field("second", TextInput::new("same")),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "form field 'pick' has nothing to pick")]
+    fn an_empty_select_is_refused() {
+        drop(Form::new("form").with_field("pick", Select::new("pick", Vec::<String>::new())));
+    }
+
+    #[test]
+    #[should_panic(expected = "form field 'pick' has nothing to pick")]
+    fn an_empty_search_select_is_refused() {
+        drop(Form::new("form").with_field("pick", SearchSelect::new("pick", Vec::<String>::new())));
+    }
+
+    #[test]
+    #[should_panic(expected = "form field 'pick' has nothing to pick")]
+    fn an_empty_select_under_an_action_layer_is_refused() {
+        drop(Form::new("form").with_field(
+            "pick",
+            ActionLayer::new(Select::new("pick", Vec::<String>::new())),
+        ));
     }
 
     fn required(id: &'static str) -> TextInput {
@@ -487,6 +566,7 @@ mod tests {
     }
 
     struct Once {
+        id:   &'static str,
         done: bool,
     }
 
@@ -496,7 +576,7 @@ mod tests {
 
     impl Widget for Once {
         fn id(&self) -> WidgetId {
-            WidgetId::from("once")
+            WidgetId::from(self.id)
         }
 
         fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
@@ -517,8 +597,14 @@ mod tests {
     #[test]
     fn a_submit_once_widget_does_not_block_a_two_field_form() {
         let mut form = Form::new("form")
-            .with_field("first", Once { done: false })
-            .with_field("second", Once { done: false });
+            .with_field("first", Once {
+                id:   "first",
+                done: false,
+            })
+            .with_field("second", Once {
+                id:   "second",
+                done: false,
+            });
         press(&mut form, Key::Enter);
         assert_eq!(
             press(&mut form, Key::Enter),
@@ -535,6 +621,10 @@ mod tests {
 
     impl screw::Widget for Animated {
         fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {}
+
+        fn tick_interest(&self) -> TickInterest {
+            TickInterest::EveryFrame
+        }
     }
 
     impl Widget for Animated {
@@ -580,17 +670,22 @@ mod tests {
     }
 
     struct Counter {
+        id:    &'static str,
         count: i64,
         asked: usize,
     }
 
     impl screw::Widget for Counter {
         fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {}
+
+        fn tick_interest(&self) -> TickInterest {
+            TickInterest::EveryFrame
+        }
     }
 
     impl Widget for Counter {
         fn id(&self) -> WidgetId {
-            WidgetId::from("counter")
+            WidgetId::from(self.id)
         }
 
         fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
@@ -618,7 +713,11 @@ mod tests {
     #[test]
     fn a_tick_that_changes_the_value_invalidates_acceptance() {
         let mut form = Form::new("form")
-            .with_field("count", Counter { count: 0, asked: 0 })
+            .with_field("count", Counter {
+                id:    "counter",
+                count: 0,
+                asked: 0,
+            })
             .with_field("nick", TextInput::new("nick"));
         press(&mut form, Key::Enter);
         press(&mut form, Key::Backtab);
@@ -632,6 +731,83 @@ mod tests {
                 ("nick".to_owned(), Value::from("")),
             ]))),
         );
+    }
+
+    #[test]
+    fn a_tick_reaches_every_field_that_wants_one() {
+        let mut form = Form::new("form")
+            .with_field("a", Counter {
+                id:    "a",
+                count: 0,
+                asked: 0,
+            })
+            .with_field("b", Counter {
+                id:    "b",
+                count: 0,
+                asked: 0,
+            });
+        assert_eq!(
+            form.handle(Event::Tick, &mut Context::new()),
+            Reaction::Changed
+        );
+        assert_eq!(
+            form.current_value(),
+            Some(Value::Object(BTreeMap::from([
+                ("a".to_owned(), Value::from(1)),
+                ("b".to_owned(), Value::from(1)),
+            ]))),
+        );
+    }
+
+    #[test]
+    fn a_widget_that_takes_esc_keeps_it_inside_a_form() {
+        use crate::{
+            ActionBinding,
+            ActionLayer,
+            widgets::ReviewList,
+        };
+
+        let mut review = Form::new("form").with_field(
+            "review",
+            ReviewList::new("review", ["alpha"])
+                .with_leave_output(true)
+                .with_exit_output(true),
+        );
+        assert!(matches!(press(&mut review, Key::Esc), Reaction::Action(_)));
+
+        let mut bound = Form::new("form").with_field(
+            "bound",
+            ActionLayer::new(TextInput::new("bound"))
+                .with_actions([ActionBinding::new(KeyEvent::new(Key::Esc), "stop")]),
+        );
+        assert!(matches!(press(&mut bound, Key::Esc), Reaction::Action(_)));
+
+        let mut plain = Form::new("form").with_field("plain", TextInput::new("plain"));
+        assert_eq!(press(&mut plain, Key::Esc), Reaction::Cancel);
+    }
+
+    #[test]
+    fn a_widget_that_takes_tab_keeps_it_inside_a_form() {
+        use crate::widgets::MultiSelect;
+
+        let mut pick = Form::new("form")
+            .with_field("pick", MultiSelect::new("pick", ["alpha"]))
+            .with_field("note", TextInput::new("note"));
+        assert_eq!(press(&mut pick, Key::Tab), Reaction::Changed);
+        assert_eq!(pick.active_index(), 0);
+        assert_eq!(
+            pick.current_value(),
+            Some(Value::Object(BTreeMap::from([
+                ("note".to_owned(), Value::from("")),
+                ("pick".to_owned(), Value::List(vec![Value::from("alpha")])),
+            ]))),
+        );
+
+        let mut plain = Form::new("form")
+            .with_field("a", TextInput::new("a"))
+            .with_field("b", TextInput::new("b"));
+        press(&mut plain, Key::Tab);
+        assert_eq!(plain.active_index(), 1);
     }
 
     #[test]
