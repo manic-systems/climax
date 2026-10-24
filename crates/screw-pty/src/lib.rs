@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! screw-pty: a strict model of the terminal output screw emits, for testing.
+//! screw-pty: a strict model of the terminal output screw emits, for testing
 //!
 //! [`EmittedScreen`] consumes the bytes a screw renderer writes and rebuilds
 //! the screen, so a test can assert on cells, styles and cursor state. it
