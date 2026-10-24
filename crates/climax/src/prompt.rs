@@ -302,6 +302,10 @@ pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) ->
 }
 
 /// Drive a widget with already-decoded events. Useful for tests and examples.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the session enums are non-exhaustive"
+)]
 pub fn replay_events(
     widget: impl Widget + 'static,
     events: impl IntoIterator<Item = bang_core::Event>,
@@ -311,7 +315,7 @@ pub fn replay_events(
         match session.handle(event) {
             SessionReaction::Submit(value) => return Ok(value),
             SessionReaction::Cancel => return Err(Error::Cancelled),
-            SessionReaction::Ignored | SessionReaction::Changed | SessionReaction::Focus(_) => {},
+            _ => {},
         }
         if !matches!(session.status(), SessionStatus::Running) {
             break;
@@ -321,7 +325,7 @@ pub fn replay_events(
     match session.status() {
         SessionStatus::Submitted(value) => Ok(value.clone()),
         SessionStatus::Cancelled => Err(Error::Cancelled),
-        SessionStatus::Running => Err(Error::InputEnded),
+        _ => Err(Error::InputEnded),
     }
 }
 

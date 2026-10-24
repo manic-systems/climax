@@ -81,6 +81,10 @@ pub fn interaction_from_runner(
 /// fails with `ErrorKind::Cancelled` when the widget or an unclaimed ctrl-c
 /// cancels, and with `ErrorKind::InputEnded` when the events run out before the
 /// widget submits
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "the session enums are non-exhaustive"
+)]
 pub fn replay_events(
     widget: impl Widget + 'static,
     events: impl IntoIterator<Item = Event>,
@@ -96,7 +100,7 @@ pub fn replay_events(
                     return Err(error);
                 }
             },
-            SessionReaction::Changed | SessionReaction::Focus(_) => {},
+            _ => {},
         }
         if !matches!(session.status(), SessionStatus::Running) {
             break;
@@ -106,7 +110,7 @@ pub fn replay_events(
     match session.status() {
         SessionStatus::Submitted(value) => Ok(value.clone()),
         SessionStatus::Cancelled => Err(Error::cancelled()),
-        SessionStatus::Running => Err(Error::input_ended()),
+        _ => Err(Error::input_ended()),
     }
 }
 

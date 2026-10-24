@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::collections::BTreeMap;
+use core::fmt;
 
 use bang_core::{
     ActionBinding,
@@ -17,7 +18,16 @@ use bang_core::{
         TextInput,
     },
 };
-use serde::Deserialize;
+use serde::{
+    Deserialize,
+    Deserializer,
+    de::{
+        self,
+        MapAccess,
+        Visitor,
+        value::MapAccessDeserializer,
+    },
+};
 
 /// parsed widget config
 #[derive(Clone, Debug, PartialEq)]
@@ -81,7 +91,22 @@ pub enum WidgetKind {
     ReviewList,
 }
 
+impl WidgetKind {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Select => "select",
+            Self::MultiSelect => "multi-select",
+            Self::Text => "text",
+            Self::Search => "search",
+            Self::Form => "form",
+            Self::Date => "date",
+            Self::ReviewList => "review-list",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(rename = "type")]
     kind:          RawWidgetKind,
@@ -210,6 +235,7 @@ impl From<RawWidgetKind> for WidgetKind {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawFieldConfig {
     name:          String,
     #[serde(rename = "type")]
@@ -231,6 +257,9 @@ struct RawFieldConfig {
 
 impl RawFieldConfig {
     fn finish(self) -> Result<FieldConfig, String> {
+        if self.name.is_empty() {
+            return Err("form field name cannot be empty".to_owned());
+        }
         if self.kind == RawWidgetKind::Form {
             return Err("nested form fields are not supported yet".to_owned());
         }
@@ -287,16 +316,43 @@ impl RawFieldConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum OptionEntry {
     Label(String),
     Detailed(DetailedOption),
 }
 
+impl<'de> Deserialize<'de> for OptionEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntryVisitor;
+
+        impl<'de> Visitor<'de> for EntryVisitor {
+            type Value = OptionEntry;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an option label or a table with a label")
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<OptionEntry, E> {
+                Ok(OptionEntry::Label(v.to_owned()))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<OptionEntry, A::Error> {
+                DetailedOption::deserialize(MapAccessDeserializer::new(map))
+                    .map(OptionEntry::Detailed)
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
+    }
+}
+
 impl OptionEntry {
     fn finish(self) -> Result<FinishedOption, String> {
         match self {
+            Self::Label(label) if label.is_empty() => {
+                Err("option label cannot be empty".to_owned())
+            },
             Self::Label(label) => {
                 Ok(FinishedOption {
                     item:         SelectItem::new(label.clone(), label),
@@ -310,6 +366,7 @@ impl OptionEntry {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DetailedOption {
     label:    String,
     value:    Option<toml::Value>,
@@ -319,6 +376,7 @@ struct DetailedOption {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawAction {
     key:  String,
     name: String,
@@ -353,6 +411,9 @@ impl RawAction {
 
 impl DetailedOption {
     fn finish(self) -> Result<FinishedOption, String> {
+        if self.label.is_empty() {
+            return Err("option label cannot be empty".to_owned());
+        }
         let review_state = self
             .state
             .as_deref()
@@ -617,6 +678,16 @@ fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
 }
 
 fn parse_date(value: &str) -> Result<Date, String> {
+    let digits = |part: &str, len: usize| {
+        part.len() == len && part.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    let well_formed = matches!(
+        value.split('-').collect::<Vec<_>>()[..],
+        [year, month, day] if digits(year, 4) && digits(month, 2) && digits(day, 2) && year != "0000"
+    );
+    if !well_formed {
+        return Err(format!("invalid date '{value}', expected YYYY-MM-DD"));
+    }
     value.parse()
 }
 
@@ -657,5 +728,75 @@ type = "text"
         )
         .expect_err("duplicate names should be rejected");
         assert!(error.contains("duplicate form field name 'who'"), "{error}");
+    }
+
+    #[test]
+    fn empty_names_and_labels_are_rejected() {
+        for (source, message) in [
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"\"\ntype = \"text\"\n",
+                "form field name cannot be empty",
+            ),
+            (
+                "type = \"select\"\noptions = [\"\"]\n",
+                "option label cannot be empty",
+            ),
+            (
+                "type = \"select\"\noptions = [{ label = \"\" }]\n",
+                "option label cannot be empty",
+            ),
+        ] {
+            let error = WidgetConfig::parse(source).expect_err("empty names should be rejected");
+            assert!(error.contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn malformed_dates_are_rejected() {
+        for date in [
+            "2024-2-9",
+            "99999-01-01",
+            "0000-01-01",
+            "-2024-01-01",
+            "24-01-01",
+            "2024-01-1x",
+        ] {
+            let source = format!("type = \"date\"\nselected_date = \"{date}\"\n");
+            let error =
+                WidgetConfig::parse(&source).expect_err("malformed dates should be rejected");
+            assert!(error.contains("expected YYYY-MM-DD"), "{date} {error}");
+        }
+        WidgetConfig::parse("type = \"date\"\nselected_date = \"2024-02-29\"\n").unwrap();
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected_with_the_key_and_its_line() {
+        for (source, key, line) in [
+            (
+                "type = \"select\"\npromt = \"Pick\"\noptions = [\"a\"]\n",
+                "promt",
+                "line 2",
+            ),
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"a\"\ntype = \"text\"\nplaceholdr = \
+                 \"x\"\n",
+                "placeholdr",
+                "line 6",
+            ),
+            (
+                "type = \"select\"\noptions = [{ label = \"a\", selectd = true }]\n",
+                "selectd",
+                "line 2",
+            ),
+            (
+                "type = \"text\"\n\n[[actions]]\nkey = \"a\"\nname = \"go\"\nhelp2 = \"x\"\n",
+                "help2",
+                "line 6",
+            ),
+        ] {
+            let error = WidgetConfig::parse(source).expect_err("unknown keys should be rejected");
+            assert!(error.contains(key), "{error}");
+            assert!(error.contains(line), "{error}");
+        }
     }
 }
