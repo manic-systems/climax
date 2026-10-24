@@ -14,15 +14,23 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 
 - application facade that re-exports each component whole, `climax::pound` under `parse`, `climax::bang` under `interactive`, `climax::screw` under `render`, `climax::caress` under `complete` and `climax::serde` under `structured`
 - exact pins between the climax family crates, `pound` and `caress` at the caret range climax was tested against and `climax-derive` taking `pound-derive-impl` at a caret range, and the dev edge from `pound-derive` to `pound` is path-only
-- `main` reports and returns an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
+- `main` and `main_with` report and return an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
 - `try_run`, `try_run_from` and `run_with` skip the reporting
+- `main` exits 141 on a closed stdout pipe everywhere, prints a parse error as pound's full report and prints the cause chain of an application error
+- `Result<T, E = Error>` alias
+- `Status::widget` reports a panicking widget once through `finish`
+- minimum Rust version 1.89
 - typed prompts on `Context` returning `PromptOutcome`, with the config types and review types re-exported
 - structured output through `Context::output` with `result`, `stream` and `notice`, and `Context::diagnostic` for a second handle
 - `Context::status` coordinator, `Status::during`, `Status::widget` and `StatusMode`
 - terminal policy through `TerminalCapabilities`, `InteractionMode` and `StatusMode`, and `with_terminal`, `with_terminal_application` and `with_*_writer` to redirect channels
-- `climax::Error` with `ErrorKind`, `signal()` and `related_errors()`, plus `Error::application` and `application_context`
-- `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]` through `derive`
+- `Context::with_prompt_summaries` and `set_prompt_summaries`
+- `climax::Error` with `ErrorKind`, `signal()` and `related_errors()`, plus `Error::application`, `application_context`, `cancelled` and `with_exit_code`
+- `ResultExt` for `.context` and `.app_err`, kept out of the prelude, and `From` for boxed errors
+- `anyhow` feature, off by default, adds `From<anyhow::Error>`
+- `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]` through `derive`, and `#[climax::serde(..)]` with `structured`
 - `complete` feature answers shell completion in `main` and `try_run`, and `climax::install` renders completion scripts and man pages
+- `climax::testing` with `run`, `run_with`, `Script`, `Capture` and `Outcome`
 
 #### bang
 
@@ -36,6 +44,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `bang::advanced`, `bang::terminal` and `bang::screw`
 - `bang-core` gains `Reaction::Action`, `Event::UnknownEscape`, `Key::Function`, `Key::Insert`, `SessionReaction`, `TextInput::with_mask`, `Date::unix_days`, `ReviewList::with_exit_output` and `with_leave_output`
 - word movement and deletion in `TextInput`
+- action help on the key help line
 - named errors with remedies, and escape sequences and bidi controls stripped from summaries
 
 #### screw
@@ -64,7 +73,9 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 #### bang-run
 
 - unknown config keys, duplicate form field names, empty names and labels and malformed dates are rejected
-- exit 2 for usage or configuration errors, 130 for cancellation, 128 plus the signal number, 141 on a closed pipe and 1 otherwise
+- a failed final write exits 1 and a closed pipe exits 141
+- config parsing uses the workspace `toml`
+- exit 2 for usage or configuration errors, 130 for cancellation, 128 plus the signal number and 1 otherwise
 
 ### Changed
 
@@ -90,15 +101,15 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 #### bang-run
 
 - **Breaking** the command-line tool is the `bang-run` package and still installs `bang`, `run` returns `Result<String, CliError>` and `run_from_env` and `run_from_args` are removed
+- **Breaking** `-o` always means `--output`, `--option` has no short flag
 
 #### bang-core
 
-- `Form::push_field` and `with_field` panic on a repeated name, and a widget that offers nothing is refused
-- `Form` delivers ticks to every field
+- `Form::push_field` and `with_field` panic on a repeated name, an empty select is refused
+- `Form` delivers ticks and resizes to every field and the active field sees Esc, Tab and Backtab first
 - `ReviewList` refuses custom keys that collide with built-ins
-- action help shows on the key help line
 - `format_output` writes non-finite floats as `NaN`, `Infinity` and `-Infinity`, strings in JSON and plain in text, and an empty list prints nothing in text
-- `DatePicker` header alignment, and `Date` parsing saturates beyond `i32` days
+- `DatePicker` header alignment, `Date` parsing and saturation
 - `ReviewList::selected_index` returns `None` when every row is removed
 - **Breaking** the View layer is removed, widgets draw through `screw::Widget`
 - **Breaking** `Session::handle` returns `SessionReaction`

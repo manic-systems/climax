@@ -1,25 +1,37 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use std::{
-    any::Any,
+use alloc::{
     collections::{
         BTreeMap,
         VecDeque,
     },
+    sync::Arc,
+};
+#[cfg(feature = "interactive")] use core::result;
+use core::{
+    any::Any,
+    cell::RefCell,
     fmt,
-    io::Write as _,
-    os::fd::OwnedFd,
-    panic::{
-        AssertUnwindSafe,
-        catch_unwind,
+    mem,
+    panic::AssertUnwindSafe,
+    sync::atomic::{
+        AtomicBool,
+        AtomicU64,
+        Ordering,
     },
+    time::Duration,
+};
+use std::{
+    io::{
+        self,
+        Error as IoError,
+        ErrorKind as IoErrorKind,
+        Write as _,
+    },
+    os::fd::OwnedFd,
+    panic::catch_unwind,
     sync::{
-        Arc,
         OnceLock,
-        atomic::{
-            AtomicU64,
-            Ordering,
-        },
         mpsc::{
             self,
             Receiver,
@@ -32,10 +44,7 @@ use std::{
         JoinHandle,
         ThreadId,
     },
-    time::{
-        Duration,
-        Instant,
-    },
+    time::Instant,
 };
 
 use screw::{
@@ -76,13 +85,14 @@ pub fn message(message: impl Into<String>) -> Status {
             if capabilities.live_status_available() {
                 StatusMode::Live
             } else {
-                StatusMode::Silent
+                StatusMode::Plain
             },
         )
     });
     Status::new(message, coordinator.clone())
 }
 
+/// transient status line, configured with builders and then started
 pub struct Status {
     message:         String,
     widget:          Option<WidgetRef>,
@@ -113,7 +123,8 @@ impl Status {
     /// the widget is drawn on the coordinator's thread, so it must be quick and
     /// must not block, and shared state it reads needs
     /// [`StatusRuntime::mark_dirty`] after changing. a widget that panics
-    /// is removed and the failure is reported by that status's `finish`
+    /// is removed and the failure is reported by that status's `finish`, the
+    /// panic hook prints the panic itself once
     #[must_use]
     pub fn widget(mut self, widget: WidgetRef) -> Self {
         self.widget = Some(widget);
@@ -121,6 +132,7 @@ impl Status {
     }
 
     #[must_use]
+    /// draw a spinner before the message or widget
     pub const fn spinner(mut self) -> Self {
         self.spinner = true;
         self
@@ -135,6 +147,8 @@ impl Status {
     }
 
     #[must_use]
+    /// message printed in place of the live line when the status finishes
+    /// successfully
     pub fn final_message(mut self, message: impl Into<String>) -> Self {
         self.final_message = Some(message.into());
         self
@@ -166,10 +180,23 @@ impl Status {
         }
     }
 
+    /// start the status and finish it at once as a success, printing the final
+    /// message if set
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be drawn or removed
     pub fn finish(self) -> Result<()> {
         self.start().finish()
     }
 
+    /// show the status while `operation` runs, an error prints the failure
+    /// message
+    ///
+    /// # Errors
+    ///
+    /// fails with the error of `operation`, with any cleanup failure attached
+    /// as related
     pub fn during<T>(self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         let mut status = self.start();
         match operation() {
@@ -187,8 +214,8 @@ impl Status {
     }
 
     fn root_widget(&self) -> WidgetRef {
-        let body = self.widget.clone();
-        match (self.spinner, body) {
+        let custom = self.widget.clone();
+        match (self.spinner, custom) {
             (false, Some(body)) => body,
             (false, None) => widget(Text::new(self.message.clone())),
             (true, body) => {
@@ -204,16 +231,28 @@ impl Status {
     }
 }
 
+/// started status, dropping it without `finish` counts as a failure
 pub struct StatusRuntime {
     coordinator: StatusCoordinator,
     id:          Option<u64>,
 }
 
 impl StatusRuntime {
+    /// ask for a redraw after state shared with the status widget changed
+    ///
+    /// # Errors
+    ///
+    /// fails when the status thread has stopped
     pub fn mark_dirty(&self) -> Result<()> {
         self.coordinator.mark_dirty()
     }
 
+    /// remove the status as a success, reporting a kept widget panic or first
+    /// draw failure
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be removed
     pub fn finish(mut self) -> Result<()> {
         self.remove(true)
     }
@@ -261,8 +300,9 @@ struct StatusEntry {
 /// thread holds it
 ///
 /// every request gives up after `REQUEST_TIMEOUT` when a widget blocks the
-/// thread, and the final join stops waiting after the same bound. a request
-/// made from the actor thread itself fails at once
+/// thread. the final join waits at most that long too, and not at all once a
+/// request has timed out, so a blocked widget delays shutdown by one bound. a
+/// request made from the actor thread itself fails at once
 #[derive(Clone)]
 pub(crate) struct StatusCoordinator {
     inner: Arc<Inner>,
@@ -284,16 +324,19 @@ impl WidthSource {
     fn measure(&self) -> Option<screw::Viewport> {
         match self {
             Self::Fixed(_) => None,
-            Self::Stderr => screw::Viewport::of(&std::io::stderr()).ok(),
+            Self::Stderr => screw::Viewport::of(&io::stderr()).ok(),
             Self::Terminal(handle) => screw::Viewport::of(handle).ok(),
         }
     }
 
-    fn columns(&self) -> usize {
+    fn viewport(&self) -> (usize, Option<usize>) {
         match self {
-            Self::Fixed(columns) => *columns,
+            Self::Fixed(columns) => (*columns, None),
             Self::Stderr | Self::Terminal(_) => {
-                self.measure().unwrap_or(screw::Viewport::FALLBACK).columns
+                self.measure()
+                    .map_or((screw::Viewport::FALLBACK.columns, None), |viewport| {
+                        (viewport.columns, Some(viewport.rows))
+                    })
             },
         }
     }
@@ -329,6 +372,7 @@ struct Inner {
     request_timeout: Duration,
     channel:         OnceLock<Channel>,
     successor:       OnceLock<StatusCoordinator>,
+    stalled:         AtomicBool,
 }
 
 struct Channel {
@@ -364,16 +408,16 @@ impl Inner {
         let latest = self.mode.load(Ordering::Acquire);
         if latest > spawned_with {
             let (reply, _discarded) = mpsc::channel();
-            let _ = channel.sender.send(Command::SetMode {
+            drop(channel.sender.send(Command::SetMode {
                 stamp: latest,
                 reply,
-            });
+            }));
         }
     }
 
     fn publish_mode(&self, mode: StatusMode) -> u64 {
         let next =
-            |stamp: u64| ((stamp >> MODE_BITS) + 1) << MODE_BITS | u64::from(mode_to_u8(mode));
+            |stamp: u64| (((stamp >> MODE_BITS) + 1) << MODE_BITS) | u64::from(mode_to_u8(mode));
         let previous = self
             .mode
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |stamp| {
@@ -391,12 +435,15 @@ impl Drop for Inner {
                 return;
             }
             let (done, stopped) = mpsc::channel();
-            let _ = channel.sender.send(Command::Stop { done });
+            drop(channel.sender.send(Command::Stop { done }));
             drop(channel.sender);
+            if self.stalled.load(Ordering::Acquire) {
+                return;
+            }
             match stopped.recv_timeout(self.request_timeout) {
                 Err(RecvTimeoutError::Timeout) => {},
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => {
-                    let _ = channel.thread.join();
+                    drop(channel.thread.join());
                 },
             }
         }
@@ -416,6 +463,7 @@ const fn mode_to_u8(mode: StatusMode) -> u8 {
 /// replayed or reordered update from the latest one
 const MODE_BITS: u32 = 8;
 
+#[expect(clippy::as_conversions, reason = "the mask keeps only the low byte")]
 const fn mode_from_stamp(stamp: u64) -> StatusMode {
     mode_from_u8((stamp & ((1 << MODE_BITS) - 1)) as u8)
 }
@@ -460,7 +508,7 @@ enum Command {
     AcquireLease {
         holder: ThreadId,
         token:  u64,
-        reply:  Sender<std::result::Result<(), LeaseError>>,
+        reply:  Sender<result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
@@ -468,6 +516,12 @@ enum Command {
     CancelLease {
         token: u64,
     },
+    #[cfg(feature = "structured")]
+    Hold {
+        reply: Sender<Result<()>>,
+    },
+    #[cfg(feature = "structured")]
+    Unhold,
     SetMode {
         stamp: u64,
         reply: Sender<Result<()>>,
@@ -506,14 +560,14 @@ impl From<Failure> for Error {
         match failure {
             Failure::Stopped => actor_stopped(),
             Failure::TimedOut => {
-                output_error(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
+                output_error(IoError::new(
+                    IoErrorKind::TimedOut,
                     "the transient actor did not answer in time, a status widget may be blocking \
                      it",
                 ))
             },
             Failure::OnActor => {
-                output_error(std::io::Error::other(
+                output_error(IoError::other(
                     "a status widget called into the transient actor it runs on, which would wait \
                      on itself",
                 ))
@@ -546,12 +600,13 @@ impl StatusCoordinator {
                 request_timeout,
                 channel: OnceLock::new(),
                 successor: OnceLock::new(),
+                stalled: AtomicBool::new(false),
             }),
         }
     }
 
     fn send(&self, command: Command) {
-        let _ = self.inner.channel().sender.send(command);
+        drop(self.inner.channel().sender.send(command));
     }
 
     fn request<T>(
@@ -564,10 +619,13 @@ impl StatusCoordinator {
             return failed(Failure::OnActor);
         }
         let (reply, receiver) = mpsc::channel();
-        let _ = channel.sender.send(command(reply));
+        drop(channel.sender.send(command(reply)));
         match receiver.recv_timeout(self.inner.request_timeout) {
             Ok(value) => value,
-            Err(RecvTimeoutError::Timeout) => failed(Failure::TimedOut),
+            Err(RecvTimeoutError::Timeout) => {
+                self.inner.stalled.store(true, Ordering::Release);
+                failed(Failure::TimedOut)
+            },
             Err(RecvTimeoutError::Disconnected) => failed(Failure::Stopped),
         }
     }
@@ -648,6 +706,20 @@ impl StatusCoordinator {
         )
     }
 
+    /// clear the live region and keep it from redrawing until the guard drops,
+    /// so a caller can write to the terminal itself
+    #[cfg(feature = "structured")]
+    pub(crate) fn hold(&self) -> Result<HoldGuard> {
+        let this = self.current();
+        this.request(
+            |reply| Command::Hold { reply },
+            |failure| Err(failure.into()),
+        )?;
+        Ok(HoldGuard {
+            coordinator: this.clone(),
+        })
+    }
+
     /// no live status, prompt lease or unwritten transient line depends on this
     /// coordinator's writer
     pub(crate) fn is_idle(&self) -> bool {
@@ -664,7 +736,7 @@ impl StatusCoordinator {
     /// make `next` replace this coordinator, so a flush of this handle also
     /// reaches whatever the caller moved to
     pub(crate) fn supersede(&self, next: &Self) {
-        let _ = self.inner.successor.set(next.clone());
+        drop(self.inner.successor.set(next.clone()));
     }
 
     /// end of the successor chain, where a handle kept from before a
@@ -697,37 +769,7 @@ impl StatusCoordinator {
             (Ok(()), Ok(())) => Ok(()),
         }
     }
-}
 
-fn actor_stopped() -> Error {
-    output_error(std::io::Error::other("the transient actor thread stopped"))
-}
-
-#[derive(Clone)]
-pub(crate) struct TransientNotice {
-    coordinator: StatusCoordinator,
-}
-
-impl TransientNotice {
-    pub(crate) const fn coordinator(coordinator: StatusCoordinator) -> Self {
-        Self { coordinator }
-    }
-}
-
-impl std::io::Write for TransientNotice {
-    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-        self.coordinator
-            .notice(buffer)
-            .map(|()| buffer.len())
-            .map_err(std::io::Error::other)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl StatusCoordinator {
     #[cfg(feature = "interactive")]
     pub(crate) fn prompt_guard(&self) -> bang::Result<PromptGuard> {
         let this = self.current();
@@ -757,7 +799,7 @@ impl StatusCoordinator {
     }
 
     #[cfg(feature = "interactive")]
-    fn acquire_lease(&self) -> std::result::Result<(), LeaseError> {
+    fn acquire_lease(&self) -> result::Result<(), LeaseError> {
         let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         self.request(
             |reply| {
@@ -783,9 +825,49 @@ impl StatusCoordinator {
     }
 }
 
+fn actor_stopped() -> Error {
+    output_error(IoError::other("the transient actor thread stopped"))
+}
+
+#[derive(Clone)]
+pub(crate) struct TransientNotice {
+    coordinator: StatusCoordinator,
+}
+
+impl TransientNotice {
+    pub(crate) const fn coordinator(coordinator: StatusCoordinator) -> Self {
+        Self { coordinator }
+    }
+}
+
+impl io::Write for TransientNotice {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.coordinator
+            .notice(buf)
+            .map(|()| buf.len())
+            .map_err(IoError::other)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 impl fmt::Debug for StatusCoordinator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatusCoordinator").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "structured")]
+pub(crate) struct HoldGuard {
+    coordinator: StatusCoordinator,
+}
+
+#[cfg(feature = "structured")]
+impl Drop for HoldGuard {
+    fn drop(&mut self) {
+        self.coordinator.send(Command::Unhold);
     }
 }
 
@@ -855,8 +937,8 @@ impl ErrorLog {
     }
 }
 
-fn is_permanent(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::BrokenPipe || error.raw_os_error() == Some(5)
+fn is_permanent(error: &IoError) -> bool {
+    error.kind() == IoErrorKind::BrokenPipe || error.raw_os_error() == Some(5)
 }
 
 struct ActorConfig {
@@ -881,6 +963,7 @@ struct Actor {
     mode_stamp:       u64,
     width:            WidthSource,
     columns:          usize,
+    rows:             Option<usize>,
     last_width_check: Instant,
     fps:              u16,
     entries:          BTreeMap<u64, StatusEntry>,
@@ -892,6 +975,8 @@ struct Actor {
     lease:            Option<Lease>,
     #[cfg(feature = "structured")]
     deferred:         VecDeque<DeferredAround>,
+    #[cfg(feature = "structured")]
+    holds:            usize,
     dead:             bool,
     errors:           ErrorLog,
     panicked:         BTreeMap<u64, Error>,
@@ -900,14 +985,20 @@ struct Actor {
 impl Actor {
     fn new(config: ActorConfig) -> Self {
         let width = config.width.resolved();
-        let columns = width.columns();
+        let (columns, rows) = width.viewport();
+        let unbounded = Renderer::new(config.writer.clone()).width(columns);
+        let renderer = match rows {
+            Some(height) => unbounded.height(height),
+            None => unbounded,
+        };
         Self {
-            renderer: Renderer::new(config.writer.clone()).width(columns),
+            renderer,
             writer: config.writer,
             mode: mode_from_stamp(config.stamp),
             mode_stamp: config.stamp,
             width,
             columns,
+            rows,
             last_width_check: Instant::now(),
             fps: 15,
             entries: BTreeMap::new(),
@@ -919,6 +1010,8 @@ impl Actor {
             lease: None,
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
+            #[cfg(feature = "structured")]
+            holds: 0,
             dead: false,
             errors: ErrorLog::default(),
             panicked: BTreeMap::new(),
@@ -936,15 +1029,17 @@ impl Actor {
         }
         match self.lease.as_ref().map(|lease| lease.holder) {
             Some(holder) if holder == requester => {
-                let _ = write.reply.send(Err(output_error(std::io::Error::other(
+                drop(write.reply.send(Err(output_error(IoError::other(
                     "the calling thread holds the terminal, so a stream write would wait on itself",
-                ))));
+                )))));
             },
             Some(_) => self.deferred.push_back(write),
             None => {
-                let _ = write
-                    .reply
-                    .send(self.write_around(write.writer, &write.bytes));
+                drop(
+                    write
+                        .reply
+                        .send(self.write_around(write.writer, &write.bytes)),
+                );
             },
         }
     }
@@ -954,10 +1049,10 @@ impl Actor {
         &mut self,
         holder: ThreadId,
         token: u64,
-        reply: &Sender<std::result::Result<(), LeaseError>>,
+        reply: &Sender<result::Result<(), LeaseError>>,
     ) {
         if self.leased() {
-            let _ = reply.send(Err(LeaseError::Busy));
+            drop(reply.send(Err(LeaseError::Busy)));
             return;
         }
         match self.clear_immediate() {
@@ -967,7 +1062,7 @@ impl Actor {
                 }
             },
             Err(error) => {
-                let _ = reply.send(Err(LeaseError::Clear(error)));
+                drop(reply.send(Err(LeaseError::Clear(error))));
             },
         }
     }
@@ -985,7 +1080,7 @@ impl Actor {
         }) = self.deferred.pop_front()
         {
             if Instant::now() < deadline {
-                let _ = reply.send(self.write_around(writer, &bytes));
+                drop(reply.send(self.write_around(writer, &bytes)));
             }
         }
         self.dirty = true;
@@ -1008,13 +1103,11 @@ impl Actor {
                 (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
                 (StatusMode::Live, true) => final_message,
                 (StatusMode::Plain | StatusMode::Live, false) => failure_message,
-                // `Auto` is resolved to `Live`/`Silent` before
-                // coordinators are built, so a raw `Auto` here means
-                // silent.
+                // `Auto` is resolved to `Live` or `Plain` before coordinators are built
                 (StatusMode::Silent | StatusMode::Auto, _) => None,
             };
-            if let Some(line) = line {
-                self.enqueue(format!("{line}\n").into_bytes());
+            if let Some(text) = line {
+                self.enqueue(format!("{}\n", sanitised(&text)).into_bytes());
             }
             self.drain_pending();
         }
@@ -1030,7 +1123,7 @@ impl Actor {
             Command::Remove { id, success, reply } => {
                 self.remove(id, success);
                 let panic = self.panicked.remove(&id);
-                let _ = reply.send(self.report(panic));
+                drop(reply.send(self.report(panic)));
             },
             Command::MarkDirty => self.dirty = true,
             Command::Stop { .. } => {},
@@ -1042,7 +1135,7 @@ impl Actor {
                     self.drain_pending();
                     self.notice_result()
                 };
-                let _ = reply.send(result);
+                drop(reply.send(result));
             },
             #[cfg(feature = "structured")]
             Command::Around {
@@ -1080,9 +1173,19 @@ impl Actor {
                     self.release_lease();
                 }
             },
+            #[cfg(feature = "structured")]
+            Command::Hold { reply } => {
+                self.holds += 1;
+                drop(reply.send(self.clear_immediate()));
+            },
+            #[cfg(feature = "structured")]
+            Command::Unhold => {
+                self.holds = self.holds.saturating_sub(1);
+                self.dirty = true;
+            },
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
-                    let _ = reply.send(Ok(()));
+                    drop(reply.send(Ok(())));
                     return;
                 }
                 let mode = mode_from_stamp(stamp);
@@ -1095,18 +1198,18 @@ impl Actor {
                 };
                 self.mode = mode;
                 self.dirty = true;
-                let _ = reply.send(result);
+                drop(reply.send(result));
             },
             Command::Flush { reply } => {
                 self.drain_pending();
-                let _ = reply.send(self.report_all());
+                drop(reply.send(self.report_all()));
             },
             Command::IsIdle { reply } => {
                 let idle = self.entries.is_empty()
                     && self.pending.is_empty()
                     && !self.flush_owed
                     && !self.leased();
-                let _ = reply.send(idle);
+                let _acknowledged = reply.send(idle);
             },
         }
     }
@@ -1123,7 +1226,7 @@ impl Actor {
             return Err(self
                 .errors
                 .take()
-                .unwrap_or_else(|| output_error(std::io::ErrorKind::BrokenPipe.into())));
+                .unwrap_or_else(|| output_error(IoErrorKind::BrokenPipe.into())));
         }
         Ok(())
     }
@@ -1133,7 +1236,7 @@ impl Actor {
     }
 
     fn report_all(&mut self) -> Result<()> {
-        let panics = std::mem::take(&mut self.panicked);
+        let panics = mem::take(&mut self.panicked);
         collect_reports(self.errors.take().into_iter().chain(panics.into_values()))
     }
 
@@ -1143,10 +1246,10 @@ impl Actor {
             panic_message(payload)
         );
         for id in ids {
-            let error = Error::message(message.clone());
+            let fresh = Error::message(message.clone());
             let error = match self.panicked.remove(id) {
-                Some(first) => first.with_related(error),
-                None => error,
+                Some(first) => first.with_related(fresh),
+                None => fresh,
             };
             self.panicked.insert(*id, error);
         }
@@ -1159,29 +1262,11 @@ impl Actor {
         }
     }
 
-    /// remove every entry whose widget panics when probed, or all of them when
-    /// the panic cannot be pinned on one, so the next draw cannot panic
-    /// again
-    fn remove_panicking_entries(&mut self, what: &str, payload: &(dyn Any + Send)) {
-        let culprits: Vec<u64> = self
-            .entries
-            .iter()
-            .filter(|(_, entry)| {
-                catch_unwind(AssertUnwindSafe(|| {
-                    let _ = screw::render_plain(&*entry.widget);
-                    let _ = entry.widget.tick_interest();
-                }))
-                .is_err()
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        let doomed = if culprits.is_empty() {
-            self.entries.keys().copied().collect()
-        } else {
-            culprits
-        };
-        self.record_widget_panic(&doomed, what, payload);
-        for id in doomed {
+    /// remove the entries `ids`, whose widgets panicked, so the next draw
+    /// cannot panic again
+    fn remove_panicked(&mut self, ids: &[u64], what: &str, payload: &(dyn Any + Send)) {
+        self.record_widget_panic(ids, what, payload);
+        for id in ids.iter().copied() {
             if let Some(entry) = self.entries.remove(&id) {
                 self.discard_widget(id, entry.widget);
             }
@@ -1201,11 +1286,12 @@ impl Actor {
         self.accepted = 0;
         self.flush_owed = false;
         if discarded > 0 {
-            self.errors.note_discarded(discarded as u64);
+            self.errors
+                .note_discarded(u64::try_from(discarded).unwrap_or(u64::MAX));
         }
     }
 
-    fn record_transient_failure(&mut self, error: std::io::Error) {
+    fn record_transient_failure(&mut self, error: IoError) {
         let permanent = is_permanent(&error);
         self.errors.record(output_error(error));
         if permanent {
@@ -1213,7 +1299,7 @@ impl Actor {
         }
     }
 
-    fn immediate_failure(&mut self, error: std::io::Error) -> Error {
+    fn immediate_failure(&mut self, error: IoError) -> Error {
         if is_permanent(&error) {
             self.kill();
         }
@@ -1266,7 +1352,7 @@ impl Actor {
             let line_len = line.len();
             match result {
                 Ok(0) => {
-                    self.record_transient_failure(std::io::ErrorKind::WriteZero.into());
+                    self.record_transient_failure(IoErrorKind::WriteZero.into());
                     return;
                 },
                 Ok(accepted) => {
@@ -1277,7 +1363,7 @@ impl Actor {
                         self.accepted = 0;
                     }
                 },
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {},
+                Err(error) if error.kind() == IoErrorKind::Interrupted => {},
                 Err(error) => {
                     self.record_transient_failure(error);
                     return;
@@ -1294,10 +1380,14 @@ impl Actor {
 
     fn refresh_width(&mut self) {
         self.last_width_check = Instant::now();
-        let columns = self.width.columns();
-        if columns != self.columns {
+        let (columns, rows) = self.width.viewport();
+        if columns != self.columns || rows != self.rows {
             self.columns = columns;
-            self.renderer.resize(columns);
+            self.rows = rows;
+            match rows {
+                Some(height) => self.renderer.resize_viewport(columns, height),
+                None => self.renderer.resize(columns),
+            }
             self.dirty = true;
         }
     }
@@ -1315,26 +1405,43 @@ impl Actor {
         if self.width.follows_terminal() {
             self.refresh_width();
         }
-        let widgets: Vec<WidgetRef> = self
-            .entries
-            .values()
-            .map(|entry| entry.widget.clone())
-            .collect();
-        match catch_unwind(AssertUnwindSafe(|| {
-            self.renderer.draw(&StatusStack(widgets))
-        })) {
-            Ok(Ok(_)) => self.dirty = false,
-            Ok(Err(error)) => {
-                self.record_transient_failure(error);
-                self.dirty = false;
+        let stack = StatusStack::new(
+            self.entries
+                .iter()
+                .map(|(id, entry)| (*id, Arc::clone(&entry.widget)))
+                .collect(),
+        );
+        match catch_unwind(AssertUnwindSafe(|| self.renderer.draw(&stack))) {
+            Ok(drawn) => {
+                match drawn {
+                    Ok(_) => self.dirty = false,
+                    Err(error) => {
+                        self.record_transient_failure(error);
+                        self.dirty = false;
+                    },
+                }
+                for (id, payload) in stack.into_panics() {
+                    self.remove_panicked(&[id], "rendering", payload.as_ref());
+                }
             },
-            Err(payload) => self.remove_panicking_entries("rendering", payload.as_ref()),
+            Err(payload) => {
+                let ids: Vec<u64> = self.entries.keys().copied().collect();
+                self.remove_panicked(&ids, "rendering", payload.as_ref());
+            },
         }
         self.last_draw = Some(Instant::now());
     }
 
     fn wants_periodic_ticks(&self) -> bool {
-        self.mode == StatusMode::Live && !self.leased() && !self.dead && !self.entries.is_empty()
+        #[cfg(feature = "structured")]
+        let held = self.holds > 0;
+        #[cfg(not(feature = "structured"))]
+        let held = false;
+        self.mode == StatusMode::Live
+            && !self.leased()
+            && !held
+            && !self.dead
+            && !self.entries.is_empty()
     }
 
     fn frame_interval(&self) -> Duration {
@@ -1342,13 +1449,18 @@ impl Actor {
     }
 
     fn tick_interest(&mut self) -> TickInterest {
-        match catch_unwind(AssertUnwindSafe(|| combined_tick_interest(&self.entries))) {
-            Ok(interest) => interest,
-            Err(payload) => {
-                self.remove_panicking_entries("reporting its tick interest", payload.as_ref());
-                TickInterest::Never
-            },
+        let mut interests = Vec::new();
+        let mut panicked = Vec::new();
+        for (id, entry) in &self.entries {
+            match catch_unwind(AssertUnwindSafe(|| entry.widget.tick_interest())) {
+                Ok(interest) => interests.push(interest),
+                Err(payload) => panicked.push((*id, payload)),
+            }
         }
+        for (id, payload) in panicked {
+            self.remove_panicked(&[id], "reporting its tick interest", payload.as_ref());
+        }
+        screw::combine_tick_interest(interests)
     }
 
     fn should_draw(&mut self) -> bool {
@@ -1403,13 +1515,17 @@ impl Actor {
 fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
     let mut actor = Actor::new(config);
     loop {
-        let event = match actor.next_wake() {
-            None => receiver.recv().map_err(|_| RecvTimeoutError::Disconnected),
-            Some(wait) => receiver.recv_timeout(wait),
-        };
+        let event = actor.next_wake().map_or_else(
+            || {
+                receiver
+                    .recv()
+                    .map_err(|_disconnected| RecvTimeoutError::Disconnected)
+            },
+            |wait| receiver.recv_timeout(wait),
+        );
         match event {
             Ok(Command::Stop { done }) => {
-                let _ = done.send(());
+                let _closed = done.send(());
                 break;
             },
             Ok(command) => actor.apply(command),
@@ -1423,11 +1539,18 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
     }
 }
 
+fn sanitised(text: &str) -> String {
+    text.split('\n')
+        .map(screw::single_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn collect_reports(errors: impl IntoIterator<Item = Error>) -> Result<()> {
-    let mut errors = errors.into_iter();
-    errors
-        .next()
-        .map_or(Ok(()), |first| Err(errors.fold(first, Error::with_related)))
+    let mut remaining = errors.into_iter();
+    remaining.next().map_or(Ok(()), |first| {
+        Err(remaining.fold(first, Error::with_related))
+    })
 }
 
 fn panic_message(payload: &(dyn Any + Send)) -> String {
@@ -1438,25 +1561,35 @@ fn panic_message(payload: &(dyn Any + Send)) -> String {
         .unwrap_or_else(|| "with a non-string payload".to_owned())
 }
 
-struct StatusStack(Vec<WidgetRef>);
+struct StatusStack {
+    widgets:  Vec<(u64, WidgetRef)>,
+    panicked: RefCell<Vec<(u64, Box<dyn Any + Send>)>>,
+}
 
-impl Widget for StatusStack {
-    fn render(&self, context: &RenderCtx, output: &mut Surface) {
-        for (index, widget) in self.0.iter().enumerate() {
-            if index > 0 {
-                output.newline();
-            }
-            widget.render(context, output);
+impl StatusStack {
+    const fn new(widgets: Vec<(u64, WidgetRef)>) -> Self {
+        Self {
+            widgets,
+            panicked: RefCell::new(Vec::new()),
         }
+    }
+
+    fn into_panics(self) -> Vec<(u64, Box<dyn Any + Send>)> {
+        self.panicked.into_inner()
     }
 }
 
-fn combined_tick_interest(entries: &BTreeMap<u64, StatusEntry>) -> TickInterest {
-    screw::combine_tick_interest(
-        entries
-            .values()
-            .map(|entry| entry.widget.as_ref().tick_interest()),
-    )
+impl Widget for StatusStack {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        for (index, (id, widget)) in self.widgets.iter().enumerate() {
+            if index > 0 {
+                out.newline();
+            }
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| widget.render(ctx, out))) {
+                self.panicked.borrow_mut().push((*id, payload));
+            }
+        }
+    }
 }
 
 fn wants_frame_tick(interest: TickInterest, elapsed: Duration) -> bool {
@@ -1467,28 +1600,28 @@ fn wants_frame_tick(interest: TickInterest, elapsed: Duration) -> bool {
     }
 }
 
-fn output_error(error: std::io::Error) -> Error {
+fn output_error(error: IoError) -> Error {
     Error::with_source(ErrorKind::Output, error)
 }
 
 #[cfg(test)]
 mod tests {
+    use core::{
+        sync::atomic::{
+            AtomicBool,
+            AtomicUsize,
+            Ordering,
+        },
+        time::Duration,
+    };
     use std::{
         collections::HashSet,
-        io,
+        fs,
         sync::{
             Barrier,
             Mutex,
-            atomic::{
-                AtomicBool,
-                AtomicUsize,
-                Ordering,
-            },
         },
-        time::{
-            Duration,
-            Instant,
-        },
+        time::Instant,
     };
 
     use super::*;
@@ -1504,9 +1637,9 @@ mod tests {
     }
 
     impl io::Write for Capture {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            lock(&self.0).extend_from_slice(buffer);
-            Ok(buffer.len())
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            lock(&self.0).extend_from_slice(buf);
+            Ok(buf.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -1530,14 +1663,17 @@ mod tests {
     fn wait_for(mut condition: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !condition() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(1));
         }
         assert!(condition(), "condition was not met within the deadline");
     }
 
     #[test]
     fn status_stack_composes_multiple_animating_widgets() {
-        let stack = StatusStack(vec![entry("first").widget, entry("second").widget]);
+        let stack = StatusStack::new(vec![
+            (0, entry("first").widget),
+            (1, entry("second").widget),
+        ]);
         assert_eq!(screw::render_plain(&stack), "first\nsecond");
     }
 
@@ -1632,11 +1768,11 @@ mod tests {
 
     #[test]
     fn concurrent_statuses_share_one_render_thread() {
-        struct Probe(Arc<Mutex<HashSet<std::thread::ThreadId>>>);
+        struct Probe(Arc<Mutex<HashSet<thread::ThreadId>>>);
 
         impl Widget for Probe {
             fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-                lock(&self.0).insert(std::thread::current().id());
+                lock(&self.0).insert(thread::current().id());
                 out.write("working", screw::Style::PLAIN);
             }
         }
@@ -1645,17 +1781,17 @@ mod tests {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let barrier = Arc::new(Barrier::new(17));
-        let ids = std::thread::scope(|scope| {
+        let ids = thread::scope(|scope| {
             let mut threads = Vec::new();
             for _ in 0..16 {
-                let seen = Arc::clone(&seen);
-                let barrier = Arc::clone(&barrier);
-                let coordinator = coordinator.clone();
+                let thread_seen = Arc::clone(&seen);
+                let thread_barrier = Arc::clone(&barrier);
+                let thread_coordinator = coordinator.clone();
                 threads.push(scope.spawn(move || {
-                    barrier.wait();
-                    coordinator.insert(
+                    thread_barrier.wait();
+                    thread_coordinator.insert(
                         StatusEntry {
-                            widget:          widget(Probe(seen)),
+                            widget:          widget(Probe(thread_seen)),
                             plain:           "working".to_owned(),
                             final_message:   None,
                             failure_message: None,
@@ -1689,6 +1825,30 @@ mod tests {
         first.finish().unwrap();
         second.finish().unwrap();
         assert_eq!(capture.text(), "first\nsecond\n");
+    }
+
+    #[test]
+    fn final_and_plain_messages_drop_control_sequences() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        Status::new("plain \x1b[31mred", coordinator.clone())
+            .finish()
+            .unwrap();
+        Status::new("working", coordinator.clone())
+            .final_message("first\nsecond \x1b[31mred\x1b[0m")
+            .finish()
+            .unwrap();
+        drop(
+            Status::new("working", coordinator)
+                .failure_message("failed \x07\x1b[2J")
+                .start(),
+        );
+        wait_for(|| capture.text().ends_with("failed [2J\n"));
+        assert_eq!(
+            capture.text(),
+            "plain [31mred\nfirst\nsecond [31mred[0m\nfailed [2J\n"
+        );
     }
 
     #[test]
@@ -1803,7 +1963,7 @@ mod tests {
         }
 
         let writer = FailingWriter::default();
-        let attempts = writer.0.clone();
+        let attempts = Arc::clone(&writer.0);
         let coordinator = StatusCoordinator::new(SharedWriter::new(writer), StatusMode::Live);
         let status = Status::new("working", coordinator.clone())
             .final_message("finished")
@@ -1865,7 +2025,7 @@ mod tests {
         assert!(coordinator.prompt_guard().is_err());
         let before = capture.text();
         coordinator.mark_dirty().unwrap();
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
         assert_eq!(capture.text(), before, "no draw happens while leased");
 
         drop(guard);
@@ -1898,12 +2058,12 @@ mod tests {
         }
 
         impl io::Write for FailOnce {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 if self.fail {
                     self.fail = false;
                     return Err(io::Error::other("first write failed"));
                 }
-                self.output.write(bytes)
+                self.output.write(buf)
             }
 
             fn flush(&mut self) -> io::Result<()> {
@@ -1961,14 +2121,14 @@ mod tests {
         }
 
         impl io::Write for Partial {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
                 match self.limit.take() {
                     Some(0) => Err(io::ErrorKind::WouldBlock.into()),
                     Some(limit) => {
                         self.limit = Some(0);
-                        self.output.write(&bytes[..limit])
+                        self.output.write(&buf[..limit])
                     },
-                    None => self.output.write(bytes),
+                    None => self.output.write(buf),
                 }
             }
 
@@ -1999,16 +2159,16 @@ mod tests {
         }
 
         impl io::Write for Buffered {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                self.buffer.extend_from_slice(bytes);
-                Ok(bytes.len())
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.buffer.extend_from_slice(buf);
+                Ok(buf.len())
             }
 
             fn flush(&mut self) -> io::Result<()> {
-                if std::mem::take(&mut self.fail_flush) {
+                if mem::take(&mut self.fail_flush) {
                     return Err(io::ErrorKind::WouldBlock.into());
                 }
-                self.output.write_all(&std::mem::take(&mut self.buffer))
+                self.output.write_all(&mem::take(&mut self.buffer))
             }
         }
 
@@ -2035,13 +2195,13 @@ mod tests {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
         let barrier = Arc::new(Barrier::new(9));
-        std::thread::scope(|scope| {
+        thread::scope(|scope| {
             for index in 0..8 {
-                let coordinator = coordinator.clone();
-                let barrier = Arc::clone(&barrier);
+                let thread_coordinator = coordinator.clone();
+                let thread_barrier = Arc::clone(&barrier);
                 scope.spawn(move || {
-                    barrier.wait();
-                    Status::new(format!("work-{index}"), coordinator)
+                    thread_barrier.wait();
+                    Status::new(format!("work-{index}"), thread_coordinator)
                         .final_message(format!("done-{index}"))
                         .finish()
                         .unwrap();
@@ -2062,13 +2222,13 @@ mod tests {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
         let stop = Arc::new(AtomicBool::new(false));
-        std::thread::scope(|scope| {
+        thread::scope(|scope| {
             for _ in 0..8 {
-                let coordinator = coordinator.clone();
-                let stop = Arc::clone(&stop);
+                let thread_coordinator = coordinator.clone();
+                let thread_stop = Arc::clone(&stop);
                 scope.spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        Status::new("working", coordinator.clone())
+                    while !thread_stop.load(Ordering::Relaxed) {
+                        Status::new("working", thread_coordinator.clone())
                             .start()
                             .finish()
                             .unwrap();
@@ -2077,7 +2237,7 @@ mod tests {
             }
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
-                let _ = format!("{coordinator:?}");
+                drop(format!("{coordinator:?}"));
             }
             stop.store(true, Ordering::Relaxed);
         });
@@ -2170,6 +2330,28 @@ mod tests {
         status.finish().unwrap();
     }
 
+    #[cfg(feature = "structured")]
+    #[test]
+    fn a_hold_clears_the_region_and_stops_redraws_until_it_drops() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        wait_for(|| !capture.text().is_empty());
+
+        let guard = coordinator.hold().unwrap();
+        let cleared = capture.text().len();
+        coordinator.mark_dirty().unwrap();
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(capture.text().len(), cleared);
+
+        drop(guard);
+        wait_for(|| capture.text().len() > cleared);
+        status.finish().unwrap();
+    }
+
     #[test]
     fn a_notice_under_a_live_status_clears_the_region_before_it_is_written() {
         let capture = Capture::default();
@@ -2229,7 +2411,11 @@ mod tests {
         struct Panics;
 
         impl io::Write for Panics {
-            fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            #[expect(
+                clippy::panic_in_result_fn,
+                reason = "the writer panics to kill the actor thread"
+            )]
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
                 panic!("writer exploded");
             }
 
@@ -2271,11 +2457,11 @@ mod tests {
             .unwrap_err();
         assert!(own.to_string().contains("would wait on itself"));
 
-        let other = std::thread::scope(|scope| {
+        let other = thread::scope(|scope| {
             let streaming = scope.spawn(|| {
                 coordinator.write_around(SharedWriter::new(capture.clone()), b"other\n".to_vec())
             });
-            std::thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(100));
             assert!(
                 capture.text().is_empty(),
                 "the write must wait for the lease"
@@ -2331,7 +2517,7 @@ mod tests {
         drawn_static_status(&mut fixed);
         assert_eq!(fixed.next_wake(), None);
 
-        let null = std::fs::File::open("/dev/null").unwrap();
+        let null = fs::File::open("/dev/null").unwrap();
         let mut not_a_terminal = actor_with(WidthSource::Terminal(null.into()));
         drawn_static_status(&mut not_a_terminal);
         assert_eq!(not_a_terminal.next_wake(), None);
@@ -2341,7 +2527,7 @@ mod tests {
     fn stderr_is_polled_for_resizes_only_when_it_is_a_terminal() {
         let mut actor = actor_with(WidthSource::Stderr);
         drawn_static_status(&mut actor);
-        let is_terminal = screw::Viewport::of(&std::io::stderr()).is_ok();
+        let is_terminal = screw::Viewport::of(&io::stderr()).is_ok();
         assert_eq!(actor.next_wake().is_some(), is_terminal);
     }
 
@@ -2382,6 +2568,29 @@ mod tests {
             .final_message("later done")
             .finish()
             .unwrap();
+    }
+
+    #[test]
+    fn a_panicking_widget_is_rendered_once_so_the_panic_hook_fires_once() {
+        struct CountsAndPanics(Arc<AtomicUsize>);
+
+        impl Widget for CountsAndPanics {
+            fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("widget exploded");
+            }
+        }
+
+        let renders = Arc::new(AtomicUsize::new(0));
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Live);
+        let broken = Status::new("broken", coordinator.clone())
+            .widget(widget(CountsAndPanics(Arc::clone(&renders))))
+            .start();
+        coordinator.is_idle();
+        let error = broken.finish().unwrap_err();
+        assert!(error.to_string().contains("widget exploded"), "{error}");
+        assert_eq!(renders.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -2483,7 +2692,7 @@ mod tests {
             )))
             .start();
         barrier.wait();
-        let _ = output.stream(&2).text(|value| value).emit();
+        drop(output.stream(&2).text(|value| value).emit());
         wait_for(|| lock(&seen).is_some());
         let (error, elapsed) = lock(&seen).take().unwrap();
         assert!(
@@ -2524,6 +2733,36 @@ mod tests {
         );
         release.wait();
         drop(status);
+    }
+
+    #[test]
+    fn a_stalled_actor_does_not_delay_the_final_drop() {
+        struct Blocks(Arc<Barrier>);
+
+        impl Widget for Blocks {
+            fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {
+                self.0.wait();
+                thread::sleep(Duration::from_secs(3));
+            }
+        }
+
+        let started = Arc::new(Barrier::new(2));
+        let coordinator = StatusCoordinator::build(
+            SharedWriter::new(Capture::default()),
+            StatusMode::Live,
+            WidthSource::Fixed(40),
+            Duration::from_millis(500),
+        );
+        let status = Status::new("blocked", coordinator.clone())
+            .widget(widget(Blocks(Arc::clone(&started))))
+            .start();
+        started.wait();
+
+        coordinator.notice(b"stuck\n").unwrap_err();
+        drop(status);
+        let before = Instant::now();
+        drop(coordinator);
+        assert!(before.elapsed() < Duration::from_millis(250));
     }
 
     #[test]
@@ -2571,7 +2810,7 @@ mod tests {
         );
         let guard = coordinator.prompt_guard().unwrap();
 
-        let error = std::thread::scope(|scope| {
+        let error = thread::scope(|scope| {
             scope
                 .spawn(|| {
                     coordinator.write_around(SharedWriter::new(capture.clone()), b"late\n".to_vec())

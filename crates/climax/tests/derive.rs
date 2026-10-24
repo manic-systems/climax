@@ -2,7 +2,10 @@
 
 #![cfg(all(feature = "derive", feature = "structured"))]
 
+use core::result;
+
 use climax::{
+    pound::Term,
     prelude::*,
     serde::Serialize,
 };
@@ -31,21 +34,17 @@ fn derives_resolve_through_climax_alone() {
     .unwrap();
 
     let help = Args::try_parse_from(["--help"]).err().unwrap();
-    assert!(
-        help.render(climax::pound::Term::plain())
-            .contains("shell to configure")
-    );
+    assert!(help.render(Term::plain()).contains("shell to configure"));
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct Port(u16);
 
 impl FromArg for Port {
-    fn from_arg(value: &str) -> core::result::Result<Self, ValueError> {
-        value
-            .parse()
+    fn from_arg(raw: &str) -> result::Result<Self, ValueError> {
+        raw.parse()
             .map(Self)
-            .map_err(|_| ValueError::new(value, "expected a port number"))
+            .map_err(|_parse_error| ValueError::new(raw, "expected a port number"))
     }
 }
 
@@ -59,4 +58,15 @@ struct Listen {
 fn the_prelude_carries_what_a_manual_from_arg_impl_needs() {
     let listen = Listen::try_parse_from(["--port", "8080"]).unwrap();
     assert_eq!(listen.port, Port(8080));
+}
+
+#[test]
+fn a_returned_parse_error_debugs_as_its_report() {
+    let error = climax::try_run_from(["--nope"], |_context, _args: Args| Ok(())).unwrap_err();
+    let report = format!("{error:?}");
+    assert!(
+        report.starts_with("unrecognized argument '--nope'"),
+        "got {report}"
+    );
+    assert!(report.contains("Usage:"), "got {report}");
 }

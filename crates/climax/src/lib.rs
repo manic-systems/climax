@@ -1,23 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! climax: application facade over `pound`, `screw` and `bang`.
+//! climax: application facade over `pound`, `screw` and `bang`
 //!
-//! The crate root and [`prelude`] contain the ordinary application workflow.
-//! Each component is also re-exported whole behind the feature that enables
-//! it, as `climax::pound` under `parse`, `climax::bang` under `interactive`,
-//! `climax::screw` under `render`, and `climax::serde` under `structured`. An
-//! application needs no direct dependency on any of them, and the versions it
-//! sees are the ones `climax` was tested against.
-//!
-//! The prompt builders on [`Context`] return the prompt types, which are
-//! re-exported at the root next to their config types, `PromptOutcome` and
-//! the review types, so a signature such as `fn ask(cx: &Context) ->
-//! SelectPrompt<String>` needs no path through `climax::bang`.
-//!
-//! The `derive` feature provides `#[derive(climax::Parse)]` and
-//! `#[derive(climax::ValueEnum)]`, whose expansion refers to
-//! `::climax::pound`. Serde's derives need `#[serde(crate = "climax::serde")]`
-//! for the same reason.
+//! the crate root and [`prelude`] hold the ordinary application workflow. each
+//! component is also re-exported whole behind the feature that enables it, as
+//! `climax::pound` under `parse`, `climax::bang` under `interactive`,
+//! `climax::screw` under `render`, `climax::caress` under `complete` and
+//! `climax::serde` under `structured`. an application needs no direct
+//! dependency on any of them, and the versions it sees are the ones `climax`
+//! was tested against
 
 #![cfg_attr(
     all(
@@ -28,19 +19,37 @@
     ),
     doc = include_str!("../README.md")
 )]
+#![cfg_attr(doc, doc = include_str!("../docs/facade.md"))]
+#![warn(missing_docs)]
+
+extern crate alloc;
 
 mod app;
+/// the application error type and its categories
 pub mod error;
-#[cfg(feature = "complete")] pub mod install;
+/// what a package installs beside the binary, completion scripts and man pages
+#[cfg(feature = "complete")]
+pub mod install;
 pub mod output;
 pub mod prelude;
 mod sync;
+/// terminal capability facts, policy overrides and terminal applications
 pub mod terminal;
+pub mod testing;
 
-#[cfg(feature = "render")] pub mod status;
+/// transient status lines drawn on the shared renderer
+#[cfg(feature = "render")]
+pub mod status;
 
+/// the `serde` crate, for applications that depend on `climax` alone
+///
+/// `#[climax::serde(..)]` also needs `derive`, otherwise this path is only the
+/// crate
+#[cfg(feature = "structured")]
+pub use ::serde;
 pub use app::{
     Context,
+    main_with,
     run_with,
 };
 #[cfg(feature = "parse")]
@@ -82,6 +91,8 @@ pub use bang::{
     TextPrompt,
 };
 #[cfg(feature = "complete")] pub use caress;
+#[cfg(all(feature = "derive", feature = "structured"))]
+pub use climax_derive::serde;
 #[cfg(feature = "derive")]
 pub use climax_derive::{
     Parse,
@@ -91,7 +102,7 @@ pub use error::{
     Error,
     ErrorKind,
     Result,
+    ResultExt,
 };
 #[cfg(feature = "parse")] pub use pound;
 #[cfg(feature = "render")] pub use screw;
-#[cfg(feature = "structured")] pub use serde;

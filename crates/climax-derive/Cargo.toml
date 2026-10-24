@@ -16,6 +16,8 @@ proc-macro = true
 
 [dependencies]
 pound-derive-impl = { path = "../pound-derive-impl", version = "0.6.0" }
+proc-macro2.workspace = true
+quote.workspace       = true
 
 [lints]
 workspace = true
