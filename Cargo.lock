@@ -75,8 +75,6 @@ name = "climax-derive"
 version = "0.1.0"
 dependencies = [
  "pound-derive-impl",
- "proc-macro2",
- "quote",
 ]
 
 [[package]]
@@ -96,10 +94,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixture-bang-core-only"
+version = "0.0.0"
+dependencies = [
+ "bang-core",
+]
+
+[[package]]
 name = "fixture-bang-only"
 version = "0.0.0"
 dependencies = [
  "bang",
+]
+
+[[package]]
+name = "fixture-bang-terminal-only"
+version = "0.0.0"
+dependencies = [
+ "bang-terminal",
+]
+
+[[package]]
+name = "fixture-caress-only"
+version = "0.0.0"
+dependencies = [
+ "caress",
+ "pound",
 ]
 
 [[package]]
@@ -162,6 +182,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fixture-pound-color-only"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
 name = "fixture-pound-no-derive"
 version = "0.0.0"
 dependencies = [
@@ -184,6 +211,13 @@ dependencies = [
 
 [[package]]
 name = "fixture-pound-only"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-unicode-only"
 version = "0.0.0"
 dependencies = [
  "pound",
