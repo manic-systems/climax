@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use std::io::{
+    self,
+    IsTerminal as _,
+};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::io::{
     Read,
@@ -7,15 +11,6 @@ use std::io::{
 };
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::os::fd::AsFd;
-#[cfg(any(feature = "render", feature = "interactive"))]
-use std::os::fd::OwnedFd;
-use std::{
-    env,
-    io::{
-        self,
-        IsTerminal as _,
-    },
-};
 
 /// whether prompts use detected terminal capabilities
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -44,7 +39,7 @@ pub enum StatusMode {
 }
 
 fn ansi_available() -> bool {
-    env::var_os("TERM").is_none_or(|term| term != "dumb")
+    std::env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
 /// terminal facts observed by the facade
@@ -104,8 +99,8 @@ impl<'a> TerminalApplication<'a> {
 
 #[cfg(all(feature = "interactive", feature = "render"))]
 impl Write for TerminalApplication<'_> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.output.write(buf)
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.output.write(buffer)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -133,7 +128,7 @@ impl TerminalCapabilities {
     }
 
     #[cfg(any(feature = "render", feature = "interactive"))]
-    pub(crate) fn detect_on(handle: &OwnedFd) -> Self {
+    pub(crate) fn detect_on(handle: &std::os::fd::OwnedFd) -> Self {
         let is_terminal = handle.is_terminal();
         Self::new(is_terminal, is_terminal, ansi_available())
     }
@@ -211,7 +206,7 @@ impl TerminalPolicy {
         match self.status {
             StatusMode::Auto if self.capabilities.live_status_available() => StatusMode::Live,
             StatusMode::Auto => StatusMode::Silent,
-            status @ (StatusMode::Live | StatusMode::Plain | StatusMode::Silent) => status,
+            status => status,
         }
     }
 

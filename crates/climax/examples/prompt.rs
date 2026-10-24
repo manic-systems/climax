@@ -15,10 +15,6 @@ fn main() -> climax::Result<()> {
             PromptOutcome::Leave => return Ok(()),
         };
 
-        context
-            .output()
-            .result(&shell)
-            .text(|chosen| *chosen)
-            .emit()
+        context.output().result(&shell).text(|shell| *shell).emit()
     })
 }
