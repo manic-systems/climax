@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use core::{
-    any::Any,
-    cell::Cell,
     error::Error,
     fmt,
     panic::AssertUnwindSafe,
@@ -15,14 +13,11 @@ use std::{
         Write,
     },
     panic,
-    sync::{
-        Once,
-        mpsc::{
-            self,
-            Receiver,
-            RecvTimeoutError,
-            Sender,
-        },
+    sync::mpsc::{
+        self,
+        Receiver,
+        RecvTimeoutError,
+        Sender,
     },
     thread::{
         self,
@@ -726,18 +721,15 @@ where
     {
         let (tx, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
-            quiet_captured_panics();
-            CAPTURING.set(true);
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let finish_mode = drive(&mut runtime, &rx)?;
                 finish_frame(&mut runtime, finish_mode)
             }));
-            CAPTURING.set(false);
             let restored = runtime.renderer.restore_cursor();
             let failure = match result {
                 Ok(Ok(())) => restored.err(),
                 Ok(Err(error)) => Some(error),
-                Err(payload) => Some(panic_error(&*payload)),
+                Err(_payload) => Some(panic_error()),
             };
             let writer = runtime.into_inner();
             match failure {
@@ -852,7 +844,7 @@ where
         match thread.join() {
             Ok(Ok(writer)) => Ok(writer),
             Ok(Err((writer, error))) => Err((Some(writer), error)),
-            Err(payload) => Err((None, panic_error(&*payload))),
+            Err(_payload) => Err((None, panic_error())),
         }
     }
 }
@@ -909,13 +901,8 @@ impl<W> Drop for LiveRuntime<W> {
                 ThreadFinishMode::Current
             };
             drop(self.handle.send(RuntimeCommand::Finish(finish_mode)));
-            if let Some(thread) = self.thread.take()
-                && let Ok(Err((_, error))) = thread.join()
-                && error
-                    .get_ref()
-                    .is_some_and(<dyn Error + Send + Sync>::is::<WidgetPanic>)
-            {
-                drop(writeln!(io::stderr(), "{error}"));
+            if let Some(thread) = self.thread.take() {
+                drop(thread.join());
             }
         }
     }
@@ -996,45 +983,21 @@ where
     Ok(())
 }
 
-thread_local! {
-    static CAPTURING: Cell<bool> = const { Cell::new(false) };
-}
-
-/// the panic hook stays quiet for panics the runtime thread captures, `finish`
-/// returns them
-fn quiet_captured_panics() {
-    static INSTALL: Once = Once::new();
-    INSTALL.call_once(|| {
-        let previous = panic::take_hook();
-        panic::set_hook(Box::new(move |info| {
-            if !CAPTURING.get() {
-                previous(info);
-            }
-        }));
-    });
-}
-
+/// the error `finish` returns for a widget panic, the default panic hook has
+/// already printed it
 #[derive(Debug)]
-struct WidgetPanic(String);
+struct WidgetPanic;
 
 impl fmt::Display for WidgetPanic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "runtime thread panicked: {}", self.0)
+        f.write_str("a widget panicked on the render thread")
     }
 }
 
 impl Error for WidgetPanic {}
 
-fn panic_error(payload: &(dyn Any + Send)) -> io::Error {
-    io::Error::other(WidgetPanic(panic_message(payload).to_owned()))
-}
-
-fn panic_message(payload: &(dyn Any + Send)) -> &str {
-    payload
-        .downcast_ref::<&str>()
-        .copied()
-        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-        .unwrap_or("non-string payload")
+fn panic_error() -> io::Error {
+    io::Error::other(WidgetPanic)
 }
 
 fn wants_frame_tick(interest: TickInterest, elapsed: Duration, frame_interval: Duration) -> bool {
@@ -1200,7 +1163,7 @@ mod tests {
         let Err(error) = live.finish() else {
             panic!("the widget panic was not reported");
         };
-        assert!(error.to_string().contains("widget exploded"), "{error}");
+        assert_eq!(error.to_string(), "a widget panicked on the render thread");
         assert!(buffer.0.lock().unwrap().ends_with(b"\x1b[?25h"));
     }
 
@@ -1247,7 +1210,7 @@ mod tests {
         let Err((writer, error)) = live.finish_recovering() else {
             panic!("the widget panic was not reported");
         };
-        assert!(error.to_string().contains("widget exploded"), "{error}");
+        assert_eq!(error.to_string(), "a widget panicked on the render thread");
         assert!(writer.is_some());
     }
 

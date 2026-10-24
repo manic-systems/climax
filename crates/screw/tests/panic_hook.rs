@@ -4,10 +4,7 @@ use core::sync::atomic::{
     AtomicUsize,
     Ordering,
 };
-use std::{
-    panic,
-    thread,
-};
+use std::panic;
 
 use screw::{
     RenderCtx,
@@ -28,16 +25,16 @@ impl Widget for Exploding {
 }
 
 #[test]
-fn a_widget_panic_returned_by_finish_is_not_also_reported_by_the_panic_hook() {
+fn a_widget_panic_reaches_the_panic_hook_once_and_finish_does_not_repeat_it() {
     panic::set_hook(Box::new(|_| {
         HOOK_CALLS.fetch_add(1, Ordering::SeqCst);
     }));
 
     let live = Runtime::new(Vec::new(), Exploding).start();
     let error = live.finish().unwrap_err();
-    assert!(error.to_string().contains("widget exploded"), "{error}");
-    assert_eq!(HOOK_CALLS.load(Ordering::SeqCst), 0);
+    drop(panic::take_hook());
 
-    drop(thread::spawn(|| panic!("unrelated")).join());
     assert_eq!(HOOK_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(error.to_string(), "a widget panicked on the render thread");
+    assert!(!error.to_string().contains("widget exploded"), "{error}");
 }
