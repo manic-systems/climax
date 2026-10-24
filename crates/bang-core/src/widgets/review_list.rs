@@ -646,6 +646,7 @@ impl Widget for ReviewList {
             | Key::Left
             | Key::Right
             | Key::Backtab
+            | Key::Insert
             | Key::Function(_) => Reaction::Ignored,
         }
     }

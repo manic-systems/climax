@@ -101,7 +101,9 @@ pub enum Key {
     PageUp,
     /// Page Down
     PageDown,
-    /// F1 to F5, as the Linux console reports them
+    /// Insert
+    Insert,
+    /// F1 to F12
     Function(u8),
 }
 

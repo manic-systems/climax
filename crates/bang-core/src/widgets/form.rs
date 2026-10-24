@@ -251,6 +251,7 @@ impl Widget for Form {
                     | Key::End
                     | Key::PageUp
                     | Key::PageDown
+                    | Key::Insert
                     | Key::Function(_) => {},
                 }
             },

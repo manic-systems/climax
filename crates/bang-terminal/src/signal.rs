@@ -37,6 +37,7 @@ impl Signal {
     pub const HUP: Self = Self(libc::SIGHUP);
     /// `SIGQUIT`
     pub const QUIT: Self = Self(libc::SIGQUIT);
+    const WINCH: Self = Self(libc::SIGWINCH);
 
     /// the platform's signal number
     #[must_use]
@@ -67,6 +68,13 @@ impl fmt::Display for Signal {
 }
 
 const TERMINAL_SIGNALS: [Signal; 4] = [Signal::INT, Signal::TERM, Signal::HUP, Signal::QUIT];
+const INSTALLED_SIGNALS: [Signal; 5] = [
+    Signal::INT,
+    Signal::TERM,
+    Signal::HUP,
+    Signal::QUIT,
+    Signal::WINCH,
+];
 
 /// both ends stay open for the life of the process, so a handler running on
 /// another thread can never write into a descriptor number that was closed and
@@ -101,6 +109,10 @@ pub struct SignalPoller {
 }
 
 impl SignalPoller {
+    pub(crate) const fn read_fd(self) -> &'static OwnedFd {
+        self.read_fd
+    }
+
     /// takes the next queued signal without blocking
     ///
     /// # Errors
@@ -127,6 +139,9 @@ impl SignalPoller {
 
 /// catches `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT`, a signal ignored at
 /// install stays ignored
+///
+/// `SIGWINCH` is caught as well so a resize wakes a waiting `TerminalEvents`,
+/// it is never reported as a `Signal`
 #[derive(Debug)]
 pub struct SignalGuard {
     poller:   SignalPoller,
@@ -210,7 +225,7 @@ fn install_terminal_handlers_exclusive() -> io::Result<SignalGuard> {
     while poller.poll_signal()?.is_some() {}
 
     let mut previous = Vec::new();
-    for signal in TERMINAL_SIGNALS {
+    for signal in INSTALLED_SIGNALS {
         match handlers::install(signal) {
             Ok(Some(old)) => previous.push((signal, old)),
             Ok(None) => {},
@@ -316,7 +331,7 @@ mod handlers {
         // below
         let mut action = unsafe { mem::zeroed::<libc::sigaction>() };
         action.sa_sigaction = handle as *const () as usize;
-        action.sa_flags = 0;
+        action.sa_flags = libc::SA_RESTART;
         // SAFETY: sa_mask points to valid memory
         if unsafe { libc::sigemptyset(&raw mut action.sa_mask) } != 0 {
             return Err(io::Error::last_os_error());
@@ -399,6 +414,10 @@ mod handlers {
 
 #[cfg(test)]
 mod tests {
+    use core::{
+        mem,
+        ptr,
+    };
     use std::os::fd::BorrowedFd;
 
     use rustix::io::write;
@@ -475,6 +494,21 @@ mod tests {
         let (result, late) = guard.restore_polling();
         result.unwrap();
         assert_eq!(late, Some(Signal::TERM));
+    }
+
+    #[test]
+    fn handlers_restart_interrupted_syscalls() {
+        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+            // SAFETY: a zeroed sigaction is valid storage for the query
+            let mut current = unsafe { mem::zeroed::<libc::sigaction>() };
+            // SAFETY: a null new action only queries into valid storage
+            let queried = unsafe { libc::sigaction(signal, ptr::null(), &raw mut current) };
+            assert_eq!(queried, 0);
+            assert_ne!(current.sa_flags & libc::SA_RESTART, 0, "signal {signal}");
+        }
+        guard.restore().unwrap();
     }
 
     #[test]

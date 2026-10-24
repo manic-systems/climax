@@ -203,6 +203,7 @@ impl Widget for DatePicker {
             | Key::Backtab
             | Key::Backspace
             | Key::Delete
+            | Key::Insert
             | Key::Function(_) => Reaction::Ignored,
         }
     }
