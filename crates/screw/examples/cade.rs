@@ -1,11 +1,15 @@
+// SPDX-License-Identifier: EUPL-1.2
+
+extern crate alloc;
+
+use alloc::sync::Arc;
+use core::time::Duration;
 use std::{
     io::{
         self,
         IsTerminal as _,
     },
-    sync::Arc,
     thread,
-    time::Duration,
 };
 
 use screw::{
