@@ -1073,9 +1073,26 @@ impl Widget for String {
     }
 }
 
-impl Widget for &'static str {
+impl Widget for &str {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         out.write(*self, Style::default());
+    }
+}
+
+impl<T> Widget for &T
+where
+    T: Widget + ?Sized,
+{
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        (**self).render(ctx, out);
+    }
+
+    fn tick_interest(&self) -> TickInterest {
+        (**self).tick_interest()
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        (**self).vertical_size()
     }
 }
 
@@ -1339,6 +1356,21 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_widgets_and_strings_render_without_a_static_lifetime() {
+        let owned = String::from("owned");
+        let borrowed: &str = &owned;
+        assert_eq!(render_plain(&borrowed), "owned");
+
+        let text = Text::new("text");
+        let reference: &dyn Widget = &text;
+        assert_eq!(render_plain(&reference), "text");
+        assert_eq!(render_plain(&&text), "text");
+
+        let stack = Stack::new(vec![&text as &dyn Widget, &"tail"]);
+        assert_eq!(render_plain(&stack), "text\ntail");
+    }
+
+    #[test]
     fn looping_accepts_borrowed_arrays_vectors_and_iterators() {
         let frames: &[&str] = &["a", "b"];
         let render = |looping: Looping| {
@@ -1351,6 +1383,13 @@ mod tests {
         assert_eq!(render(Looping::new(vec!["a".to_owned()])), "a");
         assert_eq!(render(Looping::new(frames.iter().copied())), "a");
         assert_eq!(render(Looping::new(Vec::<String>::new())), "");
+    }
+
+    #[test]
+    fn reference_forwarding_keeps_tick_interest_and_vertical_size() {
+        let looping = Looping::new(["a", "b"]);
+        assert_eq!(looping.tick_interest(), TickInterest::EveryFrame);
+        assert_eq!((&&"x").vertical_size(), VerticalSize::Content);
     }
 
     #[test]
