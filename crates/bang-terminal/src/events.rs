@@ -407,9 +407,9 @@ mod tests {
     use crate::{
         SignalGuard,
         testing::{
-            SIGNAL_LOCK,
             pty,
             resize_pty,
+            serialise_signals,
         },
     };
 
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn signals_are_sideband_outcomes_not_input_events() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         let mut events = TerminalEvents::blocking(Cursor::new(b"x")).signals(guard.poller());
         // SAFETY: raising a signal the guard has a handler for.
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn sigwinch_reports_a_resize_without_waiting_for_the_poll_tick() {
-        let _serial = SIGNAL_LOCK.lock().unwrap();
+        let _serial = serialise_signals();
         let guard = SignalGuard::install_terminal_handlers().unwrap();
         let (master, slave) = pty(80, 24).unwrap();
         let (_peer, reader) = UnixStream::pair().unwrap();

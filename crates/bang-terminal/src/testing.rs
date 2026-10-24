@@ -10,11 +10,27 @@ use std::{
         FromRawFd as _,
         OwnedFd,
     },
-    sync::Mutex,
+    sync::{
+        Mutex,
+        MutexGuard,
+        PoisonError,
+    },
 };
 
-/// held by every test that installs the process-wide signal handlers
-pub static SIGNAL_LOCK: Mutex<()> = Mutex::new(());
+static SIGNAL_LOCK: Mutex<()> = Mutex::new(());
+
+/// held by every test that installs the process-wide signal handlers, which
+/// start from default dispositions
+pub fn serialise_signals() -> MutexGuard<'static, ()> {
+    let guard = SIGNAL_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+        // SAFETY: SIG_DFL is a valid disposition for these signals
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+        }
+    }
+    guard
+}
 
 /// a pseudo-terminal with the given size, returned as `(master, slave)`
 pub fn pty(cols: u16, rows: u16) -> io::Result<(OwnedFd, OwnedFd)> {

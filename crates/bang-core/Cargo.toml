@@ -7,7 +7,7 @@ description          = "Widgets and session state behind the bang prompts, rende
 edition.workspace    = true
 keywords             = [ "cli", "input", "terminal", "widgets" ]
 license.workspace    = true
-readme               = "../../README.md"
+readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
