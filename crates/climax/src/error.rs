@@ -3,6 +3,7 @@
 use core::{
     error,
     fmt,
+    iter,
     result,
 };
 use std::io;
@@ -14,7 +15,7 @@ use bang::{
 };
 
 /// result type used across `climax`, with [`Error`] as the error
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T, E = Error> = result::Result<T, E>;
 
 /// stable, high-level category of an application error
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,10 +171,44 @@ impl Error {
         &self.related
     }
 
+    pub(crate) fn is_closed_pipe(&self) -> bool {
+        matches!(self.kind, ErrorKind::Output | ErrorKind::Io)
+            && causes(self)
+                .filter_map(|cause| cause.downcast_ref::<io::Error>())
+                .any(|cause| cause.kind() == io::ErrorKind::BrokenPipe)
+    }
+
+    pub(crate) fn report(&self) -> String {
+        let mut report = format!("error: {self}");
+        for text in self.chain_texts() {
+            report.push_str("\n  caused by: ");
+            report.push_str(&text);
+        }
+        report
+    }
+
     pub(crate) fn with_related(mut self, other: Self) -> Self {
         self.message = format!("{}, and {other}", self.message);
         self.related.push(other);
         self
+    }
+
+    fn inheriting(mut self, inherited: Option<Inherited>) -> Self {
+        let Some(Inherited {
+            kind,
+            signal,
+            exit_code,
+            cleanup,
+            carried,
+        }) = inherited
+        else {
+            return self;
+        };
+        self.kind = kind;
+        self.signal = signal;
+        self.exit_code = exit_code;
+        self.related = carried;
+        cleanup.into_iter().fold(self, Self::with_related)
     }
 
     pub(crate) fn with_source(
@@ -255,25 +290,8 @@ impl From<pound::Error> for Error {
 #[cfg(feature = "interactive")]
 impl From<bang::Error> for Error {
     fn from(value: bang::Error) -> Self {
-        let kind = match value.kind() {
-            bang::ErrorKind::Cancelled | bang::ErrorKind::Interrupted => ErrorKind::Cancelled,
-            bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
-            bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
-            bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
-            bang::ErrorKind::InvalidConfiguration
-            | bang::ErrorKind::Terminal
-            | bang::ErrorKind::UnexpectedValue
-            | _ => ErrorKind::Interactive,
-        };
-        let signal = value.signal().map(Signal::as_raw);
-        let cleanup = if kind == ErrorKind::Cancelled {
-            cleanup_errors(error::Error::source(&value))
-        } else {
-            Vec::new()
-        };
-        let mut error = Self::with_source(kind, value);
-        error.signal = signal;
-        cleanup.into_iter().fold(error, Self::with_related)
+        let inherited = Inherited::from_bang(&value);
+        Self::with_source(ErrorKind::Interactive, value).inheriting(Some(inherited))
     }
 }
 
@@ -294,6 +312,74 @@ fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
         .collect()
 }
 
+/// how `main` treats a climax or bang error found behind a wrapper
+struct Inherited {
+    kind:      ErrorKind,
+    signal:    Option<i32>,
+    exit_code: Option<u8>,
+    cleanup:   Vec<Error>,
+    carried:   Vec<Error>,
+}
+
+impl Inherited {
+    fn find<'a>(
+        causes: impl IntoIterator<Item = &'a (dyn error::Error + 'static)>,
+    ) -> Option<Self> {
+        causes.into_iter().find_map(|cause| {
+            if let Some(inner) = cause.downcast_ref::<Error>() {
+                return Some(Self {
+                    kind:      inner.kind,
+                    signal:    inner.signal,
+                    exit_code: inner.exit_code,
+                    cleanup:   Vec::new(),
+                    carried:   inner
+                        .related
+                        .iter()
+                        .map(|related| Error::message(related.to_string()))
+                        .collect(),
+                });
+            }
+            #[cfg(feature = "interactive")]
+            if let Some(inner) = cause.downcast_ref::<bang::Error>() {
+                return Some(Self::from_bang(inner));
+            }
+            None
+        })
+    }
+
+    #[cfg(feature = "interactive")]
+    fn from_bang(value: &bang::Error) -> Self {
+        let kind = match value.kind() {
+            bang::ErrorKind::Cancelled | bang::ErrorKind::Interrupted => ErrorKind::Cancelled,
+            bang::ErrorKind::InputEnded => ErrorKind::InputEnded,
+            bang::ErrorKind::InteractionUnavailable => ErrorKind::InteractionUnavailable,
+            bang::ErrorKind::InteractionBusy => ErrorKind::InteractionBusy,
+            bang::ErrorKind::InvalidConfiguration
+            | bang::ErrorKind::Terminal
+            | bang::ErrorKind::UnexpectedValue
+            | _ => ErrorKind::Interactive,
+        };
+        let cleanup = if kind == ErrorKind::Cancelled {
+            cleanup_errors(error::Error::source(value))
+        } else {
+            Vec::new()
+        };
+        Self {
+            kind,
+            signal: value.signal().map(Signal::as_raw),
+            exit_code: None,
+            cleanup,
+            carried: Vec::new(),
+        }
+    }
+}
+
+fn causes<'a>(
+    error: &'a (dyn error::Error + 'static),
+) -> impl Iterator<Item = &'a (dyn error::Error + 'static)> {
+    iter::successors(Some(error), |cause| cause.source())
+}
+
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::with_source(ErrorKind::Io, value)
@@ -302,16 +388,21 @@ impl From<io::Error> for Error {
 
 impl From<Box<dyn error::Error + Send + Sync + 'static>> for Error {
     fn from(value: Box<dyn error::Error + Send + Sync + 'static>) -> Self {
-        Self::with_source(ErrorKind::Application, BoxedSource(value))
+        let inherited = Inherited::find(causes(&*value));
+        Self::with_source(ErrorKind::Application, BoxedSource(value)).inheriting(inherited)
     }
 }
 
 /// an `anyhow::Error` becomes the source of an [`ErrorKind::Application`]
 /// error, and its whole chain is kept so it prints under `Caused by:`
+///
+/// an [`Error`] or `bang::Error` in the chain keeps its kind, signal and exit
+/// code
 #[cfg(feature = "anyhow")]
 impl From<anyhow::Error> for Error {
     fn from(value: anyhow::Error) -> Self {
-        Self::with_source(ErrorKind::Application, AnyhowSource(value))
+        let inherited = Inherited::find(value.chain());
+        Self::with_source(ErrorKind::Application, AnyhowSource(value)).inheriting(inherited)
     }
 }
 
@@ -362,6 +453,9 @@ impl error::Error for BoxedSource {
 /// converts a foreign `Result` into a [`Result`], making the error the source
 /// of an [`ErrorKind::Application`] error
 ///
+/// an [`Error`] or `bang::Error` among the causes keeps its kind, signal and
+/// exit code, so a cancelled prompt stays a cancellation
+///
 /// implemented for every `Result<T, E>` with a `Send + Sync`
 /// `std::error::Error`, and imported by name because the prelude leaves it out
 /// to avoid clashing with `anyhow::Context`
@@ -406,11 +500,17 @@ where
     E: error::Error + Send + Sync + 'static,
 {
     fn context(self, message: impl Into<String>) -> Result<T> {
-        self.map_err(|source| Error::application_context(message, source))
+        self.map_err(|source| {
+            let inherited = Inherited::find(causes(&source));
+            Error::application_context(message, source).inheriting(inherited)
+        })
     }
 
     fn app_err(self) -> Result<T> {
-        self.map_err(Error::application)
+        self.map_err(|source| {
+            let inherited = Inherited::find(causes(&source));
+            Error::application(source).inheriting(inherited)
+        })
     }
 }
 
@@ -487,6 +587,42 @@ mod tests {
         assert_eq!(
             Error::message("x").with_exit_code(255).exit_code(),
             Some(255)
+        );
+    }
+
+    #[test]
+    fn wrapping_keeps_the_kind_signal_and_exit_code() {
+        let mut interrupted = Error::cancelled().with_exit_code(7);
+        interrupted.signal = Some(15);
+        let wrapped = Err::<(), _>(interrupted).context("confirming").unwrap_err();
+        assert_eq!(wrapped.to_string(), "confirming: cancelled");
+        assert_eq!(
+            (wrapped.kind(), wrapped.signal(), wrapped.exit_code()),
+            (ErrorKind::Cancelled, Some(15), Some(7))
+        );
+
+        let noisy = Error::cancelled().with_related(Error::message("cleanup failed"));
+        let kept = Err::<(), _>(noisy).app_err().unwrap_err();
+        assert_eq!(kept.related_errors().len(), 1);
+
+        let piped = Error::from(io::Error::from(io::ErrorKind::BrokenPipe));
+        assert!(Err::<(), _>(piped).app_err().unwrap_err().is_closed_pipe());
+
+        let boxed: Box<dyn error::Error + Send + Sync> = Box::new(Error::cancelled());
+        assert_eq!(Error::from(boxed).kind(), ErrorKind::Cancelled);
+
+        #[cfg(feature = "interactive")]
+        assert_eq!(
+            Err::<(), _>(bang::Error::cancelled())
+                .app_err()
+                .unwrap_err()
+                .kind(),
+            ErrorKind::Cancelled
+        );
+        #[cfg(feature = "anyhow")]
+        assert_eq!(
+            Error::from(anyhow::Error::new(Error::cancelled()).context("confirming")).kind(),
+            ErrorKind::Cancelled
         );
     }
 
@@ -570,5 +706,26 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Application);
         assert_eq!(error.to_string(), "cannot query history: closed");
         assert!(error.source_error().is_some());
+    }
+}
+
+#[cfg(test)]
+mod prelude_result {
+    use core::num::ParseIntError;
+
+    use crate::prelude::*;
+
+    fn two_parameters(text: &str) -> Result<u32, ParseIntError> {
+        text.parse()
+    }
+
+    fn one_parameter(text: &str) -> Result<u32> {
+        two_parameters(text).map_err(Error::application)
+    }
+
+    #[test]
+    fn the_prelude_result_takes_one_or_two_parameters() {
+        assert_eq!(one_parameter("4").unwrap(), 4);
+        two_parameters("x").unwrap_err();
     }
 }

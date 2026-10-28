@@ -171,6 +171,14 @@ fn leftover_script_input_fails_the_run() {
 }
 
 #[test]
+#[should_panic(expected = "the run failed with early failure")]
+fn a_leftover_script_panic_names_the_error_that_ended_the_run() {
+    drop(testing::run_with(Script::new().confirm(true), |_cx| {
+        Err(Error::message("early failure"))
+    }));
+}
+
+#[test]
 #[should_panic(expected = "testing script was not fully consumed")]
 fn an_unread_tail_of_a_prompt_answer_fails_the_run() {
     drop(testing::run_with(
@@ -252,6 +260,26 @@ fn multi_select_nth_replaces_the_preselection() {
     });
     assert_eq!(outcome.exit_code, 0);
     assert_eq!(outcome.stderr, "[\"c\"]\n");
+}
+
+#[test]
+fn a_row_past_the_last_choice_fails_the_prompt() {
+    for script in [
+        Script::new().select_nth(3),
+        Script::new().multi_select_nth([0, 3]),
+    ] {
+        let outcome = testing::run_with(script, |cx| {
+            cx.multi_select("Tools")
+                .choice("a", "a")
+                .choice("b", "b")
+                .choice("c", "c")
+                .interact()?
+                .or_cancel()?;
+            Ok(())
+        });
+        let error = outcome.error.expect("the prompt fails").to_string();
+        assert!(error.contains("no row 3"), "error was {error:?}");
+    }
 }
 
 fn date_flow(from: Date, to: Date) -> Date {

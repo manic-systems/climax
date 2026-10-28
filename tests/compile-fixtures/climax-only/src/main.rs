@@ -148,6 +148,15 @@ mod tests {
     }
 
     #[test]
+    fn the_testing_module_answers_the_prompt() {
+        let script = climax::testing::Script::new().select_nth(1);
+        let outcome =
+            climax::testing::run_with(script, |context| run(&context, &Args { shell: None }));
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.stdout, "Zsh\n");
+    }
+
+    #[test]
     fn a_scripted_prompt_drives_the_application() {
         let interaction = scripted_interaction([[Event::key(Key::Enter)]]);
         let context = Context::new().with_interaction(interaction);
