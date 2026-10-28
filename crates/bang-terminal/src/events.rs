@@ -41,6 +41,7 @@ const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// one result of [`TerminalEvents::next_event`]
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum TerminalPoll {
     /// a decoded input event, including `Event::Resize` from the resize
     /// terminal
@@ -114,8 +115,9 @@ impl<R> TerminalEvents<R> {
         self
     }
 
-    /// reports `Event::Resize` whenever the terminal behind `terminal` changes
-    /// size, promptly on `SIGWINCH` when `signals` is set and on a 100
+    /// reports `Event::Resize` for the current size on the first poll and
+    /// whenever the terminal behind `terminal` changes size after that,
+    /// promptly on `SIGWINCH` when `signals` is set and on a 100
     /// millisecond poll otherwise
     #[must_use]
     pub fn resize_from(mut self, terminal: OwnedFd) -> Self {
@@ -125,7 +127,7 @@ impl<R> TerminalEvents<R> {
     }
 
     /// how long a pending Escape sequence waits for more bytes, counted from
-    /// its first byte, 50 milliseconds by default
+    /// its latest byte, 50 milliseconds by default
     #[must_use]
     pub const fn escape_timeout(mut self, timeout: Duration) -> Self {
         self.escape_timeout = timeout;
@@ -184,19 +186,10 @@ impl<R> TerminalEvents<R> {
         if let Some(item) = self.poll_sideband()? {
             return Ok(Some(item));
         }
-        let deadline = limit.map(|span| (self.clock)() + span);
+        let deadline = limit.and_then(|span| (self.clock)().checked_add(span));
 
         loop {
-            let remaining = match deadline {
-                Some(due) => {
-                    let remaining = due.saturating_duration_since((self.clock)());
-                    if remaining.is_zero() {
-                        return Ok(None);
-                    }
-                    Some(remaining)
-                },
-                None => None,
-            };
+            let remaining = deadline.map(|due| due.saturating_duration_since((self.clock)()));
             let input = match self.wait_for_input(remaining)? {
                 InputReadiness::Timeout => {
                     if let Some(event) = self.flush_due_escape() {
@@ -204,6 +197,9 @@ impl<R> TerminalEvents<R> {
                     }
                     if let Some(item) = self.poll_sideband()? {
                         return Ok(Some(item));
+                    }
+                    if remaining == Some(Duration::ZERO) {
+                        return Ok(None);
                     }
                     continue;
                 },
@@ -219,8 +215,7 @@ impl<R> TerminalEvents<R> {
                 if self.decoder.escape_state() == EscapeState::Ambiguous
                     && !matches!(self.wait, WaitMode::Sync(_))
                 {
-                    let now = (self.clock)();
-                    self.escape_since.get_or_insert(now);
+                    self.escape_since = Some((self.clock)());
                 } else {
                     self.escape_since = None;
                 }
@@ -235,6 +230,9 @@ impl<R> TerminalEvents<R> {
             }
             if let Some(item) = self.poll_sideband()? {
                 return Ok(Some(item));
+            }
+            if remaining == Some(Duration::ZERO) {
+                return Ok(None);
             }
         }
     }
@@ -310,7 +308,9 @@ impl<R> TerminalEvents<R>
 where
     R: AsFd,
 {
-    /// polls a descriptor for input and Escape deadlines without a worker
+    /// polls a descriptor for input and Escape deadlines without a worker, it
+    /// must be the only reader of the descriptor or a blocking one can park
+    /// past a limit
     ///
     /// # Errors
     ///
@@ -346,7 +346,7 @@ fn read_when_ready(
     match read(fd, &mut buffer) {
         Ok(0) | Err(Errno::IO) => Ok(InputReadiness::End),
         Ok(read) => Ok(InputReadiness::Bytes(buffer[..read].to_vec())),
-        Err(Errno::INTR) => Ok(InputReadiness::Timeout),
+        Err(Errno::INTR | Errno::AGAIN) => Ok(InputReadiness::Timeout),
         Err(errno) => Err(errno.into()),
     }
 }
@@ -561,12 +561,14 @@ mod tests {
     }
 
     #[test]
-    fn an_arrow_key_split_by_a_gap_under_the_default_deadline_is_still_up() {
+    fn an_arrow_key_split_by_gaps_under_the_default_deadline_is_still_up() {
         let (reader, mut writer) = UnixStream::pair().unwrap();
         let handle = thread::spawn(move || {
             writer.write_all(b"\x1b").unwrap();
-            thread::sleep(Duration::from_millis(40));
-            writer.write_all(b"[A").unwrap();
+            thread::sleep(Duration::from_millis(30));
+            writer.write_all(b"[").unwrap();
+            thread::sleep(Duration::from_millis(30));
+            writer.write_all(b"A").unwrap();
             writer
         });
         let mut events = TerminalEvents::pollable(reader).unwrap();
@@ -575,6 +577,25 @@ mod tests {
             TerminalPoll::Event(Event::key(Key::Up)),
         );
         drop(handle.join().unwrap());
+    }
+
+    #[test]
+    fn a_zero_limit_polls_once_and_an_overflowing_limit_is_no_limit() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let mut events = TerminalEvents::pollable(reader).unwrap();
+        assert_eq!(
+            events.next_event_within(Some(Duration::ZERO)).unwrap(),
+            None
+        );
+        writer.write_all(b"ab").unwrap();
+        assert_eq!(
+            events.next_event_within(Some(Duration::ZERO)).unwrap(),
+            Some(TerminalPoll::Event(Event::char('a'))),
+        );
+        assert_eq!(
+            events.next_event_within(Some(Duration::MAX)).unwrap(),
+            Some(TerminalPoll::Event(Event::char('b'))),
+        );
     }
 
     #[test]

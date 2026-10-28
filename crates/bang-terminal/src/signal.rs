@@ -142,6 +142,12 @@ impl SignalPoller {
 ///
 /// `SIGWINCH` is caught as well so a resize wakes a waiting `TerminalEvents`,
 /// it is never reported as a `Signal`
+///
+/// previous handlers, `SIGWINCH` included, are suspended while the guard lives
+/// and restored after, they are not chained
+///
+/// a child made by a raw `fork` shares the signal pipe, so a signal it receives
+/// before `exec` is queued for the parent
 #[derive(Debug)]
 pub struct SignalGuard {
     poller:   SignalPoller,
@@ -151,7 +157,7 @@ pub struct SignalGuard {
 
 impl SignalGuard {
     /// installs handlers for the conventional terminal signals, one guard at a
-    /// time
+    /// time, the previous handlers are suspended until the guard is restored
     ///
     /// # Errors
     ///
