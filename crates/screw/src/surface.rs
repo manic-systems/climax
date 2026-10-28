@@ -16,13 +16,15 @@ use crate::{
         Segment,
         join_window_start,
         segments,
+        strip_dropped,
     },
 };
 
 /// how an overlaid widget treats the cells it covers
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Fill {
-    /// cells the source leaves blank show the base underneath
+    /// cells the source never wrote show the base underneath, a written space
+    /// still hides it
     Transparent,
     /// the whole destination is blanked with this style before the source is
     /// drawn
@@ -224,12 +226,13 @@ impl Surface {
     }
 
     /// writes text per grapheme cluster, tabs expand to eight columns, other
-    /// controls are dropped
+    /// controls and bidirectional marks are dropped without splitting a cluster
     pub fn write(&mut self, text: impl AsRef<str>, style: Style) {
         let mut col = self.current_col();
         let mut first = true;
         let sealed = mem::take(&mut self.sealed);
-        let mut remaining = text.as_ref();
+        let stripped = strip_dropped(text.as_ref());
+        let mut remaining = &*stripped;
         if !sealed && let Some(consumed) = self.extend_last_cell(remaining) {
             remaining = &remaining[consumed..];
             col = self.current_col();
@@ -313,6 +316,27 @@ impl Surface {
 
     pub(crate) const fn seal(&mut self) {
         self.sealed = true;
+    }
+
+    /// shifts every row after the first right by `columns`, except rows that
+    /// continue a soft break, the cursor moves with its row
+    pub(crate) fn indent_after_first(&mut self, columns: usize) {
+        let mut starts_line = false;
+        for (index, row) in self.rows.iter_mut().enumerate() {
+            if starts_line {
+                if !row.cells.is_empty() {
+                    let mut cells = vec![space(Style::PLAIN); columns];
+                    cells.append(&mut row.cells);
+                    row.cells = cells;
+                }
+                if let Some(cursor) = &mut self.cursor
+                    && cursor.row == index
+                {
+                    cursor.col += columns;
+                }
+            }
+            starts_line = row.break_after != RowBreak::Soft;
+        }
     }
 
     /// ends the current row with a hard break and starts another
@@ -413,10 +437,8 @@ impl Surface {
             row.cells.truncate(keep);
         }
 
-        if let Some(cursor) = self.cursor {
-            let row = cursor.row.min(self.rows.len().saturating_sub(1));
-            let col = cursor.col.min(max_columns);
-            self.cursor = Some(Position { row, col });
+        if let Some(cursor) = &mut self.cursor {
+            cursor.col = cursor.col.min(max_columns);
         }
     }
 

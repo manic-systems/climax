@@ -21,7 +21,7 @@ use screw::{
 
 fn main() -> io::Result<()> {
     let document = "Document content keeps its full layout width.\n\nThe pane covers these cells.";
-    let actions = "┌─ Actions ──────────┐\n│ q  quit           │\n│ ?  help           \
+    let actions = "┌─ Actions ─────────┐\n│ q  quit           │\n│ ?  help           \
                    │\n└───────────────────┘";
     let frame = Layers::new(document).float(
         actions,

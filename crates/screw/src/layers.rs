@@ -211,6 +211,7 @@ where
         if !self.floating.is_empty() {
             composed.harden_soft_breaks();
         }
+        composed.indent_after_first(out.current_col());
         append_surface(out, &composed, composed.height());
     }
 

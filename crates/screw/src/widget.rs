@@ -769,10 +769,14 @@ impl ProgressBar {
         self
     }
 
-    /// sets how much of the bar is filled, clamped to 0 to 1
+    /// sets how much of the bar is filled, clamped to 0 to 1, NaN counts as 0
     pub fn set_fraction(&self, fraction: f32) {
-        self.fraction
-            .store(fraction.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        let clamped = if fraction.is_nan() {
+            0.0
+        } else {
+            fraction.clamp(0.0, 1.0)
+        };
+        self.fraction.store(clamped.to_bits(), Ordering::Relaxed);
     }
 
     /// how much of the bar is filled, from 0 to 1

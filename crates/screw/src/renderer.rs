@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::ops::{
-    Deref,
-    DerefMut,
+use core::{
+    mem,
+    ops::{
+        Deref,
+        DerefMut,
+    },
 };
 use std::{
     env,
@@ -103,7 +106,7 @@ where
     /// renderer over `writer`, colours follow [`colors_enabled`]
     pub fn new(writer: W) -> Self {
         Self {
-            writer:              Sink(Some(writer)),
+            writer:              Sink::new(writer),
             on_drop:             Self::restore_on_drop,
             previous:            None,
             frame:               0,
@@ -252,6 +255,8 @@ where
         if self.resync {
             self.writer.write_all(b"\r\x1b[J")?;
             self.resync = false;
+        } else if self.previous.is_none() {
+            self.writer.write_all(b"\r")?;
         }
         if self.force_full {
             if let Some(previous) = self.previous.as_ref() {
@@ -428,32 +433,43 @@ where
 
 impl<W> Drop for Renderer<W> {
     fn drop(&mut self) {
-        if self.writer.0.is_some() {
+        if self.writer.inner.is_some() {
             (self.on_drop)(self);
         }
     }
 }
 
+/// the writer, which receives each frame in one write on flush
 #[derive(Debug)]
-struct Sink<W>(Option<W>);
+struct Sink<W> {
+    inner:   Option<W>,
+    pending: Vec<u8>,
+}
 
 #[expect(
     clippy::expect_used,
     reason = "the writer is present until into_inner takes it"
 )]
 impl<W> Sink<W> {
+    const fn new(writer: W) -> Self {
+        Self {
+            inner:   Some(writer),
+            pending: Vec::new(),
+        }
+    }
+
     const fn take(&mut self) -> W {
-        self.0.take().expect("the writer is taken once")
+        self.inner.take().expect("the writer is taken once")
     }
 
     const fn get(&self) -> &W {
-        self.0
+        self.inner
             .as_ref()
             .expect("the writer is present until it is taken")
     }
 
     const fn get_mut(&mut self) -> &mut W {
-        self.0
+        self.inner
             .as_mut()
             .expect("the writer is present until it is taken")
     }
@@ -475,11 +491,17 @@ impl<W> DerefMut for Sink<W> {
 
 impl<W: Write> Write for Sink<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        (**self).write(buf)
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        (**self).flush()
+        let mut frame = mem::take(&mut self.pending);
+        let written = self.get_mut().write_all(&frame);
+        frame.clear();
+        self.pending = frame;
+        written?;
+        self.get_mut().flush()
     }
 }
 
@@ -571,6 +593,12 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
         previous_break = row.break_after();
     }
 
+    if let Some(at) = cursor.filter(|at| at.row >= surface.height()) {
+        physical_cursor = Some(Position {
+            row: out.height() + at.row - surface.height(),
+            col: at.col.min(max_columns),
+        });
+    }
     if let Some(placed) = physical_cursor {
         out.set_cursor(placed);
     }
@@ -978,6 +1006,17 @@ mod tests {
             update.starts_with(b"\r\r\n\r\n\r\x1b[3A"),
             "taller diff must create two rows before moving to the top: {update:?}"
         );
+    }
+
+    #[test]
+    fn a_patch_that_changes_the_width_rewrites_the_cells_after_it() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer.draw_surface(surface(&["a世d"], None)).unwrap();
+        let before = renderer.writer.len();
+
+        renderer.draw_surface(surface(&["axd"], None)).unwrap();
+
+        assert_eq!(&renderer.writer[before..], b"\r\x1b[1Cxd\x1b[K");
     }
 
     #[test]
@@ -1444,22 +1483,24 @@ mod tests {
 
     #[derive(Default)]
     struct FlakyWriter {
-        buffer:               Vec<u8>,
-        writes_until_failure: Option<usize>,
-        interrupted_flushes:  usize,
+        buffer:              Vec<u8>,
+        bytes_until_failure: Option<usize>,
+        interrupted_flushes: usize,
     }
 
     impl io::Write for FlakyWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            if let Some(remaining) = &mut self.writes_until_failure {
+            let mut accepted = buf.len();
+            if let Some(remaining) = &mut self.bytes_until_failure {
                 if *remaining == 0 {
-                    self.writes_until_failure = None;
+                    self.bytes_until_failure = None;
                     return Err(io::Error::other("simulated write failure"));
                 }
-                *remaining -= 1;
+                accepted = accepted.min(*remaining);
+                *remaining -= accepted;
             }
-            self.buffer.extend_from_slice(buf);
-            Ok(buf.len())
+            self.buffer.extend_from_slice(&buf[..accepted]);
+            Ok(accepted)
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -1479,7 +1520,7 @@ mod tests {
             .unwrap();
         renderer.resize(4);
 
-        renderer.writer.writes_until_failure = Some(1);
+        renderer.writer.bytes_until_failure = Some(1);
         renderer
             .draw_surface(surface(&["abcdefghij", "xy"], None))
             .unwrap_err();
@@ -1533,7 +1574,7 @@ mod tests {
         let mut coloured = Renderer::new(Vec::new()).colors(true);
         coloured.draw_surface(surface).unwrap();
 
-        assert_eq!(plain.into_inner(), b"\x1b[0;1;7mx\x1b[0my\x1b[K");
+        assert_eq!(plain.into_inner(), b"\r\x1b[0;1;7mx\x1b[0my\x1b[K");
         assert!(String::from_utf8_lossy(&coloured.into_inner()).contains("31"));
     }
 
@@ -1546,7 +1587,7 @@ mod tests {
     #[test]
     fn a_failed_write_after_an_sgr_is_reset_before_the_next_draw() {
         let mut renderer = Renderer::new(FlakyWriter::default());
-        renderer.writer.writes_until_failure = Some(1);
+        renderer.writer.bytes_until_failure = Some(7);
         renderer.draw_surface(styled_surface("red")).unwrap_err();
         assert!(renderer.writer.buffer.ends_with(b"1m"));
 
@@ -1558,14 +1599,14 @@ mod tests {
     #[test]
     fn clear_and_restore_cursor_reset_a_style_left_by_a_failed_write() {
         let mut renderer = Renderer::new(FlakyWriter::default());
-        renderer.writer.writes_until_failure = Some(1);
+        renderer.writer.bytes_until_failure = Some(1);
         renderer.draw_surface(styled_surface("red")).unwrap_err();
 
         let before = renderer.writer.buffer.len();
         renderer.restore_cursor().unwrap();
         assert_eq!(&renderer.writer.buffer[before..], b"\x1b[0m");
 
-        renderer.writer.writes_until_failure = Some(1);
+        renderer.writer.bytes_until_failure = Some(1);
         renderer.draw_surface(styled_surface("red")).unwrap_err();
         let before_clear = renderer.writer.buffer.len();
         renderer.clear().unwrap();
@@ -1645,11 +1686,11 @@ mod tests {
     #[test]
     fn a_redraw_after_a_failed_write_does_not_continue_mid_row() {
         let mut renderer = Renderer::new(FlakyWriter::default()).width(10);
-        renderer.writer.writes_until_failure = Some(3);
+        renderer.writer.bytes_until_failure = Some(4);
         renderer
             .draw_surface(surface(&["HELLO"], None))
             .unwrap_err();
-        assert_eq!(renderer.writer.buffer, b"HEL");
+        assert_eq!(renderer.writer.buffer, b"\rHEL");
 
         let before = renderer.writer.buffer.len();
         renderer.draw_surface(surface(&["HELLO"], None)).unwrap();
@@ -1665,7 +1706,7 @@ mod tests {
         let stats = renderer.draw_surface(surface(&["ok"], None)).unwrap();
         assert_eq!(stats.changed_rows, 1);
         assert!(renderer.previous.is_some());
-        assert_eq!(renderer.writer.buffer, b"ok\x1b[K");
+        assert_eq!(renderer.writer.buffer, b"\rok\x1b[K");
     }
 
     #[test]

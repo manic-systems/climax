@@ -7,6 +7,7 @@ use core::{
     time::Duration,
 };
 use std::{
+    env,
     io::{
         self,
         IsTerminal as _,
@@ -264,21 +265,36 @@ where
     }
 }
 
-impl Runtime<io::Stderr, WidgetRef> {
+impl<H> Runtime<io::Stderr, H, WidgetRef>
+where
+    H: crate::Widget,
+{
     /// runtime on standard error sized to the terminal, 80 columns when the
     /// size is unknown
-    pub fn stderr(root: WidgetRef) -> Self {
+    pub fn stderr(root: H) -> Self {
         let mut runtime = Self::new(io::stderr(), root);
         runtime.renderer = Renderer::stderr();
         runtime
     }
+}
 
+impl<H> Runtime<io::Stderr, H, WidgetRef>
+where
+    H: crate::Widget + Send + 'static,
+{
     /// [`Runtime::auto`] on standard error, live only when it is a terminal
-    pub fn stderr_auto(root: WidgetRef) -> AutoRuntimeBuilder<io::Stderr> {
+    /// that is not `dumb`, plain output off a terminal keeps its full width
+    pub fn stderr_auto(root: H) -> AutoRuntimeBuilder<io::Stderr, H> {
+        let terminal = io::stderr().is_terminal();
+        let live = terminal && env::var_os("TERM").is_none_or(|term| term != "dumb");
+        let builder = Self::auto(io::stderr(), root, live);
+        if !terminal {
+            return builder;
+        }
         let (width, height) = stderr_size();
-        let mut builder = Self::auto(io::stderr(), root, io::stderr().is_terminal()).width(width);
-        builder.height = height;
-        builder
+        let mut sized = builder.width(width);
+        sized.height = height;
+        sized
     }
 }
 
