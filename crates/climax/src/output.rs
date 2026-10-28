@@ -144,7 +144,15 @@ impl Output {
     }
 
     /// write a message in the configured format
+    ///
+    /// a live status is cleared first and redrawn after when this handle writes
+    /// to a terminal stdout
     pub fn write_message(&self, mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
+        #[cfg(all(feature = "render", feature = "structured"))]
+        let _hold = match &self.route {
+            PresentationRoute::Around(coordinator) => coordinator.hold().ok(),
+            PresentationRoute::Direct | PresentationRoute::Queued(_) => None,
+        };
         writer
             .write_all(self.format_message(message).as_bytes())
             .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
@@ -845,6 +853,36 @@ mod tests {
 
         let process = Output::new(Format::Text).with_stream_route(around());
         assert!(matches!(process.route, PresentationRoute::Around(_)));
+    }
+
+    #[cfg(all(feature = "render", feature = "structured"))]
+    #[test]
+    fn write_message_under_a_live_status_clears_the_region_first() {
+        let capture = Capture::default();
+        let coordinator = crate::status::StatusCoordinator::new(
+            SharedWriter::new(capture.clone()),
+            crate::terminal::StatusMode::Live,
+        );
+        let status = crate::status::Status::new("working", coordinator.clone())
+            .spinner()
+            .start();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while capture.text().is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let before = capture.text().len();
+
+        let output = Output::new(Format::Text).with_route(PresentationRoute::Around(coordinator));
+        output
+            .write_message(capture.clone(), "via write_message")
+            .unwrap();
+        let appended = capture.text()[before..].to_owned();
+        assert!(appended.ends_with("via write_message\n"), "{appended:?}");
+        assert!(
+            appended.len() > "via write_message\n".len(),
+            "a clear sequence must precede the message: {appended:?}"
+        );
+        status.finish().unwrap();
     }
 
     #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]

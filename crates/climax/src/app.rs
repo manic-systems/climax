@@ -34,6 +34,9 @@ fn parse_env<C: pound::Parse>() -> std::result::Result<C, pound::Error> {
 /// instead surfaces as an error that carries the signal. Exit 130 without a
 /// signal comes from `Context::with_terminal_application` or a direct
 /// `bang` dependency that builds a cancelled error.
+///
+/// A closed pipe while writing output, or an `io::Error` of kind `BrokenPipe`
+/// the handler returns, exits 141 without a message.
 #[cfg(feature = "parse")]
 pub fn main<C, F>(f: F) -> ExitCode
 where
@@ -44,6 +47,9 @@ where
 }
 
 /// Run a parsed application without handling output or process exit status.
+///
+/// With `complete`, a shell completion request is answered and the process
+/// exits before this returns, `try_run_from` never does.
 #[cfg(feature = "parse")]
 pub fn try_run<C, F>(f: F) -> Result<()>
 where
@@ -116,10 +122,11 @@ where
                     if error.related_errors().is_empty() {
                         Completion::cancelled(code)
                     } else {
-                        Completion::error(code, error)
+                        Completion::error(code, &error)
                     }
                 },
-                Err(error) => Completion::error(1, error),
+                Err(error) if error.is_closed_pipe() => Completion::cancelled(141),
+                Err(error) => Completion::error(1, &error),
             }
         },
         Err(error) if error.is_exit() => Completion::output(error.render(pound::Term::stdout())),
@@ -174,11 +181,11 @@ impl Completion {
         }
     }
 
-    fn error(code: u8, error: impl std::fmt::Display) -> Self {
+    fn error(code: u8, error: &crate::Error) -> Self {
         Self {
             code,
             stream: Some(CompletionStream::Stderr),
-            message: Some(format!("error: {error}")),
+            message: Some(error.report()),
         }
     }
 
@@ -191,7 +198,20 @@ impl Completion {
             CompletionStream::Stdout => write_message(io::stdout().lock(), &message),
             CompletionStream::Stderr => write_message(io::stderr().lock(), &message),
         };
-        ExitCode::from(if result.is_ok() { self.code } else { 1 })
+        ExitCode::from(Self::code_after_write(self.code, stream, &result))
+    }
+
+    fn code_after_write(code: u8, stream: CompletionStream, result: &io::Result<()>) -> u8 {
+        match result {
+            // 128 + SIGPIPE, as pound's Error::exit reports
+            Err(error)
+                if stream != CompletionStream::Stderr
+                    && error.kind() == io::ErrorKind::BrokenPipe =>
+            {
+                141
+            },
+            Ok(()) | Err(_) => code,
+        }
     }
 }
 
@@ -214,6 +234,10 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 /// not cloneable, since interaction and terminal policy share one owner, and
 /// not `Send` in any feature configuration, so it stays on the thread that
 /// built it
+///
+/// a prompt builder from `Context::select` and the other prompt methods
+/// keeps the interaction driver held when it is built, ignoring later mode or
+/// terminal changes
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
@@ -289,72 +313,63 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks one of several choices
     #[must_use]
     pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
         bang::select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks any number of choices
     #[must_use]
     pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
         bang::multi_select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that filters its choices as the user types
     #[must_use]
     pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
         bang::search(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that confirms, changes or rejects a list of items
     #[must_use]
     pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
         bang::review(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a line of text
     #[must_use]
     pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
         bang::text(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a line of text without echoing it
     #[must_use]
     pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
         bang::password(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that asks a yes or no question
     #[must_use]
     pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
         bang::confirm(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks a calendar date
     #[must_use]
     pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
         bang::date(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a number of type `T`
     #[must_use]
     pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
     where
@@ -398,13 +413,17 @@ impl Context {
         self.output = self.output.clone().with_format(format);
     }
 
-    /// sideband output for human-facing context, stderr in text mode
+    /// sideband output for human-facing context on stderr, in the format of
+    /// [`Self::output`]
     ///
     /// has its own result slot, committed together with [`Self::output`] when
     /// the handler returns
     #[must_use]
     pub fn diagnostic(&self) -> crate::output::Output {
-        self.diagnostic.clone().with_notices_from(&self.output)
+        self.diagnostic
+            .clone()
+            .with_format(self.output.format())
+            .with_notices_from(&self.output)
     }
 
     #[must_use]
@@ -565,14 +584,14 @@ impl Context {
         Ok(())
     }
 
-    /// prompt builders made earlier keep the driver they captured
+    /// prompt builders made earlier keep the driver they captured, and so does
+    /// a driver injected with [`Self::set_interaction`]
     #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
     pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
         self.terminal.set_interaction_mode(mode);
         #[cfg(feature = "interactive")]
-        {
+        if !self.custom_interaction {
             self.interaction = self.policy_interaction();
-            self.custom_interaction = false;
         }
     }
 
@@ -596,6 +615,10 @@ impl Context {
         Ok(())
     }
 
+    /// uses `interaction` for every prompt made afterwards and forces
+    /// interaction on
+    ///
+    /// later mode and capability changes keep it
     #[cfg(feature = "interactive")]
     pub fn set_interaction(&mut self, interaction: bang::Interaction) {
         self.terminal
@@ -885,6 +908,16 @@ mod tests {
         assert_eq!(context.output().format(), crate::output::Format::Json);
     }
 
+    #[test]
+    fn diagnostic_follows_the_output_format() {
+        let context = Context::new().with_output_format(crate::output::Format::Json);
+        assert_eq!(context.diagnostic().format(), crate::output::Format::Json);
+        assert_eq!(
+            Context::new().diagnostic().format(),
+            crate::output::Format::Text
+        );
+    }
+
     #[cfg(all(feature = "interactive", feature = "render", feature = "structured"))]
     #[test]
     fn terminal_application_uses_configured_output_and_excludes_nested_owners() {
@@ -1130,6 +1163,101 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "parse")]
+    struct Failing(std::io::ErrorKind);
+
+    #[cfg(feature = "parse")]
+    impl std::io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn complete_reports_the_cause_chain() {
+        #[derive(Debug)]
+        struct Layered(std::io::Error);
+
+        impl std::fmt::Display for Layered {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("could not save")
+            }
+        }
+
+        impl std::error::Error for Layered {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let completion = complete(Ok(()), |_, ()| {
+            Err(crate::Error::application(Layered(std::io::Error::other(
+                "disk full",
+            ))))
+        });
+        assert_eq!(
+            completion.message.as_deref(),
+            Some("error: could not save\n  caused by: disk full")
+        );
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn a_closed_pipe_while_writing_output_exits_141_silently() {
+        let output = Context::new().output();
+        let closed = output
+            .write_message(Failing(std::io::ErrorKind::BrokenPipe), "hello")
+            .unwrap_err();
+        let completion = complete(Ok(()), |_, ()| Err(closed));
+        assert_eq!((completion.code, completion.stream), (141, None));
+
+        let full = output
+            .write_message(Failing(std::io::ErrorKind::StorageFull), "hello")
+            .unwrap_err();
+        assert_eq!(complete(Ok(()), |_, ()| Err(full)).code, 1);
+
+        let own = crate::Error::from(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        assert_eq!(complete(Ok(()), |_, ()| Err(own)).code, 141);
+    }
+
+    #[cfg(all(feature = "parse", feature = "render"))]
+    #[test]
+    fn a_notice_to_a_closed_transient_stream_exits_141_silently() {
+        let context = Context::new()
+            .with_transient_writer(Failing(std::io::ErrorKind::BrokenPipe))
+            .unwrap();
+        let closed = context.output().notice("heads up").unwrap_err();
+        assert_eq!(complete(Ok(()), |_, ()| Err(closed)).code, 141);
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn a_closed_stdout_pipe_exits_141_and_other_write_failures_keep_the_code() {
+        let broken = Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe));
+        assert_eq!(
+            Completion::code_after_write(2, CompletionStream::Stdout, &Ok(())),
+            2
+        );
+        assert_eq!(
+            Completion::code_after_write(2, CompletionStream::Stdout, &broken),
+            141
+        );
+        let full = Err(std::io::Error::from(std::io::ErrorKind::StorageFull));
+        assert_eq!(
+            Completion::code_after_write(2, CompletionStream::Stdout, &full),
+            2
+        );
+        assert_eq!(
+            Completion::code_after_write(2, CompletionStream::Stderr, &broken),
+            2
+        );
+    }
+
     #[cfg(feature = "interactive")]
     #[test]
     fn context_injects_scripted_interaction_into_typed_prompts() {
@@ -1139,6 +1267,27 @@ mod tests {
         ]]);
         let context = Context::new().with_interaction(interaction);
         assert!(context.interaction_available());
+        assert_eq!(
+            context
+                .select("shell")
+                .choice("bash", 1)
+                .choice("zsh", 2)
+                .interact()
+                .unwrap(),
+            crate::PromptOutcome::Submit(2)
+        );
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn a_mode_change_keeps_an_injected_interaction() {
+        let interaction = bang::advanced::scripted_interaction([[
+            bang::advanced::Event::key(bang::advanced::Key::Down),
+            bang::advanced::Event::key(bang::advanced::Key::Enter),
+        ]]);
+        let context = Context::new()
+            .with_interaction(interaction)
+            .with_interaction_mode(crate::terminal::InteractionMode::Auto);
         assert_eq!(
             context
                 .select("shell")
