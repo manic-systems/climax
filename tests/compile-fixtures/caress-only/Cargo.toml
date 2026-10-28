@@ -6,4 +6,4 @@ publish           = false
 
 [dependencies]
 caress.workspace = true
-pound = { workspace = true, features = [ "std" ] }
+pound            = { workspace = true, features = [ "std" ] }
