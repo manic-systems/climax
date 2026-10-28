@@ -319,6 +319,7 @@ impl ReviewConfig {
 }
 
 /// how an ordinary typed prompt ended
+#[must_use]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PromptOutcome<T> {
     /// the user submitted a value
@@ -382,6 +383,7 @@ impl<T> PromptOutcome<T> {
 }
 
 /// how a review interaction ended
+#[must_use]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReviewExit<A> {
     /// the user accepted the review
@@ -427,6 +429,7 @@ impl<T> Reviewed<T> {
 }
 
 /// the exit and, when accepted, the resulting review items
+#[must_use]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewOutcome<T, A> {
     exit:           ReviewExit<A>,
@@ -435,7 +438,6 @@ pub struct ReviewOutcome<T, A> {
 
 impl<T, A> ReviewOutcome<T, A> {
     /// how the review ended
-    #[must_use]
     pub const fn exit(&self) -> &ReviewExit<A> {
         &self.exit
     }
@@ -448,7 +450,6 @@ impl<T, A> ReviewOutcome<T, A> {
     }
 
     /// split into the exit and the accepted items
-    #[must_use]
     pub fn into_parts(self) -> (ReviewExit<A>, Option<Vec<Reviewed<T>>>) {
         (self.exit, self.accepted_items)
     }
@@ -633,7 +634,9 @@ impl<T> ReviewPrompt<T> {
     /// # Errors
     ///
     /// fails with `ErrorKind::InvalidConfiguration` if no item was added, and
-    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
+    /// with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<Vec<Reviewed<T>>>> {
         let interaction = self.core.interaction.clone();
         let header = self.core.config.list.header.clone();
@@ -711,8 +714,9 @@ impl<T, A> ReviewPromptWithActions<T, A> {
     /// # Errors
     ///
     /// fails with `ErrorKind::InvalidConfiguration` if no item was added or an
-    /// action key is reserved or repeated, and with `ErrorKind::InputEnded`
-    /// or `ErrorKind::InteractionUnavailable`
+    /// action key is reserved or repeated, and with `ErrorKind::InputEnded`,
+    /// `ErrorKind::InteractionUnavailable`, `ErrorKind::InteractionBusy`,
+    /// `ErrorKind::Interrupted` or `ErrorKind::Terminal`
     pub fn interact(self) -> Result<ReviewOutcome<T, A>> {
         let interaction = self.core.interaction.clone();
         validate_review_actions(&self.actions).map_err(|error| interaction.rejected(error))?;
@@ -750,15 +754,15 @@ impl<T, A> Configurable for ReviewPromptWithActions<T, A> {
 }
 
 fn validate_review_actions<A>(actions: &[ReviewPromptAction<A>]) -> Result<()> {
-    const RESERVED: &str = "jkrycxnu ";
     let mut seen = Vec::new();
     for action in actions {
-        let key = action.key.to_ascii_lowercase();
-        if key.is_control() || RESERVED.contains(key) {
+        if ReviewList::is_reserved_key(action.key) {
             return Err(Error::invalid_configuration(format!(
-                "review action key '{key}' is reserved"
+                "review action key '{}' is reserved",
+                action.key
             )));
         }
+        let key = ReviewList::fold_key(action.key);
         if seen.contains(&key) {
             return Err(Error::invalid_configuration(format!(
                 "duplicate review action key '{key}'"
@@ -821,7 +825,9 @@ impl<T> SelectPrompt<T> {
     /// # Errors
     ///
     /// fails with `ErrorKind::InvalidConfiguration` if no choice was added, and
-    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
+    /// with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
@@ -923,7 +929,9 @@ impl<T> MultiSelectPrompt<T> {
     /// # Errors
     ///
     /// fails with `ErrorKind::InvalidConfiguration` if no choice was added, and
-    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
+    /// with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<Vec<T>>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
@@ -1024,7 +1032,9 @@ impl<T> SearchPrompt<T> {
     /// # Errors
     ///
     /// fails with `ErrorKind::InvalidConfiguration` if no choice was added, and
-    /// with `ErrorKind::InputEnded` or `ErrorKind::InteractionUnavailable`
+    /// with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let interaction = self.interaction.clone();
         let header = self.config.list.header.clone();
@@ -1145,8 +1155,9 @@ impl TextPrompt {
     ///
     /// # Errors
     ///
-    /// fails with `ErrorKind::InputEnded` or
-    /// `ErrorKind::InteractionUnavailable`
+    /// fails with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
         let summary = self.config.summary;
@@ -1580,15 +1591,17 @@ mod tests {
             crate::ErrorKind::InvalidConfiguration
         );
 
-        let duplicate = review::<()>("review")
-            .action('g', "generate", 1)
-            .action('G', "go", 2);
-        assert_eq!(
-            validate_review_actions(&duplicate.actions)
-                .unwrap_err()
-                .kind(),
-            crate::ErrorKind::InvalidConfiguration
-        );
+        for (first, second) in [('g', 'G'), ('é', 'É')] {
+            let duplicate = review::<()>("review")
+                .action(first, "generate", 1)
+                .action(second, "go", 2);
+            assert_eq!(
+                validate_review_actions(&duplicate.actions)
+                    .unwrap_err()
+                    .kind(),
+                crate::ErrorKind::InvalidConfiguration
+            );
+        }
     }
 
     #[test]

@@ -183,8 +183,9 @@ impl PasswordPrompt {
     ///
     /// # Errors
     ///
-    /// fails with `ErrorKind::InputEnded` or
-    /// `ErrorKind::InteractionUnavailable`
+    /// fails with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
         let summary = self.config.text.summary;
@@ -312,8 +313,9 @@ impl ConfirmPrompt {
     ///
     /// # Errors
     ///
-    /// fails with `ErrorKind::InputEnded` or
-    /// `ErrorKind::InteractionUnavailable`
+    /// fails with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<bool>> {
         let select = Select::new(self.config.id, [
             SelectItem::new("Yes", "yes"),
@@ -449,8 +451,9 @@ impl DatePrompt {
     ///
     /// # Errors
     ///
-    /// fails with `ErrorKind::InputEnded` or
-    /// `ErrorKind::InteractionUnavailable`
+    /// fails with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<Date>> {
         let today = today_local();
         let picker =
@@ -604,8 +607,9 @@ where
     ///
     /// # Errors
     ///
-    /// fails with `ErrorKind::InputEnded` or
-    /// `ErrorKind::InteractionUnavailable`
+    /// fails with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
+    /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
+    /// `ErrorKind::Terminal`
     pub fn interact(self) -> Result<PromptOutcome<T>> {
         let check = self.config.check;
         let text = self.config.text.validator(move |text| {
@@ -737,13 +741,15 @@ impl<W: Widget> Widget for YesNoKeys<W> {
 }
 
 /// shows a prompt line above a widget that has no header of its own
-struct Headed<W> {
+#[derive(Debug)]
+pub struct Headed<W> {
     prompt: Span,
     inner:  W,
 }
 
 impl<W> Headed<W> {
-    fn new(prompt: impl Into<String>, inner: W) -> Self {
+    /// wraps `inner` under a line reading `prompt`
+    pub fn new(prompt: impl Into<String>, inner: W) -> Self {
         Self {
             prompt: Span::new(prompt).role(Role::Prompt),
             inner,
@@ -772,6 +778,18 @@ impl<W: Widget> screw::Widget for Headed<W> {
 impl<W: Widget> Widget for Headed<W> {
     fn id(&self) -> WidgetId {
         self.inner.id()
+    }
+
+    fn has_key_help(&self) -> bool {
+        self.inner.has_key_help()
+    }
+
+    fn takes_tab(&self) -> bool {
+        self.inner.takes_tab()
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.inner.offers_nothing()
     }
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {

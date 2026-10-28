@@ -13,6 +13,7 @@ use bang_core::{
     Value,
     widgets::{
         ReviewActionBinding,
+        ReviewList,
         ReviewState,
         SelectItem,
         TextInput,
@@ -128,8 +129,66 @@ struct RawConfig {
     fields:        Vec<RawFieldConfig>,
 }
 
+const LISTS: &[RawWidgetKind] = &[
+    RawWidgetKind::Select,
+    RawWidgetKind::MultiSelect,
+    RawWidgetKind::Search,
+    RawWidgetKind::ReviewList,
+];
+
+const APPLICABLE: [(&str, &[RawWidgetKind]); 10] = [
+    ("placeholder", &[RawWidgetKind::Text, RawWidgetKind::Search]),
+    ("value", &[RawWidgetKind::Text]),
+    ("options", LISTS),
+    ("state", &[RawWidgetKind::ReviewList]),
+    ("page_size", LISTS),
+    ("wrap", LISTS),
+    ("show_removed", &[RawWidgetKind::ReviewList]),
+    ("action_output", &[RawWidgetKind::ReviewList]),
+    ("selected_date", &[RawWidgetKind::Date]),
+    ("today", &[RawWidgetKind::Date]),
+];
+
+/// `set` follows the order of [`APPLICABLE`]
+fn reject_inapplicable(owner: &str, kind: RawWidgetKind, set: [bool; 10]) -> Result<(), String> {
+    for ((key, kinds), is_set) in APPLICABLE.into_iter().zip(set) {
+        if is_set && !kinds.contains(&kind) {
+            return Err(inapplicable(owner, key, kind));
+        }
+    }
+    Ok(())
+}
+
+fn inapplicable(owner: &str, key: &str, kind: RawWidgetKind) -> String {
+    format!(
+        "{owner} key '{key}' does not apply to type '{}'",
+        kind.name()
+    )
+}
+
+fn any_state(options: &[OptionEntry]) -> bool {
+    options
+        .iter()
+        .any(|option| matches!(option, OptionEntry::Detailed(detailed) if detailed.state.is_some()))
+}
+
 impl RawConfig {
     fn finish(self) -> Result<WidgetConfig, String> {
+        reject_inapplicable("config", self.kind, [
+            self.placeholder.is_some(),
+            self.value.is_some(),
+            !self.options.is_empty(),
+            any_state(&self.options),
+            self.page_size.is_some(),
+            self.wrap.is_some(),
+            self.show_removed.is_some(),
+            self.action_output.is_some(),
+            self.selected_date.is_some(),
+            self.today.is_some(),
+        ])?;
+        if !self.fields.is_empty() && self.kind != RawWidgetKind::Form {
+            return Err(inapplicable("config", "fields", self.kind));
+        }
         if matches!(
             self.kind,
             RawWidgetKind::Select
@@ -263,6 +322,18 @@ impl RawFieldConfig {
         if self.kind == RawWidgetKind::Form {
             return Err("nested form fields are not supported yet".to_owned());
         }
+        reject_inapplicable(&format!("field '{}'", self.name), self.kind, [
+            self.placeholder.is_some(),
+            self.value.is_some(),
+            !self.options.is_empty(),
+            any_state(&self.options),
+            self.page_size.is_some(),
+            self.wrap.is_some(),
+            self.show_removed.is_some(),
+            self.action_output.is_some(),
+            self.selected_date.is_some(),
+            self.today.is_some(),
+        ])?;
         if matches!(
             self.kind,
             RawWidgetKind::Select
@@ -522,17 +593,14 @@ pub(crate) fn push_unique_review_action(
     seen: &mut Vec<char>,
     action: ReviewActionBinding,
 ) -> Result<ReviewActionBinding, String> {
-    if is_reserved_action_key(action.key()) {
+    if ReviewList::is_reserved_key(action.key()) {
         return Err(format!(
             "review action key '{}' is reserved by built-in review controls",
             action.key()
         ));
     }
-    let key = action.key().to_ascii_lowercase();
-    if seen
-        .iter()
-        .any(|existing: &char| existing.eq_ignore_ascii_case(&key))
-    {
+    let key = ReviewList::fold_key(action.key());
+    if seen.contains(&key) {
         return Err(format!("duplicate review action key '{key}'"));
     }
     seen.push(key);
@@ -601,7 +669,19 @@ fn parse_control_action_key(key: &str, original: &str) -> Result<char, String> {
             "control action key '{original}' must use ctrl- plus one letter"
         ));
     }
-    Ok(letter.to_ascii_lowercase())
+    let folded = letter.to_ascii_lowercase();
+    let read_as = match folded {
+        'm' | 'j' => Some("enter"),
+        'i' => Some("tab"),
+        'h' => Some("backspace"),
+        _ => None,
+    };
+    if let Some(name) = read_as {
+        return Err(format!(
+            "control action key '{original}' is read as {name}, so bind {name} instead"
+        ));
+    }
+    Ok(folded)
 }
 
 fn parse_action_key(value: &str, label: &str) -> Result<char, String> {
@@ -626,29 +706,6 @@ fn format_action_key_event(key: &KeyEvent) -> String {
         (code, modifiers) if modifiers.bits() == 0 => format!("{code:?}").to_ascii_lowercase(),
         (code, modifiers) => format!("{code:?}+{}", modifiers.bits()).to_ascii_lowercase(),
     }
-}
-
-const fn is_reserved_action_key(key: char) -> bool {
-    matches!(
-        key,
-        ' ' | '\t'
-            | 'c'
-            | 'C'
-            | 'j'
-            | 'J'
-            | 'k'
-            | 'K'
-            | 'n'
-            | 'N'
-            | 'r'
-            | 'R'
-            | 'u'
-            | 'U'
-            | 'x'
-            | 'X'
-            | 'y'
-            | 'Y'
-    )
 }
 
 fn toml_value_to_bang(value: toml::Value) -> Result<Value, String> {
@@ -688,7 +745,9 @@ fn parse_date(value: &str) -> Result<Date, String> {
     if !well_formed {
         return Err(format!("invalid date '{value}', expected YYYY-MM-DD"));
     }
-    value.parse()
+    value
+        .parse()
+        .map_err(|_error| format!("date '{value}' does not exist"))
 }
 
 pub fn text_from_config(config: &WidgetConfig) -> TextInput {
@@ -767,6 +826,44 @@ type = "text"
             assert!(error.contains("expected YYYY-MM-DD"), "{date} {error}");
         }
         WidgetConfig::parse("type = \"date\"\nselected_date = \"2024-02-29\"\n").unwrap();
+    }
+
+    #[test]
+    fn an_impossible_date_is_said_not_to_exist() {
+        let error = WidgetConfig::parse("type = \"date\"\nselected_date = \"2024-02-30\"\n")
+            .expect_err("a date off the calendar should be rejected");
+        assert!(error.contains("'2024-02-30' does not exist"), "{error}");
+    }
+
+    #[test]
+    fn keys_that_do_not_apply_to_the_type_are_rejected() {
+        for (source, message) in [
+            (
+                "type = \"text\"\noptions = [\"a\"]\n",
+                "config key 'options' does not apply to type 'text'",
+            ),
+            (
+                "type = \"select\"\nplaceholder = \"x\"\noptions = [\"a\"]\n",
+                "config key 'placeholder' does not apply to type 'select'",
+            ),
+            (
+                "type = \"date\"\nselected_date = \"2024-02-29\"\npage_size = 3\n",
+                "config key 'page_size' does not apply to type 'date'",
+            ),
+            (
+                "type = \"select\"\noptions = [{ label = \"a\", state = \"denied\" }]\n",
+                "config key 'state' does not apply to type 'select'",
+            ),
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"a\"\ntype = \"select\"\nvalue = \
+                 \"x\"\noptions = [\"o\"]\n",
+                "field 'a' key 'value' does not apply to type 'select'",
+            ),
+        ] {
+            let error = WidgetConfig::parse(source).expect_err("the key should be rejected");
+            assert!(error.contains(message), "{error}");
+        }
+        WidgetConfig::parse("type = \"search\"\nplaceholder = \"x\"\noptions = [\"a\"]\n").unwrap();
     }
 
     #[test]

@@ -10,12 +10,24 @@ use core::{
     error::Error as StdError,
     fmt,
 };
-use std::fs;
+use std::{
+    fs::{
+        self,
+        OpenOptions,
+    },
+    io::{
+        self,
+        IsTerminal as _,
+    },
+};
 
 use bang::{
+    Interaction,
     advanced::{
+        Headed,
         LiveSessionError,
-        interact_widget,
+        OutputFormat as CoreOutputFormat,
+        format_output,
         replay_events,
     },
     terminal::Decoder,
@@ -23,10 +35,10 @@ use bang::{
 use bang_core::{
     ActionBinding,
     ActionLayer,
-    OutputFormat as CoreOutputFormat,
+    Date,
     Value,
     Widget,
-    format_output,
+    WidgetId,
     widgets::{
         DatePicker,
         Form,
@@ -139,7 +151,8 @@ impl StdError for CliError {}
 #[derive(Debug, Parse)]
 #[pound(name = "bang", version = env!("CARGO_PKG_VERSION"))]
 pub struct Cli {
-    /// path to a widget config file, instead of a subcommand
+    /// path to a widget config file, instead of a subcommand, exit 1 when it
+    /// cannot be read
     #[pound(short, long)]
     config:  Option<String>,
     /// result encoding
@@ -156,13 +169,20 @@ pub enum Command {
         /// option label/value, may be repeated
         #[pound(long)]
         option:      Vec<String>,
-        /// escaped terminal bytes for deterministic non-TTY execution
+        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
+        /// \xHH escapes
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:   usize,
-        /// app action key in key:name form, may be repeated
+        /// bind a key to a result as key:name, may be repeated
+        ///
+        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
+        /// backtab, backspace, delete, up, down, left, right, home, end,
+        /// page-up or page-down. pressing it submits an object with `action`
+        /// as the name and `value` as the value so far, and a bound character
+        /// can no longer be typed
         #[pound(long)]
         action:      Vec<String>,
     },
@@ -171,28 +191,42 @@ pub enum Command {
         /// option label/value, may be repeated
         #[pound(long)]
         option:      Vec<String>,
-        /// escaped terminal bytes for deterministic non-TTY execution
+        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
+        /// \xHH escapes
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:   usize,
-        /// app action key in key:name form, may be repeated
+        /// bind a key to a result as key:name, may be repeated
+        ///
+        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
+        /// backtab, backspace, delete, up, down, left, right, home, end,
+        /// page-up or page-down. pressing it submits an object with `action`
+        /// as the name and `value` as the value so far, and a bound character
+        /// can no longer be typed
         #[pound(long)]
         action:      Vec<String>,
     },
     /// edit and submit text
     Text {
-        /// escaped terminal bytes for deterministic non-TTY execution
+        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
+        /// \xHH escapes
         #[pound(long)]
         input_bytes: Option<String>,
         /// initial value
         #[pound(long, default = "")]
         value:       String,
-        /// prompt shown in logical views
+        /// text shown before the input, also names the prompt in errors
         #[pound(long, default = "text: ")]
         prompt:      String,
-        /// app action key in key:name form, may be repeated
+        /// bind a key to a result as key:name, may be repeated
+        ///
+        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
+        /// backtab, backspace, delete, up, down, left, right, home, end,
+        /// page-up or page-down. pressing it submits an object with `action`
+        /// as the name and `value` as the value so far, and a bound character
+        /// can no longer be typed
         #[pound(long)]
         action:      Vec<String>,
     },
@@ -201,13 +235,20 @@ pub enum Command {
         /// option label/value, may be repeated
         #[pound(long)]
         option:      Vec<String>,
-        /// escaped terminal bytes for deterministic non-TTY execution
+        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
+        /// \xHH escapes
         #[pound(long)]
         input_bytes: Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:   usize,
-        /// app action key in key:name form, may be repeated
+        /// bind a key to a result as key:name, may be repeated
+        ///
+        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
+        /// backtab, backspace, delete, up, down, left, right, home, end,
+        /// page-up or page-down. pressing it submits an object with `action`
+        /// as the name and `value` as the value so far, and a bound character
+        /// can no longer be typed
         #[pound(long)]
         action:      Vec<String>,
     },
@@ -216,19 +257,21 @@ pub enum Command {
         /// option label/value, may be repeated
         #[pound(long)]
         option:        Vec<String>,
-        /// escaped terminal bytes for deterministic non-TTY execution
+        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
+        /// \xHH escapes
         #[pound(long)]
         input_bytes:   Option<String>,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:     usize,
-        /// hide rows whose initial review state is denied
-        #[pound(long)]
-        hide_removed:  bool,
         /// return a structured exit and rows, enables g/s/a action keys
         #[pound(long)]
         action_output: bool,
-        /// extra action key in key:name form, may be repeated
+        /// bind a key to a result as key:name, may be repeated
+        ///
+        /// the key is one character the review does not use. pressing it
+        /// submits the review result with `exit` set to action and `action`
+        /// set to the name
         #[pound(long)]
         action:        Vec<String>,
     },
@@ -319,8 +362,9 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             prompt,
             action,
         } => {
+            let name = prompt.clone();
             run_widget(
-                "text",
+                &name,
                 TextInput::new("text").with_prompt(prompt).with_value(value),
                 input_bytes,
                 action_bindings(action).map_err(CliError::Usage)?,
@@ -344,7 +388,6 @@ fn run_command(command: Command) -> Result<Value, CliError> {
             option,
             input_bytes,
             page_size,
-            hide_removed,
             action_output,
             action,
         } => {
@@ -357,7 +400,6 @@ fn run_command(command: Command) -> Result<Value, CliError> {
                     choice_items(option).map_err(CliError::Usage)?,
                 )
                 .with_page_size(page_size)
-                .with_show_removed(!hide_removed)
                 .with_exit_output(action_output || !actions.is_empty())
                 .with_custom_actions(actions),
                 input_bytes,
@@ -425,21 +467,22 @@ fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
         WidgetKind::Form => {
             let input_bytes = config.input_bytes.clone();
             let actions = config.actions.clone();
+            let prompt = config.prompt.clone();
             let widget = form_from_config(config).map_err(CliError::Usage)?;
-            run_widget(&name, widget, input_bytes, actions)
+            run_headed(&name, prompt, widget, input_bytes, actions)
         },
         WidgetKind::Date => {
-            let mut widget = DatePicker::new(
-                "date",
-                config
-                    .selected_date
-                    .ok_or_else(|| "date config requires selected_date".to_owned())
-                    .map_err(CliError::Usage)?,
-            );
-            if let Some(today) = config.today {
-                widget = widget.with_today(today);
-            }
-            run_widget(&name, widget, config.input_bytes, config.actions)
+            let selected = config
+                .selected_date
+                .ok_or_else(|| "date config requires selected_date".to_owned())
+                .map_err(CliError::Usage)?;
+            run_headed(
+                &name,
+                config.prompt,
+                date_picker("date", selected, config.today),
+                config.input_bytes,
+                config.actions,
+            )
         },
         WidgetKind::ReviewList => {
             let first_selected = config.selected_indices.first().copied();
@@ -533,16 +576,11 @@ fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
             push_action_field(form, field.name, widget, field.actions);
         },
         WidgetKind::Date => {
-            let mut widget = DatePicker::new(
-                field.name.clone(),
-                field
-                    .selected_date
-                    .ok_or_else(|| format!("field '{}' requires selected_date", field.name))?,
-            );
-            if let Some(today) = field.today {
-                widget = widget.with_today(today);
-            }
-            push_action_field(form, field.name, widget, field.actions);
+            let selected = field
+                .selected_date
+                .ok_or_else(|| format!("field '{}' requires selected_date", field.name))?;
+            let widget = date_picker(field.name.clone(), selected, field.today);
+            push_headed_field(form, field.name, field.prompt, widget, field.actions);
         },
         WidgetKind::ReviewList => {
             let first_selected = field.selected_indices.first().copied();
@@ -579,6 +617,45 @@ where
         form.push_field(name, widget);
     } else {
         form.push_field(name, ActionLayer::new(widget).with_actions(actions));
+    }
+}
+
+fn date_picker(id: impl Into<WidgetId>, selected: Date, today: Option<Date>) -> DatePicker {
+    let picker = DatePicker::new(id, selected);
+    match today {
+        Some(date) => picker.with_today(date),
+        None => picker,
+    }
+}
+
+fn push_headed_field<W>(
+    form: &mut Form,
+    name: String,
+    prompt: Option<String>,
+    widget: W,
+    actions: Vec<ActionBinding>,
+) where
+    W: Widget + 'static,
+{
+    match prompt {
+        Some(heading) => push_action_field(form, name, Headed::new(heading, widget), actions),
+        None => push_action_field(form, name, widget, actions),
+    }
+}
+
+fn run_headed<W>(
+    name: &str,
+    prompt: Option<String>,
+    widget: W,
+    input_bytes: Option<String>,
+    actions: Vec<ActionBinding>,
+) -> Result<Value, CliError>
+where
+    W: Widget + 'static,
+{
+    match prompt {
+        Some(heading) => run_widget(name, Headed::new(heading, widget), input_bytes, actions),
+        None => run_widget(name, widget, input_bytes, actions),
     }
 }
 
@@ -663,8 +740,21 @@ fn run_widget(
         let events = decoder.feed(&bytes).into_iter().chain(decoder.flush());
         replay_events(layered, events).map_err(|error| CliError::from(error.naming_prompt(name)))
     } else {
-        interact_widget(widget, actions).map_err(|error| CliError::from(error.naming_prompt(name)))
+        live_interaction()
+            .interact(widget, actions)
+            .map_err(|error| CliError::from(error.naming_prompt(name)))
     }
+}
+
+fn live_interaction() -> Interaction {
+    if io::stdin().is_terminal() && io::stderr().is_terminal() {
+        return Interaction::live();
+    }
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .map_or_else(|_error| Interaction::live(), Interaction::live_on)
 }
 
 fn decode_escaped(value: &str) -> Result<Vec<u8>, String> {

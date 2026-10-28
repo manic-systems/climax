@@ -2,10 +2,7 @@
 
 #![cfg(test)]
 
-use core::{
-    ptr,
-    time::Duration,
-};
+use core::time::Duration;
 use std::{
     fs::File,
     io::{
@@ -21,12 +18,15 @@ use std::{
     thread,
 };
 
+use bang::terminal::testing::pty;
+
 const TIMEOUT: Duration = Duration::from_secs(5);
 const STDERR: RawFd = 2;
 
 #[test]
 fn session_on_a_caller_owned_handle_submits_on_enter_without_touching_process_stderr() {
-    let (mut master, slave) = open_pty();
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
     let captured_stderr = StderrCapture::install();
 
     let (tx, rx) = mpsc::channel();
@@ -51,28 +51,6 @@ fn session_on_a_caller_owned_handle_submits_on_enter_without_touching_process_st
         stderr_bytes.is_empty(),
         "session must not write to process stderr: {stderr_bytes:?}"
     );
-}
-
-fn open_pty() -> (File, File) {
-    let mut master_fd: RawFd = -1;
-    let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid, and null termios/winsize select
-    // openpty's defaults
-    let result = unsafe {
-        libc::openpty(
-            &raw mut master_fd,
-            &raw mut slave_fd,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
-        )
-    };
-    assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned a newly owned master descriptor
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: successful openpty returned a newly owned slave descriptor
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    (master, slave)
 }
 
 /// redirects process stderr to a pipe so a test can check nothing writes to it

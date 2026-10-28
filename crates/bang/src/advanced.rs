@@ -19,6 +19,7 @@ pub use bang_core::{
     KeyEvent,
     Modifiers,
     Number,
+    OutputFormat,
     Reaction,
     Session,
     SessionReaction,
@@ -26,6 +27,7 @@ pub use bang_core::{
     Value,
     Widget,
     WidgetId,
+    format_output,
     widgets,
 };
 
@@ -33,10 +35,21 @@ use crate::{
     Error,
     Interaction,
     Result,
-    interaction::scripted,
+    interaction::{
+        scripted,
+        scripted_checked,
+    },
+    session::{
+        RunOutcome,
+        unhandled_outcome,
+    },
 };
 pub use crate::{
-    interaction::InteractionWidget,
+    input::Headed,
+    interaction::{
+        InteractionWidget,
+        ScriptCheck,
+    },
     live::LiveSessionError,
 };
 
@@ -55,12 +68,25 @@ pub fn interact_widget(
 /// build a deterministic interaction driver from one event sequence per prompt
 ///
 /// panics when the last clone of the driver is dropped with a script never
-/// started or events left unread
+/// started or events left unread, unless a guard or the prompt itself rejected
+/// the interaction first
 #[must_use]
 pub fn scripted_interaction(
     scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
 ) -> Interaction {
     scripted(scripts)
+}
+
+/// build a scripted driver like [`scripted_interaction`], with a
+/// [`ScriptCheck`] to ask what it left unread
+///
+/// dropping the driver never panics, the caller checks instead. clones of the
+/// driver share the script and the check
+#[must_use]
+pub fn checked_scripted_interaction(
+    scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
+) -> (Interaction, ScriptCheck) {
+    scripted_checked(scripts)
 }
 
 /// build an interaction driver around a custom advanced session runner
@@ -75,13 +101,15 @@ pub fn interaction_from_runner(
 ///
 /// ctrl-c and ctrl-d are offered to the widget first, as in the live runner,
 /// and an ignored ctrl-c cancels while an ignored ctrl-d ends input. an
-/// ignored `Event::Row` names a row the prompt does not have
+/// `Event::Row` the widget ignores fails, since the row is past the end or the
+/// widget takes no rows
 ///
 /// # Errors
 ///
 /// fails with `ErrorKind::Cancelled` when the widget or an unclaimed ctrl-c
 /// cancels, with `ErrorKind::InputEnded` when the events run out before the
-/// widget submits, and with `ErrorKind::InvalidConfiguration` for a missing row
+/// widget submits, and with `ErrorKind::InvalidConfiguration` for an ignored
+/// row
 #[expect(
     clippy::wildcard_enum_match_arm,
     reason = "the session enums are non-exhaustive"
@@ -116,26 +144,18 @@ pub fn replay_events(
 }
 
 fn unhandled_error(event: &Event) -> Option<Error> {
-    if is_control_char(event, 'c') {
-        return Some(Error::cancelled());
-    }
-    if is_control_char(event, 'd') {
-        return Some(Error::input_ended());
-    }
     if let Event::Row(row) = event {
         return Some(Error::invalid_configuration(format!(
             "the prompt has no row {row} to move to"
         )));
     }
-    None
-}
-
-fn is_control_char(event: &Event, value: char) -> bool {
-    matches!(
-        event,
-        Event::Key(key)
-            if key.key == Key::Char(value) && key.modifiers.contains(Modifiers::CONTROL)
-    )
+    unhandled_outcome(event).map(|outcome| {
+        if outcome == RunOutcome::Cancelled {
+            Error::cancelled()
+        } else {
+            Error::input_ended()
+        }
+    })
 }
 
 #[cfg(test)]

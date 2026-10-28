@@ -16,5 +16,8 @@ bang-terminal = { path = "../bang-terminal", version = "=0.0.1" }
 libc          = "0.2"
 screw         = { path = "../screw", version = "=0.0.1" }
 
+[dev-dependencies]
+bang-terminal = { path = "../bang-terminal", version = "=0.0.1", features = [ "testing" ] }
+
 [lints]
 workspace = true
