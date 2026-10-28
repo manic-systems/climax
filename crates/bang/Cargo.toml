@@ -18,7 +18,7 @@ libc.workspace          = true
 screw.workspace         = true
 
 [dev-dependencies]
-bang-terminal = { path = "../bang-terminal", version = "=0.0.1", features = [ "testing" ] }
+bang-terminal = { workspace = true, features = [ "testing" ] }
 
 [lints]
 workspace = true
