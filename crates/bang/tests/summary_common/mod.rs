@@ -2,10 +2,7 @@
 
 #![expect(dead_code, reason = "each test binary uses a different subset")]
 
-use core::{
-    ptr,
-    time::Duration,
-};
+use core::time::Duration;
 use std::{
     fs::File,
     io::{
@@ -13,11 +10,7 @@ use std::{
         Read as _,
         Write as _,
     },
-    os::fd::{
-        AsRawFd as _,
-        FromRawFd as _,
-        RawFd,
-    },
+    os::fd::AsRawFd as _,
     sync::{
         Mutex,
         PoisonError,
@@ -30,6 +23,7 @@ use bang::{
     ConfirmPrompt,
     Interaction,
     PromptOutcome,
+    terminal::testing::pty,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,7 +37,8 @@ pub fn run_confirm(
     keys: &'static [u8],
 ) -> (Vec<u8>, PromptOutcome<bool>) {
     let _one_session_at_a_time = SESSIONS.lock().unwrap_or_else(PoisonError::into_inner);
-    let (mut master, slave) = open_pty();
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
     set_nonblocking(&master);
     let prompt = thread::spawn(move || {
         configure(
@@ -105,26 +100,4 @@ fn set_nonblocking(file: &File) {
     // SAFETY: the descriptor is valid for the call
     let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) };
     assert_eq!(result, 0, "F_SETFL failed: {}", io::Error::last_os_error());
-}
-
-fn open_pty() -> (File, File) {
-    let mut master_fd: RawFd = -1;
-    let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid, and null termios/winsize select
-    // openpty's defaults
-    let result = unsafe {
-        libc::openpty(
-            &raw mut master_fd,
-            &raw mut slave_fd,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
-        )
-    };
-    assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned a newly owned master descriptor
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: successful openpty returned a newly owned slave descriptor
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    (master, slave)
 }

@@ -2,20 +2,10 @@
 
 #![cfg(test)]
 
-use core::{
-    ptr,
-    time::Duration,
-};
+use core::time::Duration;
 use std::{
     fs::File,
-    io::{
-        self,
-        Read as _,
-    },
-    os::fd::{
-        FromRawFd as _,
-        RawFd,
-    },
+    io::Read as _,
     sync::mpsc,
     thread,
 };
@@ -36,6 +26,7 @@ use bang::{
         TickInterest,
         Widget as ScreenWidget,
     },
+    terminal::testing::pty,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,7 +71,8 @@ impl Widget for Countdown {
 
 #[test]
 fn a_widget_that_wants_ticks_gets_them_without_input() {
-    let (mut master, slave) = open_pty();
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
     let (results_tx, results_rx) = mpsc::channel();
     thread::spawn(move || {
         let outcome = bang::Interaction::live_on(slave).interact(Countdown { ticks: 0 }, []);
@@ -101,26 +93,4 @@ fn a_widget_that_wants_ticks_gets_them_without_input() {
         text.contains("ticks 0") && text.contains("6C1") && text.contains("6C2"),
         "{text:?}"
     );
-}
-
-fn open_pty() -> (File, File) {
-    let mut master_fd: RawFd = -1;
-    let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid, and null termios/winsize select
-    // openpty's defaults
-    let result = unsafe {
-        libc::openpty(
-            &raw mut master_fd,
-            &raw mut slave_fd,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
-        )
-    };
-    assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned a newly owned master descriptor
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: successful openpty returned a newly owned slave descriptor
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    (master, slave)
 }

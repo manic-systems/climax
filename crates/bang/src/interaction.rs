@@ -26,6 +26,7 @@ use bang_core::{
     ActionLayer,
     Context,
     Event,
+    Key,
     Reaction,
     Value,
     Widget,
@@ -113,7 +114,8 @@ impl Interaction {
     /// use stdin and stderr when both are terminals
     ///
     /// resolves to `ErrorKind::InteractionUnavailable` when either is not, or
-    /// `TERM` is `dumb`
+    /// `TERM` is `dumb`. the prompt holds the stdin and stderr locks until it
+    /// ends, so another thread printing to stderr waits for the answer
     #[must_use]
     pub fn live() -> Self {
         Self::from_runner(|widget| {
@@ -122,7 +124,8 @@ impl Interaction {
         .with_summary_sink(stderr_sink())
     }
 
-    /// attempt a live session without checking terminal capability
+    /// attempt a live session without checking terminal capability, holding
+    /// the stdin and stderr locks as [`Self::live`] does
     #[must_use]
     pub fn forced() -> Self {
         Self::from_runner(|widget| {
@@ -187,9 +190,9 @@ impl Interaction {
     /// such as `Deploy to prod? › no`, on by default
     ///
     /// only live terminal drivers write summaries, dimmed unless `NO_COLOR` is
-    /// set. leaving writes nothing, and neither does a prompt with no
-    /// header or prompt text to label the answer. a prompt's own `summary`
-    /// setting wins
+    /// set or `CLICOLOR` is `0`. leaving writes nothing, and neither does a
+    /// prompt with no header or prompt text to label the answer. a prompt's own
+    /// `summary` setting wins
     #[must_use]
     pub const fn with_summaries(mut self, summaries: bool) -> Self {
         self.summaries = summaries;
@@ -261,8 +264,9 @@ impl Interaction {
     ///
     /// # Errors
     ///
-    /// fails when a guard cannot be acquired or when the session ends without a
-    /// value
+    /// fails with `ErrorKind::InvalidConfiguration` when an action is bound to
+    /// a control character or two actions share a key, and otherwise when a
+    /// guard cannot be acquired or the session ends without a value
     pub fn interact<W>(
         &self,
         widget: W,
@@ -283,11 +287,15 @@ impl Interaction {
     where
         W: Widget + 'static,
     {
+        let bindings = actions.into_iter().collect::<Vec<_>>();
+        check_actions(&bindings).map_err(|error| self.rejected(error))?;
         let mut guards = GuardStack(Vec::with_capacity(self.guards.len()));
         for factory in &self.guards {
-            guards.0.push(factory()?);
+            guards
+                .0
+                .push(factory().map_err(|error| self.rejected(error))?);
         }
-        let layered = ActionLayer::new(widget).with_actions(actions);
+        let layered = ActionLayer::new(widget).with_actions(bindings);
         let result = (self.runner)(Box::new(layered));
         if let (Ok(value), Some(answer), Some(sink)) = (&result, summary, &self.summary_sink)
             && let Some(line) = answer(value)
@@ -297,6 +305,28 @@ impl Interaction {
         drop(guards);
         result
     }
+}
+
+fn check_actions(actions: &[ActionBinding]) -> Result<()> {
+    for (index, action) in actions.iter().enumerate() {
+        if matches!(action.key_event().key, Key::Char(value) if value.is_control()) {
+            return Err(Error::invalid_configuration(format!(
+                "action '{}' is bound to a control character",
+                action.name()
+            )));
+        }
+        if let Some(earlier) = actions[..index]
+            .iter()
+            .find(|earlier| earlier.key_event() == action.key_event())
+        {
+            return Err(Error::invalid_configuration(format!(
+                "actions '{}' and '{}' share a key",
+                earlier.name(),
+                action.name()
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -315,7 +345,7 @@ impl<'a> Summary<'a> {
     }
 }
 
-fn sanitised_line(text: &str) -> String {
+pub(crate) fn sanitised_line(text: &str) -> String {
     let mut plain = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -365,7 +395,7 @@ fn skip_string(chars: &mut Peekable<Chars<'_>>) {
     }
 }
 
-fn summary_label(prompt: &str) -> String {
+pub(crate) fn summary_label(prompt: &str) -> String {
     prompt.trim().trim_end_matches(':').trim_end().to_owned()
 }
 
@@ -423,16 +453,32 @@ impl Widget for InteractionWidget {
 pub(crate) fn scripted(
     scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
 ) -> Interaction {
+    script_driver(scripts, false).0
+}
+
+pub(crate) fn scripted_checked(
+    scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
+) -> (Interaction, ScriptCheck) {
+    let (interaction, state) = script_driver(scripts, true);
+    (interaction, ScriptCheck(state))
+}
+
+fn script_driver(
+    scripts: impl IntoIterator<Item = impl IntoIterator<Item = Event>>,
+    checked: bool,
+) -> (Interaction, Rc<RefCell<Script>>) {
     let queued = scripts
         .into_iter()
         .map(|events| events.into_iter().collect::<Vec<_>>())
         .collect();
     let state = Rc::new(RefCell::new(Script {
-        scripts:       queued,
+        scripts: queued,
         unused_events: 0,
-        abandoned:     false,
+        abandoned: false,
+        checked,
     }));
     let abandon_state = Rc::clone(&state);
+    let shared = Rc::clone(&state);
     let mut interaction = Interaction::from_runner(move |widget| {
         let events = state
             .borrow_mut()
@@ -451,18 +497,49 @@ pub(crate) fn scripted(
         result
     });
     interaction.abandon = Some(Rc::new(move || abandon_state.borrow_mut().abandoned = true));
-    interaction
+    (interaction, shared)
 }
 
+/// asks a checked scripted interaction what it left unread
+///
+/// both counts are zero once a guard or the prompt itself rejected the
+/// interaction, as the unchecked driver's drop check stays quiet then
+#[derive(Clone, Debug)]
+pub struct ScriptCheck(Rc<RefCell<Script>>);
+
+impl ScriptCheck {
+    /// scripts no prompt has started
+    #[must_use]
+    pub fn unused_scripts(&self) -> usize {
+        let script = self.0.borrow();
+        if script.abandoned {
+            return 0;
+        }
+        script.scripts.len()
+    }
+
+    /// events left unread in the scripts that did start
+    #[must_use]
+    pub fn unused_events(&self) -> usize {
+        let script = self.0.borrow();
+        if script.abandoned {
+            return 0;
+        }
+        script.unused_events
+    }
+}
+
+#[derive(Debug)]
 struct Script {
     scripts:       VecDeque<Vec<Event>>,
     unused_events: usize,
     abandoned:     bool,
+    checked:       bool,
 }
 
 impl Drop for Script {
     fn drop(&mut self) {
-        if self.abandoned || thread::panicking() {
+        if self.checked || self.abandoned || thread::panicking() {
             return;
         }
         assert!(
@@ -558,6 +635,48 @@ mod tests {
         scripted([[submit]])
             .interact(TextInput::new("w"), [])
             .unwrap();
+    }
+
+    #[test]
+    fn a_guard_that_fails_before_the_script_starts_leaves_it_unchecked() {
+        let interaction = scripted([Vec::new()])
+            .with_guard(|| -> Result<()> { Err(Error::interaction_unavailable()) });
+
+        let error = interaction.interact(TextInput::new("w"), []).unwrap_err();
+
+        assert_eq!(error.kind(), crate::ErrorKind::InteractionUnavailable);
+    }
+
+    #[test]
+    fn actions_on_a_shared_or_control_key_are_refused_without_a_panic() {
+        let (interaction, check) = scripted_checked([Vec::new()]);
+        for actions in [
+            [
+                ActionBinding::char('a', "one"),
+                ActionBinding::char('a', "two"),
+            ],
+            [
+                ActionBinding::char('a', "one"),
+                ActionBinding::char('\u{7}', "bell"),
+            ],
+        ] {
+            let error = interaction
+                .interact(TextInput::new("w"), actions)
+                .unwrap_err();
+            assert_eq!(error.kind(), crate::ErrorKind::InvalidConfiguration);
+        }
+        assert_eq!(check.unused_scripts(), 0);
+    }
+
+    #[test]
+    fn a_checked_script_reports_what_it_left_instead_of_panicking() {
+        let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
+        let (interaction, check) =
+            scripted_checked([vec![submit.clone(), submit.clone()], vec![submit]]);
+
+        interaction.interact(TextInput::new("w"), []).unwrap();
+
+        assert_eq!((check.unused_scripts(), check.unused_events()), (1, 1));
     }
 
     #[test]

@@ -7,7 +7,11 @@ use core::{
     time::Duration,
 };
 use std::{
-    fs::File,
+    env,
+    fs::{
+        self,
+        File,
+    },
     io::{
         self,
         Read as _,
@@ -19,6 +23,7 @@ use std::{
         RawFd,
     },
     process::{
+        self,
         Command,
         Stdio,
     },
@@ -104,6 +109,34 @@ fn page_down_uses_the_physical_multiline_viewport() {
     let cleanup = rfind(&output, b"\r\x1b[2K\x1b[?25h");
     let result = rfind(&output, b"charlie detail\r\n");
     assert!(cleanup < result, "the third physical page should submit");
+}
+
+#[test]
+fn date_and_form_configs_draw_their_prompt() {
+    let path = env::temp_dir().join(format!("bang-run-prompt-{}.toml", process::id()));
+    for (source, shown) in [
+        (
+            "type = \"date\"\nprompt = \"When do you leave?\"\nselected_date = \"2024-02-29\"\n",
+            ["When do you leave?"].as_slice(),
+        ),
+        (
+            "type = \"form\"\nprompt = \"new user\"\n\n[[fields]]\nname = \"since\"\ntype = \
+             \"date\"\nprompt = \"Since when?\"\nselected_date = \"2024-02-29\"\n",
+            ["new user", "Since when?"].as_slice(),
+        ),
+    ] {
+        fs::write(&path, source).expect("write the config");
+        let config = path.to_str().expect("utf-8 temp path");
+        let output = run_in_pty(&["--config", config], b"\r");
+        for text in shown {
+            assert!(
+                contains(&output, text.as_bytes()),
+                "{text} missing: {}",
+                String::from_utf8_lossy(&output)
+            );
+        }
+    }
+    drop(fs::remove_file(&path));
 }
 
 fn run_in_pty(args: &[&str], input: &[u8]) -> Vec<u8> {

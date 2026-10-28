@@ -150,7 +150,7 @@ fn drive<R: Read>(
                 }
             },
             TerminalPoll::Signal(signal) => return Ok(RunOutcome::Signalled(signal)),
-            TerminalPoll::End => return Ok(outcome_from_status(session.status())),
+            TerminalPoll::End | _ => return Ok(outcome_from_status(session.status())),
         }
     }
 }
@@ -202,7 +202,7 @@ fn handle_event(
     })
 }
 
-fn unhandled_outcome(event: &Event) -> Option<RunOutcome> {
+pub(crate) fn unhandled_outcome(event: &Event) -> Option<RunOutcome> {
     if is_control_char(event, 'c') {
         return Some(RunOutcome::Cancelled);
     }

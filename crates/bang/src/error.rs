@@ -9,7 +9,13 @@ use std::io;
 
 use bang_terminal::Signal;
 
-use crate::live::LiveSessionError;
+use crate::{
+    interaction::{
+        sanitised_line,
+        summary_label,
+    },
+    live::LiveSessionError,
+};
 
 /// broad failure category for a prompt interaction
 ///
@@ -94,7 +100,7 @@ impl Error {
         let primary = error.primary().unwrap_or(&error);
         let signal = match primary {
             LiveSessionError::Signalled(signal) => Some(*signal),
-            LiveSessionError::Unavailable
+            LiveSessionError::Unavailable(_)
             | LiveSessionError::RawMode(_)
             | LiveSessionError::Signals(_)
             | LiveSessionError::TerminalIo(_)
@@ -108,7 +114,7 @@ impl Error {
             ErrorKind::Terminal
         } else {
             match primary {
-                LiveSessionError::Unavailable => ErrorKind::InteractionUnavailable,
+                LiveSessionError::Unavailable(_) => ErrorKind::InteractionUnavailable,
                 LiveSessionError::Cancelled => ErrorKind::Cancelled,
                 LiveSessionError::InputEnded => ErrorKind::InputEnded,
                 LiveSessionError::Signals(source)
@@ -125,9 +131,7 @@ impl Error {
         };
         let message = match kind {
             ErrorKind::InteractionUnavailable => {
-                "interactive terminal input is unavailable, so pass the answer another way or run \
-                 in a terminal"
-                    .to_owned()
+                format!("{primary}, so pass the answer another way or run in a terminal")
             },
             ErrorKind::InteractionBusy => {
                 "terminal signal handlers are already claimed, so wait for the other prompt to \
@@ -157,15 +161,19 @@ impl Error {
     /// asked
     #[must_use]
     pub fn naming_prompt(mut self, prompt: &str) -> Self {
-        let trimmed = prompt.trim().trim_end_matches(':').trim_end();
+        let trimmed = summary_label(&sanitised_line(prompt));
         if trimmed.is_empty() {
             return self;
         }
         match self.kind {
             ErrorKind::InteractionUnavailable => {
+                let reason = self.source.as_ref().map_or_else(
+                    || "there is no interactive terminal".to_owned(),
+                    ToString::to_string,
+                );
                 self.message = format!(
-                    "cannot ask \"{trimmed}\" because there is no interactive terminal, so pass \
-                     the answer another way or run in a terminal"
+                    "cannot ask \"{trimmed}\" because {reason}, so pass the answer another way or \
+                     run in a terminal"
                 );
             },
             ErrorKind::InputEnded if self.source.is_some() => {
@@ -333,6 +341,18 @@ mod tests {
             !Error::from_live(LiveSessionError::InputEnded)
                 .to_string()
                 .contains("run in")
+        );
+    }
+
+    #[test]
+    fn an_unavailable_error_names_the_prompt_as_one_line_and_the_stream() {
+        let error = Error::from_live(LiveSessionError::Unavailable("stdin is not a terminal"))
+            .naming_prompt("Name\n\x1b[31mx\x1b[0m:");
+
+        assert_eq!(
+            error.to_string(),
+            "cannot ask \"Name x\" because stdin is not a terminal, so pass the answer another \
+             way or run in a terminal"
         );
     }
 

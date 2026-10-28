@@ -10,14 +10,10 @@ use core::{
 use std::{
     fs::File,
     io::{
-        self,
         Read as _,
         Write as _,
     },
-    os::fd::{
-        FromRawFd as _,
-        RawFd,
-    },
+    os::fd::OwnedFd,
     sync::mpsc,
     thread,
 };
@@ -25,7 +21,10 @@ use std::{
 use bang::{
     ErrorKind,
     PromptOutcome,
-    terminal::Signal,
+    terminal::{
+        Signal,
+        testing::pty,
+    },
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,7 +49,8 @@ fn a_signal_interrupts_a_prompt_without_ending_the_process() {
 }
 
 fn a_signal_interrupts_one_prompt(raw: libc::c_int, signal: Signal) {
-    let (mut master, slave) = open_pty();
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
     let probe = slave.try_clone().expect("duplicate the slave");
     let before = termios(&probe);
 
@@ -74,7 +74,8 @@ fn a_signal_interrupts_one_prompt(raw: libc::c_int, signal: Signal) {
 }
 
 fn a_signal_the_host_ignored_does_not_interrupt_the_prompt() {
-    let (mut master, slave) = open_pty();
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
 
     // SAFETY: SIG_IGN is a valid disposition
     let previous = unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
@@ -154,7 +155,7 @@ fn wait_for_first_frame(master: &mut File) {
     assert_ne!(master.read(&mut buffer).expect("read the first frame"), 0);
 }
 
-fn termios(file: &File) -> Vec<u64> {
+fn termios(file: &OwnedFd) -> Vec<u64> {
     use std::os::fd::AsRawFd as _;
 
     // SAFETY: a zeroed termios is overwritten by tcgetattr
@@ -168,26 +169,4 @@ fn termios(file: &File) -> Vec<u64> {
         .collect();
     flags.extend(state.c_cc.into_iter().map(u64::from));
     flags
-}
-
-fn open_pty() -> (File, File) {
-    let mut master_fd: RawFd = -1;
-    let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid, and null termios/winsize select
-    // openpty's defaults
-    let result = unsafe {
-        libc::openpty(
-            &raw mut master_fd,
-            &raw mut slave_fd,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
-        )
-    };
-    assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned a newly owned master descriptor
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: successful openpty returned a newly owned slave descriptor
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    (master, slave)
 }

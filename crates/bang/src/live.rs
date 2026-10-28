@@ -86,8 +86,9 @@ where
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum LiveSessionError {
-    /// input or output is not an interactive terminal, or `TERM` is `dumb`
-    Unavailable,
+    /// input or output is not an interactive terminal, or `TERM` is `dumb`, the
+    /// text names which
+    Unavailable(&'static str),
     /// raw mode could not be enabled
     RawMode(io::Error),
     /// terminal signal handlers could not be installed
@@ -119,7 +120,7 @@ impl LiveSessionError {
     pub fn primary(&self) -> Option<&Self> {
         match self {
             Self::Cleanup { primary, .. } => primary.as_deref(),
-            Self::Unavailable
+            Self::Unavailable(_)
             | Self::RawMode(_)
             | Self::Signals(_)
             | Self::TerminalIo(_)
@@ -134,7 +135,7 @@ impl LiveSessionError {
     pub fn cleanup_failures(&self) -> &[CleanupFailure] {
         match self {
             Self::Cleanup { failures, .. } => failures.failures(),
-            Self::Unavailable
+            Self::Unavailable(_)
             | Self::RawMode(_)
             | Self::Signals(_)
             | Self::TerminalIo(_)
@@ -148,7 +149,7 @@ impl LiveSessionError {
 impl fmt::Display for LiveSessionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unavailable => f.write_str("interactive terminal input is unavailable"),
+            Self::Unavailable(reason) => f.write_str(reason),
             Self::RawMode(error) => {
                 if matches!(
                     error.kind(),
@@ -186,7 +187,7 @@ impl error::Error for LiveSessionError {
                     .map(|error| -> &(dyn error::Error + 'static) { error })
                     .or(Some(failures))
             },
-            Self::Unavailable | Self::Cancelled | Self::InputEnded | Self::Signalled(_) => None,
+            Self::Unavailable(_) | Self::Cancelled | Self::InputEnded | Self::Signalled(_) => None,
         }
     }
 }
@@ -198,13 +199,20 @@ impl error::Error for LiveSessionError {
 pub(crate) fn run_live_session(
     widget: impl BangWidget + 'static,
 ) -> Result<Value, LiveSessionError> {
-    if !io::stdin().is_terminal()
-        || !io::stderr().is_terminal()
-        || env::var_os("TERM").is_some_and(|term| term == "dumb")
-    {
-        return Err(LiveSessionError::Unavailable);
+    let missing = match (io::stdin().is_terminal(), io::stderr().is_terminal()) {
+        (false, false) => Some("stdin and stderr are not terminals"),
+        (false, true) => Some("stdin is not a terminal"),
+        (true, false) => Some("stderr is not a terminal"),
+        (true, true) => is_dumb().then_some("TERM is dumb"),
+    };
+    if let Some(reason) = missing {
+        return Err(LiveSessionError::Unavailable(reason));
     }
     run_live_session_forced(widget)
+}
+
+fn is_dumb() -> bool {
+    env::var_os("TERM").is_some_and(|term| term == "dumb")
 }
 
 /// run a session without first applying terminal capability policy
@@ -231,8 +239,13 @@ pub(crate) fn run_live_session_on(
     handle: impl Into<OwnedFd>,
 ) -> Result<Value, LiveSessionError> {
     let owned = handle.into();
-    if !owned.is_terminal() || env::var_os("TERM").is_some_and(|term| term == "dumb") {
-        return Err(LiveSessionError::Unavailable);
+    if !owned.is_terminal() {
+        return Err(LiveSessionError::Unavailable(
+            "the handle is not a terminal",
+        ));
+    }
+    if is_dumb() {
+        return Err(LiveSessionError::Unavailable("TERM is dumb"));
     }
     run_live_session_forced_on(widget, owned)
 }

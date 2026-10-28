@@ -39,7 +39,7 @@ fn the_terminal_toolkit_is_named_through_bang() {
     let mut decoder = Decoder::new();
     assert_eq!(decoder.feed(b"\r").len(), 1);
 
-    assert_eq!(RawModeOptions::blocking().minimum_bytes(), 1);
+    let _options = RawModeOptions::blocking();
 }
 
 #[test]

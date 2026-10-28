@@ -2,22 +2,14 @@
 
 #![cfg(test)]
 
-use core::{
-    mem,
-    ptr,
-};
+use core::mem;
 use std::{
     fs::File,
     io::{
-        self,
         Read as _,
         Write as _,
     },
-    os::fd::{
-        AsRawFd as _,
-        FromRawFd as _,
-        RawFd,
-    },
+    os::fd::AsRawFd as _,
     panic,
     thread,
 };
@@ -38,6 +30,7 @@ use bang::{
         Surface,
         Widget as ScreenWidget,
     },
+    terminal::testing::pty,
 };
 
 // the signal handlers are process-wide, so both cases run in turn in one test
@@ -48,8 +41,9 @@ fn panics_during_a_prompt() {
 }
 
 fn a_panicking_widget_leaves_the_terminal_as_it_found_it() {
-    let (mut master, slave) = open_pty();
-    let probe = slave.try_clone().expect("duplicate the slave");
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
+    let probe = File::from(slave.try_clone().expect("duplicate the slave"));
     let before = local_modes(&probe);
 
     let worker = thread::spawn(move || {
@@ -101,8 +95,9 @@ impl Widget for Tall {
 }
 
 fn a_panic_with_a_tall_frame_keeps_the_panic_message() {
-    let (mut master, slave) = open_pty();
-    let tty = slave.try_clone().expect("duplicate the slave");
+    let (master_fd, slave) = pty(80, 24).expect("open a pty");
+    let mut master = File::from(master_fd);
+    let tty = File::from(slave.try_clone().expect("duplicate the slave"));
     let previous = panic::take_hook();
     panic::set_hook(Box::new(move |_| {
         let _written = (&tty).write_all(b"\nPANIC-MESSAGE\n");
@@ -166,26 +161,4 @@ fn local_modes(file: &File) -> libc::tcflag_t {
     let status = unsafe { libc::tcgetattr(file.as_raw_fd(), &raw mut state) };
     assert_eq!(status, 0);
     state.c_lflag
-}
-
-fn open_pty() -> (File, File) {
-    let mut master_fd: RawFd = -1;
-    let mut slave_fd: RawFd = -1;
-    // SAFETY: both fd pointers are valid, and null termios/winsize select
-    // openpty's defaults
-    let result = unsafe {
-        libc::openpty(
-            &raw mut master_fd,
-            &raw mut slave_fd,
-            ptr::null_mut(),
-            ptr::null(),
-            ptr::null(),
-        )
-    };
-    assert_eq!(result, 0, "openpty failed: {}", io::Error::last_os_error());
-    // SAFETY: successful openpty returned a newly owned master descriptor
-    let master = unsafe { File::from_raw_fd(master_fd) };
-    // SAFETY: successful openpty returned a newly owned slave descriptor
-    let slave = unsafe { File::from_raw_fd(slave_fd) };
-    (master, slave)
 }
