@@ -6,7 +6,7 @@ use std::{
     io,
 };
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// stable, high-level category of an application error
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +108,24 @@ impl Error {
     #[must_use]
     pub fn related_errors(&self) -> &[Self] {
         &self.related
+    }
+
+    #[cfg(feature = "parse")]
+    pub(crate) fn is_closed_pipe(&self) -> bool {
+        matches!(self.kind, ErrorKind::Output | ErrorKind::Io)
+            && causes(self)
+                .filter_map(|cause| cause.downcast_ref::<io::Error>())
+                .any(|cause| cause.kind() == io::ErrorKind::BrokenPipe)
+    }
+
+    #[cfg(feature = "parse")]
+    pub(crate) fn report(&self) -> String {
+        let mut report = format!("error: {self}");
+        for text in self.chain_texts() {
+            report.push_str("\n  caused by: ");
+            report.push_str(&text);
+        }
+        report
     }
 
     pub(crate) fn with_related(mut self, other: Self) -> Self {
@@ -222,6 +240,13 @@ fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
         .collect()
 }
 
+#[cfg(feature = "parse")]
+fn causes<'a>(
+    error: &'a (dyn error::Error + 'static),
+) -> impl Iterator<Item = &'a (dyn error::Error + 'static)> {
+    std::iter::successors(Some(error), |cause| cause.source())
+}
+
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Self::with_source(ErrorKind::Io, value)
@@ -332,5 +357,26 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Application);
         assert_eq!(error.to_string(), "cannot query history: closed");
         assert!(error.source_error().is_some());
+    }
+}
+
+#[cfg(test)]
+mod prelude_result {
+    use std::num::ParseIntError;
+
+    use crate::prelude::*;
+
+    fn two_parameters(text: &str) -> Result<u32, ParseIntError> {
+        text.parse()
+    }
+
+    fn one_parameter(text: &str) -> Result<u32> {
+        two_parameters(text).map_err(Error::application)
+    }
+
+    #[test]
+    fn the_prelude_result_takes_one_or_two_parameters() {
+        assert_eq!(one_parameter("4").unwrap(), 4);
+        two_parameters("x").unwrap_err();
     }
 }
