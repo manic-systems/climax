@@ -57,8 +57,8 @@
 //! - rendering runs every frame and must not block
 //!
 //! text is laid out per grapheme cluster, each taking the columns
-//! `unicode-width` reports for it whole. terminals that do not shape VS16 or
-//! ZWJ sequences draw them wider
+//! `unicode-width` reports for it whole. terminals that do not shape these,
+//! xterm among them, draw VS16 sequences narrower and ZWJ sequences wider
 //!
 //! [`widget`] erases a widget into a `Send + Sync` [`WidgetRef`]. widgets
 //! holding `Rc` or local borrows use [`local_widget`], and cannot be started on

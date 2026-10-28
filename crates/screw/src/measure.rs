@@ -21,9 +21,61 @@ pub enum Align {
 /// distance between tab stops, a tab expands to spaces up to the next one
 pub(crate) const TAB_STOP: usize = 8;
 
-/// whether a character has no cell representation and is dropped on write
+/// whether a character has no cell representation and is dropped on write,
+/// controls and the bidirectional formatting characters
 pub(crate) const fn is_dropped_control(ch: char) -> bool {
-    matches!(ch, '\0'..='\x08' | '\x0b'..='\x1f' | '\x7f'..='\u{9f}')
+    matches!(
+        ch,
+        '\0'..='\x08'
+            | '\x0b'..='\x1f'
+            | '\x7f'..='\u{9f}'
+            | '\u{61c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
+/// whether the character at `index` is dropped, a carriage return before a line
+/// feed belongs to the line break
+fn dropped_at(text: &str, index: usize, ch: char) -> bool {
+    is_dropped_control(ch) && !(ch == '\r' && text[index + 1..].starts_with('\n'))
+}
+
+/// `text` as the terminal receives it, without the characters dropped on write
+///
+/// a dropped character does not split a cluster, so what surrounds it still
+/// joins
+pub(crate) fn strip_dropped(text: &str) -> Cow<'_, str> {
+    if !text
+        .char_indices()
+        .any(|(index, ch)| dropped_at(text, index, ch))
+    {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.char_indices()
+            .filter(|&(index, ch)| !dropped_at(text, index, ch))
+            .map(|(_, ch)| ch)
+            .collect(),
+    )
+}
+
+/// the offset in `text` of the character that sits `stripped_offset` bytes into
+/// [`strip_dropped`] of it, or its length when none does
+fn original_offset(text: &str, stripped_offset: usize) -> usize {
+    let mut kept = 0;
+    for (index, ch) in text.char_indices() {
+        if dropped_at(text, index, ch) {
+            continue;
+        }
+        if kept >= stripped_offset {
+            return index;
+        }
+        kept += ch.len_utf8();
+    }
+    text.len()
 }
 
 /// one unit of text as laid out on a row
@@ -116,12 +168,13 @@ pub(crate) fn segments(text: &str) -> impl Iterator<Item = (usize, Segment<'_>)>
 /// expands tabs in one row from column zero and drops the controls
 /// `Surface::write` drops
 pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
-    if !text.contains('\t') && !text.chars().any(is_dropped_control) {
-        return Cow::Borrowed(text);
+    let stripped = strip_dropped(text);
+    if !stripped.contains('\t') {
+        return stripped;
     }
-    let mut expanded = String::with_capacity(text.len());
+    let mut expanded = String::with_capacity(stripped.len());
     let mut col = 0;
-    for (_, segment) in segments(text) {
+    for (_, segment) in segments(&stripped) {
         match segment {
             Segment::Newline => {},
             Segment::Tab => expanded.extend(iter::repeat_n(' ', segment.advance(col) - col)),
@@ -135,11 +188,13 @@ pub(crate) fn expand_tabs(text: &str) -> Cow<'_, str> {
 /// byte offset just past the first visible segment of `text`, or its length
 /// when it has none
 pub(crate) fn first_segment_end(text: &str) -> usize {
-    let mut visible = segments(text);
+    let stripped = strip_dropped(text);
+    let mut visible = segments(&stripped);
     visible.next();
-    visible
+    let end = visible
         .find(|(_, segment)| !matches!(segment, Segment::Cluster { width: 0, .. }))
-        .map_or(text.len(), |(index, _)| index)
+        .map_or(stripped.len(), |(index, _)| index);
+    original_offset(text, end)
 }
 
 /// display width of `text` in terminal columns, that of its widest row
@@ -150,7 +205,7 @@ pub(crate) fn first_segment_end(text: &str) -> usize {
 pub fn width(text: &str) -> usize {
     let mut widest = 0;
     let mut row = 0;
-    for (_, segment) in segments(text) {
+    for (_, segment) in segments(&strip_dropped(text)) {
         row = segment.advance(row);
         widest = widest.max(row);
     }
@@ -161,11 +216,16 @@ pub fn width(text: &str) -> usize {
 /// splitting a cluster
 #[must_use]
 pub fn truncate(text: &str, columns: usize) -> &str {
+    let end = fitting_end(&strip_dropped(text), columns);
+    &text[..original_offset(text, end)]
+}
+
+fn fitting_end(text: &str, columns: usize) -> usize {
     let mut used = 0;
     let mut start = 0;
     for (index, segment) in segments(text) {
         if matches!(segment, Segment::Newline) {
-            return &text[..index];
+            return index;
         }
         let next = segment.advance(used);
         let widens = matches!(segment, Segment::Cluster {
@@ -174,14 +234,14 @@ pub fn truncate(text: &str, columns: usize) -> &str {
             ..
         });
         if next > columns {
-            return &text[..if widens { start } else { index }];
+            return if widens { start } else { index };
         }
         if !matches!(segment, Segment::Cluster { width: 0, .. }) {
             start = index;
         }
         used = next;
     }
-    text
+    text.len()
 }
 
 const fn is_line_break(ch: char) -> bool {
@@ -197,7 +257,10 @@ const fn is_line_break(ch: char) -> bool {
 /// ```
 #[must_use]
 pub fn single_line(text: &str) -> Cow<'_, str> {
-    if !text.chars().any(char::is_control) {
+    if !text
+        .chars()
+        .any(|ch| ch.is_control() || is_dropped_control(ch))
+    {
         return Cow::Borrowed(text);
     }
     let mut line = String::with_capacity(text.len());
@@ -205,7 +268,7 @@ pub fn single_line(text: &str) -> Cow<'_, str> {
         if index > 0 {
             line.push(' ');
         }
-        for (_, segment) in segments(part) {
+        for (_, segment) in segments(&strip_dropped(part)) {
             match segment {
                 Segment::Newline | Segment::Tab => line.push(' '),
                 Segment::Cluster { text: cluster, .. } => line.push_str(cluster),
