@@ -12,7 +12,11 @@ members = [
   "crates/pound-derive-impl",
   "crates/screw",
   "crates/screw-pty",
+  "tests/compile-fixtures/bang-core-only",
   "tests/compile-fixtures/bang-only",
+  "tests/compile-fixtures/bang-terminal-only",
+  "tests/compile-fixtures/caress-only",
+  "tests/compile-fixtures/climax-anyhow-only",
   "tests/compile-fixtures/climax-complete-only",
   "tests/compile-fixtures/climax-derive-only",
   "tests/compile-fixtures/climax-interactive-only",
@@ -22,10 +26,12 @@ members = [
   "tests/compile-fixtures/climax-render-only",
   "tests/compile-fixtures/climax-structured-only",
   "tests/compile-fixtures/climax-with-components",
+  "tests/compile-fixtures/pound-color-only",
   "tests/compile-fixtures/pound-no-derive",
   "tests/compile-fixtures/pound-no-help",
   "tests/compile-fixtures/pound-no-std",
   "tests/compile-fixtures/pound-only",
+  "tests/compile-fixtures/pound-unicode-only",
   "tests/compile-fixtures/screw-only",
 ]
 default-members = [
@@ -49,7 +55,7 @@ authors      = [ "atagen" ]
 edition      = "2024"
 license      = "EUPL-1.2"
 repository   = "https://github.com/manic-systems/climax"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 anyhow            = "1"

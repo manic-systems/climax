@@ -59,6 +59,10 @@ use crate::{
 /// [`crate::Error::signal`]. [`crate::Error::with_exit_code`] overrides any
 /// code
 ///
+/// a closed pipe while writing output, or an `io::Error` of kind `BrokenPipe`
+/// the handler returns, exits 141 without a message unless
+/// [`crate::Error::with_exit_code`] set a code
+///
 /// with `complete`, a shell completion request is answered and exits before
 /// parsing
 #[cfg(feature = "parse")]
@@ -96,6 +100,9 @@ where
 ///
 /// fails with the parse error when the arguments are invalid or help was
 /// requested, and otherwise with whatever the application returns
+///
+/// with `complete`, a shell completion request is answered and the process
+/// exits before this returns, `try_run_from` never does
 #[cfg(feature = "parse")]
 pub fn try_run<C, F>(application: F) -> Result<()>
 where
@@ -216,6 +223,9 @@ pub(crate) fn finish(result: &Result<()>) -> Completion {
                 Completion::error(code, error)
             }
         },
+        Err(error) if error.exit_code().is_none() && error.is_closed_pipe() => {
+            Completion::cancelled(141)
+        },
         Err(error) => Completion::error(error.exit_code().unwrap_or(1), error),
     }
 }
@@ -260,15 +270,14 @@ impl Completion {
         }
     }
 
-    fn error(code: u8, error: impl fmt::Display) -> Self {
+    fn error(code: u8, error: &crate::Error) -> Self {
         Self {
             code,
             stream: Some(CompletionStream::Stderr),
-            message: Some(format!("error: {error}")),
+            message: Some(error.report()),
         }
     }
 
-    #[cfg(feature = "interactive")]
     pub(crate) fn into_parts(self) -> (u8, Option<(CompletionStream, String)>) {
         (self.code, self.stream.zip(self.message))
     }
@@ -292,7 +301,6 @@ impl Completion {
 
     fn code_after_write(code: u8, stream: CompletionStream, result: &io::Result<()>) -> u8 {
         match result {
-            Ok(()) => code,
             // 128 + SIGPIPE, as pound's Error::exit reports
             Err(error)
                 if stream != CompletionStream::Stderr
@@ -300,7 +308,7 @@ impl Completion {
             {
                 141
             },
-            Err(_) => 1,
+            Ok(()) | Err(_) => code,
         }
     }
 }
@@ -322,6 +330,10 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 /// not cloneable, since interaction and terminal policy share one owner, and
 /// not `Send` in any feature configuration, so it stays on the thread that
 /// built it
+///
+/// a prompt builder from `Context::select` and the other prompt methods
+/// keeps the interaction driver held when it is built, ignoring later mode or
+/// terminal changes
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
@@ -402,72 +414,63 @@ impl Context {
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks one of several choices
     #[must_use]
     pub fn select<T>(&self, header: impl Into<String>) -> bang::SelectPrompt<T> {
         bang::select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks any number of choices
     #[must_use]
     pub fn multi_select<T>(&self, header: impl Into<String>) -> bang::MultiSelectPrompt<T> {
         bang::multi_select(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that filters its choices as the user types
     #[must_use]
     pub fn search<T>(&self, header: impl Into<String>) -> bang::SearchPrompt<T> {
         bang::search(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that confirms, changes or rejects a list of items
     #[must_use]
     pub fn review<T>(&self, header: impl Into<String>) -> bang::ReviewPrompt<T> {
         bang::review(header).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a line of text
     #[must_use]
     pub fn text(&self, prompt: impl Into<String>) -> bang::TextPrompt {
         bang::text(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a line of text without echoing it
     #[must_use]
     pub fn password(&self, prompt: impl Into<String>) -> bang::PasswordPrompt {
         bang::password(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that asks a yes or no question
     #[must_use]
     pub fn confirm(&self, prompt: impl Into<String>) -> bang::ConfirmPrompt {
         bang::confirm(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that picks a calendar date
     #[must_use]
     pub fn date(&self, prompt: impl Into<String>) -> bang::DatePrompt {
         bang::date(prompt).interaction(self.prompt_interaction())
     }
 
     #[cfg(feature = "interactive")]
-    /// keeps the interaction driver held now, ignoring later mode or terminal
-    /// changes
+    /// builds a prompt that reads a number of type `T`
     #[must_use]
     pub fn number<T>(&self, prompt: impl Into<String>) -> bang::NumberPrompt<T>
     where
@@ -481,9 +484,11 @@ impl Context {
     #[must_use]
     /// starts building a transient status line for a long operation
     ///
-    /// off a terminal `Auto` prints one plain line per outcome and `Silent`
-    /// prints nothing. Ctrl-C during a live status with no prompt open
-    /// keeps the default disposition and leaves the spinner line on screen
+    /// off a terminal `Auto` prints one plain line for a success and for a
+    /// failure with a `failure_message`, a failure without one prints
+    /// nothing, and `Silent` prints nothing. Ctrl-C during a live status
+    /// with no prompt open keeps the default disposition and leaves the
+    /// spinner line on screen
     pub fn status(&self, message: impl Into<String>) -> Status {
         Status::new(message, self.transient.clone())
     }
@@ -503,7 +508,7 @@ impl Context {
     }
 
     /// builds this context with `format`, so results and streams are written as
-    /// JSON under [`Format::Json`](crate::output::Format::Json)
+    /// JSON under [`Format::Json`]
     ///
     /// handles taken before the change keep the old format
     #[must_use]
@@ -519,13 +524,17 @@ impl Context {
         self.output = self.output.clone().with_format(format);
     }
 
-    /// sideband output for human-facing context, stderr in text mode
+    /// sideband output for human-facing context on stderr, in the format of
+    /// [`Self::output`]
     ///
     /// has its own result slot, committed together with [`Self::output`] when
     /// the handler returns
     #[must_use]
     pub fn diagnostic(&self) -> Output {
-        self.diagnostic.clone().with_notices_from(&self.output)
+        self.diagnostic
+            .clone()
+            .with_format(self.output.format())
+            .with_notices_from(&self.output)
     }
 
     #[must_use]
@@ -707,7 +716,8 @@ impl Context {
         Ok(())
     }
 
-    /// prompt builders made earlier keep the driver they captured
+    /// prompt builders made earlier keep the driver they captured, and so does
+    /// a driver injected with [`Self::set_interaction`]
     #[cfg_attr(
         not(feature = "interactive"),
         expect(
@@ -718,9 +728,8 @@ impl Context {
     pub fn set_interaction_mode(&mut self, mode: InteractionMode) {
         self.terminal.set_interaction_mode(mode);
         #[cfg(feature = "interactive")]
-        {
+        if !self.custom_interaction {
             self.interaction = self.policy_interaction();
-            self.custom_interaction = false;
         }
     }
 
@@ -743,7 +752,7 @@ impl Context {
         )
     )]
     /// overrides how statuses present, see
-    /// [`StatusMode`](crate::terminal::StatusMode)
+    /// [`StatusMode`]
     ///
     /// # Errors
     ///
@@ -760,7 +769,7 @@ impl Context {
     /// uses `interaction` for every prompt made afterwards and forces
     /// interaction on
     ///
-    /// later capability changes keep it
+    /// later mode and capability changes keep it
     pub fn set_interaction(&mut self, interaction: bang::Interaction) {
         self.terminal.set_interaction_mode(InteractionMode::Force);
         self.interaction = interaction;
@@ -941,7 +950,7 @@ fn guarded_interaction(
 
 #[cfg(test)]
 mod tests {
-    use alloc::sync::Arc;
+    use core::error::Error as StdError;
     #[cfg(any(
         feature = "parse",
         all(feature = "interactive", feature = "render", feature = "structured")
@@ -950,7 +959,6 @@ mod tests {
         Error as IoError,
         ErrorKind as IoErrorKind,
     };
-    use std::sync::Mutex;
 
     #[cfg(feature = "interactive")]
     use bang::advanced::{
@@ -960,64 +968,47 @@ mod tests {
     };
 
     use super::*;
-
-    #[derive(Clone, Default)]
-    struct Sink(Arc<Mutex<Vec<u8>>>);
-
-    impl io::Write for Sink {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0
-                .lock()
-                .map_err(|_poison| io::Error::other("sink lock poisoned"))?
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::testing::Capture;
 
     #[cfg(not(feature = "render"))]
     #[test]
     fn diagnostic_writer_carries_notices_without_render() {
-        let sink = Sink::default();
+        let sink = Capture::default();
         let mut context = Context::new().with_diagnostic_writer(sink.clone());
         context.output().notice("heads up").unwrap();
-        assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
+        assert_eq!(sink.text(), "heads up\n");
 
-        sink.0.lock().unwrap().clear();
         context.diagnostic().notice("heads up").unwrap();
-        assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
+        assert_eq!(sink.text(), "heads up\nheads up\n");
 
-        sink.0.lock().unwrap().clear();
         context.set_output_format(Format::Json);
         context.diagnostic().notice("heads up").unwrap();
-        assert!(sink.0.lock().unwrap().is_empty());
+        assert_eq!(sink.text(), "heads up\nheads up\n");
     }
 
     #[cfg(feature = "render")]
     #[test]
     fn diagnostic_notices_follow_the_transient_writer() {
-        let sink = Sink::default();
+        let sink = Capture::default();
         let mut context = Context::new().with_transient_writer(sink.clone()).unwrap();
         context.diagnostic().notice("heads up").unwrap();
-        assert_eq!(sink.0.lock().unwrap().as_slice(), b"heads up\n");
+        assert_eq!(sink.text(), "heads up\n");
 
-        sink.0.lock().unwrap().clear();
         context.set_output_format(Format::Json);
         context.diagnostic().notice("heads up").unwrap();
-        assert!(sink.0.lock().unwrap().is_empty());
+        assert_eq!(sink.text(), "heads up\n");
     }
 
     #[cfg(feature = "render")]
     #[test]
     fn transient_writer_cannot_change_under_a_live_status() {
         let context = Context::new()
-            .with_transient_writer(Sink::default())
+            .with_transient_writer(Capture::default())
             .unwrap();
         let status = context.status("working").start();
-        let error = context.with_transient_writer(Sink::default()).unwrap_err();
+        let error = context
+            .with_transient_writer(Capture::default())
+            .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Output);
         status.finish().unwrap();
     }
@@ -1057,32 +1048,6 @@ mod tests {
             piped.with_terminal_application(|_| piped.diagnostic().notice("queued"))
         });
         result.unwrap_err();
-    }
-
-    #[cfg(any(feature = "structured", feature = "render"))]
-    #[derive(Clone, Default)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-
-    #[cfg(any(feature = "structured", feature = "render"))]
-    impl Capture {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-        }
-    }
-
-    #[cfg(any(feature = "structured", feature = "render"))]
-    impl io::Write for Capture {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0
-                .lock()
-                .map_err(|_poison| io::Error::other("sink lock poisoned"))?
-                .extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
     }
 
     #[test]
@@ -1229,25 +1194,110 @@ mod tests {
 
     #[cfg(feature = "parse")]
     #[test]
-    fn a_closed_stdout_pipe_exits_141_and_other_write_failures_exit_1() {
+    fn a_closed_stdout_pipe_exits_141_and_other_write_failures_keep_the_code() {
         let broken = Err(io::Error::from(io::ErrorKind::BrokenPipe));
         assert_eq!(
-            Completion::code_after_write(0, CompletionStream::Stdout, &Ok(())),
-            0
+            Completion::code_after_write(2, CompletionStream::Stdout, &Ok(())),
+            2
         );
         assert_eq!(
-            Completion::code_after_write(0, CompletionStream::Stdout, &broken),
+            Completion::code_after_write(2, CompletionStream::Stdout, &broken),
             141
         );
         let full = Err(io::Error::from(io::ErrorKind::StorageFull));
         assert_eq!(
-            Completion::code_after_write(0, CompletionStream::Stdout, &full),
-            1
+            Completion::code_after_write(2, CompletionStream::Stdout, &full),
+            2
         );
         assert_eq!(
-            Completion::code_after_write(0, CompletionStream::Stderr, &broken),
-            1
+            Completion::code_after_write(2, CompletionStream::Stderr, &broken),
+            2
         );
+    }
+
+    struct Failing(io::ErrorKind);
+
+    impl io::Write for Failing {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(self.0))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn finish_reports_the_cause_chain() {
+        #[derive(Debug)]
+        struct Layered(io::Error);
+
+        impl fmt::Display for Layered {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("could not save")
+            }
+        }
+
+        impl StdError for Layered {
+            fn source(&self) -> Option<&(dyn StdError + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let completion = finish(&Err(crate::Error::application(Layered(io::Error::other(
+            "disk full",
+        )))));
+        assert_eq!(
+            completion.message.as_deref(),
+            Some("error: could not save\n  caused by: disk full")
+        );
+    }
+
+    #[cfg(feature = "anyhow")]
+    #[test]
+    fn finish_reports_an_anyhow_chain() {
+        let error = anyhow::anyhow!("root").context("mid").context("top");
+        let completion = finish(&Err(error.into()));
+        assert_eq!(
+            completion.message.as_deref(),
+            Some("error: top\n  caused by: mid\n  caused by: root")
+        );
+    }
+
+    #[test]
+    fn diagnostic_follows_the_output_format() {
+        let context = Context::new().with_output_format(Format::Json);
+        assert_eq!(context.diagnostic().format(), Format::Json);
+        assert_eq!(Context::new().diagnostic().format(), Format::Text);
+    }
+
+    #[test]
+    fn a_closed_pipe_while_writing_output_exits_141_silently() {
+        let output = Context::new().output();
+        let closed = output
+            .write_message(Failing(io::ErrorKind::BrokenPipe), "hello")
+            .unwrap_err();
+        let completion = finish(&Err(closed));
+        assert_eq!((completion.code, completion.stream), (141, None));
+
+        let full = output
+            .write_message(Failing(io::ErrorKind::StorageFull), "hello")
+            .unwrap_err();
+        assert_eq!(finish(&Err(full)).code, 1);
+
+        let own = || crate::Error::from(io::Error::from(io::ErrorKind::BrokenPipe));
+        assert_eq!(finish(&Err(own())).code, 141);
+        assert_eq!(finish(&Err(own().with_exit_code(5))).code, 5);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_notice_to_a_closed_transient_stream_exits_141_silently() {
+        let context = Context::new()
+            .with_transient_writer(Failing(io::ErrorKind::BrokenPipe))
+            .unwrap();
+        let closed = context.output().notice("heads up").unwrap_err();
+        assert_eq!(finish(&Err(closed)).code, 141);
     }
 
     #[test]
@@ -1427,6 +1477,24 @@ mod tests {
         let interaction = scripted_interaction([[Event::key(Key::Down), Event::key(Key::Enter)]]);
         let context = Context::new().with_interaction(interaction);
         assert!(context.interaction_available());
+        assert_eq!(
+            context
+                .select("shell")
+                .choice("bash", 1)
+                .choice("zsh", 2)
+                .interact()
+                .unwrap(),
+            crate::PromptOutcome::Submit(2)
+        );
+    }
+
+    #[cfg(feature = "interactive")]
+    #[test]
+    fn a_mode_change_keeps_an_injected_interaction() {
+        let interaction = scripted_interaction([[Event::key(Key::Down), Event::key(Key::Enter)]]);
+        let context = Context::new()
+            .with_interaction(interaction)
+            .with_interaction_mode(InteractionMode::Auto);
         assert_eq!(
             context
                 .select("shell")

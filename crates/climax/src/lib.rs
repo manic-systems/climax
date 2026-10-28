@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! climax: application facade over `pound`, `screw` and `bang`.
+//! climax: application facade over `pound`, `screw` and `bang`
 //!
 //! the crate root and [`prelude`] hold the ordinary application workflow. each
 //! component is also re-exported whole behind the feature that enables it, as
 //! `climax::pound` under `parse`, `climax::bang` under `interactive`,
 //! `climax::screw` under `render`, `climax::caress` under `complete` and
 //! `climax::serde` under `structured`. an application needs no direct
-//! dependency on any of them, and the versions it sees are the ones `climax`
-//! was tested against
+//! dependency on any of them, and derives with `climax::Parse` and
+//! `climax::ValueEnum`, since the derives under `climax::pound` expand to
+//! `::pound` paths
 
 #![cfg_attr(
     all(
@@ -30,6 +31,7 @@ pub mod error;
 /// what a package installs beside the binary, completion scripts and man pages
 #[cfg(feature = "complete")]
 pub mod install;
+#[cfg(feature = "structured")] mod json;
 pub mod output;
 pub mod prelude;
 mod sync;
