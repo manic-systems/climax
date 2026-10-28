@@ -23,6 +23,7 @@ use std::{
 use screw::{
     Align,
     Color,
+    LayoutMode,
     Renderer,
     Span,
     Spans,
@@ -208,6 +209,18 @@ impl Session {
         }
     }
 
+    fn wrapping(columns: usize, rows: usize) -> Self {
+        let shared = Shared::default();
+        Self {
+            renderer: Renderer::new(shared.clone())
+                .width(columns)
+                .height(rows)
+                .layout_mode(LayoutMode::Wrap),
+            screen: EmittedScreen::new(columns, rows),
+            shared,
+        }
+    }
+
     fn unbounded(columns: usize, rows: usize) -> Self {
         let shared = Shared::default();
         Self {
@@ -258,14 +271,19 @@ fn rows(lines: &[&str], anchor: Option<screw::Position>) -> screw::Surface {
 
 #[test]
 fn a_cursor_below_the_last_row_at_the_screen_bottom_keeps_later_frames_aligned() {
-    let mut session = Session::unbounded(10, 5);
-    session.screen.feed(b"x\r\ny\r\n").unwrap();
-    let below = Some(screw::Position { row: 3, col: 0 });
-    session.draw(rows(&["a", "b", "c"], None)).unwrap();
-    session.draw(rows(&["a", "b", "c"], below)).unwrap();
-    session.draw(rows(&["A", "b", "c"], below)).unwrap();
-    session.draw(rows(&["A", "B", "c"], below)).unwrap();
-    assert_eq!(session.lines(), ["y", "A", "B", "c", ""]);
+    for mut session in [
+        Session::unbounded(10, 5),
+        Session::new(10, 5, 5),
+        Session::wrapping(10, 5),
+    ] {
+        session.screen.feed(b"x\r\ny\r\n").unwrap();
+        let below = Some(screw::Position { row: 3, col: 0 });
+        session.draw(rows(&["a", "b", "c"], None)).unwrap();
+        session.draw(rows(&["a", "b", "c"], below)).unwrap();
+        session.draw(rows(&["A", "b", "c"], below)).unwrap();
+        session.draw(rows(&["A", "B", "c"], below)).unwrap();
+        assert_eq!(session.lines(), ["y", "A", "B", "c", ""]);
+    }
 }
 
 #[test]
@@ -280,7 +298,7 @@ fn a_one_column_terminal_keeps_the_characters_it_draws() {
 }
 
 #[test]
-fn screw_and_the_screen_model_agree_with_xterm_on_literal_widths() {
+fn screw_and_the_screen_model_agree_on_literal_widths() {
     for (text, columns) in [
         ("plain", 5),
         ("世界", 4),
