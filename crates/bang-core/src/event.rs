@@ -13,8 +13,8 @@ pub enum Event {
     Key(KeyEvent),
     /// text paste
     Paste(String),
-    /// a complete escape sequence the decoder did not understand, never write
-    /// it back to a terminal
+    /// bytes the decoder did not understand, a whole escape sequence or one
+    /// invalid byte, never write them back to a terminal
     UnknownEscape(Vec<u8>),
     /// term resize
     Resize {
@@ -25,8 +25,9 @@ pub enum Event {
     },
     /// animation tick
     Tick,
-    /// move a list to row `n` of the rows it offers, sent by scripted input
-    /// and never by a key. a list without that row ignores it
+    /// move a list to the row at index `n` among the rows it shows, sent by
+    /// scripted input and never by a key, a widget that is no list or has no
+    /// such row ignores it
     Row(usize),
 }
 

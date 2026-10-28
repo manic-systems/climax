@@ -7,7 +7,10 @@ use screw::{
     Surface,
 };
 
-use super::navigation::no_modifiers;
+use super::navigation::{
+    chorded,
+    no_modifiers,
+};
 use crate::{
     Context,
     Date,
@@ -175,6 +178,11 @@ impl Widget for DatePicker {
         };
 
         match key.key {
+            Key::Left | Key::Right | Key::Up | Key::Down | Key::Enter | Key::Esc
+                if chorded(&key) =>
+            {
+                Reaction::Ignored
+            },
             Key::Left => self.move_days(-1),
             Key::Right => self.move_days(1),
             Key::Up => self.move_days(-7),

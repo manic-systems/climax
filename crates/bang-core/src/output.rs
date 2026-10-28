@@ -47,11 +47,9 @@ pub fn format_text(value: &Value) -> String {
                     match item {
                         Value::String(text) => text.clone(),
                         Value::Number(number) => number.to_string(),
-                        Value::Null
-                        | Value::Bool(_)
-                        | Value::Date(_)
-                        | Value::List(_)
-                        | Value::Object(_) => format_json(item),
+                        Value::Date(date) => date.to_string(),
+                        Value::Null => String::new(),
+                        Value::Bool(_) | Value::List(_) | Value::Object(_) => format_json(item),
                     }
                 })
                 .collect::<Vec<_>>()
@@ -174,8 +172,13 @@ mod tests {
 
     #[test]
     fn text_prints_lists_one_item_per_line() {
-        let list = Value::List(vec![Value::from("a b"), Value::from(2), Value::Null]);
-        assert_eq!(format_text(&list), "a b\n2\nnull\n");
+        let list = Value::List(vec![
+            Value::from("a b"),
+            Value::from(2),
+            Value::Null,
+            Value::Date(Date::new(2024, 1, 2).unwrap()),
+        ]);
+        assert_eq!(format_text(&list), "a b\n2\n\n2024-01-02\n");
         assert_eq!(format_text(&Value::from("plain")), "plain\n");
         assert_eq!(format_text(&Value::Null), "\n");
         assert_eq!(format_text(&Value::from(1.5)), "1.5\n");

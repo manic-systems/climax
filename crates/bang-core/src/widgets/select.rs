@@ -13,6 +13,7 @@ use super::navigation::{
     ListFrame,
     ListRow,
     PageLayout,
+    chorded,
     move_index,
     no_modifiers,
     page_move,
@@ -284,6 +285,7 @@ impl Widget for Select {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
+        let targets = self.layout.take_targets();
         let key = match event {
             Event::Key(key) => key,
             Event::Row(row) => return self.jump_to(row),
@@ -291,9 +293,9 @@ impl Widget for Select {
                 return Reaction::Ignored;
             },
         };
-        let targets = self.layout.take_targets();
 
         match key.key {
+            Key::Up | Key::Down | Key::Enter | Key::Esc if chorded(&key) => Reaction::Ignored,
             Key::Up => self.move_by(-1, self.wrap),
             Key::Down => self.move_by(1, self.wrap),
             Key::Home => self.move_to(0),
@@ -457,16 +459,24 @@ impl Widget for MultiSelect {
         true
     }
 
+    fn takes_tab(&self) -> bool {
+        true
+    }
+
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         let key = match &event {
             Event::Key(key) => key,
-            Event::Row(_) => return self.select.handle(event, cx),
-            Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
-                return Reaction::Ignored;
+            Event::Paste(_)
+            | Event::UnknownEscape(_)
+            | Event::Resize { .. }
+            | Event::Tick
+            | Event::Row(_) => {
+                return self.select.handle(event, cx);
             },
         };
 
         match key.key {
+            Key::Char(' ') | Key::Tab | Key::Enter | Key::Esc if chorded(key) => Reaction::Ignored,
             Key::Char(' ') | Key::Tab => self.toggle_selected(),
             Key::Char('a' | 'A') if no_modifiers(key) => self.set_all(true),
             Key::Char('n' | 'N') if no_modifiers(key) => self.set_all(false),

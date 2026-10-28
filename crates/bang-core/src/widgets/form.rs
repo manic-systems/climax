@@ -1,22 +1,28 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::collections::BTreeMap;
+use core::{
+    cell::Cell,
+    fmt,
+};
 
 use screw::{
+    LayoutMode,
     LocalWidgetRef,
     RenderCtx,
     Role,
     Span,
     Spans,
-    Stack,
     Surface,
     Text,
     TickInterest,
     VerticalSize,
+    VerticalViewport,
     combine_tick_interest,
     local_widget,
 };
 
+use super::navigation::chorded;
 use crate::{
     Context,
     Event,
@@ -30,10 +36,31 @@ use crate::{
 
 /// several named widgets shown together, one active at a time, submits an
 /// object of values by field name, a field is asked again only after it changes
+///
+/// given a height, the form scrolls to keep the active field in view and pins
+/// its key help at the bottom
 pub struct Form {
     id:     WidgetId,
     fields: Vec<FormField>,
     active: usize,
+    top:    Cell<usize>,
+}
+
+impl fmt::Debug for Form {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Form")
+            .field("id", &self.id)
+            .field(
+                "fields",
+                &self
+                    .fields
+                    .iter()
+                    .map(|field| field.name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .field("active", &self.active)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Form {
@@ -44,6 +71,7 @@ impl Form {
             id:     id.into(),
             fields: Vec::new(),
             active: 0,
+            top:    Cell::new(0),
         }
     }
 
@@ -218,6 +246,9 @@ impl Form {
         match event {
             Event::Key(key) => {
                 match key.key {
+                    Key::Tab | Key::Backtab | Key::Esc | Key::Enter if chorded(key) => {
+                        Reaction::Ignored
+                    },
                     Key::Tab => self.move_focus(1),
                     Key::Backtab => self.move_focus(-1),
                     Key::Esc => Reaction::Cancel,
@@ -275,27 +306,48 @@ impl Form {
 
 impl screw::Widget for Form {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let mut children: Vec<LocalWidgetRef<'_>> = Vec::new();
-        for (index, field) in self.fields.iter().enumerate() {
-            let active = index == self.active;
-            children.push(local_widget(Spans::new([
-                Span::new(if active { "> " } else { "  " }).role(Role::Dim),
-                Span::new(field.name.clone()).role(if active { Role::Selected } else { Role::Dim }),
-            ])));
-            children.push(local_widget(FieldWidget {
-                widget:  &*field.widget,
-                focused: active,
-            }));
-        }
+        let Some(active) = self.fields.get(self.active) else {
+            return;
+        };
+        let remaining = ctx
+            .available_rows()
+            .map(|rows| rows.saturating_sub(out.height().saturating_sub(1)));
+        let help = help_line(active);
+        let help_rows = wrapped_rows(&help, ctx);
+        let smallest_body = if active.widget.vertical_size() == VerticalSize::Flexible {
+            2
+        } else {
+            1
+        };
+        let pinned = remaining.is_none_or(|rows| rows >= help_rows + 1 + smallest_body);
+        let budget = remaining.map(|rows| rows.saturating_sub(if pinned { help_rows } else { 0 }));
 
-        if !self.fields.is_empty() {
-            children.push(local_widget(
-                Text::new("tab next | shift-tab previous | enter accept | esc cancel")
-                    .role(Role::Dim),
-            ));
+        let blocks: Vec<LocalWidgetRef<'_>> = self
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let focused = index == self.active;
+                local_widget(FieldBlock {
+                    name: &field.name,
+                    widget: &*field.widget,
+                    focused,
+                    labelled: !focused || budget.is_none_or(|rows| rows > smallest_body),
+                    rows: if focused { budget } else { None },
+                })
+            })
+            .collect();
+        let mut viewport = VerticalViewport::new(blocks)
+            .requested_start(self.top.get())
+            .anchor(Some(self.active));
+        if pinned {
+            viewport = viewport.trailing(local_widget(Text::new(help).role(Role::Dim)));
         }
-
-        Stack::new(children).render(ctx, out);
+        let report = viewport.report_handle();
+        viewport.render(ctx, out);
+        if remaining.is_some() {
+            self.top.set(report.report().visible.start);
+        }
     }
 
     fn tick_interest(&self) -> TickInterest {
@@ -303,15 +355,33 @@ impl screw::Widget for Form {
     }
 
     fn vertical_size(&self) -> VerticalSize {
-        if self
-            .fields
-            .iter()
-            .any(|field| field.widget.vertical_size() == VerticalSize::Flexible)
-        {
-            VerticalSize::Flexible
-        } else {
+        if self.fields.is_empty() {
             VerticalSize::Content
+        } else {
+            VerticalSize::Flexible
         }
+    }
+}
+
+fn help_line(active: &FormField) -> String {
+    let mut keys = Vec::new();
+    if !active.widget.takes_tab() {
+        keys.push("tab next");
+    }
+    keys.push("shift-tab previous");
+    if !active.widget.has_key_help() {
+        keys.extend(["enter accept", "esc cancel"]);
+    }
+    keys.join(" | ")
+}
+
+fn wrapped_rows(help: &str, ctx: &RenderCtx) -> usize {
+    if ctx.layout_mode() == LayoutMode::Wrap
+        && let Some(columns) = ctx.available_columns()
+    {
+        screw::width(help).div_ceil(columns.max(1))
+    } else {
+        1
     }
 }
 
@@ -340,14 +410,7 @@ impl Widget for Form {
             Reaction::Cancel => Reaction::Cancel,
             Reaction::Focus(FocusTarget::Next) => self.move_focus(1),
             Reaction::Focus(FocusTarget::Previous) => self.move_focus(-1),
-            Reaction::Focus(FocusTarget::Widget(id)) => {
-                self.fields
-                    .iter()
-                    .position(|candidate| candidate.widget.id() == id)
-                    .map_or(Reaction::Focus(FocusTarget::Widget(id)), |index| {
-                        self.set_active_index(index)
-                    })
-            },
+            Reaction::Focus(target) => Reaction::Focus(target),
             Reaction::Changed => Reaction::Changed,
             Reaction::Ignored => self.unhandled(&event),
         }
@@ -364,29 +427,39 @@ struct FormField {
     accepted: Option<Value>,
 }
 
-struct FieldWidget<'a> {
-    widget:  &'a dyn Widget,
-    focused: bool,
+struct FieldBlock<'a> {
+    name:     &'a str,
+    widget:   &'a dyn Widget,
+    focused:  bool,
+    labelled: bool,
+    rows:     Option<usize>,
 }
 
-impl screw::Widget for FieldWidget<'_> {
+impl screw::Widget for FieldBlock<'_> {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        if self.labelled {
+            Spans::new([
+                Span::new(if self.focused { "> " } else { "  " }).role(Role::Dim),
+                Span::new(self.name).role(if self.focused {
+                    Role::Selected
+                } else {
+                    Role::Dim
+                }),
+            ])
+            .render(ctx, out);
+            out.newline();
+        }
         let cursor = out.cursor();
-        self.widget.render(ctx, out);
+        self.widget.render(
+            &ctx.with_constraints(ctx.available_columns(), self.rows),
+            out,
+        );
         if !self.focused {
             match cursor {
                 Some(position) => out.set_cursor(position),
                 None => out.clear_cursor(),
             }
         }
-    }
-
-    fn tick_interest(&self) -> TickInterest {
-        self.widget.tick_interest()
-    }
-
-    fn vertical_size(&self) -> VerticalSize {
-        self.widget.vertical_size()
     }
 }
 
@@ -816,6 +889,68 @@ mod tests {
             .with_field("b", TextInput::new("b"));
         press(&mut plain, Key::Tab);
         assert_eq!(plain.active_index(), 1);
+    }
+
+    fn help_under(widget: impl Widget + 'static) -> String {
+        let form = Form::new("form").with_field("field", widget);
+        let mut surface = Surface::new();
+        screw::Widget::render(
+            &form,
+            &RenderCtx::new().with_constraints(Some(80), None),
+            &mut surface,
+        );
+        surface
+            .plain_text()
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    #[test]
+    fn the_help_line_fits_the_active_field() {
+        use crate::widgets::{
+            MultiSelect,
+            ReviewList,
+        };
+
+        assert_eq!(
+            help_under(TextInput::new("text")),
+            "tab next | shift-tab previous | enter accept | esc cancel"
+        );
+        assert_eq!(
+            help_under(Select::new("pick", ["alpha"])),
+            "tab next | shift-tab previous"
+        );
+        assert_eq!(
+            help_under(MultiSelect::new("pick", ["alpha"])),
+            "shift-tab previous"
+        );
+        assert_eq!(
+            help_under(ReviewList::new("pick", ["alpha"])),
+            "shift-tab previous"
+        );
+        assert_eq!(
+            help_under(ActionLayer::new(MultiSelect::new("pick", ["alpha"]))),
+            "shift-tab previous"
+        );
+    }
+
+    #[test]
+    fn a_nested_form_cannot_move_the_outer_focus() {
+        let inner = Form::new("inner")
+            .with_field("one", TextInput::new("one"))
+            .with_field("two", TextInput::new("shared"));
+        let mut outer = Form::new("outer")
+            .with_field("first", TextInput::new("shared"))
+            .with_field("inner", inner);
+        outer.set_active_index(1);
+
+        assert_eq!(
+            press(&mut outer, Key::Tab),
+            Reaction::Focus(FocusTarget::Widget("shared".into()))
+        );
+        assert_eq!(outer.active_index(), 1);
     }
 
     #[test]

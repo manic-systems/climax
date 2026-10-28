@@ -56,6 +56,11 @@ pub(super) const fn only_control(key: &KeyEvent) -> bool {
     key.modifiers.bits() == Modifiers::CONTROL.bits()
 }
 
+pub(super) const fn chorded(key: &KeyEvent) -> bool {
+    let chord = Modifiers::CONTROL.bits() | Modifiers::ALT.bits() | Modifiers::SUPER.bits();
+    key.modifiers.bits() & chord != 0
+}
+
 /// lands a page key on `target`, moving both the scroll offset and the
 /// selection
 pub(super) fn page_move(

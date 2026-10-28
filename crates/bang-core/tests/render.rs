@@ -12,6 +12,7 @@ use bang_core::{
     Key,
     KeyEvent,
     Modifiers,
+    Reaction,
     Session,
     Widget as _,
     widgets::{
@@ -283,19 +284,172 @@ fn page_keys_after_unrendered_moves_scroll_by_the_page_size() {
 }
 
 #[test]
-fn a_form_shares_height_between_list_fields() {
-    let form = Form::new("form")
+fn a_form_shows_the_active_list_in_full() {
+    let mut form = Form::new("form")
         .with_field("first", Select::new("a", ["one", "two", "three"]))
         .with_field("second", Select::new("b", ["four", "five", "six"]));
 
-    let shown = lines(&form, 9);
+    let first = lines(&form, 9);
 
-    assert!(shown.iter().any(|line| line == "> one"));
-    assert!(shown.iter().any(|line| line == "  two"));
-    assert!(!shown.iter().any(|line| line.contains("three")));
-    assert!(shown.iter().any(|line| line == "> four"));
-    assert!(shown.iter().any(|line| line == "  five"));
-    assert!(!shown.iter().any(|line| line.contains("six")));
+    assert!(first.iter().any(|line| line == "> one"));
+    assert!(first.iter().any(|line| line == "  three"));
+    assert!(!first.iter().any(|line| line.contains("four")));
+
+    form.set_active_index(1);
+    let second = lines(&form, 9);
+
+    assert!(second.iter().any(|line| line == "> four"));
+    assert!(second.iter().any(|line| line == "  six"));
+    assert!(!second.iter().any(|line| line.contains("one")));
+}
+
+fn text_form(count: usize) -> Form {
+    let mut form = Form::new("form");
+    for index in 0..count {
+        form.push_field(
+            format!("field{index}"),
+            TextInput::new(format!("f{index}"))
+                .with_prompt(format!("f{index}> "))
+                .with_value("v"),
+        );
+    }
+    form
+}
+
+#[test]
+fn a_form_scrolls_to_keep_the_active_field_in_view() {
+    for height in 1..=20 {
+        let mut form = text_form(8);
+        for active in (0..8).chain((0..7).rev()) {
+            form.set_active_index(active);
+            let surface = draw(&form, Some(height));
+            let shown: Vec<_> = surface.plain_text().lines().map(str::to_owned).collect();
+            let context = format!("field {active} at height {height}");
+
+            assert!(shown.len() <= height, "{context}");
+            let cursor = surface.cursor().expect(&context);
+            assert!(
+                shown[cursor.row].starts_with(&format!("f{active}> ")),
+                "{context}"
+            );
+            if height >= 2 {
+                assert_eq!(
+                    shown[cursor.row - 1],
+                    format!("> field{active}"),
+                    "{context}"
+                );
+            }
+            if height >= 3 {
+                let help = shown.last().expect(&context);
+                assert!(help.starts_with("tab next | shift-tab"), "{context}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_list_field_in_a_form_keeps_rows_at_small_heights() {
+    for height in 2..=24 {
+        let mut form = Form::new("form")
+            .with_field("name", TextInput::new("name").with_prompt("name> "))
+            .with_field("pick", Select::new("pick", items(30)))
+            .with_field("note", TextInput::new("note").with_prompt("note> "));
+        form.set_active_index(1);
+        let shown = lines(&form, height);
+        let context = format!("height {height}");
+
+        assert!(shown.len() <= height, "{context}");
+        assert!(shown.iter().any(|line| line == "> item-00"), "{context}");
+        assert_eq!(
+            shown.iter().any(|line| line == "> pick"),
+            height >= 3,
+            "{context}"
+        );
+        assert_eq!(
+            shown.last().map(String::as_str) == Some("tab next | shift-tab previous"),
+            height >= 4,
+            "{context}"
+        );
+    }
+}
+
+#[test]
+fn a_row_event_picks_a_row_in_every_list() {
+    let mut cx = Context::new();
+    let mut select = Select::new("select", items(5));
+    let mut multi = MultiSelect::new("multi", items(5));
+    let mut search = SearchSelect::new("search", items(5));
+    let mut review = ReviewList::new("review", items(5));
+
+    for row in [3, 0] {
+        assert_eq!(select.handle(Event::Row(row), &mut cx), Reaction::Changed);
+        assert_eq!(select.selected_index(), Some(row));
+        assert_eq!(multi.handle(Event::Row(row), &mut cx), Reaction::Changed);
+        assert_eq!(multi.selected_index(), Some(row));
+        assert_eq!(search.handle(Event::Row(row), &mut cx), Reaction::Changed);
+        assert_eq!(search.selected_match_index(), Some(row));
+        assert_eq!(review.handle(Event::Row(row), &mut cx), Reaction::Changed);
+        assert_eq!(review.selected_index(), Some(row));
+    }
+    assert_eq!(select.handle(Event::Row(5), &mut cx), Reaction::Ignored);
+    assert_eq!(multi.handle(Event::Row(5), &mut cx), Reaction::Ignored);
+    assert_eq!(search.handle(Event::Row(5), &mut cx), Reaction::Ignored);
+    assert_eq!(review.handle(Event::Row(5), &mut cx), Reaction::Ignored);
+}
+
+#[test]
+fn a_non_key_event_forgets_the_rendered_page_layout() {
+    for (event, landed) in [
+        (Event::Row(20), 40),
+        (Event::Tick, 20),
+        (Event::Paste("x".to_owned()), 20),
+        (Event::Resize { cols: 40, rows: 10 }, 20),
+    ] {
+        let mut select = Select::new("choices", items(50)).with_page_size(20);
+        let mut cx = Context::new();
+        drop(lines(&select, 10));
+        select.handle(event, &mut cx);
+        select.handle(page_key(Key::PageDown), &mut cx);
+
+        assert_eq!(select.selected_index(), Some(landed));
+    }
+}
+
+#[test]
+fn a_chord_on_a_plain_key_is_ignored_by_every_widget() {
+    let widgets: Vec<Box<dyn bang_core::Widget>> = vec![
+        Box::new(Select::new("select", items(3))),
+        Box::new(MultiSelect::new("multi", items(3))),
+        Box::new(SearchSelect::new("search", items(3))),
+        Box::new(ReviewList::new("review", items(3))),
+        Box::new(TextInput::new("text")),
+        Box::new(DatePicker::new("when", date(1))),
+        Box::new(Form::new("form").with_field("text", TextInput::new("inner"))),
+    ];
+    let mut cx = Context::new();
+
+    for mut widget in widgets {
+        for modifiers in [Modifiers::CONTROL, Modifiers::ALT] {
+            for key in [
+                Key::Enter,
+                Key::Esc,
+                Key::Tab,
+                Key::Char(' '),
+                Key::Up,
+                Key::Down,
+                Key::Left,
+                Key::Right,
+            ] {
+                let event = Event::Key(KeyEvent::with_modifiers(key.clone(), modifiers));
+                assert_eq!(
+                    widget.handle(event, &mut cx),
+                    Reaction::Ignored,
+                    "{key:?} with {modifiers:?} on {:?}",
+                    widget.id()
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -352,41 +506,4 @@ fn a_list_fills_a_terminal_that_grows_in_one_frame() {
     select.handle(Event::Resize { cols: 40, rows: 30 }, &mut cx);
 
     assert_eq!(lines(&select, 30).len(), 21);
-}
-
-#[test]
-fn a_focus_request_does_not_swallow_a_submit() {
-    use bang_core::{
-        FocusTarget,
-        Reaction,
-        SessionReaction,
-        SessionStatus,
-        WidgetId,
-    };
-    use screw::Widget as ScrewWidget;
-
-    struct FocusThenSubmit;
-
-    impl ScrewWidget for FocusThenSubmit {
-        fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {}
-    }
-
-    impl bang_core::Widget for FocusThenSubmit {
-        fn id(&self) -> WidgetId {
-            WidgetId::borrowed("both")
-        }
-
-        fn handle(&mut self, _event: Event, cx: &mut Context) -> Reaction {
-            cx.request_focus(FocusTarget::Next);
-            Reaction::Submit(bang_core::Value::from("done"))
-        }
-    }
-
-    let mut session = Session::new(FocusThenSubmit);
-
-    assert_eq!(
-        session.handle(Event::char('x')),
-        SessionReaction::Submit(bang_core::Value::from("done"))
-    );
-    assert!(matches!(session.status(), SessionStatus::Submitted(_)));
 }

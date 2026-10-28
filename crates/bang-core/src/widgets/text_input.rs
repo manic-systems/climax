@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::fmt;
+
 use screw::{
     RenderCtx,
     Role,
@@ -12,7 +14,10 @@ use unicode_segmentation::{
     UnicodeSegmentation as _,
 };
 
-use super::navigation::no_modifiers;
+use super::navigation::{
+    chorded,
+    no_modifiers,
+};
 use crate::{
     Context,
     Event,
@@ -37,6 +42,23 @@ pub struct TextInput {
     error:       Option<String>,
     validator:   Option<Box<Validator>>,
     mask:        Option<char>,
+}
+
+impl fmt::Debug for TextInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextInput")
+            .field("id", &self.id)
+            .field("prompt", &self.prompt)
+            .field("placeholder", &self.placeholder)
+            .field(
+                "value",
+                &self.mask.map_or(self.value.as_str(), |_| "<masked>"),
+            )
+            .field("cursor", &self.cursor)
+            .field("error", &self.error)
+            .field("mask", &self.mask)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TextInput {
@@ -164,12 +186,7 @@ impl TextInput {
     }
 
     fn snap_cursor(&mut self) {
-        let on_boundary = GraphemeCursor::new(self.cursor, self.value.len(), true)
-            .is_boundary(&self.value, 0)
-            .unwrap_or(true);
-        if !on_boundary {
-            self.cursor = next_boundary(&self.value, self.cursor);
-        }
+        self.cursor = cluster_end(&self.value, self.cursor);
     }
 
     fn backspace(&mut self) -> Reaction {
@@ -217,7 +234,7 @@ impl TextInput {
                 start = index;
             }
         }
-        start
+        cluster_start(&self.value, start)
     }
 
     fn word_end(&self) -> usize {
@@ -241,7 +258,7 @@ impl TextInput {
                 end = at + text.len();
             }
         }
-        self.cursor + end
+        cluster_end(&self.value, self.cursor + end)
     }
 
     fn move_word_left(&mut self) -> Reaction {
@@ -384,6 +401,9 @@ impl Widget for TextInput {
                     Key::Delete if key.modifiers == Modifiers::CONTROL => self.delete_word_right(),
                     Key::Left if by_word(&key) => self.move_word_left(),
                     Key::Right if by_word(&key) => self.move_word_right(),
+                    Key::Left | Key::Right | Key::Enter | Key::Esc if chorded(&key) => {
+                        Reaction::Ignored
+                    },
                     Key::Backspace => self.backspace(),
                     Key::Delete => self.delete(),
                     Key::Left => self.move_left(),
@@ -434,6 +454,28 @@ fn word_class(segment: &str) -> WordClass {
 
 fn by_word(key: &KeyEvent) -> bool {
     key.modifiers == Modifiers::CONTROL || key.modifiers == Modifiers::ALT
+}
+
+fn cluster_start(value: &str, at: usize) -> usize {
+    if is_boundary(value, at) {
+        at
+    } else {
+        previous_boundary(value, at)
+    }
+}
+
+fn cluster_end(value: &str, at: usize) -> usize {
+    if is_boundary(value, at) {
+        at
+    } else {
+        next_boundary(value, at)
+    }
+}
+
+fn is_boundary(value: &str, at: usize) -> bool {
+    GraphemeCursor::new(at, value.len(), true)
+        .is_boundary(value, 0)
+        .unwrap_or(true)
 }
 
 fn previous_boundary(value: &str, cursor: usize) -> usize {
@@ -649,6 +691,17 @@ mod tests {
         assert_eq!(widget.cursor_byte_index(), "cafe\u{301}".len());
         chord(&mut widget, Key::Char('w'), Modifiers::CONTROL);
         assert_eq!(widget.value(), " bar");
+
+        for text in ["ทำ", "ກຳ"] {
+            assert_eq!(text.graphemes(true).count(), 1);
+            let mut sara_am = TextInput::new("line").with_value(text);
+            chord(&mut sara_am, Key::Left, Modifiers::CONTROL);
+            assert_eq!(sara_am.cursor_byte_index(), 0);
+            chord(&mut sara_am, Key::Right, Modifiers::CONTROL);
+            assert_eq!(sara_am.cursor_byte_index(), text.len());
+            chord(&mut sara_am, Key::Backspace, Modifiers::ALT);
+            assert_eq!(sara_am.value(), "");
+        }
     }
 
     #[test]
