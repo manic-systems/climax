@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::str;
+use core::{
+    ops::Deref,
+    str,
+};
 
 use bang_core::{
     Event,
@@ -19,11 +22,12 @@ const LF: u8 = b'\n';
 const CR: u8 = b'\r';
 const PASTE_START: &[u8] = b"\x1b[200~";
 const PASTE_END: &[u8] = b"\x1b[201~";
+const MAX_SEQUENCE_LEN: usize = 64;
 
 /// incremental decoder from terminal bytes to bang input events
 #[derive(Debug, Default)]
 pub struct Decoder {
-    pending:  Vec<u8>,
+    pending:  Pending,
     paste:    Vec<u8>,
     in_paste: bool,
 }
@@ -33,7 +37,7 @@ impl Decoder {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            pending:  Vec::new(),
+            pending:  Pending::new(),
             paste:    Vec::new(),
             in_paste: false,
         }
@@ -42,14 +46,14 @@ impl Decoder {
     /// feeds bytes and returns complete events, invalid bytes become
     /// `UnknownEscape`
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Event> {
-        self.pending.extend_from_slice(bytes);
+        self.pending.extend(bytes);
         let mut events = Vec::new();
 
         loop {
             if self.in_paste {
                 if let Some(end) = find_subslice(&self.pending, PASTE_END) {
                     self.paste.extend_from_slice(&self.pending[..end]);
-                    self.pending.drain(..end + PASTE_END.len());
+                    self.pending.skip(end + PASTE_END.len());
                     self.in_paste = false;
                     events.push(Event::Paste(
                         String::from_utf8_lossy(&self.paste).into_owned(),
@@ -60,7 +64,8 @@ impl Decoder {
 
                 let keep = partial_suffix_len(&self.pending, PASTE_END);
                 let paste_len = self.pending.len().saturating_sub(keep);
-                self.paste.extend(self.pending.drain(..paste_len));
+                self.paste.extend_from_slice(&self.pending[..paste_len]);
+                self.pending.skip(paste_len);
                 break;
             }
 
@@ -69,7 +74,7 @@ impl Decoder {
             }
 
             if self.pending.starts_with(PASTE_START) {
-                self.pending.drain(..PASTE_START.len());
+                self.pending.skip(PASTE_START.len());
                 self.in_paste = true;
                 continue;
             }
@@ -86,44 +91,45 @@ impl Decoder {
                     }
                 },
                 CR | LF => {
-                    self.pending.drain(..1);
+                    self.pending.skip(1);
                     events.push(Event::key(Key::Enter));
                 },
                 TAB => {
-                    self.pending.drain(..1);
+                    self.pending.skip(1);
                     events.push(Event::key(Key::Tab));
                 },
                 BACKSPACE | CTRL_H => {
-                    self.pending.drain(..1);
+                    self.pending.skip(1);
                     events.push(Event::key(Key::Backspace));
                 },
                 CTRL_C => {
-                    self.pending.drain(..1);
+                    self.pending.skip(1);
                     events.push(control_char('c'));
                 },
                 CTRL_D => {
-                    self.pending.drain(..1);
+                    self.pending.skip(1);
                     events.push(control_char('d'));
                 },
                 0x00..=0x1F => {
-                    self.pending.drain(..1);
+                    self.pending.skip(1);
                     events.push(control_char(control_symbol(first)));
                 },
                 _ => {
                     match decode_utf8_prefix(&self.pending) {
                         Utf8Result::Char(value, len) => {
-                            self.pending.drain(..len);
+                            self.pending.skip(len);
                             events.push(Event::char(value));
                         },
                         Utf8Result::Pending => break,
                         Utf8Result::Invalid => {
-                            events.push(Event::UnknownEscape(self.pending.drain(..1).collect()));
+                            events.push(Event::UnknownEscape(self.pending.take(1)));
                         },
                     }
                 },
             }
         }
 
+        self.pending.compact();
         events
     }
 
@@ -132,7 +138,8 @@ impl Decoder {
     pub fn flush(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
         if self.in_paste {
-            self.paste.append(&mut self.pending);
+            self.paste.extend_from_slice(&self.pending);
+            self.pending.clear();
             self.in_paste = false;
             events.push(Event::Paste(
                 String::from_utf8_lossy(&self.paste).into_owned(),
@@ -147,14 +154,14 @@ impl Decoder {
                 continue;
             }
             if self.pending[0] == ESC {
-                self.pending.drain(..1);
+                self.pending.skip(1);
                 events.push(Event::key(Key::Esc));
                 continue;
             }
 
             events.extend(self.feed(&[]));
             if !self.pending.is_empty() {
-                self.pending.drain(..1);
+                events.push(Event::UnknownEscape(self.pending.take(1)));
             }
         }
 
@@ -198,7 +205,7 @@ impl Decoder {
         let event = match self.pending.get(1) {
             None => Event::key(Key::Esc),
             Some(&ESC) => {
-                self.pending.drain(..1);
+                self.pending.skip(1);
                 return Some(Event::key(Key::Esc));
             },
             Some(&byte) => {
@@ -234,7 +241,7 @@ impl Decoder {
                         self.consume_modified_key(len + 1, Key::Char(value), Modifiers::ALT)
                     },
                     Utf8Result::Pending => EscapeResult::Pending,
-                    Utf8Result::Invalid => EscapeResult::Unknown(self.pending.drain(..1).collect()),
+                    Utf8Result::Invalid => EscapeResult::Unknown(self.pending.take(1)),
                 }
             },
         }
@@ -244,14 +251,14 @@ impl Decoder {
         match self.pending.get(2) {
             None => EscapeResult::Pending,
             Some(b'[' | b'O') => {
-                self.pending.remove(0);
+                self.pending.skip(1);
                 match self.decode_escape() {
                     EscapeResult::Event(Event::Key(mut key)) => {
                         key.modifiers |= Modifiers::ALT;
                         EscapeResult::Event(Event::Key(key))
                     },
                     EscapeResult::Pending => {
-                        self.pending.insert(0, ESC);
+                        self.pending.unskip(1);
                         EscapeResult::Pending
                     },
                     EscapeResult::Unknown(mut sequence) => {
@@ -262,7 +269,7 @@ impl Decoder {
                 }
             },
             Some(_) => {
-                self.pending.drain(..1);
+                self.pending.skip(1);
                 EscapeResult::Event(Event::key(Key::Esc))
             },
         }
@@ -275,6 +282,9 @@ impl Decoder {
 
         let mut index = 2;
         loop {
+            if index == MAX_SEQUENCE_LEN {
+                return EscapeResult::Unknown(self.pending.take(index));
+            }
             let Some(&byte) = self.pending.get(index) else {
                 return EscapeResult::Pending;
             };
@@ -286,11 +296,11 @@ impl Decoder {
                 // not a parameter byte and not a final byte, this CSI has no
                 // end, so stop before it and let the next loop
                 // decode it fresh
-                return EscapeResult::Unknown(self.pending.drain(..index).collect());
+                return EscapeResult::Unknown(self.pending.take(index));
             }
             let parameters = &self.pending[2..index];
             let Some((key, modifiers)) = csi_key(parameters, byte) else {
-                return EscapeResult::Unknown(self.pending.drain(..=index).collect());
+                return EscapeResult::Unknown(self.pending.take(index + 1));
             };
             return self.consume_modified_key(index + 1, key, modifiers);
         }
@@ -302,7 +312,7 @@ impl Decoder {
         };
         let key = match byte {
             b'A'..=b'E' => Key::Function(byte - b'A' + 1),
-            _ => return EscapeResult::Unknown(self.pending.drain(..4).collect()),
+            _ => return EscapeResult::Unknown(self.pending.take(4)),
         };
         self.consume_key(4, key)
     }
@@ -310,6 +320,9 @@ impl Decoder {
     fn decode_ss3(&mut self) -> EscapeResult {
         let mut index = 2;
         loop {
+            if index == MAX_SEQUENCE_LEN {
+                return EscapeResult::Unknown(self.pending.take(index));
+            }
             let Some(&byte) = self.pending.get(index) else {
                 return EscapeResult::Pending;
             };
@@ -318,10 +331,10 @@ impl Decoder {
                 continue;
             }
             if !(0x40..=0x7E).contains(&byte) {
-                return EscapeResult::Unknown(self.pending.drain(..index).collect());
+                return EscapeResult::Unknown(self.pending.take(index));
             }
             let Some((key, modifiers)) = ss3_key(&self.pending[2..index], byte) else {
-                return EscapeResult::Unknown(self.pending.drain(..=index).collect());
+                return EscapeResult::Unknown(self.pending.take(index + 1));
             };
             return self.consume_modified_key(index + 1, key, modifiers);
         }
@@ -332,14 +345,14 @@ impl Decoder {
             return EscapeResult::Pending;
         }
         if len == 0 {
-            return EscapeResult::Unknown(self.pending.drain(..1).collect());
+            return EscapeResult::Unknown(self.pending.take(1));
         }
-        self.pending.drain(..len);
+        self.pending.skip(len);
         EscapeResult::Event(Event::Key(KeyEvent::with_modifiers(key, modifiers)))
     }
 
     fn consume_key(&mut self, len: usize, key: Key) -> EscapeResult {
-        self.pending.drain(..len);
+        self.pending.skip(len);
         EscapeResult::Event(Event::key(key))
     }
 }
@@ -351,7 +364,7 @@ fn csi_key(parameters: &[u8], final_byte: u8) -> Option<(Key, Modifiers)> {
         .copied()
         .map_or(Some(Modifiers::empty()), xterm_modifiers)?;
     let key = match final_byte {
-        b'Z' if values.is_empty() => return Some((Key::Backtab, Modifiers::SHIFT)),
+        b'Z' if values.is_empty() => return Some((Key::Backtab, Modifiers::empty())),
         b'~' => tilde_key(*values.first()?)?,
         _ => final_key(final_byte)?,
     };
@@ -451,6 +464,62 @@ const fn control_char(value: char) -> Event {
         Key::Char(value),
         Modifiers::CONTROL,
     ))
+}
+
+/// undecoded bytes, consuming advances `head` instead of shifting the tail once
+/// per event
+#[derive(Debug, Default)]
+struct Pending {
+    bytes: Vec<u8>,
+    head:  usize,
+}
+
+impl Pending {
+    const fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            head:  0,
+        }
+    }
+
+    fn extend(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn skip(&mut self, len: usize) {
+        self.head += len;
+        if self.head == self.bytes.len() {
+            self.clear();
+        }
+    }
+
+    const fn unskip(&mut self, len: usize) {
+        self.head -= len;
+    }
+
+    fn take(&mut self, len: usize) -> Vec<u8> {
+        let taken = self[..len].to_vec();
+        self.skip(len);
+        taken
+    }
+
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.head = 0;
+    }
+
+    fn compact(&mut self) {
+        self.bytes.drain(..self.head);
+        self.head = 0;
+    }
+}
+
+impl Deref for Pending {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.bytes[self.head..]
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -691,6 +760,10 @@ mod tests {
             Modifiers::ALT
         )],);
         assert_eq!(decode_all(b"\x1b"), vec![Event::key(Key::Esc)]);
+        assert_eq!(decode_all(b"\xe2\x82"), vec![
+            Event::UnknownEscape(vec![0xE2]),
+            Event::UnknownEscape(vec![0x82]),
+        ]);
         assert_eq!(decode_all(b"\x1b[1;"), vec![
             Event::key(Key::Esc),
             Event::char('['),
@@ -723,6 +796,19 @@ mod tests {
     }
 
     #[test]
+    fn an_unterminated_sequence_is_capped_into_an_unknown_escape() {
+        for introducer in [b"\x1b[".as_slice(), b"\x1bO".as_slice()] {
+            let mut bytes = introducer.to_vec();
+            bytes.extend([b'1'; MAX_SEQUENCE_LEN]);
+            assert_eq!(decode_in_chunks(&bytes, 1), vec![
+                Event::UnknownEscape(bytes[..MAX_SEQUENCE_LEN].to_vec()),
+                Event::char('1'),
+                Event::char('1'),
+            ]);
+        }
+    }
+
+    #[test]
     fn xterm_function_keys_insert_and_modified_ss3_decode() {
         let none = Modifiers::empty();
         let cases = [
@@ -735,6 +821,7 @@ mod tests {
             (b"\x1b[23~".as_slice(), Key::Function(11), none),
             (b"\x1b[24~".as_slice(), Key::Function(12), none),
             (b"\x1b[2~".as_slice(), Key::Insert, none),
+            (b"\x1b[Z".as_slice(), Key::Backtab, none),
             (
                 b"\x1b[1;5P".as_slice(),
                 Key::Function(1),

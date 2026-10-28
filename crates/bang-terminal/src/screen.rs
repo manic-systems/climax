@@ -28,6 +28,7 @@ const STATE_UNCERTAIN: u8 = 1 << 4;
 
 /// where a session draws
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum ScreenKind {
     /// below the current cursor line, leaving scrollback intact
     #[default]
@@ -38,6 +39,7 @@ pub enum ScreenKind {
 
 /// what happens to the cursor while the screen is held
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum CursorPolicy {
     /// leaves the cursor as the terminal had it
     Preserve,

@@ -59,7 +59,9 @@ mod events;
 mod mode;
 mod screen;
 mod signal;
-#[doc(hidden)] pub mod testing;
+#[cfg(any(test, feature = "testing"))]
+#[doc(hidden)]
+pub mod testing;
 
 pub use cleanup::{
     CleanupFailure,

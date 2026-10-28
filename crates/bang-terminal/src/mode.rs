@@ -46,24 +46,6 @@ impl RawModeOptions {
             timeout_deciseconds: 0,
         }
     }
-
-    /// bytes a read waits for before returning (`VMIN`)
-    #[must_use]
-    pub const fn minimum_bytes(self) -> u8 {
-        self.minimum_bytes
-    }
-
-    /// read timeout in tenths of a second (`VTIME`), zero for none
-    #[must_use]
-    pub const fn timeout_deciseconds(self) -> u8 {
-        self.timeout_deciseconds
-    }
-}
-
-impl Default for RawModeOptions {
-    fn default() -> Self {
-        Self::blocking()
-    }
 }
 
 /// holds a terminal in raw mode and restores the saved settings on drop
@@ -163,11 +145,5 @@ mod tests {
         );
         assert!(!raw.local_modes.contains(LocalModes::ECHO));
         guard.restore().unwrap();
-    }
-
-    #[test]
-    fn raw_read_policies_are_explicit() {
-        assert_eq!(RawModeOptions::blocking().minimum_bytes(), 1);
-        assert_eq!(RawModeOptions::blocking().timeout_deciseconds(), 0);
     }
 }
