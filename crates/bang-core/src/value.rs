@@ -224,7 +224,14 @@ impl Date {
 
 impl fmt::Display for Date {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
+        let sign = if self.year < 0 { "-" } else { "" };
+        write!(
+            f,
+            "{sign}{:04}-{:02}-{:02}",
+            self.year.unsigned_abs(),
+            self.month,
+            self.day
+        )
     }
 }
 
@@ -353,7 +360,11 @@ mod tests {
     #[test]
     fn a_negative_year_round_trips_through_text() {
         let date = Date::new(-5, 3, 1).unwrap();
+        assert_eq!(date.to_string(), "-0005-03-01");
         assert_eq!(date.to_string().parse::<Date>(), Ok(date));
-        "--5-03-01".parse::<Date>().unwrap_err();
+        assert_eq!(Date::new(-1000, 1, 1).unwrap().to_string(), "-1000-01-01");
+        for text in ["--5-03-01", "-005-03-01", "-0000-01-01"] {
+            text.parse::<Date>().unwrap_err();
+        }
     }
 }

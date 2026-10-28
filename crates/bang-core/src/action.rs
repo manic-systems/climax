@@ -83,7 +83,18 @@ impl ActionBinding {
     }
 }
 
-/// carries widget state + action executed
+/// a widget with keys bound to named actions
+///
+/// a bound key leaves through every enclosing container with an object whose
+/// `action` is the binding's name and whose `value` is the widget's current
+/// value, null when it has none
+///
+/// the layer checks its bindings first, so a binding wins over the widget's own
+/// use of the key and the widget never sees it, which also means the current
+/// value is submitted as it stands, without running the widget's validator
+///
+/// every other event reaches the widget, and the key help gains one entry per
+/// binding
 #[derive(Clone, Debug)]
 pub struct ActionLayer<W> {
     widget:  W,
@@ -101,14 +112,37 @@ impl<W> ActionLayer<W> {
     }
 
     /// replaces the bound actions with `actions`
+    ///
+    /// # Panics
+    ///
+    /// panics when an action is bound to a control character, or two actions
+    /// share a key
     #[must_use]
     pub fn with_actions(mut self, actions: impl IntoIterator<Item = ActionBinding>) -> Self {
-        self.actions = actions.into_iter().collect();
+        self.actions.clear();
+        for action in actions {
+            self.push_action(action);
+        }
         self
     }
 
     /// binds one more action
+    ///
+    /// # Panics
+    ///
+    /// panics when the action is bound to a control character, or to a key
+    /// another action has
     pub fn push_action(&mut self, action: ActionBinding) {
+        assert!(
+            !matches!(action.key.key, Key::Char(value) if value.is_control()),
+            "action key '{}' is a control character",
+            key_label(&action.key)
+        );
+        assert!(
+            self.actions.iter().all(|bound| bound.key != action.key),
+            "action key '{}' is already bound",
+            key_label(&action.key)
+        );
         self.actions.push(action);
     }
 
@@ -168,6 +202,14 @@ where
 
     fn has_key_help(&self) -> bool {
         self.widget.has_key_help() || !self.actions.is_empty()
+    }
+
+    fn takes_tab(&self) -> bool {
+        self.widget.takes_tab()
+            || self
+                .actions
+                .iter()
+                .any(|action| action.key == KeyEvent::new(Key::Tab))
     }
 
     fn offers_nothing(&self) -> bool {
@@ -335,6 +377,24 @@ mod tests {
             panic!("a bound action should end the form");
         };
         assert_eq!(value.get("action"), Some(&Value::from("save")));
+    }
+
+    #[test]
+    #[should_panic(expected = "action key 'ctrl-s' is already bound")]
+    fn a_repeated_action_key_is_refused() {
+        drop(
+            ActionLayer::new(Select::new("choice", ["alpha"])).with_actions([
+                ActionBinding::control_char('s', "save"),
+                ActionBinding::control_char('s', "store"),
+            ]),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is a control character")]
+    fn an_action_on_a_control_character_is_refused() {
+        let mut layer = ActionLayer::new(Select::new("choice", ["alpha"]));
+        layer.push_action(ActionBinding::char('\u{7}', "bell"));
     }
 
     #[test]

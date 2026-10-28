@@ -22,6 +22,7 @@ use super::{
         ListFrame,
         ListRow,
         PageLayout,
+        chorded,
         move_index,
         only_control,
         page_move,
@@ -37,6 +38,7 @@ use crate::{
 };
 
 /// a single-choice list filtered by a query typed above it
+#[derive(Debug)]
 pub struct SearchSelect {
     id:        WidgetId,
     input:     TextInput,
@@ -332,10 +334,13 @@ impl Widget for SearchSelect {
 
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
+        let targets = self.layout.take_targets();
         match &event {
             Event::Key(key) => {
-                let targets = self.layout.take_targets();
                 match key.key {
+                    Key::Up | Key::Down | Key::Enter | Key::Esc if chorded(key) => {
+                        Reaction::Ignored
+                    },
                     Key::Up => self.move_by(-1, self.wrap),
                     Key::Down => self.move_by(1, self.wrap),
                     Key::Char('p') if only_control(key) => self.move_by(-1, self.wrap),

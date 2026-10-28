@@ -6,28 +6,16 @@ use crate::{
     WidgetId,
 };
 
-/// context from a handled event
+/// the context a widget handles an event in, it carries nothing yet
 #[derive(Debug, Default)]
-pub struct Context {
-    focus: Option<FocusTarget>,
-}
+#[non_exhaustive]
+pub struct Context;
 
 impl Context {
-    /// a context with no pending request
+    /// an empty context
     #[must_use]
     pub const fn new() -> Self {
-        Self { focus: None }
-    }
-
-    /// asks the session to move focus to `target` once the event is handled
-    pub fn request_focus(&mut self, target: FocusTarget) {
-        self.focus = Some(target);
-    }
-
-    /// takes the pending focus request, leaving none
-    #[must_use]
-    pub const fn take_focus(&mut self) -> Option<FocusTarget> {
-        self.focus.take()
+        Self
     }
 }
 
@@ -77,13 +65,18 @@ impl Reaction {
 pub trait Widget: screw::Widget {
     /// identifies the widget to drivers and actions
     fn id(&self) -> WidgetId;
-    /// handles `event`, using `cx` to request focus changes, and reports what
-    /// happened
+    /// handles `event` and reports what happened
     fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction;
 
     /// whether the last line a widget renders is a key help line, which an
     /// enclosing [`ActionLayer`](crate::ActionLayer) extends, false by default
     fn has_key_help(&self) -> bool {
+        false
+    }
+
+    /// whether the widget uses Tab itself, so a [`Form`](crate::widgets::Form)
+    /// cannot move focus with it, false by default
+    fn takes_tab(&self) -> bool {
         false
     }
 

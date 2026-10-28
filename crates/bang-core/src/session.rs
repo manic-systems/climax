@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::fmt;
+
 use screw::{
     RenderCtx,
     Surface,
@@ -19,9 +21,18 @@ use crate::{
 /// runs one root widget and tracks whether it has finished and needs redrawing
 pub struct Session {
     root:   Box<dyn Widget>,
-    focus:  Option<FocusTarget>,
     status: SessionStatus,
     dirty:  bool,
+}
+
+impl fmt::Debug for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("root", &self.root.id())
+            .field("status", &self.status)
+            .field("dirty", &self.dirty)
+            .finish()
+    }
 }
 
 impl Session {
@@ -30,7 +41,6 @@ impl Session {
     pub fn new(root: impl Widget + 'static) -> Self {
         Self {
             root:   Box::new(root),
-            focus:  None,
             status: SessionStatus::Running,
             dirty:  true,
         }
@@ -41,7 +51,6 @@ impl Session {
     pub fn boxed(root: Box<dyn Widget>) -> Self {
         Self {
             root,
-            focus: None,
             status: SessionStatus::Running,
             dirty: true,
         }
@@ -59,19 +68,12 @@ impl Session {
             Event::Tick => !matches!(self.root.tick_interest(), TickInterest::Never),
             Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Row(_) => false,
         };
-        let mut context = Context::new();
-        let handled = self.root.handle(event, &mut context);
-        let reaction = match (handled, context.take_focus()) {
-            (terminal @ (Reaction::Submit(_) | Reaction::Action(_) | Reaction::Cancel), _) => {
-                terminal
-            },
-            (_, Some(target)) => Reaction::Focus(target),
-            (other, None) => redraw_reaction(other, redraws),
-        };
+        let handled = self.root.handle(event, &mut Context::new());
+        let reaction = redraw_reaction(handled, redraws);
 
         match &reaction {
             Reaction::Ignored => {},
-            Reaction::Changed => {
+            Reaction::Changed | Reaction::Focus(_) => {
                 self.dirty = true;
             },
             Reaction::Submit(value) | Reaction::Action(value) => {
@@ -80,10 +82,6 @@ impl Session {
             },
             Reaction::Cancel => {
                 self.status = SessionStatus::Cancelled;
-                self.dirty = true;
-            },
-            Reaction::Focus(target) => {
-                self.focus = Some(target.clone());
                 self.dirty = true;
             },
         }
@@ -103,12 +101,6 @@ impl Session {
     #[must_use]
     pub const fn status(&self) -> &SessionStatus {
         &self.status
-    }
-
-    /// the latest focus request, if a widget made one
-    #[must_use]
-    pub const fn focus(&self) -> Option<&FocusTarget> {
-        self.focus.as_ref()
     }
 
     /// whether the session changed since the last [`Self::clear_dirty`]

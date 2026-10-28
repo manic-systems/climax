@@ -18,6 +18,7 @@ use super::{
         ListRow,
         PageLayout,
         PageTargets,
+        chorded,
         move_index,
         no_modifiers,
     },
@@ -149,9 +150,6 @@ impl ReviewActionBinding {
     }
 }
 
-/// keys the list handles itself, matched whatever their case
-const BUILT_IN_KEYS: [char; 9] = [' ', 'j', 'k', 'r', 'y', 'c', 'x', 'n', 'u'];
-
 /// a list where each row keeps an independent confirm, deny or unset state
 #[derive(Clone, Debug)]
 pub struct ReviewList {
@@ -275,22 +273,59 @@ impl ReviewList {
     ///
     /// # Panics
     ///
-    /// panics when an action is bound to a key the list already uses, which are
-    /// space, j, k, r, y, c, x, n and u in either case
+    /// panics when an action is bound to a control character, to a key the list
+    /// already uses (see [`Self::is_reserved_key`]), or to a key another action
+    /// has, whatever the case
     #[must_use]
     pub fn with_custom_actions(
         mut self,
         actions: impl IntoIterator<Item = ReviewActionBinding>,
     ) -> Self {
         self.custom_actions = actions.into_iter().collect();
+        let mut seen = Vec::new();
         for action in &self.custom_actions {
             assert!(
-                !BUILT_IN_KEYS.contains(&action.key.to_ascii_lowercase()),
+                !action.key.is_control(),
+                "review action key {:?} is a control character",
+                action.key
+            );
+            assert!(
+                !Self::is_reserved_key(action.key),
                 "review action key {:?} is already used by the list",
                 action.key
             );
+            let folded = Self::fold_key(action.key);
+            assert!(
+                !seen.contains(&folded),
+                "review action key {:?} is bound twice",
+                action.key
+            );
+            seen.push(folded);
         }
         self
+    }
+
+    /// whether the list takes `key` itself, which are space, j, k, r, y, c, x,
+    /// n and u in either case, and control characters such as Tab
+    #[must_use]
+    pub const fn is_reserved_key(key: char) -> bool {
+        // `char::is_control` is const only since 1.97
+        matches!(key, '\0'..='\u{1f}' | '\u{7f}'..='\u{9f}')
+            || matches!(
+                key.to_ascii_lowercase(),
+                ' ' | 'j' | 'k' | 'r' | 'y' | 'c' | 'x' | 'n' | 'u'
+            )
+    }
+
+    /// the key in simple lowercase, which review action keys are compared by,
+    /// unchanged when lowercasing gives more than one character
+    #[must_use]
+    pub fn fold_key(key: char) -> char {
+        let mut lower = key.to_lowercase();
+        match (lower.next(), lower.next()) {
+            (Some(only), None) => only,
+            _ => key,
+        }
     }
 
     const fn exits(&self) -> bool {
@@ -404,6 +439,15 @@ impl ReviewList {
             return Reaction::Ignored;
         }
         self.selected = landed;
+        self.ensure_visible();
+        Reaction::Changed
+    }
+
+    fn jump_to(&mut self, row: usize) -> Reaction {
+        let Some(index) = self.visible_iter().nth(row) else {
+            return Reaction::Ignored;
+        };
+        self.selected = index;
         self.ensure_visible();
         Reaction::Changed
     }
@@ -613,14 +657,27 @@ impl Widget for ReviewList {
         true
     }
 
+    fn takes_tab(&self) -> bool {
+        true
+    }
+
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
-        let Event::Key(key) = event else {
-            return Reaction::Ignored;
-        };
         let targets = self.layout.take_targets();
+        let key = match event {
+            Event::Key(key) => key,
+            Event::Row(row) => return self.jump_to(row),
+            Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
+                return Reaction::Ignored;
+            },
+        };
 
         match key.key {
+            Key::Up | Key::Down | Key::Char(' ') | Key::Tab | Key::Enter | Key::Esc
+                if chorded(&key) =>
+            {
+                Reaction::Ignored
+            },
             Key::Up => self.move_by(-1, self.wrap),
             Key::Down => self.move_by(1, self.wrap),
             Key::Home => self.move_to(0),
@@ -661,7 +718,7 @@ impl Widget for ReviewList {
             Key::Char(value) if no_modifiers(&key) && self.exits() => {
                 self.custom_actions
                     .iter()
-                    .find(|action| action.key.eq_ignore_ascii_case(&value))
+                    .find(|action| Self::fold_key(action.key) == Self::fold_key(value))
                     .map_or(Reaction::Ignored, |action| self.action(&action.name))
             },
             Key::Enter => self.submit(),
@@ -736,6 +793,44 @@ mod tests {
             ReviewList::new("review", ["alpha"])
                 .with_custom_actions([ReviewActionBinding::new('R', "regenerate")]),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "is bound twice")]
+    fn a_custom_action_key_repeated_in_another_case_is_refused() {
+        drop(ReviewList::new("review", ["alpha"]).with_custom_actions([
+            ReviewActionBinding::new('é', "first"),
+            ReviewActionBinding::new('É', "second"),
+        ]));
+    }
+
+    #[test]
+    #[should_panic(expected = "is a control character")]
+    fn a_custom_action_on_a_control_character_is_refused() {
+        drop(
+            ReviewList::new("review", ["alpha"])
+                .with_custom_actions([ReviewActionBinding::new('\u{7}', "bell")]),
+        );
+    }
+
+    #[test]
+    fn custom_keys_match_whatever_the_case_and_reserved_keys_are_listed() {
+        let review = ReviewList::new("review", ["alpha"])
+            .with_custom_actions([ReviewActionBinding::new('é', "accent")]);
+        assert_exit(review, Event::char('É'), "action", Some("accent"));
+
+        for key in [
+            ' ', 'j', 'J', 'k', 'R', 'y', 'C', 'x', 'N', 'u', '\t', '\u{1}',
+        ] {
+            assert!(ReviewList::is_reserved_key(key), "{key:?}");
+        }
+        for key in ['g', 'é', 'a'] {
+            assert!(!ReviewList::is_reserved_key(key), "{key:?}");
+        }
+
+        assert_eq!(ReviewList::fold_key('É'), 'é');
+        assert_eq!(ReviewList::fold_key('İ'), 'İ');
+        assert_eq!(ReviewList::fold_key('7'), '7');
     }
 
     #[test]
