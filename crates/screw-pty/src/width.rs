@@ -48,9 +48,52 @@ const WIDE: &[(u32, u32)] = &[
     (0x20000, 0x3FFFD),
 ];
 
+/// text-default symbols that an emoji presentation selector widens to two
+/// columns
+const EMOJI_BASES: &[(u32, u32)] = &[
+    (0x0023, 0x0023),
+    (0x002A, 0x002A),
+    (0x0030, 0x0039),
+    (0x00A9, 0x00A9),
+    (0x00AE, 0x00AE),
+    (0x203C, 0x203C),
+    (0x2049, 0x2049),
+    (0x2122, 0x2122),
+    (0x2139, 0x2139),
+    (0x2194, 0x2199),
+    (0x21A9, 0x21AA),
+    (0x2600, 0x2604),
+    (0x260E, 0x260E),
+    (0x2611, 0x2611),
+    (0x2618, 0x2618),
+    (0x261D, 0x261D),
+    (0x2620, 0x2620),
+    (0x2622, 0x2623),
+    (0x2626, 0x2626),
+    (0x262A, 0x262A),
+    (0x2640, 0x2640),
+    (0x2642, 0x2642),
+    (0x2660, 0x2660),
+    (0x2663, 0x2663),
+    (0x2665, 0x2666),
+    (0x2668, 0x2668),
+    (0x267B, 0x267B),
+    (0x2699, 0x2699),
+    (0x26A0, 0x26A0),
+    (0x2702, 0x2702),
+    (0x2708, 0x2709),
+    (0x2714, 0x2714),
+    (0x2716, 0x2716),
+    (0x2733, 0x2734),
+    (0x2744, 0x2744),
+    (0x2747, 0x2747),
+    (0x2763, 0x2764),
+    (0x27A1, 0x27A1),
+    (0x2B05, 0x2B07),
+];
+
 const ZWJ: char = '\u{200d}';
 const VS16: char = '\u{fe0f}';
-const KEYCAP: char = '\u{20e3}';
 
 fn within(table: &[(u32, u32)], ch: char) -> bool {
     let code = u32::from(ch);
@@ -85,15 +128,15 @@ pub fn joins(cell: &str, ch: char) -> bool {
     columns(ch) == 0 || cell.ends_with(ZWJ) || (lone_indicator && regional_indicator(ch))
 }
 
-/// columns a whole cell takes, an emoji presentation selector or keycap makes
-/// it two wide and two regional indicators make one flag
+/// columns a whole cell takes, an emoji presentation selector makes a symbol
+/// from [`EMOJI_BASES`] two wide and two regional indicators make one flag
 pub fn cell(text: &str) -> usize {
     let mut chars = text.chars();
     let Some(first) = chars.next() else {
         return 0;
     };
     let flag = regional_indicator(first) && chars.clone().next().is_some_and(regional_indicator);
-    if flag || text.contains(VS16) || text.contains(KEYCAP) {
+    if flag || (text.contains(VS16) && within(EMOJI_BASES, first)) {
         2
     } else {
         columns(first)
@@ -105,7 +148,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wide_characters_and_clusters_take_the_columns_xterm_gives_them() {
+    fn wide_characters_and_clusters_take_their_unicode_widths() {
         assert_eq!(columns('a'), 1);
         assert_eq!(columns('世'), 2);
         assert_eq!(columns('한'), 2);
@@ -117,6 +160,19 @@ mod tests {
         assert_eq!(cell("\u{2764}\u{fe0f}"), 2);
         assert_eq!(cell("1\u{fe0f}\u{20e3}"), 2);
         assert_eq!(cell("e\u{301}"), 1);
+        assert_eq!(cell(" \u{fe0f}"), 1);
+        assert_eq!(cell("a\u{fe0f}"), 1);
+        assert_eq!(cell("ก\u{fe0f}"), 1);
+    }
+
+    #[test]
+    fn the_emoji_bases_are_widened_by_screw_too() {
+        for &(low, high) in EMOJI_BASES {
+            for ch in (low..=high).filter_map(char::from_u32) {
+                let text = format!("{ch}\u{fe0f}");
+                assert_eq!(screw::width(&text), cell(&text), "{text:?}");
+            }
+        }
     }
 
     #[test]

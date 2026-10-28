@@ -70,6 +70,8 @@ pub enum ScreenError {
     IncompleteSequence,
     /// sequence screw does not emit, described by its text
     UnsupportedSequence(String),
+    /// a cluster the model measures wider than screw did, described by its text
+    WidthMismatch(String),
 }
 
 impl fmt::Display for ScreenError {
@@ -86,6 +88,7 @@ impl fmt::Display for ScreenError {
             Self::UnsupportedSequence(sequence) => {
                 write!(f, "unsupported terminal sequence {sequence:?}")
             },
+            Self::WidthMismatch(cluster) => write!(f, "width mismatch, {cluster}"),
         }
     }
 }
@@ -226,7 +229,7 @@ impl ScreenBuffer {
         if new > old {
             let end = lead + new;
             if end > self.columns() {
-                return Err(unsupported(format!(
+                return Err(ScreenError::WidthMismatch(format!(
                     "{new}-column cluster {joined:?} does not fit at column {lead}"
                 )));
             }
@@ -1103,11 +1106,11 @@ mod tests {
     }
 
     #[test]
-    fn a_cluster_that_cannot_widen_at_the_last_column_is_unsupported() {
+    fn a_cluster_that_cannot_widen_at_the_last_column_is_a_width_mismatch() {
         let mut screen = EmittedScreen::new(2, 2);
         assert!(matches!(
             screen.feed("a\u{26a0}\u{fe0f}".as_bytes()),
-            Err(ScreenError::UnsupportedSequence(_)),
+            Err(ScreenError::WidthMismatch(_)),
         ));
     }
 
