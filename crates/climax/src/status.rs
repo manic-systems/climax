@@ -85,6 +85,7 @@ pub fn message(message: impl Into<String>) -> Status {
     Status::new(message, coordinator.clone())
 }
 
+/// transient status line, configured with builders and then started
 pub struct Status {
     message:         String,
     widget:          Option<WidgetRef>,
@@ -124,6 +125,7 @@ impl Status {
     }
 
     #[must_use]
+    /// draw a spinner before the message or widget
     pub const fn spinner(mut self) -> Self {
         self.spinner = true;
         self
@@ -138,6 +140,8 @@ impl Status {
     }
 
     #[must_use]
+    /// message printed in place of the live line when the status finishes
+    /// successfully
     pub fn final_message(mut self, message: impl Into<String>) -> Self {
         self.final_message = Some(message.into());
         self
@@ -169,10 +173,23 @@ impl Status {
         }
     }
 
+    /// start the status and finish it at once as a success, printing the final
+    /// message if set
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be drawn or removed
     pub fn finish(self) -> Result<()> {
         self.start().finish()
     }
 
+    /// show the status while `operation` runs, an error prints the failure
+    /// message
+    ///
+    /// # Errors
+    ///
+    /// fails with the error of `operation`, with any cleanup failure attached
+    /// as related
     pub fn during<T>(self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         let mut status = self.start();
         match operation() {
@@ -207,16 +224,28 @@ impl Status {
     }
 }
 
+/// started status, dropping it without `finish` counts as a failure
 pub struct StatusRuntime {
     coordinator: StatusCoordinator,
     id:          Option<u64>,
 }
 
 impl StatusRuntime {
+    /// ask for a redraw after state shared with the status widget changed
+    ///
+    /// # Errors
+    ///
+    /// fails when the status thread has stopped
     pub fn mark_dirty(&self) -> Result<()> {
         self.coordinator.mark_dirty()
     }
 
+    /// remove the status as a success, reporting a kept widget panic or first
+    /// draw failure
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be removed
     pub fn finish(mut self) -> Result<()> {
         self.remove(true)
     }
@@ -656,9 +685,22 @@ impl StatusCoordinator {
     }
 
     fn remove(&self, id: u64, success: bool) -> Result<()> {
+        let sent = std::cell::Cell::new(false);
         self.request(
-            |reply| Command::Remove { id, success, reply },
-            |failure| Err(failure.into()),
+            |reply| {
+                sent.set(true);
+                Command::Remove { id, success, reply }
+            },
+            |failure| {
+                if !sent.get() {
+                    self.send(Command::Remove {
+                        id,
+                        success,
+                        reply: mpsc::channel().0,
+                    });
+                }
+                Err(failure.into())
+            },
         )
     }
 
@@ -716,11 +758,13 @@ impl StatusCoordinator {
         )
     }
 
-    /// clear the live region and keep it from redrawing until the guard drops,
-    /// so a caller can write to the terminal itself
+    /// wait out a prompt another thread holds, clear the live region and keep
+    /// it from redrawing until the guard drops, so a caller can write to
+    /// the terminal itself
     #[cfg(feature = "structured")]
     pub(crate) fn hold(&self) -> Result<HoldGuard> {
         let this = self.current();
+        this.write_around(SharedWriter::new(std::io::sink()), Vec::new())?;
         let sent = std::cell::Cell::new(false);
         let held = this.request(
             |reply| {
@@ -1053,7 +1097,7 @@ impl Actor {
         match self.lease.as_ref().map(|lease| lease.holder) {
             Some(holder) if holder == requester => {
                 let _ = write.reply.send(Err(output_error(std::io::Error::other(
-                    "the calling thread holds the terminal, so a stream write would wait on itself",
+                    "the calling thread holds the terminal, so this write would wait on itself",
                 ))));
             },
             Some(_) => {

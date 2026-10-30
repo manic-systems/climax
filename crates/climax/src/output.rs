@@ -84,11 +84,13 @@ impl Output {
     }
 
     #[must_use]
+    /// format this handle writes
     pub const fn format(&self) -> Format {
         self.format
     }
 
     #[must_use]
+    /// switch the format, which also decides whether notices are suppressed
     pub const fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self.notice_format = format;
@@ -96,6 +98,7 @@ impl Output {
     }
 
     #[must_use]
+    /// write finite results and streams to `writer` instead of stdout
     pub fn with_writer(mut self, writer: impl Write + Send + 'static) -> Self {
         self.writer = SharedWriter::new(writer);
         #[cfg(all(feature = "render", feature = "structured"))]
@@ -146,7 +149,7 @@ impl Output {
     /// write a message in the configured format
     ///
     /// a live status is cleared first and redrawn after when this handle writes
-    /// to a terminal stdout
+    /// to a terminal stdout, and a prompt held by another thread is waited out
     pub fn write_message(&self, mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
         #[cfg(all(feature = "render", feature = "structured"))]
         let _hold = match &self.route {
@@ -387,6 +390,8 @@ pub struct MissingText;
 
 #[cfg(feature = "structured")]
 #[must_use]
+/// result or stream value being built, supply [`ResultBuilder::text`] then call
+/// [`ResultBuilder::emit`]
 pub struct ResultBuilder<'a, T: ?Sized, F> {
     output: &'a Output,
     value:  &'a T,
