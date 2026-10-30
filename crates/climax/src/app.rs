@@ -22,21 +22,21 @@ fn parse_env<C: pound::Parse>() -> std::result::Result<C, pound::Error> {
 
 /// runs a parsed command-line application and reports its process outcome
 ///
-/// Help and version are written to stdout with a successful exit code, parse
+/// help and version are written to stdout with a successful exit code, parse
 /// failures are written to stderr with exit code 2, and application failures
-/// are written to stderr with exit code 1. A cancellation that reaches this
+/// are written to stderr with exit code 1. a cancellation that reaches this
 /// function exits with 130, or with 128 plus the signal number when a signal
-/// interrupted a live prompt (see [`crate::Error::signal`]). Both are silent
-/// unless related errors are attached, in which case those are printed.
+/// interrupted a live prompt (see [`crate::Error::signal`]). both are silent
+/// unless related errors are attached, in which case those are printed
 ///
-/// A typed prompt the user cancels resolves to `PromptOutcome::Leave` so the
-/// handler decides what leaving means. A signal delivered during a live prompt
-/// instead surfaces as an error that carries the signal. Exit 130 without a
+/// a typed prompt the user cancels resolves to `PromptOutcome::Leave` so the
+/// handler decides what leaving means. a signal delivered during a live prompt
+/// instead surfaces as an error that carries the signal. exit 130 without a
 /// signal comes from `Context::with_terminal_application` or a direct
-/// `bang` dependency that builds a cancelled error.
+/// `bang` dependency that builds a cancelled error
 ///
-/// A closed pipe while writing output, or an `io::Error` of kind `BrokenPipe`
-/// the handler returns, exits 141 without a message.
+/// a closed pipe while writing output, or an `io::Error` of kind `BrokenPipe`
+/// the handler returns, exits 141 without a message
 #[cfg(feature = "parse")]
 pub fn main<C, F>(f: F) -> ExitCode
 where
@@ -46,10 +46,10 @@ where
     complete(parse_env::<C>(), f).report()
 }
 
-/// Run a parsed application without handling output or process exit status.
+/// runs a parsed application without handling output or process exit status
 ///
-/// With `complete`, a shell completion request is answered and the process
-/// exits before this returns, `try_run_from` never does.
+/// with `complete`, a shell completion request is answered and the process
+/// exits before this returns, `try_run_from` never does
 #[cfg(feature = "parse")]
 pub fn try_run<C, F>(f: F) -> Result<()>
 where
@@ -70,6 +70,14 @@ where
     run_with(C::try_parse_from(args)?, f)
 }
 
+/// runs an application from an already built command and reports its result
+///
+/// on failure the registered results are discarded and its error is returned
+///
+/// # Errors
+///
+/// fails with whatever `application` returns, or with the failure to close the
+/// output and status lifecycles it opened
 pub fn run_with<C, F>(command: C, f: F) -> Result<()>
 where
     F: FnOnce(Context, C) -> Result<()>,
@@ -267,6 +275,7 @@ impl Default for Context {
 
 impl Context {
     #[must_use]
+    /// a context for the current process, using stdin, stdout and stderr
     pub fn new() -> Self {
         let terminal = crate::terminal::TerminalPolicy::process();
         #[cfg(feature = "render")]
@@ -381,11 +390,21 @@ impl Context {
 
     #[cfg(feature = "render")]
     #[must_use]
+    /// starts building a transient status line for a long operation
+    ///
+    /// off a terminal `Auto` prints one plain line for a success and for a
+    /// failure with a `failure_message`, a failure without one prints
+    /// nothing, and `Silent` prints nothing. Ctrl-C during a live status
+    /// with no prompt open keeps the default disposition and leaves the
+    /// spinner line on screen
     pub fn status(&self, message: impl Into<String>) -> crate::status::Status {
         crate::status::Status::new(message, self.transient.clone())
     }
 
     #[must_use]
+    /// output handle for results, streams and notices
+    ///
+    /// every handle shares one lifecycle, so a second finite result is an error
     pub fn output(&self) -> crate::output::Output {
         self.output.clone()
     }
@@ -427,11 +446,16 @@ impl Context {
     }
 
     #[must_use]
+    /// terminal policy this context applies, with its capabilities and any mode
+    /// overrides
     pub const fn terminal(&self) -> crate::terminal::TerminalPolicy {
         self.terminal
     }
 
     #[must_use]
+    /// whether prompts can run under the current policy
+    ///
+    /// `Force` and `Disabled` override detection
     pub const fn interaction_available(&self) -> bool {
         self.terminal.interaction_available()
     }
@@ -568,6 +592,15 @@ impl Context {
         not(any(feature = "interactive", feature = "render")),
         allow(clippy::missing_const_for_fn)
     )]
+    /// replaces the detected terminal capabilities, for tests or a host that
+    /// knows better
+    ///
+    /// the interaction driver is rederived unless one was injected
+    ///
+    /// # Errors
+    ///
+    /// fails when the status coordinator cannot switch to the resulting status
+    /// mode
     pub fn set_terminal_capabilities(
         &mut self,
         capabilities: crate::terminal::TerminalCapabilities,
@@ -585,7 +618,7 @@ impl Context {
     }
 
     /// prompt builders made earlier keep the driver they captured, and so does
-    /// a driver injected with [`Self::set_interaction`]
+    /// a driver injected with `set_interaction`
     #[cfg_attr(not(feature = "interactive"), allow(clippy::missing_const_for_fn))]
     pub fn set_interaction_mode(&mut self, mode: crate::terminal::InteractionMode) {
         self.terminal.set_interaction_mode(mode);
@@ -607,6 +640,12 @@ impl Context {
     }
 
     #[cfg_attr(not(feature = "render"), allow(clippy::missing_const_for_fn))]
+    /// overrides how statuses present, see
+    /// [`StatusMode`](crate::terminal::StatusMode)
+    ///
+    /// # Errors
+    ///
+    /// fails when the status coordinator cannot apply the resulting mode
     pub fn set_status_mode(&mut self, mode: crate::terminal::StatusMode) -> Result<()> {
         self.terminal.set_status_mode(mode);
         #[cfg(feature = "render")]
@@ -629,12 +668,16 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     #[must_use]
+    /// builder form of [`Self::set_interaction`]
     pub fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
         self.set_interaction(interaction);
         self
     }
 
     #[must_use]
+    /// writes finite results and streams to `writer` instead of stdout,
+    /// directly and not around a live status, while notices keep their own
+    /// destination
     pub fn with_output_writer(mut self, writer: impl std::io::Write + Send + 'static) -> Self {
         self.output = self.output.with_writer(writer);
         self
@@ -703,6 +746,11 @@ impl Context {
         Ok(self)
     }
 
+    /// builder form of [`Self::set_terminal_capabilities`]
+    ///
+    /// # Errors
+    ///
+    /// fails as [`Self::set_terminal_capabilities`] does
     pub fn with_terminal_capabilities(
         mut self,
         capabilities: crate::terminal::TerminalCapabilities,
@@ -712,11 +760,17 @@ impl Context {
     }
 
     #[must_use]
+    /// builder form of [`Self::set_interaction_mode`]
     pub fn with_interaction_mode(mut self, mode: crate::terminal::InteractionMode) -> Self {
         self.set_interaction_mode(mode);
         self
     }
 
+    /// builder form of [`Self::set_status_mode`]
+    ///
+    /// # Errors
+    ///
+    /// fails as [`Self::set_status_mode`] does
     pub fn with_status_mode(mut self, mode: crate::terminal::StatusMode) -> Result<Self> {
         self.set_status_mode(mode)?;
         Ok(self)

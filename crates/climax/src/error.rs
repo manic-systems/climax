@@ -6,6 +6,7 @@ use std::{
     io,
 };
 
+/// result type used across `climax`, with [`Error`] as the error
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// stable, high-level category of an application error
@@ -16,7 +17,8 @@ pub enum ErrorKind {
     Parse,
     /// terminal output failed to render or write
     Output,
-    /// filesystem or other i/o failure
+    /// filesystem or other i/o failure, also an application error whose source
+    /// chain holds one
     Io,
     /// an interactive operation failed
     Interactive,
@@ -53,6 +55,7 @@ pub struct Error {
 
 impl Error {
     #[must_use]
+    /// error with only a message, of kind [`ErrorKind::Message`]
     pub fn message(message: impl Into<String>) -> Self {
         Self {
             kind:    ErrorKind::Message,
@@ -64,18 +67,21 @@ impl Error {
     }
 
     #[must_use]
+    /// wraps `source` as an [`ErrorKind::Application`] error with its text as
+    /// the message
     pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
-        Self::with_source(ErrorKind::Application, source)
+        Self::with_source(application_kind(&source), source)
     }
 
     #[must_use]
+    /// like [`Error::application`], with the text reading `message: source`
     pub fn application_context(
         message: impl Into<String>,
         source: impl error::Error + Send + Sync + 'static,
     ) -> Self {
         let message = format!("{}: {source}", message.into());
         Self {
-            kind: ErrorKind::Application,
+            kind: application_kind(&source),
             message,
             signal: None,
             source: Some(Box::new(source)),
@@ -84,11 +90,14 @@ impl Error {
     }
 
     #[must_use]
+    /// category of this error
     pub const fn kind(&self) -> ErrorKind {
         self.kind
     }
 
     #[must_use]
+    /// retained source, keeping the `Send` and `Sync` bounds
+    /// `std::error::Error::source` erases
     pub fn source_error(&self) -> Option<&(dyn error::Error + Send + Sync + 'static)> {
         self.source.as_deref()
     }
@@ -240,7 +249,14 @@ fn cleanup_errors(source: Option<&(dyn error::Error + 'static)>) -> Vec<Error> {
         .collect()
 }
 
-#[cfg(feature = "parse")]
+fn application_kind(source: &(dyn error::Error + 'static)) -> ErrorKind {
+    if causes(source).any(<dyn error::Error>::is::<io::Error>) {
+        ErrorKind::Io
+    } else {
+        ErrorKind::Application
+    }
+}
+
 fn causes<'a>(
     error: &'a (dyn error::Error + 'static),
 ) -> impl Iterator<Item = &'a (dyn error::Error + 'static)> {
@@ -353,10 +369,17 @@ mod tests {
 
     #[test]
     fn application_context_preserves_its_source() {
-        let error = Error::application_context("cannot query history", io::Error::other("closed"));
+        let error =
+            Error::application_context("cannot query history", "x".parse::<u8>().unwrap_err());
         assert_eq!(error.kind(), ErrorKind::Application);
-        assert_eq!(error.to_string(), "cannot query history: closed");
+        assert_eq!(
+            error.to_string(),
+            "cannot query history: invalid digit found in string"
+        );
         assert!(error.source_error().is_some());
+
+        let piped = Error::application(Layered(io::Error::from(io::ErrorKind::BrokenPipe)));
+        assert_eq!(piped.kind(), ErrorKind::Io);
     }
 }
 
