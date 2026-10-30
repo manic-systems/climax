@@ -77,12 +77,14 @@ pub struct TerminalEvents<R> {
     size_initialized: bool,
     escape_timeout:   Duration,
     escape_since:     Option<Instant>,
+    sideband_at:      Option<Instant>,
     ended:            bool,
 }
 
 impl<R> TerminalEvents<R> {
     /// owns a blocking reader without a worker thread, a lone Escape waits for
-    /// the next byte or end, and a signal is reported once a read returns
+    /// the next byte or end, and a signal never interrupts a read, use
+    /// [`Self::pollable`] to react to signals while waiting
     #[must_use]
     pub const fn blocking(input: R) -> Self
     where
@@ -104,6 +106,7 @@ impl<R> TerminalEvents<R> {
             size_initialized: false,
             escape_timeout: DEFAULT_ESCAPE_TIMEOUT,
             escape_since: None,
+            sideband_at: None,
             ended: false,
         }
     }
@@ -189,6 +192,9 @@ impl<R> TerminalEvents<R> {
         let deadline = limit.and_then(|span| (self.clock)().checked_add(span));
 
         loop {
+            if let Some(event) = self.flush_due_escape() {
+                return Ok(Some(TerminalPoll::Event(event)));
+            }
             let remaining = deadline.map(|due| due.saturating_duration_since((self.clock)()));
             let input = match self.wait_for_input(remaining)? {
                 InputReadiness::Timeout => {
@@ -228,13 +234,22 @@ impl<R> TerminalEvents<R> {
             if let Some(item) = self.pending.pop_front() {
                 return Ok(Some(item));
             }
-            if let Some(item) = self.poll_sideband()? {
+            if self.sideband_due()
+                && let Some(item) = self.poll_sideband()?
+            {
                 return Ok(Some(item));
             }
             if remaining == Some(Duration::ZERO) {
                 return Ok(None);
             }
         }
+    }
+
+    fn sideband_due(&self) -> bool {
+        !self.decoder.in_paste()
+            || self.sideband_at.is_none_or(|at| {
+                (self.clock)().saturating_duration_since(at) >= SOURCE_POLL_INTERVAL
+            })
     }
 
     fn wait_for_input(&mut self, cap: Option<Duration>) -> io::Result<InputReadiness> {
@@ -261,6 +276,7 @@ impl<R> TerminalEvents<R> {
     }
 
     fn poll_sideband(&mut self) -> io::Result<Option<TerminalPoll>> {
+        self.sideband_at = Some((self.clock)());
         if let Some(signals) = &self.signals
             && let Some(signal) = signals.poll_signal()?
         {
