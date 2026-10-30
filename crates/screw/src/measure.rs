@@ -217,7 +217,12 @@ pub fn width(text: &str) -> usize {
 #[must_use]
 pub fn truncate(text: &str, columns: usize) -> &str {
     let end = fitting_end(&strip_dropped(text), columns);
-    &text[..original_offset(text, end)]
+    let cut = original_offset(text, end);
+    if cut == text.len() {
+        return text;
+    }
+    let kept = text[..cut].trim_end_matches(is_dropped_control);
+    &text[..kept.len()]
 }
 
 fn fitting_end(text: &str, columns: usize) -> usize {

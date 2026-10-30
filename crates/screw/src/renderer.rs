@@ -12,6 +12,7 @@ use std::{
     ffi::OsString,
     io::{
         self,
+        IsTerminal as _,
         Write,
     },
     sync::OnceLock,
@@ -79,6 +80,7 @@ pub struct Renderer<W> {
     rendition_uncertain: bool,
     resync:              bool,
     colors:              bool,
+    terminal:            bool,
 }
 
 /// whether the environment permits colour, read once, a non-empty `NO_COLOR`
@@ -121,7 +123,19 @@ where
             rendition_uncertain: false,
             resync:              false,
             colors:              colors_enabled(),
+            terminal:            true,
         }
+    }
+
+    /// whether the writer is a terminal, true by default
+    ///
+    /// the first frame on a terminal starts at column 0 of the current row and
+    /// clears it, text already on that row is erased. a writer that is not a
+    /// terminal gets no leading carriage return
+    #[must_use]
+    pub const fn terminal(mut self, terminal: bool) -> Self {
+        self.terminal = terminal;
+        self
     }
 
     /// whether colours are written, overrides [`colors_enabled`]
@@ -255,7 +269,7 @@ where
         if self.resync {
             self.writer.write_all(b"\r\x1b[J")?;
             self.resync = false;
-        } else if self.previous.is_none() {
+        } else if self.previous.is_none() && self.terminal {
             self.writer.write_all(b"\r")?;
         }
         if self.force_full {
@@ -510,7 +524,9 @@ impl Renderer<io::Stderr> {
     /// size is unknown
     pub fn stderr() -> Self {
         let (width, height) = stderr_size();
-        let mut renderer = Self::new(io::stderr()).width(width);
+        let mut renderer = Self::new(io::stderr())
+            .width(width)
+            .terminal(io::stderr().is_terminal());
         renderer.height = height;
         renderer
     }
