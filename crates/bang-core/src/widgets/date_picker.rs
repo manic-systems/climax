@@ -226,20 +226,40 @@ impl Widget for DatePicker {
     }
 }
 
+const FIRST: Date = Date {
+    year:  1,
+    month: 1,
+    day:   1,
+};
+
+const LAST: Date = Date {
+    year:  9999,
+    month: 12,
+    day:   31,
+};
+
 fn clamp_date(date: Date) -> Date {
+    let year = date.year.clamp(FIRST.year, LAST.year);
     let month = date.month.clamp(1, 12);
     Date {
-        year: date.year,
+        year,
         month,
-        day: date.day.clamp(1, days_in_month(date.year, month)),
+        day: date.day.clamp(1, days_in_month(year, month)),
     }
 }
 
 fn add_months(date: Date, months: i32) -> Date {
     let total = i64::from(date.year) * 12 + i64::from(date.month) - 1 + i64::from(months);
-    let Ok(year) = i32::try_from(total.div_euclid(12)) else {
-        return if months < 0 { Date::MIN } else { Date::MAX };
+    let years = total.div_euclid(12);
+    if years < i64::from(FIRST.year) {
+        return FIRST;
+    }
+    let Ok(year) = i32::try_from(years) else {
+        return LAST;
     };
+    if year > LAST.year {
+        return LAST;
+    }
     let month = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
     Date {
         year,
@@ -249,7 +269,7 @@ fn add_months(date: Date, months: i32) -> Date {
 }
 
 fn add_days(date: Date, days: i32) -> Date {
-    Date::from_unix_days(date.unix_days().saturating_add(i64::from(days)))
+    Date::from_unix_days(date.unix_days().saturating_add(i64::from(days))).clamp(FIRST, LAST)
 }
 
 fn weekday_monday0(date: Date) -> u8 {
@@ -270,13 +290,13 @@ mod tests {
 
     #[test]
     fn paging_stops_at_the_last_year() {
-        let last = Date::new(i32::MAX, 12, 31).unwrap();
+        let last = LAST;
         let mut picker = DatePicker::new("when", last);
         assert_eq!(press(&mut picker, Key::PageDown), Reaction::Ignored);
         assert_eq!(press(&mut picker, Key::Right), Reaction::Ignored);
         assert_eq!(picker.selected(), last);
 
-        let first = Date::new(i32::MIN, 1, 1).unwrap();
+        let first = FIRST;
         let mut early = DatePicker::new("when", first);
         assert_eq!(press(&mut early, Key::PageUp), Reaction::Ignored);
         assert_eq!(press(&mut early, Key::Left), Reaction::Ignored);

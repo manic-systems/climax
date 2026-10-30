@@ -124,18 +124,22 @@ impl PageLayout {
         }
     }
 
-    /// the page jump targets of the last render, forgotten once read because a
-    /// key press makes them stale
-    pub(super) fn take_targets(&self) -> PageTargets {
+    /// the page jump targets of the last render
+    pub(super) fn targets(&self) -> PageTargets {
         self.page
-            .borrow_mut()
-            .take()
+            .borrow()
+            .as_ref()
             .map_or_else(PageTargets::default, |page| {
                 PageTargets {
                     up:   page.up,
                     down: page.down,
                 }
             })
+    }
+
+    /// drops the targets, which a handled key press makes stale
+    pub(super) fn forget_targets(&self) {
+        self.page.borrow_mut().take();
     }
 }
 

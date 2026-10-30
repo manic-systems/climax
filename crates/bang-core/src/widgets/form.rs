@@ -909,9 +909,12 @@ mod tests {
 
     #[test]
     fn the_help_line_fits_the_active_field() {
-        use crate::widgets::{
-            MultiSelect,
-            ReviewList,
+        use crate::{
+            ActionBinding,
+            widgets::{
+                MultiSelect,
+                ReviewList,
+            },
         };
 
         assert_eq!(
@@ -933,6 +936,13 @@ mod tests {
         assert_eq!(
             help_under(ActionLayer::new(MultiSelect::new("pick", ["alpha"]))),
             "shift-tab previous"
+        );
+        assert_eq!(
+            help_under(
+                ActionLayer::new(TextInput::new("text"))
+                    .with_actions([ActionBinding::new(KeyEvent::new(Key::Function(1)), "help")])
+            ),
+            "tab next | shift-tab previous | enter accept | esc cancel"
         );
     }
 
