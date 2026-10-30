@@ -7,11 +7,13 @@ use alloc::{
     },
     sync::Arc,
 };
-#[cfg(feature = "structured")] use core::cell::Cell;
 #[cfg(feature = "interactive")] use core::result;
 use core::{
     any::Any,
-    cell::RefCell,
+    cell::{
+        Cell,
+        RefCell,
+    },
     fmt,
     mem,
     panic::AssertUnwindSafe,
@@ -694,9 +696,22 @@ impl StatusCoordinator {
     }
 
     fn remove(&self, id: u64, success: bool) -> Result<()> {
+        let sent = Cell::new(false);
         self.request(
-            |reply| Command::Remove { id, success, reply },
-            |failure| Err(failure.into()),
+            |reply| {
+                sent.set(true);
+                Command::Remove { id, success, reply }
+            },
+            |failure| {
+                if !sent.get() {
+                    self.send(Command::Remove {
+                        id,
+                        success,
+                        reply: mpsc::channel().0,
+                    });
+                }
+                Err(failure.into())
+            },
         )
     }
 
@@ -754,11 +769,13 @@ impl StatusCoordinator {
         )
     }
 
-    /// clear the live region and keep it from redrawing until the guard drops,
-    /// so a caller can write to the terminal itself
+    /// wait out a prompt another thread holds, clear the live region and keep
+    /// it from redrawing until the guard drops, so a caller can write to
+    /// the terminal itself
     #[cfg(feature = "structured")]
     pub(crate) fn hold(&self) -> Result<HoldGuard> {
         let this = self.current();
+        this.write_around(SharedWriter::new(io::sink()), Vec::new())?;
         let sent = Cell::new(false);
         let held = this.request(
             |reply| {
@@ -1089,7 +1106,7 @@ impl Actor {
         match self.lease.as_ref().map(|lease| lease.holder) {
             Some(holder) if holder == requester => {
                 drop(write.reply.send(Err(output_error(IoError::other(
-                    "the calling thread holds the terminal, so a stream write would wait on itself",
+                    "the calling thread holds the terminal, so this write would wait on itself",
                 )))));
             },
             Some(_) => {

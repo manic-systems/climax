@@ -164,7 +164,7 @@ impl Output {
     /// write a message in the configured format
     ///
     /// a live status is cleared first and redrawn after when this handle writes
-    /// to a terminal stdout
+    /// to a terminal stdout, and a prompt held by another thread is waited out
     ///
     /// # Errors
     ///

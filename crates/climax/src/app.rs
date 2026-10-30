@@ -717,7 +717,7 @@ impl Context {
     }
 
     /// prompt builders made earlier keep the driver they captured, and so does
-    /// a driver injected with [`Self::set_interaction`]
+    /// a driver injected with `set_interaction`
     #[cfg_attr(
         not(feature = "interactive"),
         expect(
@@ -796,7 +796,7 @@ impl Context {
 
     #[cfg(feature = "interactive")]
     #[must_use]
-    /// builder form of [`Self::set_interaction`]
+    /// builder form of `set_interaction`
     pub fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
         self.set_interaction(interaction);
         self

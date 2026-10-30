@@ -19,6 +19,9 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `main` exits 141 on a closed stdout pipe everywhere, including a `BrokenPipe` i/o error the handler returns unless `with_exit_code` sets a code, prints a parse error as pound's full report and prints the cause chain of an application error
 - a final report that cannot be written keeps its intended exit code, except that a closed stdout exits 141
 - `Result<T, E = Error>` alias
+- `Error::application`, `application_context`, `ResultExt` and the boxed and `anyhow` conversions give an error with an i/o error anywhere in its source chain the kind `Io`, so a wrapped `BrokenPipe` exits 141 like a bare one
+- `Output::write_message` waits for a prompt another thread holds, as `stream` does, instead of drawing into the prompt
+- removing a status while the status thread is stalled still takes effect once the thread answers, so the status stops drawing
 - `Status::widget` reports a panicking widget once through `finish`
 - minimum Rust version 1.89
 - typed prompts on `Context` returning `PromptOutcome`, with the config types and review types re-exported
@@ -46,6 +49,8 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `bang::Error` with `ErrorKind`, and a signal during a prompt returns `Interrupted` without re-raising
 - `bang::advanced`, `bang::terminal` and `bang::screw`
 - `checked_scripted_interaction` and `ScriptCheck` in `bang::advanced` read what a scripted driver left unread, and `Headed`, `format_output` and `OutputFormat` are re-exported there
+- `Interaction::live_or_tty` opens `/dev/tty` when stdin or stderr is not a terminal, as `bang-run` does
+- a password mask that is a control or zero-width character is refused as `InvalidConfiguration`
 - `Interaction::interact` refuses control character and repeated action keys as `InvalidConfiguration`
 - `bang-core` gains `Reaction::Action`, `Event::UnknownEscape`, `Event::Row`, `Key::Function`, `Key::Insert`, `SessionReaction`, `TextInput::with_mask`, `Date::unix_days`, `ReviewList::with_exit_output`, `with_leave_output`, `is_reserved_key` and `fold_key`, `Widget::takes_tab`, and `Debug` for `TextInput`, `SearchSelect`, `Form` and `Session`
 - word movement and deletion in `TextInput`
@@ -65,6 +70,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `Renderer::colors` and `colors_enabled`, `NO_COLOR` drops colours and keeps attributes
 - `Viewport::of` and `Viewport::FALLBACK`
 - `single_line` for text that must stay on one line
+- `Renderer::terminal`, set from stderr by `Renderer::stderr`, and a first frame off a terminal starts without a carriage return
 
 #### bang-terminal
 
@@ -73,11 +79,13 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - xterm function keys and `Insert` decode, invalid UTF-8 is reported at once and a double escape decodes
 - Ctrl keys decode for NUL and 0x1C to 0x1F
 - handlers install with `SA_RESTART`, `SIGWINCH` wakes resize at once with a 100ms poll as fallback
-- an ambiguous escape resolves 50ms after its latest byte
+- an ambiguous escape resolves 50ms after its latest byte and is delivered before any input queued behind it, and an overlong csi or ss3 is one unknown escape
 
 #### bang-run
 
-- unknown config keys, keys that do not apply to the type, duplicate form field names, empty names and labels and malformed or impossible dates are rejected
+- unknown config keys, keys that do not apply to the type, duplicate form field names, empty names and labels, malformed or impossible dates and more than one `selected = true` on a single-choice type are rejected
+- `review-list` actions need `--action-output` or `action_output`, which also binds g, s and a, and without it the result stays the bare rows and esc exits 130
+- `--action ::x` binds `:`
 - the prompt opens `/dev/tty` when stdin or stderr is redirected and a terminal is available
 - a failed final write exits 1 and a closed pipe exits 141
 - config parsing uses the workspace `toml`
@@ -121,6 +129,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `ActionLayer` and `ReviewList::with_custom_actions` panic on control character keys and repeated keys
 - `format_output` writes non-finite floats as `NaN`, `Infinity` and `-Infinity`, strings in JSON and plain in text, an empty list prints nothing in text, and a text list prints dates unquoted and null as an empty line
 - `DatePicker` header alignment, `Date` parsing and saturation, and a negative `Date` prints as `-0001-01-01`
+- `DatePicker` stays within years 1 to 9999
 - `ReviewList::selected_index` returns `None` when every row is removed
 - **Breaking** the View layer is removed, widgets draw through `screw::Widget`
 - **Breaking** `Session::handle` returns `SessionReaction`

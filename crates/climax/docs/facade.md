@@ -11,7 +11,7 @@ re-exports each component whole, so an application needs no other dependency
 | `derive`      | `#[derive(climax::Parse)]`, `#[derive(climax::ValueEnum)]` | `climax::pound`  |
 | `render`      | `status`                                                   | `climax::screw`  |
 | `interactive` | typed prompts on `Context`, `PromptOutcome`                | `climax::bang`   |
-| `structured`  | results as text or json, `#[climax::serde(..)]`            | `climax::serde`  |
+| `structured`  | json or text results, `#[climax::serde(..)]` with `derive` | `climax::serde`  |
 | `complete`    | shell completion in `main`, `climax::install`              | `climax::caress` |
 | `anyhow`      | `From<anyhow::Error>`, off by default                      |                  |
 
