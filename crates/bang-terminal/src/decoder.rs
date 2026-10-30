@@ -30,6 +30,7 @@ pub struct Decoder {
     pending:  Pending,
     paste:    Vec<u8>,
     in_paste: bool,
+    skipping: bool,
 }
 
 impl Decoder {
@@ -40,6 +41,7 @@ impl Decoder {
             pending:  Pending::new(),
             paste:    Vec::new(),
             in_paste: false,
+            skipping: false,
         }
     }
 
@@ -67,6 +69,18 @@ impl Decoder {
                 self.paste.extend_from_slice(&self.pending[..paste_len]);
                 self.pending.skip(paste_len);
                 break;
+            }
+
+            if self.skipping {
+                let end = self
+                    .pending
+                    .iter()
+                    .position(|byte| !(0x20..=0x3F).contains(byte));
+                let len = end.map_or(self.pending.len(), |at| {
+                    at + usize::from((0x40..=0x7E).contains(&self.pending[at]))
+                });
+                self.pending.skip(len);
+                self.skipping = end.is_none();
             }
 
             if self.pending.is_empty() {
@@ -136,6 +150,7 @@ impl Decoder {
     /// drains buffered input at EOF, resolving ambiguous prefixes as a timeout
     /// would
     pub fn flush(&mut self) -> Vec<Event> {
+        self.skipping = false;
         let mut events = Vec::new();
         if self.in_paste {
             self.paste.extend_from_slice(&self.pending);
@@ -166,6 +181,11 @@ impl Decoder {
         }
 
         events
+    }
+
+    #[must_use]
+    pub(crate) const fn in_paste(&self) -> bool {
+        self.in_paste
     }
 
     #[must_use]
@@ -283,6 +303,7 @@ impl Decoder {
         let mut index = 2;
         loop {
             if index == MAX_SEQUENCE_LEN {
+                self.skipping = true;
                 return EscapeResult::Unknown(self.pending.take(index));
             }
             let Some(&byte) = self.pending.get(index) else {
@@ -321,6 +342,7 @@ impl Decoder {
         let mut index = 2;
         loop {
             if index == MAX_SEQUENCE_LEN {
+                self.skipping = true;
                 return EscapeResult::Unknown(self.pending.take(index));
             }
             let Some(&byte) = self.pending.get(index) else {
@@ -800,11 +822,10 @@ mod tests {
         for introducer in [b"\x1b[".as_slice(), b"\x1bO".as_slice()] {
             let mut bytes = introducer.to_vec();
             bytes.extend([b'1'; MAX_SEQUENCE_LEN]);
-            assert_eq!(decode_in_chunks(&bytes, 1), vec![
-                Event::UnknownEscape(bytes[..MAX_SEQUENCE_LEN].to_vec()),
-                Event::char('1'),
-                Event::char('1'),
-            ]);
+            let capped = Event::UnknownEscape(bytes[..MAX_SEQUENCE_LEN].to_vec());
+            assert_eq!(decode_in_chunks(&bytes, 1), vec![capped.clone()]);
+            bytes.extend(b"m1");
+            assert_eq!(decode_in_chunks(&bytes, 1), vec![capped, Event::char('1')]);
         }
     }
 

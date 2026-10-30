@@ -146,6 +146,9 @@ impl SignalPoller {
 /// previous handlers, `SIGWINCH` included, are suspended while the guard lives
 /// and restored after, they are not chained
 ///
+/// `restore` and drop discard a signal still queued, `restore_polling` returns
+/// it
+///
 /// a child made by a raw `fork` shares the signal pipe, so a signal it receives
 /// before `exec` is queued for the parent
 #[derive(Debug)]
@@ -186,7 +189,9 @@ impl SignalGuard {
         self.poller.poll_signal()
     }
 
-    /// puts the previous handlers back and reports any failure
+    /// puts the previous handlers back and reports any failure, a signal still
+    /// queued is discarded, as it is on drop, use [`Self::restore_polling`] to
+    /// take it
     ///
     /// # Errors
     ///
