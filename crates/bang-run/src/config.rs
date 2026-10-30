@@ -16,7 +16,6 @@ use bang_core::{
         ReviewList,
         ReviewState,
         SelectItem,
-        TextInput,
     },
 };
 use serde::{
@@ -30,26 +29,12 @@ use serde::{
     },
 };
 
-/// parsed widget config
+/// parsed widget config, the top level widget is a field named for its type
 #[derive(Clone, Debug, PartialEq)]
 pub struct WidgetConfig {
-    pub kind:             WidgetKind,
-    pub input_bytes:      Option<String>,
-    pub page_size:        Option<usize>,
-    pub prompt:           Option<String>,
-    pub placeholder:      Option<String>,
-    pub value:            Option<String>,
-    pub wrap:             Option<bool>,
-    pub show_removed:     Option<bool>,
-    pub action_output:    Option<bool>,
-    pub actions:          Vec<ActionBinding>,
-    pub review_actions:   Vec<ReviewActionBinding>,
-    pub options:          Vec<SelectItem>,
-    pub selected_indices: Vec<usize>,
-    pub review_states:    Vec<ReviewState>,
-    pub fields:           Vec<FieldConfig>,
-    pub selected_date:    Option<Date>,
-    pub today:            Option<Date>,
+    pub base:        FieldConfig,
+    pub input_bytes: Option<String>,
+    pub fields:      Vec<FieldConfig>,
 }
 
 /// a single form field
@@ -73,6 +58,29 @@ pub struct FieldConfig {
     pub today:            Option<Date>,
 }
 
+impl FieldConfig {
+    pub fn new(kind: WidgetKind) -> Self {
+        Self {
+            name: kind.name().to_owned(),
+            kind,
+            page_size: None,
+            prompt: None,
+            placeholder: None,
+            value: None,
+            wrap: None,
+            show_removed: None,
+            action_output: None,
+            actions: Vec::new(),
+            review_actions: Vec::new(),
+            options: Vec::new(),
+            selected_indices: Vec::new(),
+            review_states: Vec::new(),
+            selected_date: None,
+            today: None,
+        }
+    }
+}
+
 impl WidgetConfig {
     pub fn parse(source: &str) -> Result<Self, String> {
         toml::from_str::<RawConfig>(source)
@@ -81,7 +89,8 @@ impl WidgetConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
 pub enum WidgetKind {
     Select,
     MultiSelect,
@@ -110,7 +119,7 @@ impl WidgetKind {
 #[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(rename = "type")]
-    kind:          RawWidgetKind,
+    kind:          WidgetKind,
     input_bytes:   Option<String>,
     page_size:     Option<usize>,
     prompt:        Option<String>,
@@ -129,28 +138,28 @@ struct RawConfig {
     fields:        Vec<RawFieldConfig>,
 }
 
-const LISTS: &[RawWidgetKind] = &[
-    RawWidgetKind::Select,
-    RawWidgetKind::MultiSelect,
-    RawWidgetKind::Search,
-    RawWidgetKind::ReviewList,
+const LISTS: &[WidgetKind] = &[
+    WidgetKind::Select,
+    WidgetKind::MultiSelect,
+    WidgetKind::Search,
+    WidgetKind::ReviewList,
 ];
 
-const APPLICABLE: [(&str, &[RawWidgetKind]); 10] = [
-    ("placeholder", &[RawWidgetKind::Text, RawWidgetKind::Search]),
-    ("value", &[RawWidgetKind::Text]),
+const APPLICABLE: [(&str, &[WidgetKind]); 10] = [
+    ("placeholder", &[WidgetKind::Text, WidgetKind::Search]),
+    ("value", &[WidgetKind::Text]),
     ("options", LISTS),
-    ("state", &[RawWidgetKind::ReviewList]),
+    ("state", &[WidgetKind::ReviewList]),
     ("page_size", LISTS),
     ("wrap", LISTS),
-    ("show_removed", &[RawWidgetKind::ReviewList]),
-    ("action_output", &[RawWidgetKind::ReviewList]),
-    ("selected_date", &[RawWidgetKind::Date]),
-    ("today", &[RawWidgetKind::Date]),
+    ("show_removed", &[WidgetKind::ReviewList]),
+    ("action_output", &[WidgetKind::ReviewList]),
+    ("selected_date", &[WidgetKind::Date]),
+    ("today", &[WidgetKind::Date]),
 ];
 
 /// `set` follows the order of [`APPLICABLE`]
-fn reject_inapplicable(owner: &str, kind: RawWidgetKind, set: [bool; 10]) -> Result<(), String> {
+fn reject_inapplicable(owner: &str, kind: WidgetKind, set: [bool; 10]) -> Result<(), String> {
     for ((key, kinds), is_set) in APPLICABLE.into_iter().zip(set) {
         if is_set && !kinds.contains(&kind) {
             return Err(inapplicable(owner, key, kind));
@@ -159,7 +168,7 @@ fn reject_inapplicable(owner: &str, kind: RawWidgetKind, set: [bool; 10]) -> Res
     Ok(())
 }
 
-fn inapplicable(owner: &str, key: &str, kind: RawWidgetKind) -> String {
+fn inapplicable(owner: &str, key: &str, kind: WidgetKind) -> String {
     format!(
         "{owner} key '{key}' does not apply to type '{}'",
         kind.name()
@@ -174,46 +183,28 @@ fn any_state(options: &[OptionEntry]) -> bool {
 
 impl RawConfig {
     fn finish(self) -> Result<WidgetConfig, String> {
-        reject_inapplicable("config", self.kind, [
-            self.placeholder.is_some(),
-            self.value.is_some(),
-            !self.options.is_empty(),
-            any_state(&self.options),
-            self.page_size.is_some(),
-            self.wrap.is_some(),
-            self.show_removed.is_some(),
-            self.action_output.is_some(),
-            self.selected_date.is_some(),
-            self.today.is_some(),
-        ])?;
-        if !self.fields.is_empty() && self.kind != RawWidgetKind::Form {
+        if !self.fields.is_empty() && self.kind != WidgetKind::Form {
             return Err(inapplicable("config", "fields", self.kind));
         }
-        if matches!(
-            self.kind,
-            RawWidgetKind::Select
-                | RawWidgetKind::MultiSelect
-                | RawWidgetKind::Search
-                | RawWidgetKind::ReviewList
-        ) && self.options.is_empty()
-        {
-            return Err(format!(
-                "config type '{}' requires at least one option",
-                self.kind.name()
-            ));
-        }
-        if self.kind == RawWidgetKind::Form && self.fields.is_empty() {
+        if self.kind == WidgetKind::Form && self.fields.is_empty() {
             return Err("config type 'form' requires at least one field".to_owned());
         }
-        if self.kind == RawWidgetKind::Date && self.selected_date.is_none() {
-            return Err("config type 'date' requires selected_date".to_owned());
+        let base = RawFieldConfig {
+            name:          self.kind.name().to_owned(),
+            kind:          self.kind,
+            page_size:     self.page_size,
+            prompt:        self.prompt,
+            placeholder:   self.placeholder,
+            value:         self.value,
+            selected_date: self.selected_date,
+            today:         self.today,
+            wrap:          self.wrap,
+            show_removed:  self.show_removed,
+            action_output: self.action_output,
+            actions:       self.actions,
+            options:       self.options,
         }
-
-        if matches!(self.page_size, Some(0)) {
-            return Err("config page_size must be at least 1".to_owned());
-        }
-
-        let options = finish_options(self.options)?;
+        .finish_as("config")?;
         let fields = self
             .fields
             .into_iter()
@@ -228,68 +219,11 @@ impl RawConfig {
             }
         }
 
-        let is_review_list = self.kind == RawWidgetKind::ReviewList;
-        let (actions, review_actions) = finish_actions(self.actions, is_review_list)?;
-
         Ok(WidgetConfig {
-            kind: self.kind.into(),
+            base,
             input_bytes: self.input_bytes,
-            page_size: self.page_size,
-            prompt: self.prompt,
-            placeholder: self.placeholder,
-            value: self.value,
-            wrap: self.wrap,
-            show_removed: self.show_removed,
-            action_output: self.action_output,
-            actions,
-            review_actions,
-            options: options.items,
-            selected_indices: options.selected_indices,
-            review_states: options.review_states,
             fields,
-            selected_date: self.selected_date.as_deref().map(parse_date).transpose()?,
-            today: self.today.as_deref().map(parse_date).transpose()?,
         })
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-enum RawWidgetKind {
-    Select,
-    MultiSelect,
-    Text,
-    Search,
-    Form,
-    Date,
-    ReviewList,
-}
-
-impl RawWidgetKind {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Select => "select",
-            Self::MultiSelect => "multi-select",
-            Self::Text => "text",
-            Self::Search => "search",
-            Self::Form => "form",
-            Self::Date => "date",
-            Self::ReviewList => "review-list",
-        }
-    }
-}
-
-impl From<RawWidgetKind> for WidgetKind {
-    fn from(value: RawWidgetKind) -> Self {
-        match value {
-            RawWidgetKind::Select => Self::Select,
-            RawWidgetKind::MultiSelect => Self::MultiSelect,
-            RawWidgetKind::Text => Self::Text,
-            RawWidgetKind::Search => Self::Search,
-            RawWidgetKind::Form => Self::Form,
-            RawWidgetKind::Date => Self::Date,
-            RawWidgetKind::ReviewList => Self::ReviewList,
-        }
     }
 }
 
@@ -298,7 +232,7 @@ impl From<RawWidgetKind> for WidgetKind {
 struct RawFieldConfig {
     name:          String,
     #[serde(rename = "type")]
-    kind:          RawWidgetKind,
+    kind:          WidgetKind,
     page_size:     Option<usize>,
     prompt:        Option<String>,
     placeholder:   Option<String>,
@@ -319,10 +253,15 @@ impl RawFieldConfig {
         if self.name.is_empty() {
             return Err("form field name cannot be empty".to_owned());
         }
-        if self.kind == RawWidgetKind::Form {
+        if self.kind == WidgetKind::Form {
             return Err("nested form fields are not supported yet".to_owned());
         }
-        reject_inapplicable(&format!("field '{}'", self.name), self.kind, [
+        let owner = format!("field '{}'", self.name);
+        self.finish_as(&owner)
+    }
+
+    fn finish_as(self, owner: &str) -> Result<FieldConfig, String> {
+        reject_inapplicable(owner, self.kind, [
             self.placeholder.is_some(),
             self.value.is_some(),
             !self.options.is_empty(),
@@ -334,41 +273,33 @@ impl RawFieldConfig {
             self.selected_date.is_some(),
             self.today.is_some(),
         ])?;
-        if matches!(
-            self.kind,
-            RawWidgetKind::Select
-                | RawWidgetKind::MultiSelect
-                | RawWidgetKind::Search
-                | RawWidgetKind::ReviewList
-        ) && self.options.is_empty()
-        {
+        if LISTS.contains(&self.kind) && self.options.is_empty() {
             return Err(format!(
-                "field '{}' type '{}' requires at least one option",
-                self.name,
+                "{owner} type '{}' requires at least one option",
                 self.kind.name()
             ));
         }
         if matches!(self.page_size, Some(0)) {
-            return Err(format!(
-                "field '{}' page_size must be at least 1",
-                self.name
-            ));
+            return Err(format!("{owner} page_size must be at least 1"));
         }
-        if self.kind == RawWidgetKind::Date && self.selected_date.is_none() {
-            return Err(format!(
-                "field '{}' type 'date' requires selected_date",
-                self.name
-            ));
+        if self.kind == WidgetKind::Date && self.selected_date.is_none() {
+            return Err(format!("{owner} type 'date' requires selected_date"));
         }
 
         let options = finish_options(self.options)?;
+        if self.kind != WidgetKind::MultiSelect && options.selected_indices.len() > 1 {
+            return Err(format!(
+                "{owner} type '{}' allows one option with selected = true",
+                self.kind.name()
+            ));
+        }
 
-        let is_review_list = self.kind == RawWidgetKind::ReviewList;
+        let is_review_list = self.kind == WidgetKind::ReviewList;
         let (actions, review_actions) = finish_actions(self.actions, is_review_list)?;
 
         Ok(FieldConfig {
             name: self.name,
-            kind: self.kind.into(),
+            kind: self.kind,
             page_size: self.page_size,
             prompt: self.prompt,
             placeholder: self.placeholder,
@@ -607,8 +538,18 @@ pub(crate) fn push_unique_review_action(
     Ok(action)
 }
 
+/// splits `key:name` at the first colon after the key's first character, so
+/// the key itself can be a colon
+fn split_action(value: &str) -> Option<(&str, &str)> {
+    let first = value.chars().next()?.len_utf8();
+    let (head, rest) = value.split_at_checked(first)?;
+    let offset = rest.find(':')?;
+    let (key, name) = value.split_at_checked(head.len().checked_add(offset)?)?;
+    Some((key, name.strip_prefix(':')?))
+}
+
 pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
-    let Some((key_text, name)) = value.split_once(':') else {
+    let Some((key_text, name)) = split_action(value) else {
         return Err("action must use key:name syntax".to_owned());
     };
     let key = parse_action_key_event(key_text)?;
@@ -619,7 +560,7 @@ pub fn parse_action_binding(value: &str) -> Result<ActionBinding, String> {
 }
 
 pub fn parse_review_action_binding(value: &str) -> Result<ReviewActionBinding, String> {
-    let Some((key_text, name)) = value.split_once(':') else {
+    let Some((key_text, name)) = split_action(value) else {
         return Err("review action must use key:name syntax".to_owned());
     };
     let key = parse_action_key(key_text, "review action")?;
@@ -748,22 +689,6 @@ fn parse_date(value: &str) -> Result<Date, String> {
     value
         .parse()
         .map_err(|_error| format!("date '{value}' does not exist"))
-}
-
-pub fn text_from_config(config: &WidgetConfig) -> TextInput {
-    let mut input = TextInput::new("text");
-    if let Some(prompt) = &config.prompt {
-        input = input.with_prompt(prompt.clone());
-    } else {
-        input = input.with_prompt("text: ");
-    }
-    if let Some(placeholder) = &config.placeholder {
-        input = input.with_placeholder(placeholder.clone());
-    }
-    if let Some(value) = &config.value {
-        input = input.with_value(value.clone());
-    }
-    input
 }
 
 #[cfg(test)]

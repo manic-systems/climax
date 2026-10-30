@@ -43,7 +43,14 @@ fn duplicate_plain_action_keys_are_rejected() {
 
 #[test]
 fn a_review_action_key_reserved_by_built_in_controls_is_rejected() {
-    let output = run(&["review-list", "--option", "a", "--action", "c:custom"]);
+    let output = run(&[
+        "review-list",
+        "--option",
+        "a",
+        "--action-output",
+        "--action",
+        "c:custom",
+    ]);
     assert_eq!(output.status.code(), Some(2));
     assert!(
         stderr(&output).contains("review action key 'c' is reserved by built-in review controls")
@@ -87,11 +94,12 @@ fn review_action_keys_differing_only_in_case_are_duplicates() {
         "review-list",
         "--option",
         "a",
+        "--action-output",
         "--action",
-        "g:one",
+        "z:one",
         "--action",
-        "G:two",
+        "Z:two",
     ]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("duplicate review action key 'g'"));
+    assert!(stderr(&output).contains("duplicate review action key 'z'"));
 }

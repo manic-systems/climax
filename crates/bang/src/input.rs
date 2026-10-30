@@ -185,8 +185,17 @@ impl PasswordPrompt {
     ///
     /// fails with `ErrorKind::InputEnded`, `ErrorKind::InteractionUnavailable`,
     /// `ErrorKind::InteractionBusy`, `ErrorKind::Interrupted` or
-    /// `ErrorKind::Terminal`
+    /// `ErrorKind::Terminal`, and with `ErrorKind::InvalidConfiguration` when
+    /// the mask is a control character or takes no columns
     pub fn interact(self) -> Result<PromptOutcome<String>> {
+        let mask = self.config.mask;
+        if mask.is_control() || screw::width(mask.encode_utf8(&mut [0; 4])) == 0 {
+            return Err(self
+                .interaction
+                .rejected(Error::invalid_configuration(format!(
+                    "password mask {mask:?} must be a visible character"
+                ))));
+        }
         let prompt = self.prompt.clone();
         let summary = self.config.text.summary;
         let hidden = self.config.mask.to_string().repeat(SECRET_SUMMARY_WIDTH);
