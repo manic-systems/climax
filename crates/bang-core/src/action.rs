@@ -201,7 +201,7 @@ where
     }
 
     fn has_key_help(&self) -> bool {
-        self.widget.has_key_help() || !self.actions.is_empty()
+        self.widget.has_key_help()
     }
 
     fn takes_tab(&self) -> bool {

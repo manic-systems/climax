@@ -258,34 +258,9 @@ impl Select {
             out,
         );
     }
-}
 
-impl screw::Widget for Select {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        self.render_list(None, ctx, out);
-    }
-
-    fn vertical_size(&self) -> VerticalSize {
-        VerticalSize::Flexible
-    }
-}
-
-impl Widget for Select {
-    fn id(&self) -> WidgetId {
-        self.id.clone()
-    }
-
-    fn has_key_help(&self) -> bool {
-        true
-    }
-
-    fn offers_nothing(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
-        self.layout.sync_top(&mut self.top);
-        let targets = self.layout.take_targets();
+    fn react(&mut self, event: Event) -> Reaction {
+        let targets = self.layout.targets();
         let key = match event {
             Event::Key(key) => key,
             Event::Row(row) => return self.jump_to(row),
@@ -326,6 +301,39 @@ impl Widget for Select {
             | Key::Insert
             | Key::Function(_) => Reaction::Ignored,
         }
+    }
+}
+
+impl screw::Widget for Select {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.render_list(None, ctx, out);
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Flexible
+    }
+}
+
+impl Widget for Select {
+    fn id(&self) -> WidgetId {
+        self.id.clone()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
+        self.layout.sync_top(&mut self.top);
+        let reaction = self.react(event);
+        if reaction != Reaction::Ignored {
+            self.layout.forget_targets();
+        }
+        reaction
     }
 
     fn current_value(&self) -> Option<Value> {
@@ -513,6 +521,27 @@ mod tests {
         let window = navigation::window_range(5_000, navigation::DEFAULT_PAGE_SIZE, 10_000);
 
         assert!(window.len() <= 3 * navigation::DEFAULT_PAGE_SIZE);
+    }
+
+    #[test]
+    fn ignored_events_keep_the_page_targets() {
+        let page_down = |ignored: Option<Event>| {
+            let mut select = Select::new("s", (0..40).map(|index| index.to_string()));
+            let mut cx = Context::new();
+            screw::render_plain(&select);
+            if let Some(event) = ignored {
+                assert_eq!(select.handle(event, &mut cx), Reaction::Ignored);
+            }
+            select.handle(Event::key(Key::PageDown), &mut cx);
+            select.selected
+        };
+
+        let expected = page_down(None);
+        assert_eq!(page_down(Some(Event::key(Key::Left))), expected);
+        assert_eq!(
+            page_down(Some(Event::UnknownEscape(vec![27, 91, 57]))),
+            expected
+        );
     }
 
     #[test]

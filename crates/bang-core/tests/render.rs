@@ -398,12 +398,12 @@ fn a_row_event_picks_a_row_in_every_list() {
 }
 
 #[test]
-fn a_non_key_event_forgets_the_rendered_page_layout() {
+fn only_a_handled_event_forgets_the_rendered_page_layout() {
     for (event, landed) in [
         (Event::Row(20), 40),
-        (Event::Tick, 20),
-        (Event::Paste("x".to_owned()), 20),
-        (Event::Resize { cols: 40, rows: 10 }, 20),
+        (Event::Tick, 9),
+        (Event::Paste("x".to_owned()), 9),
+        (Event::Resize { cols: 40, rows: 10 }, 9),
     ] {
         let mut select = Select::new("choices", items(50)).with_page_size(20);
         let mut cx = Context::new();

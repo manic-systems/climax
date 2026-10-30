@@ -289,52 +289,9 @@ impl SearchSelect {
             out,
         );
     }
-}
 
-struct Results<'a>(&'a SearchSelect);
-
-impl screw::Widget for Results<'_> {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        self.0.render_results(ctx, out);
-    }
-
-    fn vertical_size(&self) -> VerticalSize {
-        VerticalSize::Flexible
-    }
-}
-
-impl screw::Widget for SearchSelect {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let mut children: Vec<LocalWidgetRef<'_>> = Vec::new();
-        if !self.header.is_empty() {
-            children.push(local_widget(Spans::new(self.header.iter().cloned())));
-        }
-        children.push(local_widget(&self.input));
-        children.push(local_widget(Results(self)));
-        Stack::new(children).render(ctx, out);
-    }
-
-    fn vertical_size(&self) -> VerticalSize {
-        VerticalSize::Flexible
-    }
-}
-
-impl Widget for SearchSelect {
-    fn id(&self) -> WidgetId {
-        self.id.clone()
-    }
-
-    fn has_key_help(&self) -> bool {
-        true
-    }
-
-    fn offers_nothing(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
-        self.layout.sync_top(&mut self.top);
-        let targets = self.layout.take_targets();
+    fn react(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        let targets = self.layout.targets();
         match &event {
             Event::Key(key) => {
                 match key.key {
@@ -390,6 +347,57 @@ impl Widget for SearchSelect {
             },
             Event::Resize { .. } | Event::Tick | Event::UnknownEscape(_) => Reaction::Ignored,
         }
+    }
+}
+
+struct Results<'a>(&'a SearchSelect);
+
+impl screw::Widget for Results<'_> {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.0.render_results(ctx, out);
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Flexible
+    }
+}
+
+impl screw::Widget for SearchSelect {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        let mut children: Vec<LocalWidgetRef<'_>> = Vec::new();
+        if !self.header.is_empty() {
+            children.push(local_widget(Spans::new(self.header.iter().cloned())));
+        }
+        children.push(local_widget(&self.input));
+        children.push(local_widget(Results(self)));
+        Stack::new(children).render(ctx, out);
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Flexible
+    }
+}
+
+impl Widget for SearchSelect {
+    fn id(&self) -> WidgetId {
+        self.id.clone()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
+    fn offers_nothing(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn handle(&mut self, event: Event, cx: &mut Context) -> Reaction {
+        self.layout.sync_top(&mut self.top);
+        let reaction = self.react(event, cx);
+        if reaction != Reaction::Ignored {
+            self.layout.forget_targets();
+        }
+        reaction
     }
 
     fn current_value(&self) -> Option<crate::Value> {

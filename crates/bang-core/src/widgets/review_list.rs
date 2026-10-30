@@ -636,34 +636,9 @@ impl ReviewList {
         }
         parts.join(" | ")
     }
-}
 
-impl screw::Widget for ReviewList {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        self.render_list(ctx, out);
-    }
-
-    fn vertical_size(&self) -> VerticalSize {
-        VerticalSize::Flexible
-    }
-}
-
-impl Widget for ReviewList {
-    fn id(&self) -> WidgetId {
-        self.id.clone()
-    }
-
-    fn has_key_help(&self) -> bool {
-        true
-    }
-
-    fn takes_tab(&self) -> bool {
-        true
-    }
-
-    fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
-        self.layout.sync_top(&mut self.top);
-        let targets = self.layout.take_targets();
+    fn react(&mut self, event: Event) -> Reaction {
+        let targets = self.layout.targets();
         let key = match event {
             Event::Key(key) => key,
             Event::Row(row) => return self.jump_to(row),
@@ -732,6 +707,39 @@ impl Widget for ReviewList {
             | Key::Insert
             | Key::Function(_) => Reaction::Ignored,
         }
+    }
+}
+
+impl screw::Widget for ReviewList {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.render_list(ctx, out);
+    }
+
+    fn vertical_size(&self) -> VerticalSize {
+        VerticalSize::Flexible
+    }
+}
+
+impl Widget for ReviewList {
+    fn id(&self) -> WidgetId {
+        self.id.clone()
+    }
+
+    fn has_key_help(&self) -> bool {
+        true
+    }
+
+    fn takes_tab(&self) -> bool {
+        true
+    }
+
+    fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
+        self.layout.sync_top(&mut self.top);
+        let reaction = self.react(event);
+        if reaction != Reaction::Ignored {
+            self.layout.forget_targets();
+        }
+        reaction
     }
 
     fn current_value(&self) -> Option<Value> {
