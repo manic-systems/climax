@@ -12,7 +12,10 @@ use core::{
     str::Chars,
 };
 use std::{
-    fs::File,
+    fs::{
+        File,
+        OpenOptions,
+    },
     io::{
         self,
         IsTerminal as _,
@@ -132,6 +135,23 @@ impl Interaction {
             run_live_session_forced(InteractionWidget::new(widget)).map_err(Error::from_live)
         })
         .with_summary_sink(stderr_sink())
+    }
+
+    /// use stdin and stderr when both are terminals, and otherwise open
+    /// `/dev/tty` and use that
+    ///
+    /// falls back to [`Self::live`] when `/dev/tty` cannot be opened, so the
+    /// prompt then resolves to `ErrorKind::InteractionUnavailable`
+    #[must_use]
+    pub fn live_or_tty() -> Self {
+        if io::stdin().is_terminal() && io::stderr().is_terminal() {
+            return Self::live();
+        }
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .map_or_else(|_error| Self::live(), Self::live_on)
     }
 
     /// use a caller-owned terminal handle such as `/dev/tty`
@@ -502,8 +522,9 @@ fn script_driver(
 
 /// asks a checked scripted interaction what it left unread
 ///
-/// both counts are zero once a guard or the prompt itself rejected the
-/// interaction, as the unchecked driver's drop check stays quiet then
+/// no scripts count once a guard or the prompt itself rejected the interaction,
+/// as the unchecked driver's drop check stays quiet about them, but events that
+/// earlier prompts left unread still do
 #[derive(Clone, Debug)]
 pub struct ScriptCheck(Rc<RefCell<Script>>);
 
@@ -521,11 +542,7 @@ impl ScriptCheck {
     /// events left unread in the scripts that did start
     #[must_use]
     pub fn unused_events(&self) -> usize {
-        let script = self.0.borrow();
-        if script.abandoned {
-            return 0;
-        }
-        script.unused_events
+        self.0.borrow().unused_events
     }
 }
 
@@ -539,13 +556,17 @@ struct Script {
 
 impl Drop for Script {
     fn drop(&mut self) {
-        if self.checked || self.abandoned || thread::panicking() {
+        if self.checked || thread::panicking() {
             return;
         }
+        let scripts = if self.abandoned {
+            0
+        } else {
+            self.scripts.len()
+        };
         assert!(
-            self.scripts.is_empty() && self.unused_events == 0,
-            "scripted interaction dropped with {} unused scripts and {} unused events",
-            self.scripts.len(),
+            scripts == 0 && self.unused_events == 0,
+            "scripted interaction dropped with {scripts} unused scripts and {} unused events",
             self.unused_events,
         );
     }

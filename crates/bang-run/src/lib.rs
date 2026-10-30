@@ -10,16 +10,7 @@ use core::{
     error::Error as StdError,
     fmt,
 };
-use std::{
-    fs::{
-        self,
-        OpenOptions,
-    },
-    io::{
-        self,
-        IsTerminal as _,
-    },
-};
+use std::fs;
 
 use bang::{
     Interaction,
@@ -35,10 +26,8 @@ use bang::{
 use bang_core::{
     ActionBinding,
     ActionLayer,
-    Date,
     Value,
     Widget,
-    WidgetId,
     widgets::{
         DatePicker,
         Form,
@@ -59,7 +48,6 @@ use config::{
     parse_review_action_binding,
     push_unique_action,
     push_unique_review_action,
-    text_from_config,
 };
 use pound::{
     Parse,
@@ -162,116 +150,105 @@ pub struct Cli {
     command: Option<Command>,
 }
 
+/// bytes to replay instead of reading input
+#[derive(Debug, Parse)]
+pub struct Replay {
+    /// bytes to replay instead of reading input, with \n \r \t \e \\ and \xHH
+    /// escapes
+    #[pound(long)]
+    input_bytes: Option<String>,
+}
+
+/// key bindings that submit the value so far under a name
+#[derive(Debug, Parse)]
+pub struct Bindings {
+    /// bind a key to a result as key:name, may be repeated
+    ///
+    /// the key is one character, ctrl- and a letter, or enter, esc, tab,
+    /// backtab, backspace, delete, up, down, left, right, home, end, page-up or
+    /// page-down. pressing it submits an object with `action` as the name and
+    /// `value` as the value so far, and a bound character can no longer be
+    /// typed
+    #[pound(long)]
+    action: Vec<String>,
+}
+
 #[derive(Debug, Parse)]
 pub enum Command {
     /// choose one option
     Select {
         /// option label/value, may be repeated
         #[pound(long)]
-        option:      Vec<String>,
-        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
-        /// \xHH escapes
-        #[pound(long)]
-        input_bytes: Option<String>,
+        option:    Vec<String>,
+        #[pound(flatten)]
+        replay:    Replay,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:   usize,
-        /// bind a key to a result as key:name, may be repeated
-        ///
-        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
-        /// backtab, backspace, delete, up, down, left, right, home, end,
-        /// page-up or page-down. pressing it submits an object with `action`
-        /// as the name and `value` as the value so far, and a bound character
-        /// can no longer be typed
-        #[pound(long)]
-        action:      Vec<String>,
+        page_size: usize,
+        #[pound(flatten)]
+        bindings:  Bindings,
     },
     /// choose zero or more options
     MultiSelect {
         /// option label/value, may be repeated
         #[pound(long)]
-        option:      Vec<String>,
-        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
-        /// \xHH escapes
-        #[pound(long)]
-        input_bytes: Option<String>,
+        option:    Vec<String>,
+        #[pound(flatten)]
+        replay:    Replay,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:   usize,
-        /// bind a key to a result as key:name, may be repeated
-        ///
-        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
-        /// backtab, backspace, delete, up, down, left, right, home, end,
-        /// page-up or page-down. pressing it submits an object with `action`
-        /// as the name and `value` as the value so far, and a bound character
-        /// can no longer be typed
-        #[pound(long)]
-        action:      Vec<String>,
+        page_size: usize,
+        #[pound(flatten)]
+        bindings:  Bindings,
     },
     /// edit and submit text
     Text {
-        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
-        /// \xHH escapes
-        #[pound(long)]
-        input_bytes: Option<String>,
+        #[pound(flatten)]
+        replay:   Replay,
         /// initial value
         #[pound(long, default = "")]
-        value:       String,
+        value:    String,
         /// text shown before the input, also names the prompt in errors
         #[pound(long, default = "text: ")]
-        prompt:      String,
-        /// bind a key to a result as key:name, may be repeated
-        ///
-        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
-        /// backtab, backspace, delete, up, down, left, right, home, end,
-        /// page-up or page-down. pressing it submits an object with `action`
-        /// as the name and `value` as the value so far, and a bound character
-        /// can no longer be typed
-        #[pound(long)]
-        action:      Vec<String>,
+        prompt:   String,
+        #[pound(flatten)]
+        bindings: Bindings,
     },
     /// filter options and choose one
     Search {
         /// option label/value, may be repeated
         #[pound(long)]
-        option:      Vec<String>,
-        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
-        /// \xHH escapes
-        #[pound(long)]
-        input_bytes: Option<String>,
+        option:    Vec<String>,
+        #[pound(flatten)]
+        replay:    Replay,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
-        page_size:   usize,
-        /// bind a key to a result as key:name, may be repeated
-        ///
-        /// the key is one character, ctrl- and a letter, or enter, esc, tab,
-        /// backtab, backspace, delete, up, down, left, right, home, end,
-        /// page-up or page-down. pressing it submits an object with `action`
-        /// as the name and `value` as the value so far, and a bound character
-        /// can no longer be typed
-        #[pound(long)]
-        action:      Vec<String>,
+        page_size: usize,
+        #[pound(flatten)]
+        bindings:  Bindings,
     },
     /// review options with confirmed/denied/unconfirmed row state
     ReviewList {
         /// option label/value, may be repeated
         #[pound(long)]
         option:        Vec<String>,
-        /// bytes to replay instead of reading input, with \n \r \t \e \\ and
-        /// \xHH escapes
-        #[pound(long)]
-        input_bytes:   Option<String>,
+        #[pound(flatten)]
+        replay:        Replay,
         /// visible result rows
         #[pound(long, default = "9", min = "1")]
         page_size:     usize,
-        /// return a structured exit and rows, enables g/s/a action keys
+        /// return a structured exit and rows, and bind g, s and a as the
+        /// regen, search and add actions, needed by --action
+        ///
+        /// without it the result is the bare rows and esc cancels with exit 130
         #[pound(long)]
         action_output: bool,
-        /// bind a key to a result as key:name, may be repeated
+        /// bind a key to a result as key:name, may be repeated, needs
+        /// --action-output
         ///
-        /// the key is one character the review does not use. pressing it
-        /// submits the review result with `exit` set to action and `action`
-        /// set to the name
+        /// the key is one character the review does not use, and not g, s or
+        /// a. pressing it submits the review result with `exit` set to action
+        /// and `action` set to the name
         #[pound(long)]
         action:        Vec<String>,
     },
@@ -323,340 +300,273 @@ pub fn run(cli: Cli) -> Result<String, CliError> {
     Ok(format_output(&result, output.into()))
 }
 
-fn run_command(command: Command) -> Result<Value, CliError> {
-    match command {
+fn command_spec(command: Command) -> Result<(FieldConfig, Option<String>), String> {
+    Ok(match command {
         Command::Select {
             option,
-            input_bytes,
+            replay,
             page_size,
-            action,
+            bindings,
         } => {
-            run_widget(
-                "select",
-                Select::new("select", choice_items(option).map_err(CliError::Usage)?)
-                    .with_page_size(page_size),
-                input_bytes,
-                action_bindings(action).map_err(CliError::Usage)?,
+            (
+                FieldConfig {
+                    options: choice_items(option)?,
+                    page_size: Some(page_size),
+                    actions: action_bindings(bindings.action)?,
+                    ..FieldConfig::new(WidgetKind::Select)
+                },
+                replay.input_bytes,
             )
         },
         Command::MultiSelect {
             option,
-            input_bytes,
+            replay,
             page_size,
-            action,
+            bindings,
         } => {
-            run_widget(
-                "multi-select",
-                MultiSelect::new(
-                    "multi-select",
-                    choice_items(option).map_err(CliError::Usage)?,
-                )
-                .with_page_size(page_size),
-                input_bytes,
-                action_bindings(action).map_err(CliError::Usage)?,
+            (
+                FieldConfig {
+                    options: choice_items(option)?,
+                    page_size: Some(page_size),
+                    actions: action_bindings(bindings.action)?,
+                    ..FieldConfig::new(WidgetKind::MultiSelect)
+                },
+                replay.input_bytes,
             )
         },
         Command::Text {
-            input_bytes,
+            replay,
             value,
             prompt,
-            action,
+            bindings,
         } => {
-            let name = prompt.clone();
-            run_widget(
-                &name,
-                TextInput::new("text").with_prompt(prompt).with_value(value),
-                input_bytes,
-                action_bindings(action).map_err(CliError::Usage)?,
+            (
+                FieldConfig {
+                    prompt: Some(prompt),
+                    value: Some(value),
+                    actions: action_bindings(bindings.action)?,
+                    ..FieldConfig::new(WidgetKind::Text)
+                },
+                replay.input_bytes,
             )
         },
         Command::Search {
             option,
-            input_bytes,
+            replay,
             page_size,
-            action,
+            bindings,
         } => {
-            run_widget(
-                "search",
-                SearchSelect::new("search", choice_items(option).map_err(CliError::Usage)?)
-                    .with_page_size(page_size),
-                input_bytes,
-                action_bindings(action).map_err(CliError::Usage)?,
+            (
+                FieldConfig {
+                    options: choice_items(option)?,
+                    page_size: Some(page_size),
+                    actions: action_bindings(bindings.action)?,
+                    ..FieldConfig::new(WidgetKind::Search)
+                },
+                replay.input_bytes,
             )
         },
         Command::ReviewList {
             option,
-            input_bytes,
+            replay,
             page_size,
             action_output,
             action,
         } => {
-            let actions = review_action_bindings_with_defaults(action, action_output)
-                .map_err(CliError::Usage)?;
-            run_widget(
-                "review-list",
-                ReviewList::new(
-                    "review-list",
-                    choice_items(option).map_err(CliError::Usage)?,
-                )
-                .with_page_size(page_size)
-                .with_exit_output(action_output || !actions.is_empty())
-                .with_custom_actions(actions),
-                input_bytes,
-                Vec::new(),
+            (
+                FieldConfig {
+                    options: choice_items(option)?,
+                    page_size: Some(page_size),
+                    action_output: Some(action_output),
+                    review_actions: action
+                        .iter()
+                        .map(|binding| parse_review_action_binding(binding))
+                        .collect::<Result<_, _>>()?,
+                    ..FieldConfig::new(WidgetKind::ReviewList)
+                },
+                replay.input_bytes,
             )
         },
-    }
+    })
+}
+
+fn run_command(command: Command) -> Result<Value, CliError> {
+    let (spec, input_bytes) = command_spec(command).map_err(CliError::Usage)?;
+    run_spec(spec, Vec::new(), input_bytes)
 }
 
 fn run_config(config: WidgetConfig) -> Result<Value, CliError> {
-    let name = config
-        .prompt
-        .clone()
-        .unwrap_or_else(|| config.kind.name().to_owned());
-    match config.kind {
-        WidgetKind::Select => {
-            let mut widget = Select::new("select", config.options)
-                .with_page_size(config.page_size.unwrap_or(9))
-                .with_wrap(config.wrap.unwrap_or(true));
-            if let Some(prompt) = config.prompt {
-                widget = widget.with_header(prompt);
-            }
-            if let Some(selected) = config.selected_indices.first() {
-                widget = widget.with_selected_index(*selected);
-            }
-            run_widget(&name, widget, config.input_bytes, config.actions)
-        },
-        WidgetKind::MultiSelect => {
-            let first_selected = config.selected_indices.first().copied();
-            let mut widget = MultiSelect::new("multi-select", config.options)
-                .with_page_size(config.page_size.unwrap_or(9))
-                .with_wrap(config.wrap.unwrap_or(true))
-                .with_checked_indices(config.selected_indices);
-            if let Some(prompt) = config.prompt {
-                widget = widget.with_header(prompt);
-            }
-            if let Some(selected) = first_selected {
-                widget = widget.with_selected_index(selected);
-            }
-            run_widget(&name, widget, config.input_bytes, config.actions)
-        },
-        WidgetKind::Text => {
-            run_widget(
-                &name,
-                text_from_config(&config),
-                config.input_bytes,
-                config.actions,
-            )
-        },
-        WidgetKind::Search => {
-            let mut widget = SearchSelect::new("search", config.options)
-                .with_page_size(config.page_size.unwrap_or(9))
-                .with_wrap(config.wrap.unwrap_or(true));
-            if let Some(prompt) = config.prompt {
-                widget = widget.with_prompt(prompt);
-            }
-            if let Some(placeholder) = config.placeholder {
-                widget = widget.with_placeholder(placeholder);
-            }
-            if let Some(selected) = config.selected_indices.first() {
-                widget = widget.with_selected_match_index(*selected);
-            }
-            run_widget(&name, widget, config.input_bytes, config.actions)
-        },
-        WidgetKind::Form => {
-            let input_bytes = config.input_bytes.clone();
-            let actions = config.actions.clone();
-            let prompt = config.prompt.clone();
-            let widget = form_from_config(config).map_err(CliError::Usage)?;
-            run_headed(&name, prompt, widget, input_bytes, actions)
-        },
-        WidgetKind::Date => {
-            let selected = config
-                .selected_date
-                .ok_or_else(|| "date config requires selected_date".to_owned())
-                .map_err(CliError::Usage)?;
-            run_headed(
-                &name,
-                config.prompt,
-                date_picker("date", selected, config.today),
-                config.input_bytes,
-                config.actions,
-            )
-        },
-        WidgetKind::ReviewList => {
-            let first_selected = config.selected_indices.first().copied();
-            let actions = review_actions_with_defaults(
-                config.review_actions,
-                config.action_output.unwrap_or(false),
-            )
-            .map_err(CliError::Usage)?;
-            let mut widget = ReviewList::new("review-list", config.options)
-                .with_page_size(config.page_size.unwrap_or(9))
-                .with_wrap(config.wrap.unwrap_or(true))
-                .with_states(config.review_states)
-                .with_show_removed(config.show_removed.unwrap_or(true))
-                .with_exit_output(config.action_output.unwrap_or(false) || !actions.is_empty())
-                .with_custom_actions(actions);
-            if let Some(prompt) = config.prompt {
-                widget = widget.with_header(prompt);
-            }
-            if let Some(selected) = first_selected {
-                widget = widget.with_selected_index(selected);
-            }
-            run_widget(&name, widget, config.input_bytes, Vec::new())
-        },
+    run_spec(config.base, config.fields, config.input_bytes)
+}
+
+fn run_spec(
+    spec: FieldConfig,
+    fields: Vec<FieldConfig>,
+    input_bytes: Option<String>,
+) -> Result<Value, CliError> {
+    let sink = RunSink {
+        name: spec
+            .prompt
+            .clone()
+            .unwrap_or_else(|| spec.kind.name().to_owned()),
+        input_bytes,
+    };
+    if spec.kind == WidgetKind::Form {
+        let mut form = Form::new("form");
+        for field in fields {
+            push_form_field(&mut form, field).map_err(CliError::Usage)?;
+        }
+        return headed(sink, spec.prompt, form, spec.actions);
+    }
+    build(spec, false, sink).map_err(CliError::Usage)?
+}
+
+trait WidgetSink {
+    type Out;
+
+    fn accept(self, widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Self::Out;
+}
+
+struct RunSink {
+    name:        String,
+    input_bytes: Option<String>,
+}
+
+impl WidgetSink for RunSink {
+    type Out = Result<Value, CliError>;
+
+    fn accept(self, widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Self::Out {
+        run_widget(&self.name, widget, self.input_bytes, actions)
     }
 }
 
-fn form_from_config(config: WidgetConfig) -> Result<Form, String> {
-    let mut form = Form::new("form");
-    for field in config.fields {
-        push_form_field(&mut form, field)?;
+struct FieldSink<'form> {
+    form: &'form mut Form,
+    name: String,
+}
+
+impl WidgetSink for FieldSink<'_> {
+    type Out = ();
+
+    fn accept(self, widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Self::Out {
+        if actions.is_empty() {
+            self.form.push_field(self.name, widget);
+        } else {
+            self.form
+                .push_field(self.name, ActionLayer::new(widget).with_actions(actions));
+        }
     }
-    Ok(form)
 }
 
 fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
-    match field.kind {
+    let sink = FieldSink {
+        form,
+        name: field.name.clone(),
+    };
+    build(field, true, sink)
+}
+
+fn headed<S: WidgetSink>(
+    sink: S,
+    prompt: Option<String>,
+    widget: impl Widget + 'static,
+    actions: Vec<ActionBinding>,
+) -> S::Out {
+    match prompt {
+        Some(heading) => sink.accept(Headed::new(heading, widget), actions),
+        None => sink.accept(widget, actions),
+    }
+}
+
+fn build<S: WidgetSink>(spec: FieldConfig, in_form: bool, sink: S) -> Result<S::Out, String> {
+    let id = spec.name;
+    let page_size = spec.page_size.unwrap_or(9);
+    let wrap = spec.wrap.unwrap_or(true);
+    let first_selected = spec.selected_indices.first().copied();
+    Ok(match spec.kind {
         WidgetKind::Select => {
-            let mut widget = Select::new(field.name.clone(), field.options)
-                .with_page_size(field.page_size.unwrap_or(9))
-                .with_wrap(field.wrap.unwrap_or(true));
-            if let Some(prompt) = field.prompt {
+            let mut widget = Select::new(id, spec.options)
+                .with_page_size(page_size)
+                .with_wrap(wrap);
+            if let Some(prompt) = spec.prompt {
                 widget = widget.with_header(prompt);
             }
-            if let Some(selected) = field.selected_indices.first() {
-                widget = widget.with_selected_index(*selected);
+            if let Some(selected) = first_selected {
+                widget = widget.with_selected_index(selected);
             }
-            push_action_field(form, field.name, widget, field.actions);
+            sink.accept(widget, spec.actions)
         },
         WidgetKind::MultiSelect => {
-            let first_selected = field.selected_indices.first().copied();
-            let mut widget = MultiSelect::new(field.name.clone(), field.options)
-                .with_page_size(field.page_size.unwrap_or(9))
-                .with_wrap(field.wrap.unwrap_or(true))
-                .with_checked_indices(field.selected_indices);
-            if let Some(prompt) = field.prompt {
+            let mut widget = MultiSelect::new(id, spec.options)
+                .with_page_size(page_size)
+                .with_wrap(wrap)
+                .with_checked_indices(spec.selected_indices);
+            if let Some(prompt) = spec.prompt {
                 widget = widget.with_header(prompt);
             }
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
             }
-            push_action_field(form, field.name, widget, field.actions);
+            sink.accept(widget, spec.actions)
         },
         WidgetKind::Text => {
-            let mut widget = TextInput::new(field.name.clone());
-            if let Some(prompt) = field.prompt {
-                widget = widget.with_prompt(prompt);
-            } else {
-                widget = widget.with_prompt(format!("{}: ", field.name));
-            }
-            if let Some(placeholder) = field.placeholder {
+            let prompt = spec.prompt.unwrap_or_else(|| format!("{id}: "));
+            let mut widget = TextInput::new(id).with_prompt(prompt);
+            if let Some(placeholder) = spec.placeholder {
                 widget = widget.with_placeholder(placeholder);
             }
-            if let Some(value) = field.value {
+            if let Some(value) = spec.value {
                 widget = widget.with_value(value);
             }
-            push_action_field(form, field.name, widget, field.actions);
+            sink.accept(widget, spec.actions)
         },
         WidgetKind::Search => {
-            let mut widget = SearchSelect::new(field.name.clone(), field.options)
-                .with_page_size(field.page_size.unwrap_or(9))
-                .with_wrap(field.wrap.unwrap_or(true));
-            if let Some(prompt) = field.prompt {
-                widget = widget.with_prompt(prompt);
+            let mut widget = SearchSelect::new(id, spec.options)
+                .with_page_size(page_size)
+                .with_wrap(wrap);
+            if let Some(prompt) = spec.prompt {
+                widget = widget.with_header(prompt);
             }
-            if let Some(placeholder) = field.placeholder {
+            if let Some(placeholder) = spec.placeholder {
                 widget = widget.with_placeholder(placeholder);
             }
-            if let Some(selected) = field.selected_indices.first() {
-                widget = widget.with_selected_match_index(*selected);
+            if let Some(selected) = first_selected {
+                widget = widget.with_selected_match_index(selected);
             }
-            push_action_field(form, field.name, widget, field.actions);
+            sink.accept(widget, spec.actions)
         },
         WidgetKind::Date => {
-            let selected = field
+            let selected = spec
                 .selected_date
-                .ok_or_else(|| format!("field '{}' requires selected_date", field.name))?;
-            let widget = date_picker(field.name.clone(), selected, field.today);
-            push_headed_field(form, field.name, field.prompt, widget, field.actions);
+                .ok_or_else(|| format!("{id} requires selected_date"))?;
+            let mut picker = DatePicker::new(id, selected);
+            if let Some(today) = spec.today {
+                picker = picker.with_today(today);
+            }
+            headed(sink, spec.prompt, picker, spec.actions)
         },
         WidgetKind::ReviewList => {
-            let first_selected = field.selected_indices.first().copied();
-            let actions = review_actions_with_defaults(
-                field.review_actions,
-                field.action_output.unwrap_or(false),
-            )?;
-            let mut widget = ReviewList::new(field.name.clone(), field.options)
-                .with_page_size(field.page_size.unwrap_or(9))
-                .with_wrap(field.wrap.unwrap_or(true))
-                .with_states(field.review_states)
-                .with_show_removed(field.show_removed.unwrap_or(true))
-                .with_exit_output(field.action_output.unwrap_or(false) || !actions.is_empty())
-                .with_custom_actions(actions)
-                .with_leave_output(false);
-            if let Some(prompt) = field.prompt {
+            let action_output = spec.action_output.unwrap_or(false);
+            let mut widget = ReviewList::new(id, spec.options)
+                .with_page_size(page_size)
+                .with_wrap(wrap)
+                .with_states(spec.review_states)
+                .with_show_removed(spec.show_removed.unwrap_or(true))
+                .with_exit_output(action_output)
+                .with_custom_actions(review_actions(spec.review_actions, action_output)?);
+            if in_form {
+                widget = widget.with_leave_output(false);
+            }
+            if let Some(prompt) = spec.prompt {
                 widget = widget.with_header(prompt);
             }
             if let Some(selected) = first_selected {
                 widget = widget.with_selected_index(selected);
             }
-            form.push_field(field.name, widget);
+            sink.accept(widget, Vec::new())
         },
         WidgetKind::Form => return Err("nested form fields are not supported yet".to_owned()),
-    }
-    Ok(())
-}
-
-fn push_action_field<W>(form: &mut Form, name: String, widget: W, actions: Vec<ActionBinding>)
-where
-    W: Widget + 'static,
-{
-    if actions.is_empty() {
-        form.push_field(name, widget);
-    } else {
-        form.push_field(name, ActionLayer::new(widget).with_actions(actions));
-    }
-}
-
-fn date_picker(id: impl Into<WidgetId>, selected: Date, today: Option<Date>) -> DatePicker {
-    let picker = DatePicker::new(id, selected);
-    match today {
-        Some(date) => picker.with_today(date),
-        None => picker,
-    }
-}
-
-fn push_headed_field<W>(
-    form: &mut Form,
-    name: String,
-    prompt: Option<String>,
-    widget: W,
-    actions: Vec<ActionBinding>,
-) where
-    W: Widget + 'static,
-{
-    match prompt {
-        Some(heading) => push_action_field(form, name, Headed::new(heading, widget), actions),
-        None => push_action_field(form, name, widget, actions),
-    }
-}
-
-fn run_headed<W>(
-    name: &str,
-    prompt: Option<String>,
-    widget: W,
-    input_bytes: Option<String>,
-    actions: Vec<ActionBinding>,
-) -> Result<Value, CliError>
-where
-    W: Widget + 'static,
-{
-    match prompt {
-        Some(heading) => run_widget(name, Headed::new(heading, widget), input_bytes, actions),
-        None => run_widget(name, widget, input_bytes, actions),
-    }
+    })
 }
 
 fn choice_items(options: Vec<String>) -> Result<Vec<SelectItem>, String> {
@@ -684,47 +594,39 @@ fn action_bindings(actions: Vec<String>) -> Result<Vec<ActionBinding>, String> {
     Ok(bindings)
 }
 
-fn review_action_bindings_with_defaults(
-    actions: Vec<String>,
-    defaults: bool,
-) -> Result<Vec<ReviewActionBinding>, String> {
-    let mut bindings = if defaults {
-        default_review_actions()
-    } else {
-        Vec::new()
-    };
-    let mut seen: Vec<char> = bindings.iter().map(ReviewActionBinding::key).collect();
-    for action in actions {
-        bindings.push(push_unique_review_action(
-            &mut seen,
-            parse_review_action_binding(&action)?,
-        )?);
-    }
-    Ok(bindings)
-}
-
-fn review_actions_with_defaults(
+fn review_actions(
     actions: Vec<ReviewActionBinding>,
-    defaults: bool,
+    action_output: bool,
 ) -> Result<Vec<ReviewActionBinding>, String> {
-    let mut bindings = if defaults {
-        default_review_actions()
-    } else {
-        Vec::new()
-    };
-    let mut seen: Vec<char> = bindings.iter().map(ReviewActionBinding::key).collect();
-    for action in actions {
-        bindings.push(push_unique_review_action(&mut seen, action)?);
+    if !action_output {
+        return if actions.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err("review actions need action_output".to_owned())
+        };
     }
-    Ok(bindings)
-}
-
-fn default_review_actions() -> Vec<ReviewActionBinding> {
-    vec![
+    let mut bindings = vec![
         ReviewActionBinding::new('g', "regen").with_help("regenerate"),
         ReviewActionBinding::new('s', "search"),
         ReviewActionBinding::new('a', "add"),
-    ]
+    ];
+    let defaults = bindings.len();
+    let mut seen: Vec<char> = bindings.iter().map(ReviewActionBinding::key).collect();
+    for action in actions {
+        let key = ReviewList::fold_key(action.key());
+        if let Some(bound) = bindings
+            .iter()
+            .take(defaults)
+            .find(|default| default.key() == key)
+        {
+            return Err(format!(
+                "duplicate review action key '{key}', action_output binds it to {}",
+                bound.name()
+            ));
+        }
+        bindings.push(push_unique_review_action(&mut seen, action)?);
+    }
+    Ok(bindings)
 }
 
 fn run_widget(
@@ -740,21 +642,10 @@ fn run_widget(
         let events = decoder.feed(&bytes).into_iter().chain(decoder.flush());
         replay_events(layered, events).map_err(|error| CliError::from(error.naming_prompt(name)))
     } else {
-        live_interaction()
+        Interaction::live_or_tty()
             .interact(widget, actions)
             .map_err(|error| CliError::from(error.naming_prompt(name)))
     }
-}
-
-fn live_interaction() -> Interaction {
-    if io::stdin().is_terminal() && io::stderr().is_terminal() {
-        return Interaction::live();
-    }
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .map_or_else(|_error| Interaction::live(), Interaction::live_on)
 }
 
 fn decode_escaped(value: &str) -> Result<Vec<u8>, String> {
