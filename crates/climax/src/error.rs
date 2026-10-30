@@ -25,7 +25,8 @@ pub enum ErrorKind {
     Parse,
     /// terminal output failed to render or write
     Output,
-    /// filesystem or other i/o failure
+    /// filesystem or other i/o failure, also an application error whose source
+    /// chain holds one
     Io,
     /// an interactive operation failed
     Interactive,
@@ -97,9 +98,9 @@ impl Error {
 
     #[must_use]
     /// wraps `source` as an [`ErrorKind::Application`] error with its text as
-    /// the message
+    /// the message, or as [`ErrorKind::Io`] when an `io::Error` is in its chain
     pub fn application(source: impl error::Error + Send + Sync + 'static) -> Self {
-        Self::with_source(ErrorKind::Application, source)
+        Self::with_source(application_kind(&source), source)
     }
 
     #[must_use]
@@ -110,7 +111,7 @@ impl Error {
     ) -> Self {
         let combined = format!("{}: {source}", message.into());
         Self {
-            kind:      ErrorKind::Application,
+            kind:      application_kind(&source),
             message:   combined,
             signal:    None,
             exit_code: None,
@@ -374,6 +375,14 @@ impl Inherited {
     }
 }
 
+fn application_kind(source: &(dyn error::Error + 'static)) -> ErrorKind {
+    if causes(source).any(<dyn error::Error>::is::<io::Error>) {
+        ErrorKind::Io
+    } else {
+        ErrorKind::Application
+    }
+}
+
 fn causes<'a>(
     error: &'a (dyn error::Error + 'static),
 ) -> impl Iterator<Item = &'a (dyn error::Error + 'static)> {
@@ -389,7 +398,7 @@ impl From<io::Error> for Error {
 impl From<Box<dyn error::Error + Send + Sync + 'static>> for Error {
     fn from(value: Box<dyn error::Error + Send + Sync + 'static>) -> Self {
         let inherited = Inherited::find(causes(&*value));
-        Self::with_source(ErrorKind::Application, BoxedSource(value)).inheriting(inherited)
+        Self::with_source(application_kind(&*value), BoxedSource(value)).inheriting(inherited)
     }
 }
 
@@ -402,7 +411,7 @@ impl From<Box<dyn error::Error + Send + Sync + 'static>> for Error {
 impl From<anyhow::Error> for Error {
     fn from(value: anyhow::Error) -> Self {
         let inherited = Inherited::find(value.chain());
-        Self::with_source(ErrorKind::Application, AnyhowSource(value)).inheriting(inherited)
+        Self::with_source(application_kind(&*value), AnyhowSource(value)).inheriting(inherited)
     }
 }
 
@@ -554,7 +563,7 @@ mod tests {
         let boxed: Box<dyn error::Error + Send + Sync> =
             Box::new(Layered(io::Error::other("disk full")));
         let converted = Error::from(boxed);
-        assert_eq!(converted.kind(), ErrorKind::Application);
+        assert_eq!(converted.kind(), ErrorKind::Io);
         assert_eq!(
             format!("{converted:?}"),
             "could not save\n\nCaused by:\n    disk full"
@@ -702,10 +711,22 @@ mod tests {
 
     #[test]
     fn application_context_preserves_its_source() {
-        let error = Error::application_context("cannot query history", io::Error::other("closed"));
+        let error =
+            Error::application_context("cannot query history", "x".parse::<u8>().unwrap_err());
         assert_eq!(error.kind(), ErrorKind::Application);
-        assert_eq!(error.to_string(), "cannot query history: closed");
+        assert_eq!(
+            error.to_string(),
+            "cannot query history: invalid digit found in string"
+        );
         assert!(error.source_error().is_some());
+
+        let piped = Layered(io::Error::from(io::ErrorKind::BrokenPipe));
+        assert!(
+            Err::<(), _>(piped)
+                .context("writing")
+                .unwrap_err()
+                .is_closed_pipe()
+        );
     }
 }
 
