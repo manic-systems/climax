@@ -10,16 +10,6 @@
 //! dependency on any of them, and derives with `climax::Parse` and
 //! `climax::ValueEnum`, since the derives under `climax::pound` expand to
 //! `::pound` paths
-//!
-//! the prompt builders on [`Context`] return the prompt types, which are
-//! re-exported at the root next to their config types, `PromptOutcome` and
-//! the review types, so a signature such as `fn ask(cx: &Context) ->
-//! SelectPrompt<String>` needs no path through `climax::bang`
-//!
-//! the `derive` feature provides `#[derive(climax::Parse)]` and
-//! `#[derive(climax::ValueEnum)]`, whose expansion refers to
-//! `::climax::pound`. serde's derives need `#[serde(crate = "climax::serde")]`
-//! for the same reason
 
 #![cfg_attr(
     all(
@@ -30,24 +20,38 @@
     ),
     doc = include_str!("../README.md")
 )]
+#![cfg_attr(doc, doc = include_str!("../docs/facade.md"))]
 #![warn(missing_docs)]
+
+extern crate alloc;
 
 mod app;
 /// the application error type and its categories
 pub mod error;
-#[cfg(feature = "complete")] pub mod install;
+/// what a package installs beside the binary, completion scripts and man pages
+#[cfg(feature = "complete")]
+pub mod install;
+#[cfg(feature = "structured")] mod json;
 pub mod output;
 pub mod prelude;
 mod sync;
 /// terminal capability facts, policy overrides and terminal applications
 pub mod terminal;
+pub mod testing;
 
 /// transient status lines drawn on the shared renderer
 #[cfg(feature = "render")]
 pub mod status;
 
+/// the `serde` crate, for applications that depend on `climax` alone
+///
+/// `#[climax::serde(..)]` also needs `derive`, otherwise this path is only the
+/// crate
+#[cfg(feature = "structured")]
+pub use ::serde;
 pub use app::{
     Context,
+    main_with,
     run_with,
 };
 #[cfg(feature = "parse")]
@@ -89,6 +93,8 @@ pub use bang::{
     TextPrompt,
 };
 #[cfg(feature = "complete")] pub use caress;
+#[cfg(all(feature = "derive", feature = "structured"))]
+pub use climax_derive::serde;
 #[cfg(feature = "derive")]
 pub use climax_derive::{
     Parse,
@@ -98,7 +104,7 @@ pub use error::{
     Error,
     ErrorKind,
     Result,
+    ResultExt,
 };
 #[cfg(feature = "parse")] pub use pound;
 #[cfg(feature = "render")] pub use screw;
-#[cfg(feature = "structured")] pub use serde;

@@ -14,12 +14,12 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 
 - application facade that re-exports each component whole, `climax::pound` under `parse`, `climax::bang` under `interactive`, `climax::screw` under `render`, `climax::caress` under `complete` and `climax::serde` under `structured`
 - exact pins between the climax family crates, `pound` and `caress` at the caret range climax was tested against and `climax-derive` taking `pound-derive-impl` at a caret range, and the dev edge from `pound-derive` to `pound` is path-only
-- `main` reports and returns an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
+- `main` and `main_with` report and return an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
 - `try_run`, `try_run_from` and `run_with` skip the reporting
-- `main` exits 141 on a closed stdout pipe everywhere, including a `BrokenPipe` i/o error the handler returns, prints a parse error as pound's full report and prints the cause chain of an application error
+- `main` exits 141 on a closed stdout pipe everywhere, including a `BrokenPipe` i/o error the handler returns unless `with_exit_code` sets a code, prints a parse error as pound's full report and prints the cause chain of an application error
 - a final report that cannot be written keeps its intended exit code, except that a closed stdout exits 141
 - `Result<T, E = Error>` alias
-- `Error::application` and `application_context` give an error with an i/o error anywhere in its source chain the kind `Io`, so a wrapped `BrokenPipe` exits 141 like a bare one
+- `Error::application`, `application_context`, `ResultExt` and the boxed and `anyhow` conversions give an error with an i/o error anywhere in its source chain the kind `Io`, so a wrapped `BrokenPipe` exits 141 like a bare one
 - `Output::write_message` waits for a prompt another thread holds, as `stream` does, instead of drawing into the prompt
 - a prompt requested while `Output::write_message` is writing waits for the write to finish, up to the request bound
 - removing a status while the status thread is stalled still takes effect once the thread answers, so the status stops drawing
@@ -27,12 +27,17 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - minimum Rust version 1.89
 - typed prompts on `Context` returning `PromptOutcome`, with the config types and review types re-exported
 - structured output through `Context::output` with `result`, `stream` and `notice`, and `Context::diagnostic` for a second handle
+- json output writes a non-finite float as the string `"NaN"`, `"Infinity"` or `"-Infinity"`, as `bang` does
 - `Context::status` coordinator, `Status::during`, `Status::widget` and `StatusMode`
 - terminal policy through `TerminalCapabilities`, `InteractionMode` and `StatusMode`, and `with_terminal`, `with_terminal_application` and `with_*_writer` to redirect channels
+- `Context::with_prompt_summaries` and `set_prompt_summaries`
 - `set_interaction_mode` keeps an interaction injected with `set_interaction`
-- `climax::Error` with `ErrorKind`, `signal()` and `related_errors()`, plus `Error::application` and `application_context`
-- `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]` through `derive`
+- `climax::Error` with `ErrorKind`, `signal()` and `related_errors()`, plus `Error::application`, `application_context`, `cancelled` and `with_exit_code`
+- `ResultExt` for `.context` and `.app_err`, kept out of the prelude, and `From` for boxed errors, where a `climax::Error` or `bang::Error` inside keeps its kind, signal and exit code
+- `anyhow` feature, off by default, adds `From<anyhow::Error>`
+- `#[derive(climax::Parse)]` and `#[derive(climax::ValueEnum)]` through `derive`, and `#[climax::serde(..)]` with `structured`
 - `complete` feature answers shell completion in `main` and `try_run`, and `climax::install` renders completion scripts and man pages
+- `climax::testing` with `run`, `run_with`, `Script`, `Capture` and `Outcome`, where `Script::select_nth` and `multi_select_nth` fail on a row the prompt does not have, `run_with` needs no feature, and a script left unread panics once and names the error that ended the run
 
 #### bang
 

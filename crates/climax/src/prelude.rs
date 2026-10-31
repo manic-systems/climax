@@ -32,6 +32,7 @@ pub use crate::{
     Error,
     ErrorKind,
     Result,
+    main_with,
     output::Format,
     run_with,
     terminal::{

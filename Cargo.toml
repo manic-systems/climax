@@ -16,6 +16,8 @@ members = [
   "tests/compile-fixtures/bang-only",
   "tests/compile-fixtures/bang-terminal-only",
   "tests/compile-fixtures/caress-only",
+  "tests/compile-fixtures/climax-anyhow-only",
+  "tests/compile-fixtures/climax-complete-only",
   "tests/compile-fixtures/climax-derive-only",
   "tests/compile-fixtures/climax-interactive-only",
   "tests/compile-fixtures/climax-no-default-features",
@@ -56,6 +58,7 @@ repository   = "https://github.com/manic-systems/climax"
 rust-version = "1.89"
 
 [workspace.dependencies]
+anyhow            = "1"
 bang              = { path = "crates/bang", version = "=0.1.0" }
 bang-core         = { path = "crates/bang-core", version = "=0.1.0" }
 bang-terminal     = { path = "crates/bang-terminal", version = "=0.1.0" }

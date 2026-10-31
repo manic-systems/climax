@@ -1,0 +1,1 @@
+../crates/climax/docs/facade.md

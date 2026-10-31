@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use std::process::ExitCode;
+
 use climax::PromptOutcome;
 
-fn main() -> climax::Result<()> {
-    climax::run_with((), |context, ()| {
+fn main() -> ExitCode {
+    climax::main_with(|context| {
         let shell = match context
             .select("shell")
             .choice("bash", "bash")
@@ -15,6 +17,10 @@ fn main() -> climax::Result<()> {
             PromptOutcome::Leave => return Ok(()),
         };
 
-        context.output().result(&shell).text(|shell| *shell).emit()
+        context
+            .output()
+            .result(&shell)
+            .text(|chosen| *chosen)
+            .emit()
     })
 }

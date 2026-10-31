@@ -1,21 +1,30 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-//! output: routing of application results and notices.
+//! output: routing of application results and notices
 
+use alloc::sync::Arc;
+use core::fmt;
+#[cfg(feature = "structured")] use core::mem;
+#[cfg(feature = "structured")]
+use std::sync::{
+    Condvar,
+    PoisonError,
+};
 use std::{
-    fmt,
     io::{
         self,
         Write,
     },
-    sync::{
-        Arc,
-        Mutex,
-    },
+    sync::Mutex,
 };
 
 #[cfg(feature = "structured")] use serde::Serialize;
 
+#[cfg(feature = "structured")] use crate::json;
+#[cfg(all(feature = "render", feature = "structured"))]
+use crate::status::StatusCoordinator;
+#[cfg(feature = "render")]
+use crate::status::TransientNotice;
 use crate::{
     Error,
     Result,
@@ -62,14 +71,20 @@ pub(crate) enum PresentationRoute {
     /// straight to the destination
     Direct,
     /// clear the live region, write through, let the next frame redraw
-    Around(crate::status::StatusCoordinator),
+    Around(StatusCoordinator),
     /// through the coordinator's notice path
-    Queued(crate::status::StatusCoordinator),
+    Queued(StatusCoordinator),
 }
 
 impl Output {
     #[must_use]
-    #[cfg_attr(not(feature = "structured"), allow(clippy::missing_const_for_fn))]
+    #[cfg_attr(
+        not(feature = "structured"),
+        expect(
+            clippy::missing_const_for_fn,
+            reason = "const only once the gated code is compiled in"
+        )
+    )]
     pub(crate) fn new(format: Format) -> Self {
         Self {
             format,
@@ -135,7 +150,7 @@ impl Output {
     }
 
     #[cfg(feature = "render")]
-    pub(crate) fn with_transient(mut self, notices: crate::status::TransientNotice) -> Self {
+    pub(crate) fn with_transient(mut self, notices: TransientNotice) -> Self {
         self.notices = SharedWriter::Transient(notices);
         self
     }
@@ -150,6 +165,11 @@ impl Output {
     ///
     /// a live status is cleared first and redrawn after when this handle writes
     /// to a terminal stdout, and a prompt held by another thread is waited out
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::Output` when the writer rejects the message or
+    /// cannot flush
     pub fn write_message(&self, mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
         #[cfg(all(feature = "render", feature = "structured"))]
         let _hold = match &self.route {
@@ -170,6 +190,10 @@ impl Output {
     /// suppressed in structured output modes. while a prompt or terminal
     /// application holds the terminal the line is queued until release and
     /// the call returns at once
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::Output` when the notice cannot be written
     pub fn notice(&self, message: impl fmt::Display) -> Result<()> {
         if self.notice_format == Format::Text {
             write_text(self.notices.clone(), message)?;
@@ -181,6 +205,34 @@ impl Output {
     /// register the invocation's single finite result
     ///
     /// the projection is buffered until the handler succeeds
+    ///
+    /// derive with `#[climax::serde(Serialize)]`, which must come before any
+    /// other derive sharing serde's helper attributes
+    ///
+    /// ```
+    /// use climax::prelude::*;
+    ///
+    /// # #[cfg(feature = "derive")]
+    /// #[climax::serde(Serialize)]
+    /// #[serde(rename_all = "kebab-case")]
+    /// struct Report {
+    ///     file_count: usize,
+    /// }
+    /// ```
+    ///
+    /// without `derive`, write `#[derive(climax::serde::Serialize)]` with
+    /// `#[serde(crate = "climax::serde")]`, or rustc reports `E0658` about
+    /// `rustc_private`
+    ///
+    /// ```
+    /// use climax::prelude::*;
+    ///
+    /// #[derive(climax::serde::Serialize)]
+    /// #[serde(crate = "climax::serde")]
+    /// struct Report {
+    ///     files: usize,
+    /// }
+    /// ```
     pub const fn result<'a, T>(&'a self, value: &'a T) -> ResultBuilder<'a, T, MissingText>
     where
         T: Serialize + ?Sized,
@@ -195,6 +247,9 @@ impl Output {
 
     #[cfg(feature = "structured")]
     /// begin an immediate result stream
+    ///
+    /// JSON mode writes one value per line. a stream cannot mix with a finite
+    /// result in the same invocation, and derives follow [`Self::result`]
     ///
     /// a write on a [`crate::Context::diagnostic`] handle behaves like a
     /// notice. any other write that must wait for a prompt on the calling
@@ -215,10 +270,9 @@ impl Output {
     /// format a message without writing it
     #[must_use]
     pub fn format_message(&self, message: impl fmt::Display) -> String {
-        let message = message.to_string();
         match self.format {
-            Format::Text => format!("{message}\n"),
-            Format::Json => format!("\"{}\"\n", escape_json(&message)),
+            Format::Text => format_text(message),
+            Format::Json => format!("\"{}\"\n", escape_json(&message.to_string())),
         }
     }
 
@@ -264,7 +318,7 @@ impl Output {
     #[cfg(feature = "structured")]
     pub(crate) fn commit(&self) -> Result<()> {
         let pending = {
-            let state = std::mem::replace(
+            let state = mem::replace(
                 &mut lock(&self.state.lifecycle).state,
                 EmissionState::Closed,
             );
@@ -274,17 +328,16 @@ impl Output {
                     .wait_while(lock(&self.state.lifecycle), |lifecycle| {
                         lifecycle.in_flight > 0
                     })
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    .unwrap_or_else(PoisonError::into_inner),
             );
             match state {
                 EmissionState::Finite(pending) => Some(pending),
                 EmissionState::Empty | EmissionState::Streaming | EmissionState::Closed => None,
             }
         };
-        if let Some(mut pending) = pending {
-            pending
-                .writer
-                .write_record(&pending.bytes)
+        if let Some(mut item) = pending {
+            item.writer
+                .write_record(&item.bytes)
                 .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
         }
         Ok(())
@@ -340,7 +393,7 @@ impl Output {
 #[derive(Default)]
 struct Emission {
     lifecycle: Mutex<Lifecycle>,
-    drained:   std::sync::Condvar,
+    drained:   Condvar,
 }
 
 #[cfg(feature = "structured")]
@@ -388,10 +441,10 @@ enum EmissionMode {
 #[doc(hidden)]
 pub struct MissingText;
 
-#[cfg(feature = "structured")]
-#[must_use]
 /// result or stream value being built, supply [`ResultBuilder::text`] then call
 /// [`ResultBuilder::emit`]
+#[cfg(feature = "structured")]
+#[must_use]
 pub struct ResultBuilder<'a, T: ?Sized, F> {
     output: &'a Output,
     value:  &'a T,
@@ -425,6 +478,11 @@ where
     T: Serialize + ?Sized,
 {
     /// encode the projection and register or write it
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::Output` when the value cannot be encoded or
+    /// written
     pub fn emit<D>(self) -> Result<()>
     where
         F: FnOnce(&'a T) -> D,
@@ -433,10 +491,8 @@ where
         let bytes = match self.output.format {
             Format::Text => format_text((self.text)(self.value)).into_bytes(),
             Format::Json => {
-                let mut bytes = serde_json::to_vec(self.value)
-                    .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-                bytes.push(b'\n');
-                bytes
+                json::to_line(self.value)
+                    .map_err(|error| Error::with_source(ErrorKind::Output, error))?
             },
         };
         self.output.register(self.mode, bytes)
@@ -456,7 +512,7 @@ pub(crate) enum SharedWriter {
     Stdout,
     Stderr,
     #[cfg(feature = "render")]
-    Transient(crate::status::TransientNotice),
+    Transient(TransientNotice),
     Custom(Arc<Mutex<Box<dyn Write + Send>>>),
 }
 
@@ -490,13 +546,13 @@ impl SharedWriter {
 }
 
 impl Write for SharedWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Stdout => io::stdout().write(buffer),
-            Self::Stderr => io::stderr().write(buffer),
+            Self::Stdout => io::stdout().write(buf),
+            Self::Stderr => io::stderr().write(buf),
             #[cfg(feature = "render")]
-            Self::Transient(notices) => notices.write(buffer),
-            Self::Custom(inner) => lock(inner).write(buffer),
+            Self::Transient(notices) => notices.write(buf),
+            Self::Custom(inner) => lock(inner).write(buf),
         }
     }
 
@@ -514,15 +570,19 @@ impl Write for SharedWriter {
 fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| {
-            match value {
+        .flat_map(|ch| {
+            match ch {
                 '"' => "\\\"".chars().collect::<Vec<_>>(),
                 '\\' => "\\\\".chars().collect(),
                 '\n' => "\\n".chars().collect(),
                 '\r' => "\\r".chars().collect(),
                 '\t' => "\\t".chars().collect(),
-                value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-                value => vec![value],
+                '\u{08}' => "\\b".chars().collect(),
+                '\u{0C}' => "\\f".chars().collect(),
+                control if control.is_control() => {
+                    format!("\\u{:04x}", u32::from(control)).chars().collect()
+                },
+                other => vec![other],
             }
         })
         .collect()
@@ -546,45 +606,38 @@ fn output_policy(message: &'static str) -> Error {
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "structured")]
-    use std::sync::atomic::{
-        AtomicUsize,
-        Ordering,
+    use alloc::collections::BTreeMap;
+    #[cfg(feature = "structured")]
+    use core::{
+        sync::atomic::{
+            AtomicUsize,
+            Ordering,
+        },
+        time::Duration,
     };
+    #[cfg(feature = "structured")] use std::thread;
+    #[cfg(all(feature = "render", feature = "structured"))]
+    use std::time::Instant;
 
     use super::*;
-
-    #[derive(Clone, Default)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-
-    impl Capture {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-        }
-    }
-
-    impl Write for Capture {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buffer);
-            Ok(buffer.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::testing::Capture;
+    #[cfg(all(feature = "render", feature = "structured"))]
+    use crate::{
+        status::Status,
+        terminal::StatusMode,
+    };
 
     #[cfg(feature = "structured")]
     #[derive(Clone, Default)]
     struct FlushCapture {
-        bytes:   Arc<Mutex<Vec<u8>>>,
+        bytes:   Capture,
         flushes: Arc<AtomicUsize>,
     }
 
     #[cfg(feature = "structured")]
     impl Write for FlushCapture {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.bytes.lock().unwrap().extend_from_slice(buffer);
-            Ok(buffer.len())
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.write(buf)
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -604,6 +657,10 @@ mod tests {
             Output::new(Format::Json).format_message("a\n\"b"),
             "\"a\\n\\\"b\"\n"
         );
+        assert_eq!(
+            Output::new(Format::Json).format_message("\u{8}\u{c}"),
+            "\"\\b\\f\"\n"
+        );
     }
 
     #[cfg(feature = "structured")]
@@ -612,9 +669,9 @@ mod tests {
         struct OneByte(Capture);
 
         impl Write for OneByte {
-            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-                std::thread::yield_now();
-                self.0.write(&buffer[..buffer.len().min(1)])
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                thread::yield_now();
+                self.0.write(&buf[..buf.len().min(1)])
             }
 
             fn flush(&mut self) -> io::Result<()> {
@@ -627,10 +684,10 @@ mod tests {
         let threads: Vec<_> = ["a", "b"]
             .into_iter()
             .map(|letter| {
-                let output = output.clone();
-                std::thread::spawn(move || {
+                let handle = output.clone();
+                thread::spawn(move || {
                     for _ in 0..50 {
-                        output
+                        handle
                             .stream(&letter.repeat(20))
                             .text(|value| value)
                             .emit()
@@ -668,7 +725,7 @@ mod tests {
         let value = 42;
         output
             .result(&value)
-            .text(|value| format!("answer: {value}"))
+            .text(|shown| format!("answer: {shown}"))
             .emit()
             .unwrap();
         assert_eq!(capture.text(), "");
@@ -709,10 +766,10 @@ mod tests {
     fn structured_results_use_json_in_json_mode() {
         let capture = Capture::default();
         let output = Output::new(Format::Json).with_writer(capture.clone());
-        let answer = std::collections::BTreeMap::from([("value", 42)]);
+        let answer = BTreeMap::from([("value", 42)]);
         output
             .result(&answer)
-            .text(|answer| answer["value"])
+            .text(|map| map["value"])
             .emit()
             .unwrap();
         output.commit().unwrap();
@@ -768,9 +825,9 @@ mod tests {
         assert_eq!(text.text(), "heads up\n");
 
         let json = Capture::default();
-        let mut output = Output::new(Format::Json);
-        output.notices = SharedWriter::new(json.clone());
-        output.notice("heads up").unwrap();
+        let mut json_output = Output::new(Format::Json);
+        json_output.notices = SharedWriter::new(json.clone());
+        json_output.notice("heads up").unwrap();
         assert_eq!(json.text(), "");
     }
 
@@ -786,10 +843,14 @@ mod tests {
         }
 
         impl Write for Gated {
-            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-                self.entered.send(()).unwrap();
-                self.release.lock().unwrap().recv().unwrap();
-                self.bytes.write(buffer)
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.entered.send(()).map_err(io::Error::other)?;
+                self.release
+                    .lock()
+                    .map_err(|_poison| io::Error::other("sink lock poisoned"))?
+                    .recv()
+                    .map_err(io::Error::other)?;
+                self.bytes.write(buf)
             }
 
             fn flush(&mut self) -> io::Result<()> {
@@ -807,14 +868,14 @@ mod tests {
         });
 
         let streaming = output.clone();
-        let stream = std::thread::spawn(move || streaming.stream(&1).text(|value| value).emit());
+        let stream = thread::spawn(move || streaming.stream(&1).text(|value| value).emit());
         entered_rx.recv().unwrap();
 
-        let commit = std::thread::spawn(move || {
+        let commit = thread::spawn(move || {
             output.commit().unwrap();
             capture.text()
         });
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(100));
         assert!(
             !commit.is_finished(),
             "commit must wait for the write in flight"
@@ -829,10 +890,8 @@ mod tests {
     #[test]
     fn queued_route_has_written_when_the_call_returns() {
         let capture = Capture::default();
-        let coordinator = crate::status::StatusCoordinator::new(
-            SharedWriter::new(capture.clone()),
-            crate::terminal::StatusMode::Silent,
-        );
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Silent);
         let output = Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator));
         for index in 0..20 {
             output
@@ -845,10 +904,8 @@ mod tests {
     #[cfg(all(feature = "render", feature = "structured"))]
     #[test]
     fn a_stream_route_never_replaces_a_writer_the_caller_supplied() {
-        let coordinator = crate::status::StatusCoordinator::new(
-            SharedWriter::new(Capture::default()),
-            crate::terminal::StatusMode::Silent,
-        );
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Silent);
         let around = || PresentationRoute::Around(coordinator.clone());
 
         let supplied = Output::new(Format::Text)
@@ -864,16 +921,14 @@ mod tests {
     #[test]
     fn write_message_under_a_live_status_clears_the_region_first() {
         let capture = Capture::default();
-        let coordinator = crate::status::StatusCoordinator::new(
-            SharedWriter::new(capture.clone()),
-            crate::terminal::StatusMode::Live,
-        );
-        let status = crate::status::Status::new("working", coordinator.clone())
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
+        let status = Status::new("working", coordinator.clone())
             .spinner()
             .start();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while capture.text().is_empty() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while capture.text().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
         }
         let before = capture.text().len();
 
@@ -894,10 +949,8 @@ mod tests {
     #[test]
     fn queued_route_defers_writes_while_the_coordinator_is_leased() {
         let capture = Capture::default();
-        let coordinator = crate::status::StatusCoordinator::new(
-            SharedWriter::new(capture.clone()),
-            crate::terminal::StatusMode::Silent,
-        );
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Silent);
         let output =
             Output::new(Format::Text).with_route(PresentationRoute::Queued(coordinator.clone()));
 
@@ -906,9 +959,9 @@ mod tests {
         assert!(capture.text().is_empty());
 
         drop(guard);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while capture.text().is_empty() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while capture.text().is_empty() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(capture.text(), "heads up\n");
     }
