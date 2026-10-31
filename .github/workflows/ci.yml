@@ -19,16 +19,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-26.04-arm, macos-latest]
+        include:
+          - os: ubuntu-latest
+            scope: --workspace
+          - os: ubuntu-26.04-arm
+            scope: --workspace
+          # screw, bang and climax are linux only until the macos port
+          - os: macos-latest
+            scope: -p pound -p pound-derive -p pound-derive-impl -p caress
     uses: manic-systems/workflows/.github/workflows/rust-checks.yml@ec457510b197b2eeb8b2ea2d182f31e3ed7157bd # v2.3.3
     with:
       os: ${{ matrix.os }}
       flake-check: false
       fmt: ${{ matrix.os == 'ubuntu-latest' }}
       clippy: true
-      clippy-command: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      clippy-command: cargo clippy --locked ${{ matrix.scope }} --all-targets --all-features -- -D warnings
       test: true
-      test-command: cargo test --locked --workspace --all-features
+      test-command: cargo test --locked ${{ matrix.scope }} --all-features
 
   actions:
     name: Actions Lint

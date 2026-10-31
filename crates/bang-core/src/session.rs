@@ -1,65 +1,82 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+use core::fmt;
+
+use screw::{
+    RenderCtx,
+    Surface,
+    TickInterest,
+    VerticalSize,
+};
+
 use crate::{
     Context,
     Event,
     FocusTarget,
     Reaction,
     Value,
-    View,
-    ViewContext,
     Widget,
 };
 
+/// runs one root widget and tracks whether it has finished and needs redrawing
 pub struct Session {
-    root:         Box<dyn Widget>,
-    focus:        Option<FocusTarget>,
-    status:       SessionStatus,
-    view_context: ViewContext,
-    dirty:        bool,
+    root:   Box<dyn Widget>,
+    status: SessionStatus,
+    dirty:  bool,
+}
+
+impl fmt::Debug for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("root", &self.root.id())
+            .field("status", &self.status)
+            .field("dirty", &self.dirty)
+            .finish()
+    }
 }
 
 impl Session {
+    /// starts a session around `root`
     #[must_use]
     pub fn new(root: impl Widget + 'static) -> Self {
         Self {
-            root:         Box::new(root),
-            focus:        None,
-            status:       SessionStatus::Running,
-            view_context: ViewContext::default(),
-            dirty:        true,
+            root:   Box::new(root),
+            status: SessionStatus::Running,
+            dirty:  true,
         }
     }
 
+    /// starts a session around an already boxed `root`
     #[must_use]
     pub fn boxed(root: Box<dyn Widget>) -> Self {
         Self {
             root,
-            focus: None,
             status: SessionStatus::Running,
-            view_context: ViewContext::default(),
             dirty: true,
         }
     }
 
-    pub fn handle(&mut self, event: Event) -> Reaction {
+    /// delivers `event` to the root and records the outcome, a finished session
+    /// ignores events
+    pub fn handle(&mut self, event: Event) -> SessionReaction {
         if !matches!(self.status, SessionStatus::Running) {
-            return Reaction::Ignored;
+            return SessionReaction::Ignored;
         }
 
-        let resized = self.record_resize(&event);
-        let mut context = Context::new();
-        let handled = self.root.handle(event, &mut context);
-        let reaction = context
-            .take_focus()
-            .map_or_else(|| resize_reaction(handled, resized), Reaction::Focus);
+        let redraws = match event {
+            Event::Resize { .. } => true,
+            Event::Tick => !matches!(self.root.tick_interest(), TickInterest::Never),
+            Event::Key(_) | Event::Paste(_) | Event::UnknownEscape(_) | Event::Row(_) => false,
+        };
+        let handled = self.root.handle(event, &mut Context::new());
+        let reaction = redraw_reaction(handled, redraws);
 
         match &reaction {
             Reaction::Ignored => {},
-            Reaction::Changed => {
+            Reaction::Changed | Reaction::Focus(_) => {
                 self.dirty = true;
             },
-            Reaction::Submit(value) => {
+            Reaction::Submit(value) | Reaction::Action(value) => {
                 self.status = SessionStatus::Submitted(value.clone());
                 self.dirty = true;
             },
@@ -67,71 +84,96 @@ impl Session {
                 self.status = SessionStatus::Cancelled;
                 self.dirty = true;
             },
-            Reaction::Focus(target) => {
-                self.focus = Some(target.clone());
-                self.dirty = true;
-            },
         }
 
-        reaction
+        // containers route actions to the session boundary, drivers only ever
+        // see a submission
+        match reaction {
+            Reaction::Ignored => SessionReaction::Ignored,
+            Reaction::Changed => SessionReaction::Changed,
+            Reaction::Submit(value) | Reaction::Action(value) => SessionReaction::Submit(value),
+            Reaction::Cancel => SessionReaction::Cancel,
+            Reaction::Focus(target) => SessionReaction::Focus(target),
+        }
     }
 
-    #[must_use]
-    pub fn view(&self) -> View {
-        self.root.view(&self.view_context)
-    }
-
-    #[must_use]
-    pub const fn view_context(&self) -> &ViewContext {
-        &self.view_context
-    }
-
+    /// whether the session is running or how it ended
     #[must_use]
     pub const fn status(&self) -> &SessionStatus {
         &self.status
     }
 
-    #[must_use]
-    pub const fn focus(&self) -> Option<&FocusTarget> {
-        self.focus.as_ref()
-    }
-
+    /// whether the session changed since the last [`Self::clear_dirty`]
     #[must_use]
     pub const fn is_dirty(&self) -> bool {
         self.dirty
     }
 
+    /// marks the current state as drawn
     pub const fn clear_dirty(&mut self) {
         self.dirty = false;
     }
+}
 
-    fn record_resize(&mut self, event: &Event) -> bool {
-        let Event::Resize { cols, rows } = event else {
-            return false;
-        };
+impl screw::Widget for Session {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        self.root.render(ctx, out);
+    }
 
-        let width = Some(*cols);
-        let height = Some(*rows);
-        if self.view_context.width == width && self.view_context.height == height {
-            return false;
-        }
+    fn tick_interest(&self) -> TickInterest {
+        self.root.tick_interest()
+    }
 
-        self.view_context = ViewContext { width, height };
-        true
+    fn vertical_size(&self) -> VerticalSize {
+        self.root.vertical_size()
     }
 }
 
-fn resize_reaction(reaction: Reaction, resized: bool) -> Reaction {
-    if resized && matches!(reaction, Reaction::Ignored) {
+/// a resize, or a tick for a widget that asked for them, always needs a redraw
+fn redraw_reaction(reaction: Reaction, redraws: bool) -> Reaction {
+    if redraws && matches!(reaction, Reaction::Ignored) {
         Reaction::Changed
     } else {
         reaction
     }
 }
 
+/// how far a [`Session`] has got
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum SessionStatus {
+    /// still waiting for input
     Running,
+    /// finished with this value
     Submitted(Value),
+    /// finished without a value
     Cancelled,
+}
+
+/// what a driver sees back from [`Session::handle`], [`Reaction`] without the
+/// `Action` variant
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum SessionReaction {
+    /// the root did not use the event
+    Ignored,
+    /// state changed and needs redrawing
+    Changed,
+    /// the session finished with this value
+    Submit(Value),
+    /// the session was cancelled
+    Cancel,
+    /// focus should move to the target
+    Focus(FocusTarget),
+}
+
+impl SessionReaction {
+    /// whether the event had any effect, everything except `Ignored`
+    #[must_use]
+    pub fn changed(self) -> bool {
+        matches!(
+            self,
+            Self::Changed | Self::Submit(_) | Self::Cancel | Self::Focus(_)
+        )
+    }
 }

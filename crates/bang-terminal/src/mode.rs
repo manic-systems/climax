@@ -1,91 +1,149 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::mem::MaybeUninit;
-use std::io;
+use std::{
+    io,
+    os::fd::{
+        AsFd,
+        OwnedFd,
+    },
+};
 
-/// restore terminal state on drop
-/// TODO - should we catch job control then drop and reinstate on resume ?
+use rustix::{
+    io::{
+        Errno,
+        fcntl_dupfd_cloexec,
+    },
+    termios::{
+        OptionalActions,
+        OutputModes,
+        SpecialCodeIndex,
+        Termios,
+        tcgetattr,
+        tcsetattr,
+    },
+};
+
+use crate::cleanup::{
+    CleanupFailures,
+    CleanupStage,
+    staged,
+};
+
+/// read behavior installed alongside the usual raw terminal flags
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RawModeOptions {
+    minimum_bytes:       u8,
+    timeout_deciseconds: u8,
+}
+
+impl RawModeOptions {
+    /// blocks until at least one byte is available, for readiness managed with
+    /// `poll(2)`
+    #[must_use]
+    pub const fn blocking() -> Self {
+        Self {
+            minimum_bytes:       1,
+            timeout_deciseconds: 0,
+        }
+    }
+}
+
+/// holds a terminal in raw mode and restores the saved settings on drop
 #[derive(Debug)]
 pub struct TerminalModeGuard {
-    #[cfg(unix)]
-    fd:    libc::c_int,
-    #[cfg(unix)]
-    saved: libc::termios,
+    fd:     OwnedFd,
+    saved:  Termios,
+    active: bool,
 }
 
 impl TerminalModeGuard {
+    /// switches the terminal behind `input` to raw mode, remembering its
+    /// settings
+    ///
     /// # Errors
     ///
-    /// fails with [`io::ErrorKind::NotConnected`] when stdin is not a terminal,
-    /// and with the OS error when its mode cannot be read or set.
-    pub fn activate_stdin() -> io::Result<Self> {
-        activate_fd(stdin_fd())
+    /// fails when `input` is not a terminal or its settings cannot be read or
+    /// written
+    pub fn activate(input: &(impl AsFd + ?Sized), options: RawModeOptions) -> io::Result<Self> {
+        activate_fd(input, options)
+    }
+
+    /// restores the saved settings now and reports any failure, which drop
+    /// cannot
+    ///
+    /// # Errors
+    ///
+    /// fails when the saved settings cannot be written back
+    pub fn restore(mut self) -> Result<(), CleanupFailures> {
+        self.restore_active()
+    }
+
+    fn restore_active(&mut self) -> Result<(), CleanupFailures> {
+        if !self.active {
+            return Ok(());
+        }
+        let restored = tcsetattr(&self.fd, OptionalActions::Now, &self.saved);
+        staged(
+            CleanupStage::RawMode,
+            restored.err().map(io::Error::from).into_iter().collect(),
+        )?;
+        self.active = false;
+        Ok(())
     }
 }
 
 impl Drop for TerminalModeGuard {
     fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            // SAFETY: self.saved was captured from this fd by tcgetattr
-            let _result = unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &raw const self.saved) };
-        }
+        let _result = self.restore_active();
     }
 }
 
-#[cfg(unix)]
-fn activate_fd(fd: libc::c_int) -> io::Result<TerminalModeGuard> {
-    let saved = termios(fd)?;
-    let mut raw = saved;
-    configure_raw_timeout(&mut raw);
-    set_termios(fd, &raw)?;
-    Ok(TerminalModeGuard { fd, saved })
+fn activate_fd(
+    terminal: &(impl AsFd + ?Sized),
+    options: RawModeOptions,
+) -> io::Result<TerminalModeGuard> {
+    // a duplicate keeps the terminal available for restoration without
+    // borrowing the caller's handle
+    let owned_fd = fcntl_dupfd_cloexec(terminal, 0)?;
+    let saved = tcgetattr(&owned_fd).map_err(terminal_mode_error)?;
+    let mut raw = saved.clone();
+    raw.make_raw();
+    raw.output_modes |= OutputModes::OPOST | OutputModes::ONLCR;
+    raw.special_codes[SpecialCodeIndex::VMIN] = options.minimum_bytes;
+    raw.special_codes[SpecialCodeIndex::VTIME] = options.timeout_deciseconds;
+    tcsetattr(&owned_fd, OptionalActions::Now, &raw)?;
+    Ok(TerminalModeGuard {
+        fd: owned_fd,
+        saved,
+        active: true,
+    })
 }
 
-#[cfg(unix)]
-const fn stdin_fd() -> libc::c_int {
-    libc::STDIN_FILENO
-}
-
-#[cfg(unix)]
-fn termios(fd: libc::c_int) -> io::Result<libc::termios> {
-    let mut termios = MaybeUninit::<libc::termios>::uninit();
-    // SAFETY: termios points to valid writable memory for tcgetattr
-    if unsafe { libc::tcgetattr(fd, termios.as_mut_ptr()) } != 0 {
-        return Err(terminal_mode_error());
+fn terminal_mode_error(errno: Errno) -> io::Error {
+    if errno == Errno::NOTTY {
+        return io::Error::new(io::ErrorKind::NotConnected, "raw mode needs a terminal");
     }
-    // SAFETY: tcgetattr succeeded and initialized the termios value
-    Ok(unsafe { termios.assume_init() })
+    errno.into()
 }
 
-#[cfg(unix)]
-fn terminal_mode_error() -> io::Error {
-    let error = io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ENOTTY) {
-        return io::Error::new(
-            io::ErrorKind::NotConnected,
-            "live mode requires terminal stdin; pass --input-bytes for deterministic non-TTY \
-             execution",
+#[cfg(test)]
+mod tests {
+    use rustix::termios::LocalModes;
+
+    use super::*;
+    use crate::testing::pty;
+
+    #[test]
+    fn raw_mode_keeps_output_post_processing() {
+        let (_master, slave) = pty(80, 24).unwrap();
+        let guard = TerminalModeGuard::activate(&slave, RawModeOptions::blocking()).unwrap();
+
+        let raw = tcgetattr(&slave).unwrap();
+        assert!(
+            raw.output_modes
+                .contains(OutputModes::OPOST | OutputModes::ONLCR)
         );
+        assert!(!raw.local_modes.contains(LocalModes::ECHO));
+        guard.restore().unwrap();
     }
-    error
-}
-
-#[cfg(unix)]
-fn set_termios(fd: libc::c_int, termios: &libc::termios) -> io::Result<()> {
-    // SAFETY: termios is a valid termios struct
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, termios) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn configure_raw_timeout(termios: &mut libc::termios) {
-    // SAFETY: termios is a valid mutable termios struct
-    unsafe {
-        libc::cfmakeraw(termios);
-    }
-    termios.c_cc[libc::VMIN] = 0;
-    termios.c_cc[libc::VTIME] = 1;
 }
