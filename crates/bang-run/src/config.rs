@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::collections::BTreeMap;
-use core::fmt;
+use core::{
+    fmt,
+    mem,
+};
 
 use bang_core::{
     ActionBinding,
@@ -118,6 +121,7 @@ impl WidgetKind {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
+    name:          Option<String>,
     #[serde(rename = "type")]
     kind:          WidgetKind,
     input_bytes:   Option<String>,
@@ -135,7 +139,7 @@ struct RawConfig {
     #[serde(default)]
     options:       Vec<OptionEntry>,
     #[serde(default)]
-    fields:        Vec<RawFieldConfig>,
+    fields:        Vec<Self>,
 }
 
 const LISTS: &[WidgetKind] = &[
@@ -182,33 +186,23 @@ fn any_state(options: &[OptionEntry]) -> bool {
 }
 
 impl RawConfig {
-    fn finish(self) -> Result<WidgetConfig, String> {
+    fn finish(mut self) -> Result<WidgetConfig, String> {
+        if self.name.is_some() {
+            return Err("config key 'name' does not apply to the top level".to_owned());
+        }
         if !self.fields.is_empty() && self.kind != WidgetKind::Form {
             return Err(inapplicable("config", "fields", self.kind));
         }
         if self.kind == WidgetKind::Form && self.fields.is_empty() {
             return Err("config type 'form' requires at least one field".to_owned());
         }
-        let base = RawFieldConfig {
-            name:          self.kind.name().to_owned(),
-            kind:          self.kind,
-            page_size:     self.page_size,
-            prompt:        self.prompt,
-            placeholder:   self.placeholder,
-            value:         self.value,
-            selected_date: self.selected_date,
-            today:         self.today,
-            wrap:          self.wrap,
-            show_removed:  self.show_removed,
-            action_output: self.action_output,
-            actions:       self.actions,
-            options:       self.options,
-        }
-        .finish_as("config")?;
-        let fields = self
-            .fields
+        let raw_fields = mem::take(&mut self.fields);
+        let input_bytes = self.input_bytes.take();
+        let name = self.kind.name().to_owned();
+        let base = self.finish_as(name, "config")?;
+        let fields = raw_fields
             .into_iter()
-            .map(RawFieldConfig::finish)
+            .map(Self::finish_field)
             .collect::<Result<Vec<_>, _>>()?;
         for (index, field) in fields.iter().enumerate() {
             if fields[..index]
@@ -221,46 +215,32 @@ impl RawConfig {
 
         Ok(WidgetConfig {
             base,
-            input_bytes: self.input_bytes,
+            input_bytes,
             fields,
         })
     }
-}
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawFieldConfig {
-    name:          String,
-    #[serde(rename = "type")]
-    kind:          WidgetKind,
-    page_size:     Option<usize>,
-    prompt:        Option<String>,
-    placeholder:   Option<String>,
-    value:         Option<String>,
-    selected_date: Option<String>,
-    today:         Option<String>,
-    wrap:          Option<bool>,
-    show_removed:  Option<bool>,
-    action_output: Option<bool>,
-    #[serde(default)]
-    actions:       Vec<RawAction>,
-    #[serde(default)]
-    options:       Vec<OptionEntry>,
-}
-
-impl RawFieldConfig {
-    fn finish(self) -> Result<FieldConfig, String> {
-        if self.name.is_empty() {
+    fn finish_field(mut self) -> Result<FieldConfig, String> {
+        let name = self
+            .name
+            .take()
+            .ok_or_else(|| "form field requires a name".to_owned())?;
+        if name.is_empty() {
             return Err("form field name cannot be empty".to_owned());
         }
-        if self.kind == WidgetKind::Form {
+        if self.kind == WidgetKind::Form || !self.fields.is_empty() {
             return Err("nested form fields are not supported yet".to_owned());
         }
-        let owner = format!("field '{}'", self.name);
-        self.finish_as(&owner)
+        let owner = format!("field '{name}'");
+        if self.input_bytes.is_some() {
+            return Err(format!(
+                "{owner} key 'input_bytes' does not apply to form fields"
+            ));
+        }
+        self.finish_as(name, &owner)
     }
 
-    fn finish_as(self, owner: &str) -> Result<FieldConfig, String> {
+    fn finish_as(self, name: String, owner: &str) -> Result<FieldConfig, String> {
         reject_inapplicable(owner, self.kind, [
             self.placeholder.is_some(),
             self.value.is_some(),
@@ -298,7 +278,7 @@ impl RawFieldConfig {
         let (actions, review_actions) = finish_actions(self.actions, is_review_list)?;
 
         Ok(FieldConfig {
-            name: self.name,
+            name,
             kind: self.kind,
             page_size: self.page_size,
             prompt: self.prompt,
@@ -731,6 +711,33 @@ type = "text"
             ),
         ] {
             let error = WidgetConfig::parse(source).expect_err("empty names should be rejected");
+            assert!(error.contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn name_fields_and_input_bytes_are_refused_where_they_do_not_apply() {
+        for (source, message) in [
+            (
+                "type = \"text\"\nname = \"a\"\n",
+                "config key 'name' does not apply to the top level",
+            ),
+            (
+                "type = \"form\"\n\n[[fields]]\ntype = \"text\"\n",
+                "form field requires a name",
+            ),
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"a\"\ntype = \"text\"\ninput_bytes = \
+                 \"x\"\n",
+                "field 'a' key 'input_bytes' does not apply to form fields",
+            ),
+            (
+                "type = \"form\"\n\n[[fields]]\nname = \"a\"\ntype = \
+                 \"text\"\n\n[[fields.fields]]\nname = \"b\"\ntype = \"text\"\n",
+                "nested form fields are not supported yet",
+            ),
+        ] {
+            let error = WidgetConfig::parse(source).expect_err("the key should be refused");
             assert!(error.contains(message), "{error}");
         }
     }
