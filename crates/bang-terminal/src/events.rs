@@ -38,6 +38,7 @@ use crate::{
 
 const DEFAULT_ESCAPE_TIMEOUT: Duration = Duration::from_millis(50);
 const SOURCE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const PASTE_READ_LEN: usize = 4096;
 
 /// one result of [`TerminalEvents::next_event`]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -270,7 +271,12 @@ impl<R> TerminalEvents<R> {
                 }
             },
             WaitMode::Poll(fd) => {
-                read_when_ready(fd, self.signals.map(SignalPoller::read_fd), timeout)
+                read_when_ready(
+                    fd,
+                    self.signals.map(SignalPoller::read_fd),
+                    timeout,
+                    self.decoder.in_paste(),
+                )
             },
         }
     }
@@ -347,19 +353,21 @@ pub fn resize_event(size: Viewport) -> Event {
 
 // reads the fd `poll` just reported ready, bypassing any userspace buffer a
 // generic `R: Read` might hold bytes in that `poll` cannot see, takes one byte
-// at a time, including inside a paste, so typeahead behind a key or a paste end
-// that finishes the session stays in the kernel queue for whoever reads the
-// terminal next
+// at a time outside a paste so typeahead behind a key stays in the kernel queue
+// for whoever reads the terminal next, inside a paste it takes a chunk, so
+// typeahead read together with the paste end is consumed by this reader
 fn read_when_ready(
     fd: &OwnedFd,
     wake: Option<&OwnedFd>,
     timeout: Duration,
+    in_paste: bool,
 ) -> io::Result<InputReadiness> {
     if !wait_for_fd(fd, wake, timeout)? {
         return Ok(InputReadiness::Timeout);
     }
-    let mut buffer = [0_u8; 1];
-    match read(fd, &mut buffer) {
+    let mut buffer = [0_u8; PASTE_READ_LEN];
+    let window = if in_paste { PASTE_READ_LEN } else { 1 };
+    match read(fd, &mut buffer[..window]) {
         Ok(0) | Err(Errno::IO) => Ok(InputReadiness::End),
         Ok(read) => Ok(InputReadiness::Bytes(buffer[..read].to_vec())),
         Err(Errno::INTR | Errno::AGAIN) => Ok(InputReadiness::Timeout),
@@ -529,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn pollable_source_leaves_typeahead_behind_a_paste_end_unread() {
+    fn pollable_source_decodes_typeahead_read_together_with_a_paste_end() {
         use std::io::Read as _;
 
         let (reader, mut writer) = UnixStream::pair().unwrap();
@@ -540,12 +548,18 @@ mod tests {
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Paste("ab".into())),
         );
+        for key in "next".chars() {
+            assert_eq!(
+                events.next_event().unwrap(),
+                TerminalPoll::Event(Event::char(key)),
+            );
+        }
         drop(events);
         drop(writer);
 
         let mut rest = String::new();
         leftover.read_to_string(&mut rest).unwrap();
-        assert_eq!(rest, "next");
+        assert_eq!(rest, "");
     }
 
     #[test]
