@@ -37,7 +37,6 @@ dependencies = [
  "bang-screw",
  "bang-terminal",
  "screw",
- "screw-pty",
 ]
 
 [[package]]
