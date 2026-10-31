@@ -21,6 +21,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - `Result<T, E = Error>` alias
 - `Error::application`, `application_context`, `ResultExt` and the boxed and `anyhow` conversions give an error with an i/o error anywhere in its source chain the kind `Io`, so a wrapped `BrokenPipe` exits 141 like a bare one
 - `Output::write_message` waits for a prompt another thread holds, as `stream` does, instead of drawing into the prompt
+- a prompt requested while `Output::write_message` is writing waits for the write to finish, up to the request bound
 - removing a status while the status thread is stalled still takes effect once the thread answers, so the status stops drawing
 - `Status::widget` reports a panicking widget once through `finish`
 - minimum Rust version 1.89
@@ -80,6 +81,7 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 - Ctrl keys decode for NUL and 0x1C to 0x1F
 - handlers install with `SA_RESTART`, `SIGWINCH` wakes resize at once with a 100ms poll as fallback
 - an ambiguous escape resolves 50ms after its latest byte and is delivered before any input queued behind it, and an overlong csi or ss3 is one unknown escape
+- a pollable source reads a bracketed paste in chunks, so input typed right after the paste end is consumed with it instead of being left for the next reader
 
 #### bang-run
 
