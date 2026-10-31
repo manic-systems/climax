@@ -1,0 +1,9 @@
+[package]
+name              = "fixture-caress-only"
+version           = "0.0.0"
+edition.workspace = true
+publish           = false
+
+[dependencies]
+caress.workspace = true
+pound            = { workspace = true, features = [ "std" ] }

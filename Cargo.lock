@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "bang"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang-core",
  "bang-terminal",
@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "bang-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "screw",
  "unicode-segmentation",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "bang-run"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang",
  "bang-core",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "bang-terminal"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang-core",
  "libc",
@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "climax"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bang",
  "caress",
@@ -67,11 +67,12 @@ dependencies = [
  "screw",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
 name = "climax-derive"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "pound-derive-impl",
 ]
@@ -90,6 +91,143 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "fixture-bang-core-only"
+version = "0.0.0"
+dependencies = [
+ "bang-core",
+]
+
+[[package]]
+name = "fixture-bang-only"
+version = "0.0.0"
+dependencies = [
+ "bang",
+]
+
+[[package]]
+name = "fixture-bang-terminal-only"
+version = "0.0.0"
+dependencies = [
+ "bang-terminal",
+]
+
+[[package]]
+name = "fixture-caress-only"
+version = "0.0.0"
+dependencies = [
+ "caress",
+ "pound",
+]
+
+[[package]]
+name = "fixture-climax-derive-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-interactive-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-no-default-features"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-parse-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-render-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-structured-only"
+version = "0.0.0"
+dependencies = [
+ "climax",
+]
+
+[[package]]
+name = "fixture-climax-with-components"
+version = "0.0.0"
+dependencies = [
+ "bang",
+ "climax",
+ "pound",
+ "screw",
+]
+
+[[package]]
+name = "fixture-pound-color-only"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-no-derive"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-no-help"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-no-std"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-only"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-pound-unicode-only"
+version = "0.0.0"
+dependencies = [
+ "pound",
+]
+
+[[package]]
+name = "fixture-screw-only"
+version = "0.0.0"
+dependencies = [
+ "screw",
 ]
 
 [[package]]
@@ -190,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "screw"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "rustix",
  "unicode-segmentation",
@@ -199,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "screw-pty"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "screw",
 ]

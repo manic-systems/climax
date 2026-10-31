@@ -1,23 +1,24 @@
 [package]
-name                 = "bang"
-version              = "0.0.1"
-authors.workspace    = true
-categories           = [ "command-line-interface" ]
-description          = "Typed interactive terminal prompts such as select, search, review and text input"
-edition.workspace    = true
-keywords             = [ "cli", "input", "terminal", "prompts" ]
-license.workspace    = true
-readme               = "README.md"
-repository.workspace = true
+name                   = "bang"
+version                = "0.1.0"
+authors.workspace      = true
+categories             = [ "command-line-interface" ]
+description            = "Typed interactive terminal prompts such as select, search, review and text input"
+edition.workspace      = true
+keywords               = [ "cli", "input", "terminal", "prompts" ]
+license.workspace      = true
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
 
 [dependencies]
-bang-core     = { path = "../bang-core", version = "=0.0.1" }
-bang-terminal = { path = "../bang-terminal", version = "=0.0.1" }
-libc          = "0.2"
-screw         = { path = "../screw", version = "=0.0.1" }
+bang-core.workspace     = true
+bang-terminal.workspace = true
+libc.workspace          = true
+screw.workspace         = true
 
 [dev-dependencies]
-bang-terminal = { path = "../bang-terminal", version = "=0.0.1", features = [ "testing" ] }
+bang-terminal = { workspace = true, features = [ "testing" ] }
 
 [lints]
 workspace = true
