@@ -290,7 +290,9 @@ struct StatusEntry {
 /// stream writes to a stdout that shares the terminal wait for a reply, so a
 /// blocked stdout stalls status drawing until it drains. one requested while a
 /// prompt holds the lease waits for it to end, giving up after the bound
-/// without counting as a stall, and fails if the requesting thread holds it
+/// without counting as a stall, and fails if the requesting thread holds it. a
+/// hold is gated the same way, and a prompt requested during a hold waits for
+/// it
 ///
 /// every request gives up after `REQUEST_TIMEOUT` when a widget blocks the
 /// thread, and later requests fail at once until the thread answers again. the
@@ -506,18 +508,16 @@ enum Command {
     },
     #[cfg(feature = "structured")]
     Around {
-        writer:    SharedWriter,
-        bytes:     Vec<u8>,
+        write:     DeferredAround,
         requester: ThreadId,
-        deadline:  Instant,
         waiting:   Arc<AtomicBool>,
-        reply:     Sender<Result<()>>,
     },
     #[cfg(feature = "interactive")]
     AcquireLease {
-        holder: ThreadId,
-        token:  u64,
-        reply:  Sender<std::result::Result<(), LeaseError>>,
+        holder:  ThreadId,
+        token:   u64,
+        waiting: Arc<AtomicBool>,
+        reply:   Sender<std::result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
@@ -526,11 +526,9 @@ enum Command {
         token: u64,
     },
     #[cfg(feature = "structured")]
-    Hold {
-        reply: Sender<Result<()>>,
+    Unhold {
+        token: u64,
     },
-    #[cfg(feature = "structured")]
-    Unhold,
     SetMode {
         stamp: u64,
         reply: Sender<Result<()>>,
@@ -580,7 +578,7 @@ impl From<Failure> for Error {
             Failure::Prompt => {
                 output_error(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
-                    "gave up waiting for a prompt to release the terminal, the write was dropped",
+                    "gave up waiting for a prompt to release the terminal, the request was dropped",
                 ))
             },
             Failure::OnActor => {
@@ -739,49 +737,47 @@ impl StatusCoordinator {
     /// request bound, and fails when the calling thread holds it
     #[cfg(feature = "structured")]
     pub(crate) fn write_around(&self, writer: SharedWriter, bytes: Vec<u8>) -> Result<()> {
+        self.current()
+            .request_around(AroundKind::Write { writer, bytes })
+    }
+
+    /// clear the live region and keep it from redrawing until the guard drops,
+    /// so a caller can write to the terminal itself
+    ///
+    /// gated like `write_around`, so it waits for the lease when another thread
+    /// holds it, giving up after the request bound, and fails when the calling
+    /// thread holds it
+    #[cfg(feature = "structured")]
+    pub(crate) fn hold(&self) -> Result<HoldGuard> {
         let this = self.current();
-        let deadline = Instant::now() + this.inner.request_timeout;
+        let token = this.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        let guard = HoldGuard {
+            coordinator: this.clone(),
+            token,
+        };
+        this.request_around(AroundKind::Hold { token })?;
+        Ok(guard)
+    }
+
+    #[cfg(feature = "structured")]
+    fn request_around(&self, kind: AroundKind) -> Result<()> {
+        let deadline = Instant::now() + self.inner.request_timeout;
         let waiting = Arc::new(AtomicBool::new(false));
-        this.request_waiting(
+        self.request_waiting(
             |reply| {
                 Command::Around {
-                    writer,
-                    bytes,
+                    write:     DeferredAround {
+                        kind,
+                        deadline,
+                        reply,
+                    },
                     requester: thread::current().id(),
-                    deadline,
-                    waiting: Arc::clone(&waiting),
-                    reply,
+                    waiting:   Arc::clone(&waiting),
                 }
             },
             |failure| Err(failure.into()),
             &waiting,
         )
-    }
-
-    /// wait out a prompt another thread holds, clear the live region and keep
-    /// it from redrawing until the guard drops, so a caller can write to
-    /// the terminal itself
-    #[cfg(feature = "structured")]
-    pub(crate) fn hold(&self) -> Result<HoldGuard> {
-        let this = self.current();
-        this.write_around(SharedWriter::new(std::io::sink()), Vec::new())?;
-        let sent = std::cell::Cell::new(false);
-        let held = this.request(
-            |reply| {
-                sent.set(true);
-                Command::Hold { reply }
-            },
-            |failure| Err(failure.into()),
-        );
-        if let Err(error) = held {
-            if sent.get() {
-                this.send(Command::Unhold);
-            }
-            return Err(error);
-        }
-        Ok(HoldGuard {
-            coordinator: this.clone(),
-        })
     }
 
     /// no live status, prompt lease or unwritten transient line depends on this
@@ -895,11 +891,13 @@ impl StatusCoordinator {
     #[cfg(feature = "interactive")]
     fn acquire_lease(&self) -> std::result::Result<(), LeaseError> {
         let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        self.request(
+        let waiting = Arc::new(AtomicBool::new(false));
+        self.request_waiting(
             |reply| {
                 Command::AcquireLease {
                     holder: thread::current().id(),
                     token,
+                    waiting: Arc::clone(&waiting),
                     reply,
                 }
             },
@@ -910,6 +908,7 @@ impl StatusCoordinator {
                 self.send(Command::CancelLease { token });
                 Err(LeaseError::Clear(failure.into()))
             },
+            &waiting,
         )
     }
 
@@ -928,12 +927,13 @@ impl fmt::Debug for StatusCoordinator {
 #[cfg(feature = "structured")]
 pub(crate) struct HoldGuard {
     coordinator: StatusCoordinator,
+    token:       u64,
 }
 
 #[cfg(feature = "structured")]
 impl Drop for HoldGuard {
     fn drop(&mut self) {
-        self.coordinator.send(Command::Unhold);
+        self.coordinator.send(Command::Unhold { token: self.token });
     }
 }
 
@@ -1015,11 +1015,28 @@ struct ActorConfig {
 }
 
 #[cfg(feature = "structured")]
+enum AroundKind {
+    Write {
+        writer: SharedWriter,
+        bytes:  Vec<u8>,
+    },
+    Hold {
+        token: u64,
+    },
+}
+
+#[cfg(feature = "structured")]
 struct DeferredAround {
-    writer:   SharedWriter,
-    bytes:    Vec<u8>,
+    kind:     AroundKind,
     deadline: Instant,
     reply:    Sender<Result<()>>,
+}
+
+#[cfg(feature = "interactive")]
+struct PendingLease {
+    holder: ThreadId,
+    token:  u64,
+    reply:  Sender<std::result::Result<(), LeaseError>>,
 }
 
 /// state owned by the transient-terminal thread
@@ -1043,7 +1060,9 @@ struct Actor {
     #[cfg(feature = "structured")]
     deferred:         VecDeque<DeferredAround>,
     #[cfg(feature = "structured")]
-    holds:            usize,
+    holds:            Vec<u64>,
+    #[cfg(feature = "interactive")]
+    leases_waiting:   VecDeque<PendingLease>,
     dead:             bool,
     errors:           ErrorLog,
     panicked:         BTreeMap<u64, Error>,
@@ -1078,7 +1097,9 @@ impl Actor {
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
             #[cfg(feature = "structured")]
-            holds: 0,
+            holds: Vec::new(),
+            #[cfg(feature = "interactive")]
+            leases_waiting: VecDeque::new(),
             dead: false,
             errors: ErrorLog::default(),
             panicked: BTreeMap::new(),
@@ -1104,20 +1125,62 @@ impl Actor {
                 waiting.store(true, Ordering::Release);
                 self.deferred.push_back(write);
             },
-            None => {
-                let _ = write
-                    .reply
-                    .send(self.write_around(write.writer, &write.bytes));
+            None => self.grant(write),
+        }
+    }
+
+    #[cfg(feature = "structured")]
+    fn grant(&mut self, write: DeferredAround) {
+        let result = match write.kind {
+            AroundKind::Write { writer, bytes } => self.write_around(writer, &bytes),
+            AroundKind::Hold { token } => {
+                self.holds.push(token);
+                self.clear_immediate()
             },
+        };
+        let _ = write.reply.send(result);
+    }
+
+    #[cfg(feature = "structured")]
+    fn unhold(&mut self, token: u64) {
+        self.holds.retain(|held| *held != token);
+        self.dirty = true;
+        #[cfg(feature = "interactive")]
+        if self.holds.is_empty() {
+            while let Some(lease) = self.leases_waiting.pop_front() {
+                self.acquire_lease(lease);
+            }
+        }
+    }
+
+    #[cfg(feature = "structured")]
+    const fn held(&self) -> bool {
+        !self.holds.is_empty()
+    }
+
+    #[cfg(not(feature = "structured"))]
+    const fn held(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "interactive")]
+    fn request_lease(&mut self, lease: PendingLease, waiting: &AtomicBool) {
+        if self.held() && !self.leased() {
+            waiting.store(true, Ordering::Release);
+            self.leases_waiting.push_back(lease);
+        } else {
+            self.acquire_lease(lease);
         }
     }
 
     #[cfg(feature = "interactive")]
     fn acquire_lease(
         &mut self,
-        holder: ThreadId,
-        token: u64,
-        reply: &Sender<std::result::Result<(), LeaseError>>,
+        PendingLease {
+            holder,
+            token,
+            reply,
+        }: PendingLease,
     ) {
         if self.leased() {
             let _ = reply.send(Err(LeaseError::Busy));
@@ -1140,15 +1203,9 @@ impl Actor {
         self.lease = None;
         self.drain_pending();
         #[cfg(feature = "structured")]
-        while let Some(DeferredAround {
-            writer,
-            bytes,
-            deadline,
-            reply,
-        }) = self.deferred.pop_front()
-        {
-            if Instant::now() < deadline {
-                let _ = reply.send(self.write_around(writer, &bytes));
+        while let Some(write) = self.deferred.pop_front() {
+            if Instant::now() < write.deadline {
+                self.grant(write);
             }
         }
         self.dirty = true;
@@ -1209,30 +1266,26 @@ impl Actor {
             },
             #[cfg(feature = "structured")]
             Command::Around {
-                writer,
-                bytes,
+                write,
                 requester,
-                deadline,
                 waiting,
-                reply,
-            } => {
-                self.around(
-                    DeferredAround {
-                        writer,
-                        bytes,
-                        deadline,
-                        reply,
-                    },
-                    requester,
-                    &waiting,
-                );
-            },
+            } => self.around(write, requester, &waiting),
             #[cfg(feature = "interactive")]
             Command::AcquireLease {
                 holder,
                 token,
+                waiting,
                 reply,
-            } => self.acquire_lease(holder, token, &reply),
+            } => {
+                self.request_lease(
+                    PendingLease {
+                        holder,
+                        token,
+                        reply,
+                    },
+                    &waiting,
+                );
+            },
             #[cfg(feature = "interactive")]
             Command::ReleaseLease => self.release_lease(),
             #[cfg(feature = "interactive")]
@@ -1244,17 +1297,10 @@ impl Actor {
                 {
                     self.release_lease();
                 }
+                self.leases_waiting.retain(|lease| lease.token != token);
             },
             #[cfg(feature = "structured")]
-            Command::Hold { reply } => {
-                self.holds += 1;
-                let _ = reply.send(self.clear_immediate());
-            },
-            #[cfg(feature = "structured")]
-            Command::Unhold => {
-                self.holds = self.holds.saturating_sub(1);
-                self.dirty = true;
-            },
+            Command::Unhold { token } => self.unhold(token),
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
                     let _ = reply.send(Ok(()));
@@ -1504,13 +1550,9 @@ impl Actor {
     }
 
     fn wants_periodic_ticks(&self) -> bool {
-        #[cfg(feature = "structured")]
-        let held = self.holds > 0;
-        #[cfg(not(feature = "structured"))]
-        let held = false;
         self.mode == StatusMode::Live
             && !self.leased()
-            && !held
+            && !self.held()
             && !self.dead
             && !self.entries.is_empty()
     }
@@ -2556,6 +2598,7 @@ mod tests {
         actor.apply(Command::AcquireLease {
             holder: thread::current().id(),
             token: 7,
+            waiting: Arc::new(AtomicBool::new(false)),
             reply,
         });
         assert!(actor.leased());
@@ -2914,6 +2957,52 @@ mod tests {
         let drawn = capture.text().len();
         wait_for(|| capture.text().len() > drawn);
         status.finish().unwrap();
+    }
+
+    #[cfg(all(feature = "interactive", feature = "structured"))]
+    #[test]
+    fn a_hold_waits_for_a_prompt_another_thread_holds() {
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
+        let prompt = coordinator.prompt_guard().unwrap();
+        let (sender, receiver) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| sender.send(coordinator.hold().map(|_guard| ())).unwrap());
+            receiver
+                .recv_timeout(Duration::from_millis(200))
+                .unwrap_err();
+            drop(prompt);
+            receiver
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+        });
+    }
+
+    #[cfg(all(feature = "interactive", feature = "structured"))]
+    #[test]
+    fn a_prompt_waits_for_an_active_hold() {
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
+        let hold = coordinator.hold().unwrap();
+        let (sender, receiver) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                sender
+                    .send(coordinator.prompt_guard().map(|_guard| ()))
+                    .unwrap();
+            });
+            receiver
+                .recv_timeout(Duration::from_millis(200))
+                .unwrap_err();
+            drop(hold);
+            receiver
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+        });
     }
 
     #[cfg(all(feature = "interactive", feature = "structured"))]
