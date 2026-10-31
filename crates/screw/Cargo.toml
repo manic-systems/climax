@@ -1,17 +1,19 @@
 [package]
-name        = "screw"
-version     = "0.0.1"
-edition     = "2024"
-license     = "EUPL-1.2"
-description = "differential terminal renderer"
-repository  = "https://github.com/manic-systems/screw"
-readme      = "README.md"
-keywords    = [ "terminal", "cli", "tui", "renderer", "animation" ]
-categories  = [ "command-line-interface", "command-line-utilities" ]
+name                 = "screw"
+version              = "0.0.1"
+authors.workspace    = true
+categories           = [ "command-line-interface", "command-line-utilities" ]
+description          = "A differential terminal renderer with composable widgets for animated command-line output"
+edition.workspace    = true
+keywords             = [ "terminal", "cli", "tui", "renderer", "animation" ]
+license.workspace    = true
+readme               = "README.md"
+repository.workspace = true
 
 [dependencies]
-libc.workspace = true
-unicode-width  = { workspace = true, default-features = true }
+rustix               = { version = "1.1", default-features = false, features = [ "std", "termios" ] }
+unicode-segmentation = "1.13"
+unicode-width        = { workspace = true, default-features = true }
 
 [lints]
 workspace = true

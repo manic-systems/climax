@@ -1,6 +1,21 @@
-use std::io::{
-    self,
-    Write,
+// SPDX-License-Identifier: EUPL-1.2
+
+use core::{
+    mem,
+    ops::{
+        Deref,
+        DerefMut,
+    },
+};
+use std::{
+    env,
+    ffi::OsString,
+    io::{
+        self,
+        IsTerminal as _,
+        Write,
+    },
+    sync::OnceLock,
 };
 
 use crate::{
@@ -11,208 +26,517 @@ use crate::{
     Surface,
     Theme,
     Widget,
-    terminal_width_or_default,
+    terminal::stderr_size,
 };
 
+/// counters describing one draw
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RenderStats {
+    /// rows rewritten, zero when the frame matched the previous one
     pub changed_rows: usize,
 }
 
+/// how a surface wider than the terminal is fitted
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LayoutMode {
+    /// cut each row at the terminal width
     #[default]
     Clip,
+    /// continue overlong rows on the next line, kept as one logical line
     Wrap,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RenderedFrame {
-    logical:  Surface,
-    physical: Surface,
+/// whether terminal cursor visibility is left alone or derived from the
+/// surface's cursor anchor
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CursorVisibility {
+    /// emit no cursor visibility controls
+    #[default]
+    Preserve,
+    /// show the cursor when the surface has an anchor, hide it otherwise
+    FromSurface,
 }
 
+/// draws widgets to a terminal stream, writing only the rows that changed since
+/// the last draw
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag tracks an independent part of the terminal state"
+)]
+#[derive(Debug)]
 pub struct Renderer<W> {
-    writer:         W,
-    previous:       Option<RenderedFrame>,
-    frame:          u64,
-    width:          Option<usize>,
-    layout_mode:    LayoutMode,
-    theme:          Theme,
-    force_full:     bool,
-    resize_pending: bool,
+    writer:              Sink<W>,
+    on_drop:             fn(&mut Self),
+    previous:            Option<Surface>,
+    frame:               u64,
+    width:               Option<usize>,
+    height:              Option<usize>,
+    layout_mode:         LayoutMode,
+    theme:               Theme,
+    cursor_visibility:   CursorVisibility,
+    cursor_visible:      Option<bool>,
+    pending_cursor:      Option<bool>,
+    force_full:          bool,
+    rendition_uncertain: bool,
+    resync:              bool,
+    colors:              bool,
+    terminal:            bool,
+}
+
+/// whether the environment permits colour, read once, a non-empty `NO_COLOR`
+/// always wins
+pub fn colors_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| colors_from(|name| env::var_os(name).filter(|value| !value.is_empty())))
+}
+
+fn colors_from(var: impl Fn(&str) -> Option<OsString>) -> bool {
+    if var("NO_COLOR").is_some() {
+        return false;
+    }
+    if var("CLICOLOR_FORCE").is_some_and(|value| value != "0") {
+        return true;
+    }
+    var("TERM").is_none_or(|value| value != "dumb")
+        && var("CLICOLOR").is_none_or(|value| value != "0")
 }
 
 impl<W> Renderer<W>
 where
     W: Write,
 {
-    pub const fn new(writer: W) -> Self {
+    /// renderer over `writer`, colours follow [`colors_enabled`]
+    pub fn new(writer: W) -> Self {
         Self {
-            writer,
-            previous: None,
-            frame: 0,
-            width: None,
-            layout_mode: LayoutMode::Clip,
-            theme: Theme::DEFAULT,
-            force_full: false,
-            resize_pending: false,
+            writer:              Sink::new(writer),
+            on_drop:             Self::restore_on_drop,
+            previous:            None,
+            frame:               0,
+            width:               None,
+            height:              None,
+            layout_mode:         LayoutMode::Clip,
+            theme:               Theme::DEFAULT,
+            cursor_visibility:   CursorVisibility::Preserve,
+            cursor_visible:      None,
+            pending_cursor:      None,
+            force_full:          false,
+            rendition_uncertain: false,
+            resync:              false,
+            colors:              colors_enabled(),
+            terminal:            true,
         }
     }
 
+    /// whether the writer is a terminal, true by default
+    ///
+    /// the first frame on a terminal starts at column 0 of the current row and
+    /// clears it, text already on that row is erased. a writer that is not a
+    /// terminal gets no leading carriage return
+    #[must_use]
+    pub const fn terminal(mut self, terminal: bool) -> Self {
+        self.terminal = terminal;
+        self
+    }
+
+    /// whether colours are written, overrides [`colors_enabled`]
+    #[must_use]
+    pub const fn colors(mut self, enabled: bool) -> Self {
+        self.colors = enabled;
+        self
+    }
+
+    /// terminal width in columns, rows are clipped or wrapped to it
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
         self
     }
 
+    /// terminal height in rows, the frame is clipped to it
+    #[must_use]
+    pub const fn height(mut self, height: usize) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    /// clip or wrap overlong rows
     #[must_use]
     pub const fn layout_mode(mut self, mode: LayoutMode) -> Self {
         self.layout_mode = mode;
         self
     }
 
-    pub const fn resize(&mut self, width: usize) {
-        self.width = Some(width);
-        self.resize_pending = true;
-        if matches!(self.layout_mode, LayoutMode::Clip) {
-            self.force_full = true;
-        }
+    /// whether the surface's cursor anchor controls terminal cursor visibility
+    #[must_use]
+    pub const fn cursor_visibility(mut self, visibility: CursorVisibility) -> Self {
+        self.cursor_visibility = visibility;
+        self
     }
 
+    /// changes the width, the next draw repaints the whole frame
+    pub const fn resize(&mut self, width: usize) {
+        if matches!(self.width, Some(current) if current == width) {
+            return;
+        }
+        self.width = Some(width);
+        self.force_full = true;
+    }
+
+    /// changes the width and height, repaints the whole frame when the width
+    /// changed or the frame is taller than the new height
+    pub fn resize_viewport(&mut self, width: usize, height: usize) {
+        if self
+            .previous
+            .as_ref()
+            .is_some_and(|previous| previous.height() > height)
+        {
+            self.force_full = true;
+        }
+        self.height = Some(height);
+        self.resize(width);
+    }
+
+    /// theme that resolves [`Role`](crate::Role) styles
     #[must_use]
     pub const fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
     }
 
+    /// renders `widget` and writes the difference from the previous frame
+    ///
     /// # Errors
     ///
-    /// fails when the frame cannot be written to or flushed through the writer.
+    /// fails when the frame cannot be written or flushed
     pub fn draw<T>(&mut self, widget: &T) -> io::Result<RenderStats>
     where
         T: Widget + ?Sized,
     {
         let mut next = Surface::new();
         widget.render(
-            &RenderCtx {
-                frame: self.frame,
-                width: self.width,
-                theme: self.theme,
-            },
+            &RenderCtx::new()
+                .with_frame(self.frame)
+                .with_constraints(self.width.map(usable_columns), self.height)
+                .with_layout_mode(self.layout_mode)
+                .with_theme(self.theme),
             &mut next,
         );
         self.frame = self.frame.wrapping_add(1);
         self.draw_surface(next)
     }
 
+    /// writes an already rendered surface after fitting it to the width and
+    /// height
+    ///
     /// # Errors
     ///
-    /// fails when the frame cannot be written to or flushed through the writer.
+    /// fails when the frame cannot be written or flushed
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
-        let next_physical = self.layout_surface(next_logical.clone());
+        let next_physical = self.layout_surface(next_logical);
 
-        let previous_physical = self.previous.as_ref().map(|previous| {
-            if self.resize_pending && matches!(self.layout_mode, LayoutMode::Wrap) {
-                self.layout_surface(previous.logical.clone())
-            } else {
-                previous.physical.clone()
-            }
-        });
-
-        if !self.force_full && previous_physical.as_ref() == Some(&next_physical) {
-            self.previous = Some(RenderedFrame {
-                logical:  next_logical,
-                physical: next_physical,
-            });
-            self.resize_pending = false;
+        if !self.force_full && self.previous.as_ref() == Some(&next_physical) {
+            self.previous = Some(next_physical);
             return Ok(RenderStats::default());
         }
 
+        match self.write_frame(&next_physical) {
+            Ok(stats) => {
+                self.previous = Some(next_physical);
+                Ok(stats)
+            },
+            Err(error) => {
+                self.previous = None;
+                self.rendition_uncertain = true;
+                self.resync = true;
+                Err(error)
+            },
+        }
+    }
+
+    fn settle_rendition(&mut self) -> io::Result<()> {
+        if self.rendition_uncertain {
+            self.writer.write_all(Style::default().sgr().as_bytes())?;
+        }
+        Ok(())
+    }
+
+    fn write_frame(&mut self, next_physical: &Surface) -> io::Result<RenderStats> {
+        self.settle_rendition()?;
+        let mut cursor = Cursor::default();
+        let mut stats = RenderStats::default();
+        let columns = self.width.unwrap_or(usize::MAX);
+
+        if self.resync {
+            self.writer.write_all(b"\r\x1b[J")?;
+            self.resync = false;
+        } else if self.previous.is_none() && self.terminal {
+            self.writer.write_all(b"\r")?;
+        }
+        if self.force_full {
+            if let Some(previous) = self.previous.as_ref() {
+                clear_reflowed(
+                    previous,
+                    self.width,
+                    &mut self.writer,
+                    &mut cursor,
+                    &mut stats,
+                )?;
+            }
+            write_initial_surface(
+                next_physical,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+                columns,
+            )?;
+            self.force_full = false;
+        } else if let Some(previous) = self.previous.as_ref() {
+            let from = extend_for_growth(previous, next_physical, &mut self.writer, &mut cursor)?;
+            move_to_top(&mut self.writer, from, &mut cursor)?;
+            diff_surfaces(
+                previous,
+                next_physical,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+                columns,
+            )?;
+        } else {
+            write_initial_surface(
+                next_physical,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+                columns,
+            )?;
+        }
+
+        cursor.move_to(&mut self.writer, final_position(next_physical))?;
+        self.update_cursor_visibility(next_physical.cursor().is_some())?;
+        self.flush_retrying_interrupts()?;
+        Ok(stats)
+    }
+
+    fn flush_retrying_interrupts(&mut self) -> io::Result<()> {
+        loop {
+            match self.writer.flush() {
+                Ok(()) => {
+                    self.rendition_uncertain = false;
+                    if let Some(visible) = self.pending_cursor.take() {
+                        self.cursor_visible = Some(visible);
+                    }
+                    return Ok(());
+                },
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// erases the last frame from the terminal and forgets it
+    ///
+    /// # Errors
+    ///
+    /// fails when the erase sequence cannot be written or flushed
+    pub fn clear(&mut self) -> io::Result<RenderStats> {
+        let reset_pending = self.rendition_uncertain;
+        let result = self
+            .settle_rendition()
+            .and_then(|()| self.clear_frame(reset_pending));
+        if result.is_err() {
+            self.rendition_uncertain = true;
+        }
+        result
+    }
+
+    fn clear_frame(&mut self, reset_written: bool) -> io::Result<RenderStats> {
+        let Some(previous_physical) = self.previous.take() else {
+            if self.cursor_may_be_hidden() {
+                self.restore_cursor()?;
+            } else if reset_written {
+                self.flush_retrying_interrupts()?;
+            }
+            return Ok(RenderStats::default());
+        };
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
 
         if self.force_full {
-            if let Some(previous) = &previous_physical {
-                move_to_top(&mut self.writer, final_position(previous), &mut cursor)?;
-                clear_surface(previous, &mut self.writer, &mut cursor, &mut stats)?;
-                cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
-            }
-            write_initial_surface(&next_physical, &mut self.writer, &mut cursor, &mut stats)?;
-            self.force_full = false;
-        } else if let Some(previous) = &previous_physical {
-            move_to_top(&mut self.writer, final_position(previous), &mut cursor)?;
-            diff_surfaces(
-                previous,
-                &next_physical,
+            clear_reflowed(
+                &previous_physical,
+                self.width,
                 &mut self.writer,
                 &mut cursor,
                 &mut stats,
             )?;
         } else {
-            write_initial_surface(&next_physical, &mut self.writer, &mut cursor, &mut stats)?;
+            move_to_top(
+                &mut self.writer,
+                final_position(&previous_physical),
+                &mut cursor,
+            )?;
+            clear_surface(
+                &previous_physical,
+                &mut self.writer,
+                &mut cursor,
+                &mut stats,
+            )?;
+            cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
         }
-
-        cursor.move_to(&mut self.writer, final_position(&next_physical))?;
-        self.writer.flush()?;
-        self.previous = Some(RenderedFrame {
-            logical:  next_logical,
-            physical: next_physical,
-        });
-        self.resize_pending = false;
+        self.restore_cursor()?;
+        self.flush_retrying_interrupts()?;
+        self.force_full = false;
         Ok(stats)
     }
 
+    /// the writer, the terminal is left untouched
+    pub fn into_inner(mut self) -> W {
+        self.writer.take()
+    }
+
+    fn layout_surface(&self, logical: Surface) -> Surface {
+        let mut physical =
+            layout_surface(logical, self.width.map(usable_columns), self.layout_mode);
+        if !self.colors {
+            physical.drop_colors();
+        }
+        if let Some(height) = self.height {
+            physical.fit_height(height);
+        }
+        physical
+    }
+
+    /// shows the cursor again if this renderer hid it under `FromSurface`
+    ///
     /// # Errors
     ///
-    /// fails when the frame cannot be written to or flushed through the writer.
-    pub fn clear(&mut self) -> io::Result<RenderStats> {
-        let Some(previous) = self.previous.take() else {
-            return Ok(RenderStats::default());
-        };
-        let previous_physical =
-            if self.resize_pending && matches!(self.layout_mode, LayoutMode::Wrap) {
-                self.layout_surface(previous.logical)
-            } else {
-                previous.physical
-            };
-        let mut cursor = Cursor::default();
-        let mut stats = RenderStats::default();
-
-        move_to_top(
-            &mut self.writer,
-            final_position(&previous_physical),
-            &mut cursor,
-        )?;
-        clear_surface(
-            &previous_physical,
-            &mut self.writer,
-            &mut cursor,
-            &mut stats,
-        )?;
-        cursor.move_to(&mut self.writer, Position { row: 0, col: 0 })?;
-        self.writer.flush()?;
-        self.force_full = false;
-        self.resize_pending = false;
-        Ok(stats)
+    /// fails when the cursor sequence cannot be written or flushed
+    pub fn restore_cursor(&mut self) -> io::Result<()> {
+        let settled = self.rendition_uncertain;
+        self.settle_rendition()?;
+        if self.cursor_may_be_hidden() {
+            self.update_cursor_visibility(true)?;
+            self.flush_retrying_interrupts()?;
+        } else if settled {
+            self.flush_retrying_interrupts()?;
+        }
+        Ok(())
     }
 
-    pub fn into_inner(self) -> W {
+    fn restore_on_drop(&mut self) {
+        drop(self.restore_cursor());
+    }
+
+    fn cursor_may_be_hidden(&self) -> bool {
+        matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            && (self.cursor_visible == Some(false) || self.pending_cursor == Some(false))
+    }
+
+    fn update_cursor_visibility(&mut self, visible: bool) -> io::Result<()> {
+        if !matches!(self.cursor_visibility, CursorVisibility::FromSurface)
+            || (self.pending_cursor.is_none() && self.cursor_visible == Some(visible))
+        {
+            return Ok(());
+        }
         self.writer
+            .write_all(if visible { b"\x1b[?25h" } else { b"\x1b[?25l" })?;
+        self.pending_cursor = Some(visible);
+        Ok(())
+    }
+}
+
+impl<W> Drop for Renderer<W> {
+    fn drop(&mut self) {
+        if self.writer.inner.is_some() {
+            (self.on_drop)(self);
+        }
+    }
+}
+
+/// the writer, which receives each frame in one write on flush
+#[derive(Debug)]
+struct Sink<W> {
+    inner:   Option<W>,
+    pending: Vec<u8>,
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the writer is present until into_inner takes it"
+)]
+impl<W> Sink<W> {
+    const fn new(writer: W) -> Self {
+        Self {
+            inner:   Some(writer),
+            pending: Vec::new(),
+        }
     }
 
-    fn layout_surface(&self, surface: Surface) -> Surface {
-        layout_surface(surface, self.width, self.layout_mode)
+    const fn take(&mut self) -> W {
+        self.inner.take().expect("the writer is taken once")
+    }
+
+    const fn get(&self) -> &W {
+        self.inner
+            .as_ref()
+            .expect("the writer is present until it is taken")
+    }
+
+    const fn get_mut(&mut self) -> &mut W {
+        self.inner
+            .as_mut()
+            .expect("the writer is present until it is taken")
+    }
+}
+
+impl<W> Deref for Sink<W> {
+    type Target = W;
+
+    fn deref(&self) -> &W {
+        self.get()
+    }
+}
+
+impl<W> DerefMut for Sink<W> {
+    fn deref_mut(&mut self) -> &mut W {
+        self.get_mut()
+    }
+}
+
+impl<W: Write> Write for Sink<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.pending.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut frame = mem::take(&mut self.pending);
+        let written = self.get_mut().write_all(&frame);
+        frame.clear();
+        self.pending = frame;
+        written?;
+        self.get_mut().flush()
     }
 }
 
 impl Renderer<io::Stderr> {
+    /// renderer on standard error sized to the terminal, or 80 columns when the
+    /// size is unknown
     pub fn stderr() -> Self {
-        Self::new(io::stderr()).width(terminal_width_or_default())
+        let (width, height) = stderr_size();
+        let mut renderer = Self::new(io::stderr())
+            .width(width)
+            .terminal(io::stderr().is_terminal());
+        renderer.height = height;
+        renderer
     }
 }
 
-pub fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMode) -> Surface {
+pub(crate) fn layout_surface(
+    mut surface: Surface,
+    width: Option<usize>,
+    mode: LayoutMode,
+) -> Surface {
     match (width, mode) {
         (Some(columns), LayoutMode::Clip) => {
             surface.fit_width(columns);
@@ -223,28 +547,29 @@ pub fn layout_surface(mut surface: Surface, width: Option<usize>, mode: LayoutMo
     }
 }
 
-fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
-    let max_columns = fitted_columns(terminal_width);
-    let logical_cursor = surface.cursor();
+fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
+    let cursor = surface.cursor();
     let mut out = Surface::new();
     let mut first_physical_row = true;
     let mut physical_cursor = None;
 
+    let mut previous_break = crate::RowBreak::None;
     for (logical_row, row) in surface.rows().iter().enumerate() {
-        if !first_physical_row {
+        if !first_physical_row && previous_break != crate::RowBreak::Soft {
             out.newline();
         }
         first_physical_row = false;
         let mut logical_col = 0_usize;
-        let cursor_on_row = logical_cursor.filter(|position| position.row == logical_row);
+        let cursor_on_row = cursor.filter(|at| at.row == logical_row);
 
         if row.is_empty() {
-            if cursor_on_row.is_some_and(|position| position.col == 0) {
+            if let Some(on_row) = cursor_on_row {
                 physical_cursor = Some(Position {
                     row: out.height().saturating_sub(1),
-                    col: 0,
+                    col: on_row.col.min(max_columns),
                 });
             }
+            previous_break = row.break_after();
             continue;
         }
 
@@ -271,32 +596,84 @@ fn wrap_surface(surface: &Surface, terminal_width: usize) -> Surface {
                 });
             }
 
-            out.write(&cell.text, cell.style);
+            out.push_cell(cell);
             logical_col += cell.width;
         }
 
-        if cursor_on_row.is_some_and(|position| position.col >= logical_col) {
+        if cursor_on_row.is_some_and(|at| at.col >= logical_col) {
             physical_cursor = Some(Position {
                 row: out.height().saturating_sub(1),
                 col: out.current_col(),
             });
         }
+        previous_break = row.break_after();
     }
 
-    if let Some(position) = physical_cursor {
-        out.set_cursor(position);
+    if let Some(at) = cursor.filter(|at| at.row >= surface.height()) {
+        physical_cursor = Some(Position {
+            row: out.height() + at.row - surface.height(),
+            col: at.col.min(max_columns),
+        });
+    }
+    if let Some(placed) = physical_cursor {
+        out.set_cursor(placed);
     }
     out
 }
 
 fn cursor_crosses_cell(cursor: Option<Position>, logical_col: usize, cell_width: usize) -> bool {
-    cursor.is_some_and(|position| {
-        position.col >= logical_col && position.col < logical_col.saturating_add(cell_width)
+    cursor
+        .is_some_and(|at| at.col >= logical_col && at.col < logical_col.saturating_add(cell_width))
+}
+
+pub(crate) const fn usable_columns(terminal_columns: usize) -> usize {
+    if terminal_columns > 1 {
+        terminal_columns - 1
+    } else {
+        1
+    }
+}
+
+/// appends real newlines so every row addressed by the next diff exists, cursor
+/// movement clamps
+fn extend_for_growth(
+    previous: &Surface,
+    next: &Surface,
+    writer: &mut impl Write,
+    cursor: &mut Cursor,
+) -> io::Result<Position> {
+    let previous_final = final_position(previous);
+    let previous_bottom = allocated_bottom(previous);
+    let next_bottom = allocated_bottom(next);
+    if next_bottom <= previous_bottom {
+        return Ok(previous_final);
+    }
+
+    *cursor = Cursor {
+        row:   previous_final.row,
+        col:   previous_final.col,
+        style: Style::default(),
+    };
+    cursor.move_to(writer, Position {
+        row: previous_bottom,
+        col: 0,
+    })?;
+    for _ in previous_bottom..next_bottom {
+        writer.write_all(b"\r\n")?;
+        cursor.row += 1;
+        cursor.col = 0;
+    }
+    Ok(Position {
+        row: next_bottom,
+        col: 0,
     })
 }
 
-fn fitted_columns(terminal_width: usize) -> usize {
-    terminal_width.saturating_sub(1).max(1)
+fn allocated_bottom(surface: &Surface) -> usize {
+    surface
+        .height()
+        .saturating_sub(1)
+        .max(final_position(surface).row)
 }
 
 fn move_to_top(writer: &mut impl Write, from: Position, cursor: &mut Cursor) -> io::Result<()> {
@@ -308,16 +685,70 @@ fn move_to_top(writer: &mut impl Write, from: Position, cursor: &mut Cursor) -> 
     Ok(())
 }
 
+/// reflowing terminals rewrap each hard-broken row from its original width, so
+/// after any resizes the frame top is the sum of those rewraps above the
+/// anchor, the erase below catches lines the estimate misses
+fn clear_reflowed(
+    previous: &Surface,
+    width: Option<usize>,
+    writer: &mut impl Write,
+    cursor: &mut Cursor,
+    stats: &mut RenderStats,
+) -> io::Result<()> {
+    let anchor = final_position(previous);
+    let row = width
+        .filter(|&columns| columns > 0)
+        .map_or(anchor.row, |columns| {
+            previous
+                .rows()
+                .iter()
+                .take(anchor.row)
+                .map(|row| wrapped_lines(row.cells(), columns))
+                .sum::<usize>()
+                + previous.rows().get(anchor.row).map_or(0, |row| {
+                    wraps_before_column(row.cells(), columns, anchor.col)
+                })
+        });
+    move_to_top(writer, Position { row, col: 0 }, cursor)?;
+    writer.write_all(b"\x1b[J")?;
+    stats.changed_rows += previous.height();
+    Ok(())
+}
+
+fn wrapped_lines(cells: &[Cell], width: usize) -> usize {
+    1 + wraps_before_column(cells, width, usize::MAX)
+}
+
+/// wraps of `cells` at `width` before `column`, counted per cell for wide cells
+fn wraps_before_column(cells: &[Cell], width: usize, column: usize) -> usize {
+    let mut wraps = 0;
+    let mut used = 0;
+    let mut consumed = 0;
+    for cell in cells {
+        if consumed >= column {
+            break;
+        }
+        if used + cell.width > width {
+            wraps += 1;
+            used = 0;
+        }
+        used += cell.width;
+        consumed += cell.width;
+    }
+    wraps
+}
+
 fn write_initial_surface(
     surface: &Surface,
     writer: &mut impl Write,
     cursor: &mut Cursor,
     stats: &mut RenderStats,
+    columns: usize,
 ) -> io::Result<()> {
     let final_position = final_position(surface);
     for (row_index, row) in surface.rows().iter().enumerate() {
         write_row_tail(writer, cursor, row.cells(), 0)?;
-        writer.write_all(b"\x1b[K")?;
+        erase_to_end(writer, cursor, columns)?;
         stats.changed_rows += 1;
 
         let should_create_next_line =
@@ -338,13 +769,14 @@ fn diff_surfaces(
     writer: &mut impl Write,
     cursor: &mut Cursor,
     stats: &mut RenderStats,
+    columns: usize,
 ) -> io::Result<()> {
     let rows = previous.height().max(next.height());
     for row_index in 0..rows {
         match (previous.rows().get(row_index), next.rows().get(row_index)) {
-            (Some(old), Some(new)) if old == new => {},
+            (Some(old), Some(new)) if old.cells() == new.cells() => {},
             (Some(old), Some(new)) => {
-                patch_row(writer, cursor, row_index, old.cells(), new.cells())?;
+                patch_row(writer, cursor, row_index, old.cells(), new.cells(), columns)?;
                 stats.changed_rows += 1;
             },
             (Some(_), None) => {
@@ -361,7 +793,7 @@ fn diff_surfaces(
                     col: 0,
                 })?;
                 write_row_tail(writer, cursor, new.cells(), 0)?;
-                writer.write_all(b"\x1b[K")?;
+                erase_to_end(writer, cursor, columns)?;
                 stats.changed_rows += 1;
             },
             (None, None) => {},
@@ -393,6 +825,7 @@ fn patch_row(
     row_index: usize,
     old: &[Cell],
     new: &[Cell],
+    columns: usize,
 ) -> io::Result<()> {
     let prefix = common_prefix(old, new);
     if prefix == old.len() && prefix == new.len() {
@@ -417,9 +850,18 @@ fn patch_row(
     write_row_tail(writer, cursor, &new[..end], prefix)?;
 
     if !can_patch_middle && cells_width(old) > cells_width(new) {
-        writer.write_all(b"\x1b[K")?;
+        erase_to_end(writer, cursor, columns)?;
     }
 
+    Ok(())
+}
+
+/// a cursor left on the final column is pending a wrap, where erasing would
+/// take the last cell
+fn erase_to_end(writer: &mut impl Write, cursor: &Cursor, columns: usize) -> io::Result<()> {
+    if cursor.col < columns {
+        writer.write_all(b"\x1b[K")?;
+    }
     Ok(())
 }
 
@@ -440,7 +882,7 @@ fn write_row_tail(
 fn common_prefix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .zip(new)
-        .take_while(|(before, after)| before == after)
+        .take_while(|(left, right)| left == right)
         .count()
 }
 
@@ -448,7 +890,7 @@ fn common_suffix(old: &[Cell], new: &[Cell]) -> usize {
     old.iter()
         .rev()
         .zip(new.iter().rev())
-        .take_while(|(before, after)| before == after)
+        .take_while(|(left, right)| left == right)
         .count()
 }
 
@@ -459,8 +901,8 @@ fn cells_width(cells: &[Cell]) -> usize {
 fn final_position(surface: &Surface) -> Position {
     surface.cursor().unwrap_or_else(|| {
         Position {
-            row: surface.height(),
-            col: 0,
+            row: surface.height().saturating_sub(1),
+            col: surface.row_width(surface.height().saturating_sub(1)),
         }
     })
 }
@@ -501,5 +943,816 @@ impl Cursor {
             self.style = style;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::rc::Rc;
+    use core::cell::RefCell;
+    use std::io;
+
+    use crate::{
+        Color,
+        CursorMerge,
+        CursorVisibility,
+        Edge,
+        Fill,
+        Floating,
+        Insets,
+        Layers,
+        LayoutMode,
+        Position,
+        Renderer,
+        Size,
+        Style,
+        Surface,
+        Widget,
+        renderer::layout_surface,
+    };
+
+    fn surface(lines: &[&str], cursor: Option<Position>) -> Surface {
+        let mut surface = Surface::new();
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                surface.newline();
+            }
+            surface.write(line, Style::default());
+        }
+        if let Some(position) = cursor {
+            surface.set_cursor(position);
+        }
+        surface
+    }
+
+    #[test]
+    fn a_hard_break_after_an_empty_soft_continuation_row_starts_a_new_row() {
+        let mut logical = Surface::new();
+        logical.write("ab", Style::default());
+        logical.soft_wrap();
+        logical.newline();
+        logical.write("c", Style::default());
+        let laid_out = layout_surface(logical, Some(20), LayoutMode::Wrap);
+        assert_eq!(laid_out.plain_text(), "ab\nc");
+    }
+
+    #[test]
+    fn clear_without_a_retained_frame_still_restores_the_cursor() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.cursor_visible = Some(false);
+        renderer.clear().unwrap();
+        assert_eq!(renderer.into_inner(), b"\x1b[?25h");
+    }
+
+    #[test]
+    fn growing_frame_allocates_rows_before_diffing_them() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(&["one", "two"], None))
+            .unwrap();
+        let before = renderer.writer.len();
+
+        renderer
+            .draw_surface(surface(&["one", "two", "three", "four"], None))
+            .unwrap();
+
+        let update = &renderer.writer[before..];
+        assert!(
+            update.starts_with(b"\r\r\n\r\n\r\x1b[3A"),
+            "taller diff must create two rows before moving to the top: {update:?}"
+        );
+    }
+
+    #[test]
+    fn a_patch_that_changes_the_width_rewrites_the_cells_after_it() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer.draw_surface(surface(&["a世d"], None)).unwrap();
+        let before = renderer.writer.len();
+
+        renderer.draw_surface(surface(&["axd"], None)).unwrap();
+
+        assert_eq!(&renderer.writer[before..], b"\r\x1b[1Cxd\x1b[K");
+    }
+
+    #[test]
+    fn shrinking_cursor_anchored_frame_clears_every_removed_row() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(
+                &["search: ", "alpha", "bravo", "charlie", "help"],
+                Some(Position { row: 0, col: 8 }),
+            ))
+            .unwrap();
+        let before = renderer.writer.len();
+
+        renderer
+            .draw_surface(surface(
+                &["search: c", "charlie", "help"],
+                Some(Position { row: 0, col: 9 }),
+            ))
+            .unwrap();
+
+        let update = &renderer.writer[before..];
+        assert_eq!(
+            update
+                .windows(b"\x1b[2K".len())
+                .filter(|part| *part == b"\x1b[2K")
+                .count(),
+            2,
+            "both removed result rows must be erased: {update:?}"
+        );
+    }
+
+    #[test]
+    fn cursor_visibility_can_follow_surface_intent() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25h".len())
+                .filter(|part| *part == b"\x1b[?25h")
+                .count(),
+            1
+        );
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25l".len())
+                .filter(|part| *part == b"\x1b[?25l")
+                .count(),
+            1
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct Shared(Rc<RefCell<Vec<u8>>>);
+
+    impl io::Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn dropping_a_renderer_shows_a_cursor_it_hid() {
+        let shared = Shared::default();
+        let mut renderer =
+            Renderer::new(shared.clone()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+        assert!(shared.0.borrow().ends_with(b"\x1b[?25l"));
+        drop(renderer);
+        assert!(shared.0.borrow().ends_with(b"\x1b[?25l\x1b[?25h"));
+    }
+
+    #[test]
+    fn into_inner_leaves_a_hidden_cursor_to_the_caller() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+        assert!(renderer.into_inner().ends_with(b"\x1b[?25l"));
+    }
+
+    #[test]
+    fn cursor_visibility_is_preserved_by_default() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+
+        assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25"));
+    }
+
+    #[test]
+    fn renderer_height_clips_rows_and_an_outside_cursor() {
+        let renderer = Renderer::new(Vec::new()).height(2);
+        let physical = renderer.layout_surface(surface(
+            &["one", "two", "three"],
+            Some(Position { row: 2, col: 1 }),
+        ));
+
+        assert_eq!(physical.height(), 2);
+        assert_eq!(physical.cursor(), None);
+    }
+
+    #[test]
+    fn usable_width_reserves_the_terminal_final_column_once() {
+        assert_eq!(super::usable_columns(0), 1);
+        assert_eq!(super::usable_columns(1), 1);
+        assert_eq!(super::usable_columns(2), 1);
+        assert_eq!(super::usable_columns(80), 79);
+
+        let renderer = Renderer::new(Vec::new()).width(6);
+        let physical = renderer.layout_surface(surface(&["abcdef"], None));
+        assert_eq!(physical.plain_text(), "abcde");
+    }
+
+    #[test]
+    fn removing_a_floating_pane_clears_its_materialized_canvas_rows() {
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
+        renderer.draw(&Layers::new("document")).unwrap();
+        renderer
+            .draw(
+                &Layers::new("document").float(
+                    "panel",
+                    Floating::new(Edge::BOTTOM | Edge::RIGHT)
+                        .margin(Insets::bottom(1))
+                        .max_size(Size::new(10, 3))
+                        .fill(Fill::Opaque(Style::PLAIN))
+                        .cursor(CursorMerge::PreserveBase),
+                ),
+            )
+            .unwrap();
+        let before = renderer.writer.len();
+
+        let stats = renderer.draw(&Layers::new("document")).unwrap();
+        let update = &renderer.writer[before..];
+        assert_eq!(stats.changed_rows, 4);
+        assert_eq!(
+            update
+                .windows(b"\x1b[2K".len())
+                .filter(|part| *part == b"\x1b[2K")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn unchanged_floating_frame_uses_the_retained_fast_path() {
+        let pane = || {
+            Layers::new("document").float(
+                "panel",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            )
+        };
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
+        renderer.draw(&pane()).unwrap();
+        assert_eq!(renderer.draw(&pane()).unwrap().changed_rows, 0);
+    }
+
+    #[test]
+    fn shrinking_a_pane_restores_every_vacated_cell() {
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(5);
+        renderer
+            .draw(&Layers::new("underlying document").float(
+                "large pane",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+        let before = renderer.writer.len();
+        let stats = renderer
+            .draw(&Layers::new("underlying document").float(
+                "x",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+
+        let physical = renderer.previous.as_ref().unwrap();
+        assert!(!physical.plain_text().contains("large pane"));
+        assert_eq!(text_at(physical, Position { row: 4, col: 19 }), Some("x"));
+        assert_eq!(stats.changed_rows, 1);
+        assert!(renderer.writer.len() > before);
+    }
+
+    #[test]
+    fn resize_remeasures_and_reanchors_a_floating_child() {
+        let pane = || {
+            Layers::new("document").float(
+                "panel",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            )
+        };
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(6);
+        renderer.draw(&pane()).unwrap();
+        assert_eq!(
+            text_at(renderer.previous.as_ref().unwrap(), Position {
+                row: 5,
+                col: 15,
+            },),
+            Some("p"),
+        );
+
+        renderer.resize_viewport(11, 4);
+        renderer.draw(&pane()).unwrap();
+        let smaller = renderer.previous.as_ref().unwrap();
+        assert!(smaller.height() <= 4);
+        assert!(smaller.display_width() <= 10);
+        assert_eq!(text_at(smaller, Position { row: 3, col: 5 }), Some("p"));
+
+        renderer.resize_viewport(31, 8);
+        renderer.draw(&pane()).unwrap();
+        let larger = renderer.previous.as_ref().unwrap();
+        assert!(larger.height() <= 8);
+        assert!(larger.display_width() <= 30);
+        assert_eq!(text_at(larger, Position { row: 7, col: 25 }), Some("p"));
+    }
+
+    #[test]
+    fn moving_a_floating_pane_restores_its_old_footprint() {
+        let base = "01234567890123456789\nabcdefghijklmnopqrst\nABCDEFGHIJKLMNOPQRST";
+        let mut renderer = Renderer::new(Vec::new()).width(21).height(3);
+        renderer
+            .draw(&Layers::new(base).float(
+                "pane",
+                Floating::new(Edge::BOTTOM | Edge::RIGHT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+
+        let stats = renderer
+            .draw(&Layers::new(base).float(
+                "pane",
+                Floating::new(Edge::BOTTOM | Edge::LEFT).fill(Fill::Opaque(Style::PLAIN)),
+            ))
+            .unwrap();
+        let physical = renderer.previous.as_ref().unwrap();
+
+        assert_eq!(stats.changed_rows, 1);
+        assert_eq!(text_at(physical, Position { row: 2, col: 0 }), Some("p"));
+        assert_eq!(text_at(physical, Position { row: 2, col: 16 }), Some("Q"));
+        assert_eq!(
+            physical.plain_text(),
+            "01234567890123456789\nabcdefghijklmnopqrst\npaneEFGHIJKLMNOPQRST"
+        );
+    }
+
+    #[test]
+    fn resize_clips_and_restores_surface_cursor_visibility() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(10)
+            .height(2)
+            .cursor_visibility(CursorVisibility::FromSurface);
+        let frame = || surface(&["search:", "value"], Some(Position { row: 1, col: 5 }));
+
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize_viewport(10, 1);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize_viewport(10, 2);
+        renderer.draw_surface(frame()).unwrap();
+
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25h".len())
+                .filter(|part| *part == b"\x1b[?25h")
+                .count(),
+            2,
+            "cursor transitions: {:?}",
+            String::from_utf8_lossy(&renderer.writer),
+        );
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25l".len())
+                .filter(|part| *part == b"\x1b[?25l")
+                .count(),
+            1,
+        );
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().cursor(),
+            Some(Position { row: 1, col: 5 }),
+        );
+    }
+
+    #[test]
+    fn repeated_viewport_resizes_rewrap_logical_content_to_each_new_width() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(6)
+            .height(6)
+            .layout_mode(crate::LayoutMode::Wrap);
+        let logical = || surface(&["abcdefghij"], None);
+
+        renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().plain_text(),
+            "abcde\nfghij",
+        );
+
+        renderer.resize_viewport(4, 6);
+        renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().plain_text(),
+            "abc\ndef\nghi\nj",
+        );
+
+        renderer.resize_viewport(7, 6);
+        let before = renderer.writer.len();
+        let stats = renderer.draw_surface(logical()).unwrap();
+        assert_eq!(
+            renderer.previous.as_ref().unwrap().plain_text(),
+            "abcdef\nghij",
+        );
+        assert!(stats.changed_rows > 0);
+        assert!(renderer.writer.len() > before);
+    }
+
+    #[test]
+    fn rewrapping_consumes_soft_boundaries_but_preserves_hard_ones() {
+        let mut prewrapped = surface(&["abc"], None);
+        prewrapped.soft_wrap();
+        prewrapped.write("def", Style::PLAIN);
+        assert_eq!(
+            layout_surface(prewrapped, Some(10), LayoutMode::Wrap).plain_text(),
+            "abcdef",
+        );
+
+        let hard = surface(&["abc", "def"], None);
+        assert_eq!(
+            layout_surface(hard, Some(10), LayoutMode::Wrap).plain_text(),
+            "abc\ndef",
+        );
+    }
+
+    struct CursorDocument;
+
+    impl Widget for CursorDocument {
+        fn render(&self, _ctx: &crate::RenderCtx, out: &mut Surface) {
+            out.write("document", Style::PLAIN);
+            out.set_cursor(Position { row: 0, col: 3 });
+        }
+    }
+
+    #[test]
+    fn display_only_pane_keeps_cursor_visibility_stable() {
+        let mut renderer = Renderer::new(Vec::new())
+            .width(21)
+            .height(5)
+            .cursor_visibility(CursorVisibility::FromSurface);
+        for text in ["one", "different pane", "x"] {
+            renderer
+                .draw(
+                    &Layers::new(CursorDocument).float(
+                        text,
+                        Floating::new(Edge::BOTTOM | Edge::RIGHT)
+                            .fill(Fill::Opaque(Style::PLAIN))
+                            .cursor(CursorMerge::PreserveBase),
+                    ),
+                )
+                .unwrap();
+            assert_eq!(
+                renderer.previous.as_ref().unwrap().cursor(),
+                Some(Position { row: 0, col: 3 }),
+            );
+        }
+        assert_eq!(
+            renderer
+                .writer
+                .windows(b"\x1b[?25h".len())
+                .filter(|part| *part == b"\x1b[?25h")
+                .count(),
+            1,
+        );
+        assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25l"));
+    }
+
+    #[test]
+    fn explicit_teardown_restores_a_hidden_surface_cursor() {
+        let mut renderer =
+            Renderer::new(Vec::new()).cursor_visibility(CursorVisibility::FromSurface);
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+        renderer.draw_surface(surface(&["done"], None)).unwrap();
+        let hidden = renderer
+            .writer
+            .windows(b"\x1b[?25l".len())
+            .filter(|part| *part == b"\x1b[?25l")
+            .count();
+        assert_eq!(hidden, 1);
+
+        renderer.clear().unwrap();
+        let shown = renderer
+            .writer
+            .windows(b"\x1b[?25h".len())
+            .filter(|part| *part == b"\x1b[?25h")
+            .count();
+        assert_eq!(
+            shown, 2,
+            "teardown must return the terminal to a visible cursor"
+        );
+    }
+
+    #[test]
+    fn explicit_teardown_leaves_preserved_visibility_alone() {
+        let mut renderer = Renderer::new(Vec::new());
+        renderer
+            .draw_surface(surface(&["search: "], Some(Position { row: 0, col: 8 })))
+            .unwrap();
+        renderer.clear().unwrap();
+        assert!(!renderer.writer.windows(6).any(|part| part == b"\x1b[?25"));
+    }
+
+    #[test]
+    fn narrowing_climbs_to_the_rewrapped_frame_top() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        let frame = || surface(&["abcdefghij", "xy"], None);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize(4);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame()).unwrap();
+        let update = &renderer.writer[before..];
+        assert!(update.starts_with(b"\r\x1b[3A\x1b[J"), "{update:?}");
+        assert!(!update.windows(4).any(|part| part == b"\x1b[2K"));
+    }
+
+    #[test]
+    fn widening_keeps_the_hard_broken_row_count() {
+        let mut renderer = Renderer::new(Vec::new()).width(4);
+        let frame = || surface(&["abcd", "xy"], None);
+        renderer.draw_surface(frame()).unwrap();
+        renderer.resize(10);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame()).unwrap();
+        assert!(renderer.writer[before..].starts_with(b"\r\x1b[1A\x1b[J"));
+    }
+
+    #[test]
+    fn unchanged_width_resize_keeps_diffing() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        renderer.resize_viewport(10, 5);
+        let stats = renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        assert_eq!(stats.changed_rows, 0);
+    }
+
+    fn text_at(surface: &Surface, wanted: Position) -> Option<&str> {
+        let row = surface.rows().get(wanted.row)?;
+        let mut col = 0;
+        for cell in row.cells() {
+            if col == wanted.col {
+                return Some(cell.text.as_str());
+            }
+            col += cell.width;
+        }
+        None
+    }
+
+    #[derive(Default)]
+    struct FlakyWriter {
+        buffer:              Vec<u8>,
+        bytes_until_failure: Option<usize>,
+        interrupted_flushes: usize,
+    }
+
+    impl io::Write for FlakyWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let mut accepted = buf.len();
+            if let Some(remaining) = &mut self.bytes_until_failure {
+                if *remaining == 0 {
+                    self.bytes_until_failure = None;
+                    return Err(io::Error::other("simulated write failure"));
+                }
+                accepted = accepted.min(*remaining);
+                *remaining -= accepted;
+            }
+            self.buffer.extend_from_slice(&buf[..accepted]);
+            Ok(accepted)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.interrupted_flushes > 0 {
+                self.interrupted_flushes -= 1;
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "simulated"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_error_mid_frame_forces_a_fresh_frame_on_the_next_draw() {
+        let mut renderer = Renderer::new(FlakyWriter::default()).width(10);
+        renderer
+            .draw_surface(surface(&["one", "two"], None))
+            .unwrap();
+        renderer.resize(4);
+
+        renderer.writer.bytes_until_failure = Some(1);
+        renderer
+            .draw_surface(surface(&["abcdefghij", "xy"], None))
+            .unwrap_err();
+        assert!(renderer.previous.is_none());
+
+        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(surface(&["abc"], None)).unwrap();
+        let update = &renderer.writer.buffer[before..];
+        assert_eq!(
+            update, b"\x1b[0m\r\x1b[Jabc\x1b[K",
+            "a redraw after a failed write must restart at column zero and erase below without \
+             climbing: {update:?}"
+        );
+    }
+
+    #[test]
+    fn the_colour_policy_matches_pounds_term() {
+        let policy = |set: &[(&str, &str)]| {
+            super::colors_from(|name| {
+                set.iter()
+                    .find(|(key, value)| *key == name && !value.is_empty())
+                    .map(|(_, value)| (*value).into())
+            })
+        };
+
+        assert!(policy(&[]));
+        assert!(policy(&[("NO_COLOR", "")]));
+        assert!(!policy(&[("NO_COLOR", "1")]));
+        assert!(!policy(&[("NO_COLOR", "1"), ("CLICOLOR_FORCE", "1")]));
+        assert!(!policy(&[("CLICOLOR", "0")]));
+        assert!(!policy(&[("TERM", "dumb")]));
+        assert!(policy(&[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "1")]));
+        assert!(!policy(&[("CLICOLOR", "0"), ("CLICOLOR_FORCE", "0")]));
+    }
+
+    #[test]
+    fn disabling_colours_keeps_the_other_attributes() {
+        let mut surface = Surface::new();
+        surface.write(
+            "x",
+            Style::new()
+                .fg(Color::Red)
+                .bg(Color::Rgb(1, 2, 3))
+                .bold()
+                .reverse(),
+        );
+        surface.write("y", Style::new().fg(Color::Indexed(9)));
+
+        let mut plain = Renderer::new(Vec::new()).colors(false);
+        plain.draw_surface(surface.clone()).unwrap();
+        let mut coloured = Renderer::new(Vec::new()).colors(true);
+        coloured.draw_surface(surface).unwrap();
+
+        assert_eq!(plain.into_inner(), b"\r\x1b[0;1;7mx\x1b[0my\x1b[K");
+        assert!(String::from_utf8_lossy(&coloured.into_inner()).contains("31"));
+    }
+
+    fn styled_surface(text: &str) -> Surface {
+        let mut surface = Surface::new();
+        surface.write(text, Style::new().bold());
+        surface
+    }
+
+    #[test]
+    fn a_failed_write_after_an_sgr_is_reset_before_the_next_draw() {
+        let mut renderer = Renderer::new(FlakyWriter::default());
+        renderer.writer.bytes_until_failure = Some(7);
+        renderer.draw_surface(styled_surface("red")).unwrap_err();
+        assert!(renderer.writer.buffer.ends_with(b"1m"));
+
+        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(surface(&["plain"], None)).unwrap();
+        assert!(renderer.writer.buffer[before..].starts_with(b"\x1b[0m"));
+    }
+
+    #[test]
+    fn clear_and_restore_cursor_reset_a_style_left_by_a_failed_write() {
+        let mut renderer = Renderer::new(FlakyWriter::default());
+        renderer.writer.bytes_until_failure = Some(1);
+        renderer.draw_surface(styled_surface("red")).unwrap_err();
+
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(&renderer.writer.buffer[before..], b"\x1b[0m");
+
+        renderer.writer.bytes_until_failure = Some(1);
+        renderer.draw_surface(styled_surface("red")).unwrap_err();
+        let before_clear = renderer.writer.buffer.len();
+        renderer.clear().unwrap();
+        assert!(renderer.writer.buffer[before_clear..].starts_with(b"\x1b[0m"));
+    }
+
+    #[test]
+    fn clear_flushes_the_rendition_reset_when_no_frame_is_retained() {
+        let mut renderer = Renderer::new(io::BufWriter::new(Vec::new()));
+        renderer.rendition_uncertain = true;
+        renderer.clear().unwrap();
+        assert_eq!(renderer.writer.get_ref(), b"\x1b[0m");
+    }
+
+    #[test]
+    fn clear_flushes_the_erased_frame_when_the_cursor_is_preserved() {
+        let mut renderer = Renderer::new(io::BufWriter::with_capacity(1 << 16, Vec::new()));
+        renderer
+            .draw_surface(surface(&["one", "two"], None))
+            .unwrap();
+        let drawn = renderer.writer.get_ref().len();
+        renderer.clear().unwrap();
+        assert!(renderer.writer.get_ref().len() > drawn);
+    }
+
+    #[derive(Default)]
+    struct FlushOnceFailing {
+        buffer:          Vec<u8>,
+        failing_flushes: usize,
+    }
+
+    impl io::Write for FlushOnceFailing {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.buffer.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.failing_flushes > 0 {
+                self.failing_flushes -= 1;
+                return Err(io::Error::other("simulated flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn restore_cursor_retries_after_a_failed_flush() {
+        let mut renderer = Renderer::new(FlushOnceFailing::default())
+            .cursor_visibility(CursorVisibility::FromSurface);
+        renderer.draw_surface(surface(&["a"], None)).unwrap();
+        assert!(renderer.writer.buffer.ends_with(b"\x1b[?25l"));
+
+        renderer.writer.failing_flushes = 1;
+        assert!(renderer.restore_cursor().is_err());
+
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(&renderer.writer.buffer[before..], b"\x1b[?25h");
+        let before_again = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(renderer.writer.buffer.len(), before_again);
+    }
+
+    #[test]
+    fn rendition_reset_is_rewritten_after_a_failed_flush() {
+        let mut renderer = Renderer::new(FlushOnceFailing::default());
+        renderer.rendition_uncertain = true;
+        renderer.writer.failing_flushes = 1;
+        assert!(renderer.restore_cursor().is_err());
+
+        let before = renderer.writer.buffer.len();
+        renderer.restore_cursor().unwrap();
+        assert_eq!(&renderer.writer.buffer[before..], b"\x1b[0m");
+    }
+
+    #[test]
+    fn a_redraw_after_a_failed_write_does_not_continue_mid_row() {
+        let mut renderer = Renderer::new(FlakyWriter::default()).width(10);
+        renderer.writer.bytes_until_failure = Some(4);
+        renderer
+            .draw_surface(surface(&["HELLO"], None))
+            .unwrap_err();
+        assert_eq!(renderer.writer.buffer, b"\rHEL");
+
+        let before = renderer.writer.buffer.len();
+        renderer.draw_surface(surface(&["HELLO"], None)).unwrap();
+        let update = &renderer.writer.buffer[before..];
+        assert!(update.starts_with(b"\x1b[0m\r\x1b[JHELLO"), "{update:?}");
+    }
+
+    #[test]
+    fn interrupted_flush_is_retried_instead_of_desyncing_the_renderer() {
+        let mut renderer = Renderer::new(FlakyWriter::default());
+        renderer.writer.interrupted_flushes = 1;
+
+        let stats = renderer.draw_surface(surface(&["ok"], None)).unwrap();
+        assert_eq!(stats.changed_rows, 1);
+        assert!(renderer.previous.is_some());
+        assert_eq!(renderer.writer.buffer, b"\rok\x1b[K");
+    }
+
+    #[test]
+    fn narrowing_estimates_the_anchor_rows_wrap_around_a_wide_character() {
+        let mut renderer = Renderer::new(Vec::new()).width(10);
+        let mut frame = Surface::new();
+        frame.write("a", Style::PLAIN);
+        frame.write("界", Style::PLAIN);
+        frame.write("bc", Style::PLAIN);
+        frame.set_cursor(Position { row: 0, col: 3 });
+        renderer.draw_surface(frame.clone()).unwrap();
+
+        renderer.resize(3);
+        let before = renderer.writer.len();
+        renderer.draw_surface(frame).unwrap();
+        let update = &renderer.writer[before..];
+        assert!(
+            update.starts_with(b"\r\x1b[J"),
+            "the wide anchor cell fills the reflowed row exactly, so no climb is needed: \
+             {update:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_surface_keeps_a_cursor_on_a_blank_row_past_column_zero() {
+        let mut logical = Surface::new();
+        logical.newline();
+        logical.set_cursor(Position { row: 1, col: 5 });
+
+        let wrapped = super::wrap_surface(&logical, 10);
+        assert_eq!(wrapped.cursor(), Some(Position { row: 1, col: 5 }));
     }
 }

@@ -1,5 +1,7 @@
 //! batteries-included CLI facade over `pound`, `screw`, and `bang`
 
+extern crate alloc;
+
 pub mod app;
 pub mod error;
 #[cfg(feature = "complete")] pub mod install;

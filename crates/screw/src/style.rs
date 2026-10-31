@@ -1,63 +1,127 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// SPDX-License-Identifier: EUPL-1.2
+
+/// a terminal colour
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Color {
+    /// ANSI colour 0
     Black,
+    /// ANSI colour 1
     Red,
+    /// ANSI colour 2
     Green,
+    /// ANSI colour 3
     Yellow,
+    /// ANSI colour 4
     Blue,
+    /// ANSI colour 5
     Magenta,
+    /// ANSI colour 6
     Cyan,
+    /// ANSI colour 7
     White,
+    /// bright [`Color::Black`], often rendered as grey
+    BrightBlack,
+    /// bright [`Color::Red`]
+    BrightRed,
+    /// bright [`Color::Green`]
+    BrightGreen,
+    /// bright [`Color::Yellow`]
+    BrightYellow,
+    /// bright [`Color::Blue`]
+    BrightBlue,
+    /// bright [`Color::Magenta`]
+    BrightMagenta,
+    /// bright [`Color::Cyan`]
+    BrightCyan,
+    /// bright [`Color::White`]
+    BrightWhite,
+    /// an entry of the 256-colour palette
+    Indexed(u8),
+    /// 24-bit colour as red, green and blue
+    Rgb(u8, u8, u8),
 }
 
 impl Color {
-    pub(crate) const fn fg_code(self) -> u8 {
-        match self {
-            Self::Black => 30,
-            Self::Red => 31,
-            Self::Green => 32,
-            Self::Yellow => 33,
-            Self::Blue => 34,
-            Self::Magenta => 35,
-            Self::Cyan => 36,
-            Self::White => 37,
-        }
-    }
-
-    pub(crate) const fn bg_code(self) -> u8 {
-        match self {
-            Self::Black => 40,
-            Self::Red => 41,
-            Self::Green => 42,
-            Self::Yellow => 43,
-            Self::Blue => 44,
-            Self::Magenta => 45,
-            Self::Cyan => 46,
-            Self::White => 47,
-        }
+    pub(crate) fn push_sgr(self, background: bool, codes: &mut Vec<String>) {
+        let (base, extended) = if background { (40, 48) } else { (30, 38) };
+        let simple = |offset: u8| vec![(base + offset).to_string()];
+        let parts = match self {
+            Self::Black => simple(0),
+            Self::Red => simple(1),
+            Self::Green => simple(2),
+            Self::Yellow => simple(3),
+            Self::Blue => simple(4),
+            Self::Magenta => simple(5),
+            Self::Cyan => simple(6),
+            Self::White => simple(7),
+            Self::BrightBlack => simple(60),
+            Self::BrightRed => simple(61),
+            Self::BrightGreen => simple(62),
+            Self::BrightYellow => simple(63),
+            Self::BrightBlue => simple(64),
+            Self::BrightMagenta => simple(65),
+            Self::BrightCyan => simple(66),
+            Self::BrightWhite => simple(67),
+            Self::Indexed(index) => vec![extended.to_string(), "5".to_owned(), index.to_string()],
+            Self::Rgb(red, green, blue) => {
+                vec![
+                    extended.to_string(),
+                    "2".to_owned(),
+                    red.to_string(),
+                    green.to_string(),
+                    blue.to_string(),
+                ]
+            },
+        };
+        codes.extend(parts);
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// colours and text attributes applied to written cells
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each attribute is an independent SGR flag"
+)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Style {
-    pub fg:      Option<Color>,
-    pub bg:      Option<Color>,
-    pub bold:    bool,
-    pub dim:     bool,
-    pub reverse: bool,
+    /// foreground colour, the terminal default when `None`
+    pub fg:            Option<Color>,
+    /// background colour, the terminal default when `None`
+    pub bg:            Option<Color>,
+    /// bold weight
+    pub bold:          bool,
+    /// reduced intensity
+    pub dim:           bool,
+    /// italic slant
+    pub italic:        bool,
+    /// underline
+    pub underline:     bool,
+    /// strike-through
+    pub strikethrough: bool,
+    /// swapped foreground and background
+    pub reverse:       bool,
 }
 
+/// a semantic text role, resolved to a [`Style`] through a [`Theme`]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Role {
+    /// prompt and heading text
     Prompt,
+    /// ordinary text
     Normal,
+    /// de-emphasised text
     Dim,
+    /// the selected item of a list
     Selected,
+    /// a highlighted search match
     Match,
+    /// error text
     Error,
+    /// success text
     Success,
 }
 
+/// maps each [`Role`] to a concrete [`Style`]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Theme {
     prompt:   Style,
@@ -76,16 +140,18 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// the built-in theme
     pub const DEFAULT: Self = Self {
-        prompt:   Style::PLAIN.bold(),
-        normal:   Style::PLAIN,
-        dim:      Style::PLAIN.dim(),
-        selected: Style::PLAIN.reverse(),
-        matched:  Style::PLAIN.fg(Color::Yellow).bold(),
-        error:    Style::PLAIN.fg(Color::Red).bold(),
-        success:  Style::PLAIN.fg(Color::Green).bold(),
+        prompt:   Style::new().bold(),
+        normal:   Style::new(),
+        dim:      Style::new().dim(),
+        selected: Style::new().reverse(),
+        matched:  Style::new().fg(Color::Yellow).bold(),
+        error:    Style::new().fg(Color::Red).bold(),
+        success:  Style::new().fg(Color::Green).bold(),
     };
 
+    /// the style assigned to `role`
     pub const fn style(self, role: Role) -> Style {
         match role {
             Role::Prompt => self.prompt,
@@ -98,6 +164,7 @@ impl Theme {
         }
     }
 
+    /// this theme with `role` mapped to `style`
     #[must_use]
     pub const fn with(mut self, role: Role, style: Style) -> Self {
         match role {
@@ -114,38 +181,74 @@ impl Theme {
 }
 
 impl Style {
-    pub const PLAIN: Self = Self {
-        fg:      None,
-        bg:      None,
-        bold:    false,
-        dim:     false,
-        reverse: false,
-    };
+    /// the empty style, which leaves the terminal defaults untouched
+    pub const PLAIN: Self = Self::new();
 
+    /// the empty style, equal to [`Style::PLAIN`]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            fg:            None,
+            bg:            None,
+            bold:          false,
+            dim:           false,
+            italic:        false,
+            underline:     false,
+            strikethrough: false,
+            reverse:       false,
+        }
+    }
+
+    /// sets the foreground colour
     #[must_use]
     pub const fn fg(mut self, color: Color) -> Self {
         self.fg = Some(color);
         self
     }
 
+    /// sets the background colour
     #[must_use]
     pub const fn bg(mut self, color: Color) -> Self {
         self.bg = Some(color);
         self
     }
 
+    /// enables bold weight
     #[must_use]
     pub const fn bold(mut self) -> Self {
         self.bold = true;
         self
     }
 
+    /// enables reduced intensity
     #[must_use]
     pub const fn dim(mut self) -> Self {
         self.dim = true;
         self
     }
 
+    /// enables italics
+    #[must_use]
+    pub const fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    /// enables underline
+    #[must_use]
+    pub const fn underline(mut self) -> Self {
+        self.underline = true;
+        self
+    }
+
+    /// enables strike-through
+    #[must_use]
+    pub const fn strikethrough(mut self) -> Self {
+        self.strikethrough = true;
+        self
+    }
+
+    /// swaps foreground and background
     #[must_use]
     pub const fn reverse(mut self) -> Self {
         self.reverse = true;
@@ -157,28 +260,74 @@ impl Style {
             return "\x1b[0m".to_owned();
         }
 
-        let mut codes = Vec::new();
-        if self.bold {
-            codes.push(1);
-        }
-        if self.dim {
-            codes.push(2);
-        }
-        if self.reverse {
-            codes.push(7);
+        let mut codes = vec!["0".to_owned()];
+        for (enabled, code) in [
+            (self.bold, "1"),
+            (self.dim, "2"),
+            (self.italic, "3"),
+            (self.underline, "4"),
+            (self.reverse, "7"),
+            (self.strikethrough, "9"),
+        ] {
+            if enabled {
+                codes.push(code.to_owned());
+            }
         }
         if let Some(fg) = self.fg {
-            codes.push(fg.fg_code());
+            fg.push_sgr(false, &mut codes);
         }
         if let Some(bg) = self.bg {
-            codes.push(bg.bg_code());
+            bg.push_sgr(true, &mut codes);
         }
 
-        let joined = codes
-            .into_iter()
-            .map(|code| code.to_string())
-            .collect::<Vec<_>>()
-            .join(";");
-        format!("\x1b[{joined}m")
+        format!("\x1b[{}m", codes.join(";"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_non_default_style_resets_before_setting_its_own_attributes() {
+        assert_eq!(Style::PLAIN.bold().sgr(), "\x1b[0;1m");
+        assert_eq!(Style::PLAIN.fg(Color::Red).sgr(), "\x1b[0;31m");
+        assert_eq!(Style::default().sgr(), "\x1b[0m");
+    }
+
+    #[test]
+    fn new_is_the_plain_style() {
+        assert_eq!(Style::new(), Style::PLAIN);
+        assert_eq!(Style::new(), Style::default());
+    }
+
+    #[test]
+    fn attributes_emit_their_sgr_codes_in_a_fixed_order() {
+        let style = Style::new()
+            .strikethrough()
+            .underline()
+            .italic()
+            .reverse()
+            .dim()
+            .bold();
+        assert_eq!(style.sgr(), "\x1b[0;1;2;3;4;7;9m");
+    }
+
+    #[test]
+    fn bright_indexed_and_rgb_colours_use_their_extended_codes() {
+        assert_eq!(Style::new().fg(Color::BrightRed).sgr(), "\x1b[0;91m");
+        assert_eq!(Style::new().bg(Color::BrightWhite).sgr(), "\x1b[0;107m");
+        assert_eq!(
+            Style::new().fg(Color::Indexed(200)).sgr(),
+            "\x1b[0;38;5;200m"
+        );
+        assert_eq!(Style::new().bg(Color::Indexed(7)).sgr(), "\x1b[0;48;5;7m");
+        assert_eq!(
+            Style::new()
+                .fg(Color::Rgb(1, 2, 3))
+                .bg(Color::Rgb(255, 0, 128))
+                .sgr(),
+            "\x1b[0;38;2;1;2;3;48;2;255;0;128m"
+        );
     }
 }

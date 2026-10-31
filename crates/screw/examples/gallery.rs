@@ -1,9 +1,19 @@
+// SPDX-License-Identifier: EUPL-1.2
+
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
+
 extern crate alloc;
 
 use alloc::sync::Arc;
 use core::time::Duration;
 use std::{
-    io,
+    io::{
+        self,
+        IsTerminal as _,
+    },
     sync::{
         Mutex,
         PoisonError,
@@ -13,8 +23,6 @@ use std::{
 
 use screw::{
     Color,
-    Grid,
-    GridCell,
     Line,
     List,
     Looping,
@@ -22,10 +30,12 @@ use screw::{
     RenderCtx,
     Role,
     Runtime,
+    Span,
     Stack,
     Stateful,
     Style,
     Surface,
+    Table,
     Text,
     TextInput,
     Widget,
@@ -108,13 +118,13 @@ impl Widget for Calendar {
                             Role::Normal
                         }
                     });
-                    GridCell::new(day).role(role)
+                    Span::new(day).role(role)
                 })
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
-        Grid::new(rows).gap(2).render(ctx, out);
+        Table::new(rows).gap(2).render(ctx, out);
     }
 }
 
@@ -131,7 +141,8 @@ impl DraftInput {
     }
 
     fn set(&self, value: &str) {
-        value.clone_into(&mut self.value.lock().unwrap_or_else(PoisonError::into_inner));
+        let mut guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
+        value.clone_into(&mut guard);
     }
 }
 
@@ -168,7 +179,7 @@ impl Gallery {
                 .case(
                     Phase::Busy,
                     widget(
-                        Looping::new(["\u{2801}", "\u{2802}", "\u{2804}", "\u{2802}"])
+                        Looping::new(["⠁", "⠂", "⠄", "⠂"])
                             .style(Style::default().fg(Color::Yellow).bold()),
                     ),
                 )
@@ -300,7 +311,7 @@ fn linger<W>(runtime: &screw::AutoRuntime<W>) -> io::Result<()>
 where
     W: io::Write + Send + 'static,
 {
-    if !screw::stderr_is_terminal() {
+    if !io::stderr().is_terminal() {
         return Ok(());
     }
 
