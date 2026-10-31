@@ -6,6 +6,7 @@ members = [
   "crates/bang-terminal",
   "crates/caress",
   "crates/climax",
+  "crates/climax-derive",
   "crates/pound",
   "crates/pound-derive",
   "crates/pound-derive-impl",
@@ -84,5 +85,5 @@ tests_outside_test_module          = "allow"
 codegen-units = 1
 lto           = "fat"
 opt-level     = "s"
-panic         = "abort"
+panic         = "unwind"
 strip         = true
