@@ -4,7 +4,8 @@
 //!
 //! [`EmittedScreen`] consumes the bytes a screw renderer writes and rebuilds
 //! the screen, so a test can assert on cells, styles and cursor state. it
-//! understands only the sequences screw emits and rejects the rest with a
+//! understands the sequences screw emits, plus bracketed paste and the
+//! alternate screen that terminal sessions add, and rejects the rest with a
 //! [`ScreenError`]
 //!
 //! not a general terminal emulator
@@ -16,6 +17,9 @@
         reason = "terminal glyphs read better as themselves than as escapes"
     )
 )]
+
+#[cfg(not(unix))]
+compile_error!("screw-pty supports unix targets only");
 
 mod ansi;
 mod width;
