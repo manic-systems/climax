@@ -57,22 +57,13 @@ pub use app::{
     try_run_from,
 };
 #[cfg(feature = "interactive")] pub use bang;
-/// presentation settings for a review prompt, passed to `with_config`
-#[cfg(feature = "interactive")]
-pub use bang::ReviewConfig;
 #[cfg(feature = "interactive")]
 pub use bang::{
-    Configurable,
-    ConfirmConfig,
     ConfirmPrompt,
     Date,
-    DateConfig,
     DatePrompt,
-    MultiSelectConfig,
     MultiSelectPrompt,
-    NumberConfig,
     NumberPrompt,
-    PasswordConfig,
     PasswordPrompt,
     PromptOutcome,
     ReviewExit,
@@ -81,11 +72,8 @@ pub use bang::{
     ReviewPromptWithActions,
     ReviewState,
     Reviewed,
-    SearchConfig,
     SearchPrompt,
-    SelectConfig,
     SelectPrompt,
-    TextConfig,
     TextPrompt,
 };
 #[cfg(feature = "complete")] pub use caress;

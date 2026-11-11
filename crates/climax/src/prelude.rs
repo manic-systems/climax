@@ -8,25 +8,6 @@ pub use crate::pound::{
     Parse as _,
     ValueError,
 };
-#[cfg(feature = "interactive")]
-pub use crate::{
-    Configurable,
-    ConfirmConfig,
-    Date,
-    DateConfig,
-    MultiSelectConfig,
-    NumberConfig,
-    PasswordConfig,
-    PromptOutcome,
-    ReviewConfig,
-    ReviewExit,
-    ReviewOutcome,
-    ReviewState,
-    Reviewed,
-    SearchConfig,
-    SelectConfig,
-    TextConfig,
-};
 pub use crate::{
     Context,
     Error,
@@ -40,6 +21,15 @@ pub use crate::{
         TerminalCapabilities,
         TerminalPolicy,
     },
+};
+#[cfg(feature = "interactive")]
+pub use crate::{
+    Date,
+    PromptOutcome,
+    ReviewExit,
+    ReviewOutcome,
+    ReviewState,
+    Reviewed,
 };
 #[cfg(feature = "derive")]
 pub use crate::{

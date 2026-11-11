@@ -1606,10 +1606,10 @@ impl Actor {
         } else {
             match self.tick_interest() {
                 TickInterest::Never => None,
-                TickInterest::EveryFrame => Some(until_frame),
                 TickInterest::Every(interval) => {
                     Some(until_frame.max(interval.saturating_sub(elapsed)))
                 },
+                TickInterest::EveryFrame | _ => Some(until_frame),
             }
         };
         // terminals give no resize notice without a signal handler, so their
@@ -1707,8 +1707,8 @@ impl Widget for StatusStack {
 fn wants_frame_tick(interest: TickInterest, elapsed: Duration) -> bool {
     match interest {
         TickInterest::Never => false,
-        TickInterest::EveryFrame => true,
         TickInterest::Every(interval) => elapsed >= interval,
+        TickInterest::EveryFrame | _ => true,
     }
 }
 
