@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#[cfg(not(any(feature = "render", feature = "interactive")))]
+use std::env;
+use std::io::{
+    self,
+    IsTerminal as _,
+};
 #[cfg(all(feature = "interactive", feature = "render"))]
 use std::io::{
     Read,
@@ -9,13 +15,9 @@ use std::io::{
 use std::os::fd::AsFd;
 #[cfg(any(feature = "render", feature = "interactive"))]
 use std::os::fd::OwnedFd;
-use std::{
-    env,
-    io::{
-        self,
-        IsTerminal as _,
-    },
-};
+
+#[cfg(all(feature = "interactive", not(feature = "render")))]
+use bang::screw;
 
 /// whether prompts use detected terminal capabilities
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -45,16 +47,72 @@ pub enum StatusMode {
     Silent,
 }
 
+/// whether colour is written
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(feature = "derive", derive(pound::ValueEnum))]
+#[non_exhaustive]
+pub enum ColorChoice {
+    /// colour on a terminal when the environment allows it
+    #[default]
+    Auto,
+    /// colour wherever the facade writes styled text
+    Always,
+    /// no colour
+    Never,
+}
+
+impl ColorChoice {
+    pub(crate) const fn resolve(self, detected: bool) -> bool {
+        match self {
+            Self::Auto => detected,
+            Self::Always => true,
+            Self::Never => false,
+        }
+    }
+}
+
+#[cfg(any(feature = "render", feature = "interactive"))]
+fn ansi_available() -> bool {
+    !screw::is_dumb_terminal()
+}
+
+#[cfg(any(feature = "render", feature = "interactive"))]
+fn color_allowed() -> bool {
+    screw::colors_enabled()
+}
+
+#[cfg(not(any(feature = "render", feature = "interactive")))]
 fn ansi_available() -> bool {
     env::var_os("TERM").is_none_or(|term| term != "dumb")
 }
 
+#[cfg(not(any(feature = "render", feature = "interactive")))]
+fn color_allowed() -> bool {
+    let set = |name| env::var_os(name).filter(|value| !value.is_empty());
+    if set("NO_COLOR").is_some() {
+        return false;
+    }
+    if set("CLICOLOR_FORCE").is_some_and(|value| value != "0") {
+        return true;
+    }
+    ansi_available() && set("CLICOLOR").is_none_or(|value| value != "0")
+}
+
 /// terminal facts observed by the facade
+///
+/// build one with [`Self::detect`] or [`Self::none`] and the `with_` setters
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalCapabilities {
-    input_terminal:     bool,
-    transient_terminal: bool,
-    ansi:               bool,
+    terminals: Terminals,
+    ansi:      bool,
+    color:     bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Terminals {
+    input:     bool,
+    transient: bool,
+    output:    bool,
 }
 
 /// readable terminal input accepted by a [`TerminalApplication`]
@@ -122,42 +180,100 @@ impl Write for TerminalApplication<'_> {
 
 impl TerminalCapabilities {
     #[must_use]
-    /// capabilities from explicit facts, for tests and hosts that detect
-    /// terminals themselves
-    pub const fn new(input_terminal: bool, transient_terminal: bool, ansi: bool) -> Self {
+    /// no terminal anywhere and no colour, the start for tests and hosts that
+    /// detect terminals themselves
+    pub const fn none() -> Self {
         Self {
-            input_terminal,
-            transient_terminal,
-            ansi,
+            terminals: Terminals {
+                input:     false,
+                transient: false,
+                output:    false,
+            },
+            ansi:      false,
+            color:     false,
         }
     }
 
     #[must_use]
-    /// detect from process stdin, process stderr and `TERM`
+    /// detect from process stdin, stdout and stderr, `TERM` and the colour
+    /// variables `NO_COLOR`, `CLICOLOR` and `CLICOLOR_FORCE`
     pub fn detect() -> Self {
-        Self::new(
-            io::stdin().is_terminal(),
-            io::stderr().is_terminal(),
-            ansi_available(),
-        )
+        Self {
+            terminals: Terminals {
+                input:     io::stdin().is_terminal(),
+                transient: io::stderr().is_terminal(),
+                output:    io::stdout().is_terminal(),
+            },
+            ansi:      ansi_available(),
+            color:     color_allowed(),
+        }
     }
 
     #[cfg(any(feature = "render", feature = "interactive"))]
     pub(crate) fn detect_on(handle: &OwnedFd) -> Self {
         let is_terminal = handle.is_terminal();
-        Self::new(is_terminal, is_terminal, ansi_available())
+        let detected = Self::detect();
+        Self {
+            terminals: Terminals {
+                input: is_terminal,
+                transient: is_terminal,
+                ..detected.terminals
+            },
+            ..detected
+        }
+    }
+
+    #[must_use]
+    /// sets whether input comes from a terminal
+    pub const fn with_input_terminal(mut self, terminal: bool) -> Self {
+        self.terminals.input = terminal;
+        self
+    }
+
+    #[must_use]
+    /// sets whether the transient stream is a terminal
+    pub const fn with_transient_terminal(mut self, terminal: bool) -> Self {
+        self.terminals.transient = terminal;
+        self
+    }
+
+    #[must_use]
+    /// sets whether stdout is a terminal
+    pub const fn with_output_terminal(mut self, terminal: bool) -> Self {
+        self.terminals.output = terminal;
+        self
+    }
+
+    #[must_use]
+    /// sets whether ANSI escapes should work
+    pub const fn with_ansi(mut self, ansi: bool) -> Self {
+        self.ansi = ansi;
+        self
+    }
+
+    #[must_use]
+    /// sets whether the environment allows colour
+    pub const fn with_color(mut self, color: bool) -> Self {
+        self.color = color;
+        self
     }
 
     #[must_use]
     /// whether input comes from a terminal
     pub const fn input_terminal(self) -> bool {
-        self.input_terminal
+        self.terminals.input
     }
 
     #[must_use]
     /// whether the transient stream, stderr by default, is a terminal
     pub const fn transient_terminal(self) -> bool {
-        self.transient_terminal
+        self.terminals.transient
+    }
+
+    #[must_use]
+    /// whether stdout, where results go by default, is a terminal
+    pub const fn output_terminal(self) -> bool {
+        self.terminals.output
     }
 
     #[must_use]
@@ -167,17 +283,24 @@ impl TerminalCapabilities {
     }
 
     #[must_use]
+    /// whether the environment allows colour, which `NO_COLOR` and a dumb
+    /// terminal refuse and `CLICOLOR_FORCE` grants
+    pub const fn color(self) -> bool {
+        self.color
+    }
+
+    #[must_use]
     /// whether prompts can run, needing terminal input, a terminal transient
     /// stream and ANSI
     pub const fn interaction_available(self) -> bool {
-        self.input_terminal && self.transient_terminal && self.ansi
+        self.terminals.input && self.terminals.transient && self.ansi
     }
 
     #[must_use]
     /// whether a live status can animate, needing a terminal transient stream
     /// and ANSI
     pub const fn live_status_available(self) -> bool {
-        self.transient_terminal && self.ansi
+        self.terminals.transient && self.ansi
     }
 }
 
@@ -255,41 +378,48 @@ impl TerminalPolicy {
 mod tests {
     use super::*;
 
+    fn caps(input: bool, transient: bool, ansi: bool) -> TerminalCapabilities {
+        TerminalCapabilities::none()
+            .with_input_terminal(input)
+            .with_transient_terminal(transient)
+            .with_ansi(ansi)
+    }
+
     #[test]
     fn auto_interaction_requires_input_transient_and_ansi_capabilities() {
         for capabilities in [
-            TerminalCapabilities::new(false, true, true),
-            TerminalCapabilities::new(true, false, true),
-            TerminalCapabilities::new(true, true, false),
+            caps(false, true, true),
+            caps(true, false, true),
+            caps(true, true, false),
         ] {
             let mut policy = TerminalPolicy::process();
             policy.set_capabilities(capabilities);
             assert!(!policy.interaction_available());
         }
         let mut policy = TerminalPolicy::process();
-        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        policy.set_capabilities(caps(true, true, true));
         assert!(policy.interaction_available());
     }
 
     #[test]
     fn auto_status_is_plain_off_a_terminal_and_live_on_one() {
         let mut policy = TerminalPolicy::process();
-        policy.set_capabilities(TerminalCapabilities::new(false, false, false));
+        policy.set_capabilities(caps(false, false, false));
         assert_eq!(policy.effective_status_mode(), StatusMode::Plain);
-        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        policy.set_capabilities(caps(true, true, true));
         assert_eq!(policy.effective_status_mode(), StatusMode::Live);
     }
 
     #[test]
     fn explicit_modes_override_detection() {
         let mut policy = TerminalPolicy::process();
-        policy.set_capabilities(TerminalCapabilities::new(false, false, false));
+        policy.set_capabilities(caps(false, false, false));
         policy.set_interaction_mode(InteractionMode::Force);
         policy.set_status_mode(StatusMode::Live);
         assert!(policy.interaction_available());
         assert_eq!(policy.effective_status_mode(), StatusMode::Live);
 
-        policy.set_capabilities(TerminalCapabilities::new(true, true, true));
+        policy.set_capabilities(caps(true, true, true));
         policy.set_interaction_mode(InteractionMode::Disabled);
         policy.set_status_mode(StatusMode::Silent);
         assert!(!policy.interaction_available());

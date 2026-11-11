@@ -46,7 +46,7 @@ fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_st
     let (mut master, slave) = open_pty();
     let captured_stderr = StderrCapture::install();
 
-    on_terminal(slave, |context| {
+    on_terminal(slave, None, |context| {
         let status = context.status("loading").start();
         let status_bytes = read_until(&mut master, b"loading");
         status.finish().expect("finish status");
@@ -88,9 +88,16 @@ fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_st
     });
 }
 
-fn on_terminal<T>(terminal: impl Into<OwnedFd>, body: impl FnOnce(&Context) -> T) -> T {
+fn on_terminal<T>(
+    terminal: impl Into<OwnedFd>,
+    choice: Option<bool>,
+    body: impl FnOnce(&Context) -> T,
+) -> T {
     let mut result = None;
-    climax::run_with((), |cx, ()| {
+    climax::run_with((), |mut cx, ()| {
+        if let Some(summaries) = choice {
+            cx.set_prompt_summaries(summaries);
+        }
         let mut context = cx.with_terminal(terminal)?;
         context.set_interaction_mode(InteractionMode::Force);
         result = Some(body(&context));
@@ -265,11 +272,9 @@ fn answered_select_output(context: &Context, mut master: File) -> Vec<u8> {
 fn a_submitted_prompt_leaves_a_summary_on_the_terminal_handle_by_default() {
     let _serial = PROMPTS.lock().unwrap_or_else(PoisonError::into_inner);
     let (master, slave) = open_pty();
-    let context = Context::new()
-        .with_terminal(slave)
-        .expect("with_terminal")
-        .with_interaction_mode(InteractionMode::Force);
-    let output = answered_select_output(&context, master);
+    let output = on_terminal(slave, None, |context| {
+        answered_select_output(context, master)
+    });
     assert!(
         contains(&output, "choice › first".as_bytes()),
         "got {output:?}"
@@ -280,12 +285,9 @@ fn a_submitted_prompt_leaves_a_summary_on_the_terminal_handle_by_default() {
 fn prompt_summaries_off_survives_a_later_terminal_and_mode_change() {
     let _serial = PROMPTS.lock().unwrap_or_else(PoisonError::into_inner);
     let (master, slave) = open_pty();
-    let context = Context::new()
-        .with_prompt_summaries(false)
-        .with_terminal(slave)
-        .expect("with_terminal")
-        .with_interaction_mode(InteractionMode::Force);
-    let output = answered_select_output(&context, master);
+    let output = on_terminal(slave, Some(false), |context| {
+        answered_select_output(context, master)
+    });
     assert!(
         !contains(&output, "choice › first".as_bytes()),
         "got {output:?}"

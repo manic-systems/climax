@@ -18,6 +18,7 @@ pub use crate::{
     output::Format,
     run_with,
     terminal::{
+        ColorChoice,
         InteractionMode,
         StatusMode,
         TerminalCapabilities,

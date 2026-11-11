@@ -3,7 +3,7 @@ name                   = "screw"
 version                = "0.1.0"
 authors.workspace      = true
 categories             = [ "command-line-interface", "command-line-utilities" ]
-description            = "a differential terminal renderer with composable widgets for animated command-line output"
+description            = "A differential terminal renderer with composable widgets for animated command-line output"
 edition.workspace      = true
 keywords               = [ "terminal", "cli", "tui", "renderer", "animation" ]
 license.workspace      = true
@@ -18,7 +18,3 @@ unicode-width.workspace        = true
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = [ "--cfg", "docsrs" ]

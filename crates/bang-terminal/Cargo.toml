@@ -3,7 +3,7 @@ name                   = "bang-terminal"
 version                = "0.1.0"
 authors.workspace      = true
 categories             = [ "command-line-interface" ]
-description            = "terminal input decoding, raw mode and event loop behind the bang prompts"
+description            = "Terminal input decoding, raw mode and event loop behind the bang prompts"
 edition.workspace      = true
 keywords               = [ "cli", "input", "terminal", "ansi" ]
 license.workspace      = true
@@ -22,7 +22,3 @@ testing = [  ]
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = [ "--cfg", "docsrs" ]

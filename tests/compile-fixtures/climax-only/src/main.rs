@@ -86,11 +86,6 @@ fn main() -> std::process::ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        Mutex,
-    };
-
     use climax::bang::advanced::{
         Event,
         Key,
@@ -108,41 +103,21 @@ mod tests {
         line_count: u32,
     }
 
-    #[derive(Clone, Default)]
-    struct Buffer(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Buffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
     #[test]
     fn the_serde_attribute_roots_derives_and_keeps_helpers() {
         let report = Report {
             shell_name: "zsh".to_owned(),
             line_count: 3,
         };
-        let buffer = Buffer::default();
-        let context = Context::new()
-            .with_output_format(Format::Json)
-            .with_output_writer(buffer.clone());
-        context
-            .output()
-            .stream(&report)
-            .text(|_| String::new())
-            .emit()
-            .unwrap();
-        drop(context);
-        assert_eq!(
-            String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap(),
-            "{\"shell-name\":\"zsh\",\"lines\":3}\n",
-        );
+        let outcome = climax::testing::run_with(climax::testing::Script::new(), |mut context| {
+            context.set_output_format(Format::Json);
+            context
+                .output()
+                .stream(&report)
+                .text(|_| String::new())
+                .emit()
+        });
+        assert_eq!(outcome.stdout, "{\"shell-name\":\"zsh\",\"lines\":3}\n",);
         fn deserializes<T: for<'de> climax::serde::Deserialize<'de>>() {}
         deserializes::<Report>();
     }

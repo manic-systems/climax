@@ -195,6 +195,25 @@ fn a_prompt_past_the_end_of_the_script_is_an_input_ended_error() {
 }
 
 #[test]
+fn an_unavailable_script_fails_prompts_as_a_pipeline_does() {
+    let outcome = testing::run_with(Script::unavailable(), |cx| {
+        assert!(!cx.interaction_available());
+        ask(&cx)
+    });
+    assert_eq!(outcome.exit_code, 1);
+    assert_eq!(
+        outcome.error.unwrap().kind(),
+        ErrorKind::InteractionUnavailable
+    );
+}
+
+#[test]
+fn write_message_lands_in_the_captured_stdout() {
+    let outcome = testing::run_with(Script::new(), |cx| cx.output().write_message("hi"));
+    assert_eq!(outcome.stdout, "hi\n");
+}
+
+#[test]
 fn multi_select_nth_toggles_rows_in_any_order() {
     let outcome = testing::run_with(Script::new().multi_select_nth([2, 0]), |cx| {
         let picked = cx
@@ -372,7 +391,7 @@ fn text_attempts_keep_a_prefilled_value_when_erasing_a_combining_mark() {
     let outcome = testing::run_with(script, |cx| {
         let value = cx
             .text("Name")
-            .value("x")
+            .default("x")
             .validator(|text| {
                 if text == "xok" {
                     Ok(())

@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use alloc::rc;
+use alloc::rc::Rc;
+#[cfg(feature = "interactive")] use core::fmt;
 #[cfg(feature = "render")] use core::mem;
 #[cfg(feature = "parse")] use core::result;
 #[cfg(any(feature = "parse", feature = "interactive"))]
 use core::str;
 use core::{
-    fmt,
+    cell::Cell,
     marker::PhantomData,
 };
 #[cfg(any(feature = "render", feature = "interactive"))]
@@ -44,6 +45,7 @@ use crate::{
         SharedWriter,
     },
     terminal::{
+        ColorChoice,
         InteractionMode,
         StatusMode,
         TerminalCapabilities,
@@ -66,6 +68,7 @@ use crate::{
 /// with `complete`, a shell completion request is answered and exits before
 /// parsing
 #[cfg(feature = "parse")]
+#[must_use]
 pub fn main<C, F>(application: F) -> ExitCode
 where
     C: pound::Parse,
@@ -76,22 +79,59 @@ where
 
 /// runs an application that takes no arguments and reports its process outcome
 ///
-/// errors are reported and exit codes chosen as in `main`
+/// errors are reported and exit codes chosen as in `main`. with `parse`,
+/// `--help` prints a usage line and any other argument fails with exit 2, and
+/// without it arguments are ignored
 ///
 /// ```no_run
 /// use climax::prelude::*;
 ///
 /// fn main() -> std::process::ExitCode {
 ///     climax::main_with(|cx: Context| -> climax::Result<()> {
-///         cx.output().write_message(std::io::stdout(), "hello")
+///         cx.output().write_message("hello")
 ///     })
 /// }
 /// ```
+#[must_use]
 pub fn main_with<F>(application: F) -> ExitCode
 where
     F: FnOnce(Context) -> Result<()>,
 {
+    #[cfg(feature = "parse")]
+    {
+        complete(parse_env::<NoArguments>(), |context, NoArguments| {
+            application(context)
+        })
+        .report()
+    }
+    #[cfg(not(feature = "parse"))]
     finish(&run_with((), |context, ()| application(context))).report()
+}
+
+#[cfg(feature = "parse")]
+struct NoArguments;
+
+#[cfg(feature = "parse")]
+const NO_ARGUMENTS: pound::CommandSpec = pound::CommandSpec::new("").invoked_name();
+
+#[cfg(feature = "parse")]
+impl pound::Parse for NoArguments {
+    const SPEC: &'static pound::CommandSpec = &NO_ARGUMENTS;
+
+    fn from_matches(
+        _: &'static pound::CommandSpec,
+        _: &pound::Matches<'_>,
+    ) -> result::Result<Self, pound::Error> {
+        Ok(Self)
+    }
+
+    fn update_from_matches(
+        &mut self,
+        _: &'static pound::CommandSpec,
+        _: &pound::Matches<'_>,
+    ) -> result::Result<(), pound::Error> {
+        Ok(())
+    }
 }
 
 /// runs a parsed application without handling output or process exit status
@@ -119,13 +159,18 @@ where
 /// fails with the parse error when the arguments are invalid or help was
 /// requested, and otherwise with whatever the application returns
 #[cfg(feature = "parse")]
-pub fn try_run_from<'a, C, F, I>(args: I, application: F) -> Result<()>
+pub fn try_run_from<C, F, I>(args: I, application: F) -> Result<()>
 where
     C: pound::Parse,
     F: FnOnce(Context, C) -> Result<()>,
-    I: IntoIterator<Item = &'a str>,
+    I: IntoIterator,
+    I::Item: AsRef<str>,
 {
-    run_with(C::try_parse_from(args)?, application)
+    let collected: Vec<I::Item> = args.into_iter().collect();
+    run_with(
+        C::try_parse_from(collected.iter().map(AsRef::as_ref))?,
+        application,
+    )
 }
 
 /// runs an application from an already built command and reports its result
@@ -149,6 +194,7 @@ where
 {
     let output = context.output();
     let diagnostic = context.diagnostic();
+    let error_color = Rc::clone(&context.error_color);
     #[cfg(feature = "render")]
     let transient = context.transient.clone();
     match application(context, command) {
@@ -159,7 +205,7 @@ where
             collect_related(&mut failure, diagnostic.commit());
             #[cfg(feature = "render")]
             collect_related(&mut failure, transient.flush_transient());
-            failure.map_or(Ok(()), Err)
+            failure.map_or(Ok(()), |error| Err(error.with_color(error_color.get())))
         },
         #[cfg_attr(
             not(feature = "render"),
@@ -172,7 +218,7 @@ where
             if let Err(cleanup) = transient.flush_transient() {
                 error = error.with_related(cleanup);
             }
-            Err(error)
+            Err(error.with_color(error_color.get()))
         },
     }
 }
@@ -329,7 +375,9 @@ fn write_message(mut writer: impl io::Write, message: &str) -> io::Result<()> {
 ///
 /// not cloneable, since interaction and terminal policy share one owner, and
 /// not `Send` in any feature configuration, so it stays on the thread that
-/// built it
+/// built it. the [`Output`] handles from [`Self::output`] and
+/// [`Self::diagnostic`] and the status handles are `Send`, so take them before
+/// spawning a thread
 ///
 /// a prompt builder from `Context::select` and the other prompt methods
 /// keeps the interaction driver held when it is built, ignoring later mode or
@@ -354,19 +402,14 @@ pub struct Context {
     transient:          StatusCoordinator,
     #[cfg(any(feature = "render", feature = "interactive"))]
     terminal_handle:    Option<OwnedFd>,
-    _not_send:          PhantomData<rc::Rc<()>>,
-}
-
-impl Default for Context {
-    fn default() -> Self {
-        Self::new()
-    }
+    color:              ColorChoice,
+    error_color:        Rc<Cell<bool>>,
+    _not_send:          PhantomData<Rc<()>>,
 }
 
 impl Context {
     #[must_use]
-    /// a context for the current process, using stdin, stdout and stderr
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let terminal = TerminalPolicy::process();
         #[cfg(feature = "render")]
         let transient =
@@ -395,7 +438,7 @@ impl Context {
         let output = transient_output;
         #[cfg(not(feature = "render"))]
         let output = Output::new(Format::Text);
-        Self {
+        let context = Self {
             output,
             diagnostic,
             terminal,
@@ -409,8 +452,20 @@ impl Context {
             transient,
             #[cfg(any(feature = "render", feature = "interactive"))]
             terminal_handle: None,
+            color: ColorChoice::Auto,
+            error_color: Rc::new(Cell::new(false)),
             _not_send: PhantomData,
-        }
+        };
+        context.refresh_error_color();
+        context
+    }
+
+    fn refresh_error_color(&self) {
+        let capabilities = self.terminal.capabilities();
+        self.error_color.set(
+            self.color
+                .resolve(capabilities.transient_terminal() && capabilities.color()),
+        );
     }
 
     #[cfg(feature = "interactive")]
@@ -507,19 +562,10 @@ impl Context {
         self.output.format()
     }
 
-    /// builds this context with `format`, so results and streams are written as
-    /// JSON under [`Format::Json`]
-    ///
-    /// handles taken before the change keep the old format
-    #[must_use]
-    pub fn with_output_format(mut self, format: Format) -> Self {
-        self.output = self.output.with_format(format);
-        self
-    }
-
     /// sets the format for `output` handles taken after this call
     ///
-    /// notices are suppressed in JSON mode and streams write JSON Lines
+    /// notices are suppressed in JSON mode and streams write JSON Lines, and
+    /// `cx.diagnostic().with_format(Format::Text)` still writes them as text
     pub fn set_output_format(&mut self, format: Format) {
         self.output = self.output.clone().with_format(format);
     }
@@ -606,6 +652,7 @@ impl Context {
         let handle = terminal.into();
         let capabilities = TerminalCapabilities::detect_on(&handle);
         self.terminal.set_capabilities(capabilities);
+        self.refresh_error_color();
 
         #[cfg(feature = "render")]
         {
@@ -687,24 +734,15 @@ impl Context {
         Ok(())
     }
 
-    #[cfg_attr(
-        not(any(feature = "interactive", feature = "render")),
-        expect(
-            clippy::missing_const_for_fn,
-            reason = "const only once the gated code is compiled in"
-        )
-    )]
     /// replaces the detected terminal capabilities, for tests or a host that
     /// knows better
     ///
-    /// the interaction driver is rederived unless one was injected
-    ///
-    /// # Errors
-    ///
-    /// fails when the status coordinator cannot switch to the resulting status
-    /// mode
-    pub fn set_terminal_capabilities(&mut self, capabilities: TerminalCapabilities) -> Result<()> {
+    /// the interaction driver is rederived unless one was injected. a status
+    /// thread that does not answer within ten seconds is reported when the run
+    /// ends
+    pub fn set_terminal_capabilities(&mut self, capabilities: TerminalCapabilities) {
         self.terminal.set_capabilities(capabilities);
+        self.refresh_error_color();
         // an injected interaction belongs to the caller, so detection leaves it
         #[cfg(feature = "interactive")]
         if !self.custom_interaction {
@@ -712,8 +750,7 @@ impl Context {
         }
         #[cfg(feature = "render")]
         self.transient
-            .set_mode(self.terminal.effective_status_mode())?;
-        Ok(())
+            .set_mode(self.terminal.effective_status_mode());
     }
 
     /// prompt builders made earlier keep the driver they captured, and so does
@@ -754,15 +791,47 @@ impl Context {
     /// overrides how statuses present, see
     /// [`StatusMode`]
     ///
-    /// # Errors
-    ///
-    /// fails when the status coordinator cannot apply the resulting mode
-    pub fn set_status_mode(&mut self, mode: StatusMode) -> Result<()> {
+    /// a status thread that does not answer within ten seconds, or fails to
+    /// clear its line, is reported when the run ends
+    pub fn set_status_mode(&mut self, mode: StatusMode) {
         self.terminal.set_status_mode(mode);
         #[cfg(feature = "render")]
         self.transient
-            .set_mode(self.terminal.effective_status_mode())?;
-        Ok(())
+            .set_mode(self.terminal.effective_status_mode());
+    }
+
+    /// sets whether statuses, prompts and the error line are coloured, and what
+    /// [`Self::color`] answers
+    ///
+    /// prompts built before the call keep the choice they were built with
+    ///
+    /// `Auto` follows the terminal and the `NO_COLOR`, `CLICOLOR` and
+    /// `CLICOLOR_FORCE` variables. parse errors are rendered before a handler
+    /// runs, so this never reaches them
+    pub fn set_color(&mut self, choice: ColorChoice) {
+        self.color = choice;
+        self.refresh_error_color();
+        #[cfg(feature = "render")]
+        self.transient.set_colors(match choice {
+            ColorChoice::Auto => None,
+            ColorChoice::Always => Some(true),
+            ColorChoice::Never => Some(false),
+        });
+    }
+
+    #[must_use]
+    /// the choice last given to [`Self::set_color`]
+    pub const fn color_choice(&self) -> ColorChoice {
+        self.color
+    }
+
+    #[must_use]
+    /// whether styled text written to stdout should carry colour under the
+    /// current choice, for output the application styles itself
+    pub const fn color(&self) -> bool {
+        let capabilities = self.terminal.capabilities();
+        self.color
+            .resolve(capabilities.output_terminal() && capabilities.color())
     }
 
     #[cfg(feature = "interactive")]
@@ -786,27 +855,18 @@ impl Context {
         self.prompt_summaries = Some(summaries);
     }
 
-    /// builder form of [`Self::set_prompt_summaries`]
     #[cfg(feature = "interactive")]
     #[must_use]
-    pub const fn with_prompt_summaries(mut self, summaries: bool) -> Self {
-        self.set_prompt_summaries(summaries);
-        self
-    }
-
-    #[cfg(feature = "interactive")]
-    #[must_use]
-    /// builder form of `set_interaction`
-    pub fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
+    pub(crate) fn with_interaction(mut self, interaction: bang::Interaction) -> Self {
         self.set_interaction(interaction);
         self
     }
 
-    #[must_use]
     /// writes finite results and streams to `writer` instead of stdout,
     /// directly and not around a live status, while notices keep their own
     /// destination
-    pub fn with_output_writer(mut self, writer: impl io::Write + Send + 'static) -> Self {
+    #[must_use]
+    pub(crate) fn with_output_writer(mut self, writer: impl io::Write + Send + 'static) -> Self {
         self.output = self.output.with_writer(writer);
         self
     }
@@ -815,7 +875,10 @@ impl Context {
     /// they belong to the transient channel, moved by
     /// `with_transient_writer`
     #[must_use]
-    pub fn with_diagnostic_writer(mut self, writer: impl io::Write + Send + 'static) -> Self {
+    pub(crate) fn with_diagnostic_writer(
+        mut self,
+        writer: impl io::Write + Send + 'static,
+    ) -> Self {
         let shared = SharedWriter::new(writer);
         #[cfg(not(feature = "render"))]
         {
@@ -838,7 +901,7 @@ impl Context {
     /// fails while statuses are live, a prompt holds the terminal or failed
     /// transient lines are still queued
     #[cfg(feature = "render")]
-    pub fn with_transient_writer(
+    pub(crate) fn with_transient_writer(
         mut self,
         writer: impl io::Write + Send + 'static,
     ) -> Result<Self> {
@@ -865,42 +928,30 @@ impl Context {
         Ok(self)
     }
 
-    /// builder form of [`Self::set_terminal_capabilities`]
-    ///
-    /// # Errors
-    ///
-    /// fails as [`Self::set_terminal_capabilities`] does
-    pub fn with_terminal_capabilities(
-        mut self,
-        capabilities: TerminalCapabilities,
-    ) -> Result<Self> {
-        self.set_terminal_capabilities(capabilities)?;
-        Ok(self)
+    #[must_use]
+    pub(crate) fn with_terminal_capabilities(mut self, capabilities: TerminalCapabilities) -> Self {
+        self.set_terminal_capabilities(capabilities);
+        self
     }
 
+    #[cfg(test)]
     #[must_use]
-    /// builder form of [`Self::set_interaction_mode`]
-    pub fn with_interaction_mode(mut self, mode: InteractionMode) -> Self {
+    fn with_interaction_mode(mut self, mode: InteractionMode) -> Self {
         self.set_interaction_mode(mode);
         self
     }
 
-    /// builder form of [`Self::set_status_mode`]
-    ///
-    /// # Errors
-    ///
-    /// fails as [`Self::set_status_mode`] does
-    pub fn with_status_mode(mut self, mode: StatusMode) -> Result<Self> {
-        self.set_status_mode(mode)?;
-        Ok(self)
-    }
-
     #[cfg(feature = "interactive")]
     fn prompt_interaction(&self) -> bang::Interaction {
-        let interaction = self.prompt_summaries.map_or_else(
+        let summarised = self.prompt_summaries.map_or_else(
             || self.interaction.clone(),
             |summaries| self.interaction.clone().with_summaries(summaries),
         );
+        let interaction = match self.color {
+            ColorChoice::Auto => summarised,
+            ColorChoice::Always => summarised.with_colors(true),
+            ColorChoice::Never => summarised.with_colors(false),
+        };
         #[cfg(feature = "render")]
         {
             guarded_interaction(interaction, &self.transient)
@@ -950,7 +1001,10 @@ fn guarded_interaction(
 
 #[cfg(test)]
 mod tests {
-    use core::error::Error as StdError;
+    use core::{
+        error::Error as StdError,
+        fmt,
+    };
     #[cfg(any(
         feature = "parse",
         all(feature = "interactive", feature = "render", feature = "structured")
@@ -1040,8 +1094,7 @@ mod tests {
         }
 
         let context = Context::new()
-            .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-            .unwrap()
+            .with_terminal_capabilities(TerminalCapabilities::none())
             .with_interaction_mode(InteractionMode::Force);
         let result = execute(context, (), |scoped, ()| {
             let piped = scoped.with_transient_writer(BrokenPipe)?;
@@ -1052,7 +1105,8 @@ mod tests {
 
     #[test]
     fn context_carries_output_policy() {
-        let context = Context::new().with_output_format(Format::Json);
+        let mut context = Context::new();
+        context.set_output_format(Format::Json);
         assert_eq!(context.output_format(), Format::Json);
         assert_eq!(context.output().format(), Format::Json);
     }
@@ -1064,8 +1118,7 @@ mod tests {
 
         let capture = Capture::default();
         let context = Context::new()
-            .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-            .unwrap()
+            .with_terminal_capabilities(TerminalCapabilities::none())
             .with_interaction_mode(InteractionMode::Force)
             .with_transient_writer(capture.clone())
             .unwrap();
@@ -1087,12 +1140,11 @@ mod tests {
         let run = |requested: Option<StatusMode>, fail: bool| {
             let capture = Capture::default();
             let mut context = Context::new()
-                .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-                .unwrap()
+                .with_terminal_capabilities(TerminalCapabilities::none())
                 .with_transient_writer(capture.clone())
                 .unwrap();
             if let Some(mode) = requested {
-                context.set_status_mode(mode).unwrap();
+                context.set_status_mode(mode);
             }
             drop(
                 context
@@ -1119,8 +1171,7 @@ mod tests {
     #[test]
     fn terminal_application_releases_exclusivity_after_an_error() {
         let context = Context::new()
-            .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-            .unwrap()
+            .with_terminal_capabilities(TerminalCapabilities::none())
             .with_interaction_mode(InteractionMode::Force);
         let failed = context.with_terminal_application::<()>(|_| Err("failed".into()));
         assert!(failed.is_err());
@@ -1138,8 +1189,7 @@ mod tests {
         let (input, _peer) = UnixStream::pair().unwrap();
         let mut output = Vec::new();
         let context = Context::new()
-            .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-            .unwrap()
+            .with_terminal_capabilities(TerminalCapabilities::none())
             .with_interaction_mode(InteractionMode::Force);
 
         context
@@ -1266,22 +1316,23 @@ mod tests {
 
     #[test]
     fn diagnostic_follows_the_output_format() {
-        let context = Context::new().with_output_format(Format::Json);
+        let mut context = Context::new();
+        context.set_output_format(Format::Json);
         assert_eq!(context.diagnostic().format(), Format::Json);
         assert_eq!(Context::new().diagnostic().format(), Format::Text);
     }
 
     #[test]
     fn a_closed_pipe_while_writing_output_exits_141_silently() {
-        let output = Context::new().output();
-        let closed = output
-            .write_message(Failing(io::ErrorKind::BrokenPipe), "hello")
+        let output = |kind| Context::new().with_output_writer(Failing(kind)).output();
+        let closed = output(io::ErrorKind::BrokenPipe)
+            .write_message("hello")
             .unwrap_err();
         let completion = finish(&Err(closed));
         assert_eq!((completion.code, completion.stream), (141, None));
 
-        let full = output
-            .write_message(Failing(io::ErrorKind::StorageFull), "hello")
+        let full = output(io::ErrorKind::StorageFull)
+            .write_message("hello")
             .unwrap_err();
         assert_eq!(finish(&Err(full)).code, 1);
 
@@ -1509,9 +1560,7 @@ mod tests {
     #[cfg(feature = "interactive")]
     #[test]
     fn auto_policy_rejects_interaction_when_capabilities_are_absent() {
-        let context = Context::new()
-            .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-            .unwrap();
+        let context = Context::new().with_terminal_capabilities(TerminalCapabilities::none());
         let error = context
             .select("shell")
             .choice("bash", 1)
@@ -1536,5 +1585,32 @@ mod tests {
         let _confirm = context.confirm("Continue");
         let _date = context.date("Due");
         let _number = context.number::<u16>("Port");
+    }
+
+    #[cfg(feature = "parse")]
+    #[test]
+    fn main_with_answers_help_and_refuses_other_arguments() {
+        use pound::Parse as _;
+
+        let help = NoArguments::try_parse_from(["--help"]).err().unwrap();
+        assert!(help.is_exit());
+        assert!(NoArguments::try_parse_from(["--bogus"]).is_err());
+        assert!(NoArguments::try_parse_from(["extra"]).is_err());
+        NoArguments::try_parse_from(Vec::<&str>::new()).unwrap();
+    }
+
+    #[test]
+    fn the_error_line_follows_the_colour_choice() {
+        let run = |choice| {
+            let mut context =
+                Context::new().with_terminal_capabilities(TerminalCapabilities::none());
+            context.set_color(choice);
+            assert_eq!(context.color(), choice == ColorChoice::Always);
+            let result = execute(context, (), |_, ()| Err(crate::Error::message("boom")));
+            finish(&result).message.unwrap()
+        };
+        assert_eq!(run(ColorChoice::Auto), "error: boom");
+        assert_eq!(run(ColorChoice::Never), "error: boom");
+        assert!(run(ColorChoice::Always).starts_with("\x1b[1;31merror:\x1b[0m boom"));
     }
 }

@@ -48,7 +48,10 @@ pub enum ErrorKind {
 
 /// error reported through the `climax` facade
 ///
-/// dependency errors are kept as opaque sources, not variants
+/// dependency errors are kept as opaque sources, not variants. `?` converts an
+/// `io::Error`, a `String`, a `&str` and a boxed error, and any other `Error`
+/// type needs [`ResultExt::app_err`] or [`ResultExt::context`], or the
+/// `anyhow` feature for `anyhow::Error`
 ///
 /// `Debug` prints the report `fn main() -> climax::Result<()>` should show, the
 /// message followed by any source or related error text it does not already
@@ -64,6 +67,7 @@ pub struct Error {
     exit_code:         Option<u8>,
     source:            Option<Box<dyn error::Error + Send + Sync + 'static>>,
     related:           Vec<Self>,
+    colored:           bool,
 }
 
 impl Error {
@@ -77,6 +81,7 @@ impl Error {
             exit_code: None,
             source:    None,
             related:   Vec::new(),
+            colored:   false,
         }
     }
 
@@ -93,6 +98,7 @@ impl Error {
             exit_code: None,
             source:    None,
             related:   Vec::new(),
+            colored:   false,
         }
     }
 
@@ -117,6 +123,7 @@ impl Error {
             exit_code: None,
             source:    Some(Box::new(source)),
             related:   Vec::new(),
+            colored:   false,
         }
     }
 
@@ -155,8 +162,9 @@ impl Error {
         self.source.as_deref()
     }
 
-    /// number of the signal that interrupted a prompt, for a
-    /// [`ErrorKind::Cancelled`] error raised by one
+    /// raw number of the signal that interrupted a prompt, for a
+    /// [`ErrorKind::Cancelled`] error raised by one, the value of
+    /// `bang::terminal::Signal::as_raw`
     ///
     /// `climax::main` exits with 128 plus this number, and a plain cancellation
     /// exits with 130
@@ -179,8 +187,18 @@ impl Error {
                 .any(|cause| cause.kind() == io::ErrorKind::BrokenPipe)
     }
 
+    pub(crate) const fn with_color(mut self, colored: bool) -> Self {
+        self.colored = colored;
+        self
+    }
+
     pub(crate) fn report(&self) -> String {
-        let mut report = format!("error: {self}");
+        let label = if self.colored {
+            "\x1b[1;31merror:\x1b[0m"
+        } else {
+            "error:"
+        };
+        let mut report = format!("{label} {self}");
         for text in self.chain_texts() {
             report.push_str("\n  caused by: ");
             report.push_str(&text);
@@ -216,13 +234,21 @@ impl Error {
         kind: ErrorKind,
         source: impl error::Error + Send + Sync + 'static,
     ) -> Self {
+        Self::with_boxed_source(kind, Box::new(source))
+    }
+
+    fn with_boxed_source(
+        kind: ErrorKind,
+        source: Box<dyn error::Error + Send + Sync + 'static>,
+    ) -> Self {
         Self {
             kind,
             message: source.to_string(),
             signal: None,
             exit_code: None,
-            source: Some(Box::new(source)),
+            source: Some(source),
             related: Vec::new(),
+            colored: false,
         }
     }
 
@@ -398,7 +424,7 @@ impl From<io::Error> for Error {
 impl From<Box<dyn error::Error + Send + Sync + 'static>> for Error {
     fn from(value: Box<dyn error::Error + Send + Sync + 'static>) -> Self {
         let inherited = Inherited::find(causes(&*value));
-        Self::with_source(application_kind(&*value), BoxedSource(value)).inheriting(inherited)
+        Self::with_boxed_source(application_kind(&*value), value).inheriting(inherited)
     }
 }
 
@@ -435,27 +461,7 @@ impl fmt::Display for AnyhowSource {
 #[cfg(feature = "anyhow")]
 impl error::Error for AnyhowSource {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        error::Error::source(&*self.0)
-    }
-}
-
-struct BoxedSource(Box<dyn error::Error + Send + Sync + 'static>);
-
-impl fmt::Debug for BoxedSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(&self.0, f)
-    }
-}
-
-impl fmt::Display for BoxedSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl error::Error for BoxedSource {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        self.0.source()
+        Some(&*self.0)
     }
 }
 
@@ -727,6 +733,33 @@ mod tests {
                 .unwrap_err()
                 .is_closed_pipe()
         );
+    }
+}
+
+#[cfg(test)]
+mod conversions {
+    use super::*;
+
+    #[test]
+    fn a_boxed_error_is_its_own_source_so_a_closed_pipe_is_seen() {
+        let boxed: Box<dyn error::Error + Send + Sync> =
+            Box::new(io::Error::from(io::ErrorKind::BrokenPipe));
+        let error = Error::from(boxed);
+        assert!(error.is_closed_pipe());
+        assert!(
+            error
+                .source_error()
+                .is_some_and(<dyn error::Error + Send + Sync>::is::<io::Error>)
+        );
+    }
+
+    #[cfg(feature = "anyhow")]
+    #[test]
+    fn a_bare_anyhow_error_over_a_closed_pipe_is_seen() {
+        let error = Error::from(anyhow::Error::new(io::Error::from(
+            io::ErrorKind::BrokenPipe,
+        )));
+        assert!(error.is_closed_pipe());
     }
 }
 

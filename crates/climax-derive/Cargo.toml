@@ -1,7 +1,7 @@
 [package]
 name                   = "climax-derive"
 version                = "0.1.0"
-description            = "pound derive macros rooted at climax's re-export"
+description            = "Pound derive macros rooted at climax's re-export"
 keywords               = [ "cli", "args", "derive" ]
 categories             = [ "development-tools::procedural-macro-helpers" ]
 readme                 = "README.md"
@@ -21,7 +21,3 @@ quote.workspace       = true
 
 [lints]
 workspace = true
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = [ "--cfg", "docsrs" ]

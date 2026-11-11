@@ -2,20 +2,15 @@
 
 use std::process::ExitCode;
 
-use climax::PromptOutcome;
-
 fn main() -> ExitCode {
     climax::main_with(|context| {
-        let shell = match context
+        let shell = context
             .select("shell")
             .choice("bash", "bash")
             .choice("nushell", "nushell")
             .choice("zsh", "zsh")
             .interact()?
-        {
-            PromptOutcome::Submit(shell) => shell,
-            PromptOutcome::Leave => return Ok(()),
-        };
+            .or_cancel()?;
 
         context
             .output()

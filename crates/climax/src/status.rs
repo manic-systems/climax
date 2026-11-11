@@ -19,7 +19,9 @@ use core::{
     panic::AssertUnwindSafe,
     sync::atomic::{
         AtomicBool,
+        AtomicU8,
         AtomicU64,
+        AtomicUsize,
         Ordering,
     },
     time::Duration,
@@ -34,6 +36,7 @@ use std::{
     os::fd::OwnedFd,
     panic::catch_unwind,
     sync::{
+        Mutex,
         OnceLock,
         mpsc::{
             self,
@@ -52,8 +55,10 @@ use std::{
 
 use screw::{
     Looping,
+    ProgressBar,
     RenderCtx,
     Renderer,
+    Style,
     Surface,
     Text,
     TickInterest,
@@ -68,32 +73,9 @@ use crate::{
     Result,
     error::ErrorKind,
     output::SharedWriter,
-    terminal::{
-        StatusMode,
-        TerminalCapabilities,
-    },
+    sync::lock,
+    terminal::StatusMode,
 };
-
-/// standalone status for use without a [`crate::Context`]
-///
-/// uses its own process-wide stderr coordinator, so don't mix it with
-/// `Context::status`
-#[must_use]
-pub fn message(message: impl Into<String>) -> Status {
-    static COORDINATOR: OnceLock<StatusCoordinator> = OnceLock::new();
-    let coordinator = COORDINATOR.get_or_init(|| {
-        let capabilities = TerminalCapabilities::detect();
-        StatusCoordinator::new(
-            SharedWriter::stderr(),
-            if capabilities.live_status_available() {
-                StatusMode::Live
-            } else {
-                StatusMode::Plain
-            },
-        )
-    });
-    Status::new(message, coordinator.clone())
-}
 
 /// transient status line, configured with builders and then started
 pub struct Status {
@@ -104,6 +86,79 @@ pub struct Status {
     final_message:   Option<String>,
     failure_message: Option<String>,
     coordinator:     StatusCoordinator,
+}
+
+/// state a started status shares with its widget on the actor thread
+struct Shared {
+    texts: Mutex<Texts>,
+    done:  AtomicUsize,
+    total: usize,
+}
+
+struct Texts {
+    message: String,
+    finale:  Option<String>,
+}
+
+impl Shared {
+    fn new(message: String, total: usize) -> Arc<Self> {
+        Arc::new(Self {
+            texts: Mutex::new(Texts {
+                message,
+                finale: None,
+            }),
+            done: AtomicUsize::new(0),
+            total,
+        })
+    }
+
+    fn message(&self) -> String {
+        lock(&self.texts).message.clone()
+    }
+
+    fn finale(&self) -> Option<String> {
+        lock(&self.texts).finale.take()
+    }
+}
+
+/// the status message, followed by a bar and a count when there is a total
+struct StatusLine {
+    shared:   Arc<Shared>,
+    reserved: usize,
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    clippy::float_arithmetic,
+    reason = "a display ratio"
+)]
+fn fraction(done: usize, total: usize) -> f32 {
+    done as f32 / total as f32
+}
+
+impl Widget for StatusLine {
+    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        let message = self.shared.message();
+        let total = self.shared.total;
+        let text = Text::new(message.clone());
+        if total == 0 {
+            text.render(ctx, out);
+            return;
+        }
+        let done = self.shared.done.load(Ordering::Relaxed).min(total);
+        let count = format!("{done}/{total}");
+        let used = screw::width(&message) + screw::width(&count) + self.reserved + 4;
+        let bar = ProgressBar::new(
+            ctx.available_columns()
+                .map_or(20, |columns| columns.saturating_sub(used).max(4)),
+        );
+        bar.set_fraction(fraction(done, total));
+        text.render(ctx, out);
+        out.write(" ", Style::PLAIN);
+        bar.render(ctx, out);
+        out.write(format!(" {count}"), Style::PLAIN);
+    }
 }
 
 impl Status {
@@ -169,9 +224,26 @@ impl Status {
     /// status
     #[must_use]
     pub fn start(self) -> StatusRuntime {
+        self.start_with(0)
+    }
+
+    /// start a status drawn as `message [━━━───] 12/20` for `total` steps,
+    /// filling the available width
+    ///
+    /// a `widget` set before replaces the line, and a `total` of 0 draws the
+    /// message alone
+    #[must_use]
+    pub fn progress(self, total: usize) -> Progress {
+        Progress {
+            runtime: self.start_with(total),
+        }
+    }
+
+    fn start_with(self, total: usize) -> StatusRuntime {
+        let shared = Shared::new(self.message.clone(), total);
         let entry = StatusEntry {
-            widget:          self.root_widget(),
-            plain:           self.message,
+            widget:          self.root_widget(&shared),
+            shared:          Arc::clone(&shared),
             final_message:   self.final_message,
             failure_message: self.failure_message,
         };
@@ -180,6 +252,7 @@ impl Status {
         StatusRuntime {
             coordinator,
             id: Some(id),
+            shared,
         }
     }
 
@@ -216,17 +289,22 @@ impl Status {
         }
     }
 
-    fn root_widget(&self) -> WidgetRef {
-        let custom = self.widget.clone();
-        match (self.spinner, custom) {
+    fn root_widget(&self, shared: &Arc<Shared>) -> WidgetRef {
+        let line = |reserved| {
+            widget(StatusLine {
+                shared: Arc::clone(shared),
+                reserved,
+            })
+        };
+        match (self.spinner, self.widget.clone()) {
             (false, Some(body)) => body,
-            (false, None) => widget(Text::new(self.message.clone())),
+            (false, None) => line(0),
             (true, body) => {
                 layout()
                     .line(vec![
                         widget(Looping::new(["/", "-", "\\", "|"])),
                         widget(Text::new(" ")),
-                        body.unwrap_or_else(|| widget(Text::new(self.message.clone()))),
+                        body.unwrap_or_else(|| line(2)),
                     ])
                     .into_widget()
             },
@@ -238,9 +316,34 @@ impl Status {
 pub struct StatusRuntime {
     coordinator: StatusCoordinator,
     id:          Option<u64>,
+    shared:      Arc<Shared>,
 }
 
 impl StatusRuntime {
+    /// replace the message, which also stands in for the final message of a
+    /// plain status that has none
+    ///
+    /// a custom `widget` keeps drawing itself
+    ///
+    /// # Errors
+    ///
+    /// fails when the status thread has stopped
+    pub fn set_message(&self, message: impl Into<String>) -> Result<()> {
+        lock(&self.shared.texts).message = message.into();
+        self.mark_dirty()
+    }
+
+    /// remove the status as a success, printing `message` in place of its final
+    /// message
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be removed
+    pub fn finish_with(mut self, message: impl Into<String>) -> Result<()> {
+        lock(&self.shared.texts).finale = Some(message.into());
+        self.remove(true)
+    }
+
     /// ask for a redraw after state shared with the status widget changed
     ///
     /// # Errors
@@ -273,9 +376,71 @@ impl Drop for StatusRuntime {
     }
 }
 
+/// started status with a step count, dropping it without `finish` counts as a
+/// failure
+pub struct Progress {
+    runtime: StatusRuntime,
+}
+
+impl Progress {
+    /// advance by `steps`, stopping at the total
+    ///
+    /// # Errors
+    ///
+    /// fails when the status thread has stopped
+    pub fn inc(&self, steps: usize) -> Result<()> {
+        let shared = &self.runtime.shared;
+        let _previous = shared
+            .done
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |done| {
+                Some(done.saturating_add(steps).min(shared.total))
+            });
+        self.runtime.mark_dirty()
+    }
+
+    /// move to step `done`, stopping at the total
+    ///
+    /// # Errors
+    ///
+    /// fails when the status thread has stopped
+    pub fn set(&self, done: usize) -> Result<()> {
+        let shared = &self.runtime.shared;
+        shared.done.store(done.min(shared.total), Ordering::Relaxed);
+        self.runtime.mark_dirty()
+    }
+
+    /// replace the message in front of the bar
+    ///
+    /// # Errors
+    ///
+    /// fails when the status thread has stopped
+    pub fn set_message(&self, message: impl Into<String>) -> Result<()> {
+        self.runtime.set_message(message)
+    }
+
+    /// remove the status as a success, printing the final message if set
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be removed
+    pub fn finish(self) -> Result<()> {
+        self.runtime.finish()
+    }
+
+    /// remove the status as a success, printing `message` in place of its final
+    /// message
+    ///
+    /// # Errors
+    ///
+    /// fails when the status cannot be removed
+    pub fn finish_with(self, message: impl Into<String>) -> Result<()> {
+        self.runtime.finish_with(message)
+    }
+}
+
 struct StatusEntry {
     widget:          WidgetRef,
-    plain:           String,
+    shared:          Arc<Shared>,
     final_message:   Option<String>,
     failure_message: Option<String>,
 }
@@ -375,6 +540,7 @@ struct Inner {
     next_id:         AtomicU64,
     writer:          SharedWriter,
     mode:            AtomicU64,
+    colors:          AtomicU8,
     width:           WidthSource,
     request_timeout: Duration,
     channel:         OnceLock<Channel>,
@@ -393,19 +559,27 @@ impl Inner {
         let mut spawned_with = None;
         let channel = self.channel.get_or_init(|| {
             let stamp = self.mode.load(Ordering::Acquire);
-            spawned_with = Some(stamp);
+            let colors = self.colors.load(Ordering::Acquire);
+            spawned_with = Some((stamp, colors));
             let (sender, receiver) = mpsc::channel();
             let config = ActorConfig {
                 writer: self.writer.clone(),
                 stamp,
+                colors: colors_from_u8(colors),
                 width: self.width.duplicate(),
                 progress: Arc::clone(&self.progress),
             };
             let thread = thread::spawn(move || run_actor(config, &receiver));
             Channel { sender, thread }
         });
-        if let Some(stamp) = spawned_with {
+        if let Some((stamp, colors)) = spawned_with {
             self.reconcile_mode(channel, stamp);
+            let latest = self.colors.load(Ordering::Acquire);
+            if latest != colors {
+                drop(channel.sender.send(Command::SetColors {
+                    colors: colors_from_u8(latest),
+                }));
+            }
         }
         channel
     }
@@ -471,6 +645,22 @@ impl Drop for Inner {
     }
 }
 
+const fn colors_to_u8(colors: Option<bool>) -> u8 {
+    match colors {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => 2,
+    }
+}
+
+const fn colors_from_u8(value: u8) -> Option<bool> {
+    match value {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
+}
+
 const fn mode_to_u8(mode: StatusMode) -> u8 {
     match mode {
         StatusMode::Auto => 0,
@@ -510,6 +700,9 @@ enum Command {
         reply:   Sender<Result<()>>,
     },
     MarkDirty,
+    SetColors {
+        colors: Option<bool>,
+    },
     Stop {
         done: Sender<()>,
     },
@@ -525,10 +718,9 @@ enum Command {
     },
     #[cfg(feature = "interactive")]
     AcquireLease {
-        holder:  ThreadId,
-        token:   u64,
-        waiting: Arc<AtomicBool>,
-        reply:   Sender<result::Result<(), LeaseError>>,
+        holder: ThreadId,
+        token:  u64,
+        reply:  Sender<result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
@@ -536,13 +728,9 @@ enum Command {
     CancelLease {
         token: u64,
     },
-    #[cfg(feature = "structured")]
-    Unhold {
-        token: u64,
-    },
     SetMode {
         stamp: u64,
-        reply: Sender<Result<()>>,
+        reply: Sender<()>,
     },
     Flush {
         reply: Sender<Result<()>>,
@@ -575,24 +763,24 @@ enum Failure {
     OnActor,
 }
 
-impl From<Failure> for Error {
-    fn from(failure: Failure) -> Self {
-        match failure {
-            Failure::Stopped => actor_stopped(),
-            Failure::TimedOut | Failure::Stalled => {
+impl Failure {
+    fn into_error(self) -> Error {
+        match self {
+            Self::Stopped => actor_stopped(),
+            Self::TimedOut | Self::Stalled => {
                 output_error(IoError::new(
                     IoErrorKind::TimedOut,
                     "the transient actor did not answer in time, a status widget may be blocking \
                      it",
                 ))
             },
-            Failure::Prompt => {
+            Self::Prompt => {
                 output_error(IoError::new(
                     IoErrorKind::TimedOut,
                     "gave up waiting for a prompt to release the terminal, the request was dropped",
                 ))
             },
-            Failure::OnActor => {
+            Self::OnActor => {
                 output_error(IoError::other(
                     "a status widget called into the transient actor it runs on, which would wait \
                      on itself",
@@ -622,6 +810,7 @@ impl StatusCoordinator {
                 next_id: AtomicU64::new(0),
                 writer,
                 mode: AtomicU64::new(mode_to_u8(mode).into()),
+                colors: AtomicU8::new(0),
                 width,
                 request_timeout,
                 channel: OnceLock::new(),
@@ -675,16 +864,26 @@ impl StatusCoordinator {
         }
     }
 
-    pub(crate) fn set_mode(&self, mode: StatusMode) -> Result<()> {
+    /// forces colour on or off for frames, `None` follows the environment
+    pub(crate) fn set_colors(&self, colors: Option<bool>) {
+        let this = self.current();
+        this.inner
+            .colors
+            .store(colors_to_u8(colors), Ordering::Release);
+        if this.inner.channel.get().is_some() {
+            this.send(Command::SetColors { colors });
+        }
+    }
+
+    /// publishes `mode` and waits for the actor to apply it, bounded by the
+    /// request timeout. a stall or a failed clear is not reported here, the
+    /// next `flush_transient` reports it
+    pub(crate) fn set_mode(&self, mode: StatusMode) {
         let this = self.current();
         let stamp = this.inner.publish_mode(mode);
-        if this.inner.channel.get().is_none() {
-            return Ok(());
+        if this.inner.channel.get().is_some() {
+            this.request(|reply| Command::SetMode { stamp, reply }, drop);
         }
-        this.request(
-            |reply| Command::SetMode { stamp, reply },
-            |failure| Err(failure.into()),
-        )
     }
 
     fn insert(&self, entry: StatusEntry, fps: u16) -> u64 {
@@ -708,7 +907,7 @@ impl StatusCoordinator {
                         reply: mpsc::channel().0,
                     });
                 }
-                Err(failure.into())
+                Err(failure.into_error())
             },
         )
     }
@@ -737,7 +936,7 @@ impl StatusCoordinator {
                     reply,
                 }
             },
-            |failure| Err(failure.into()),
+            |failure| Err(failure.into_error()),
         )
     }
 
@@ -750,24 +949,6 @@ impl StatusCoordinator {
     pub(crate) fn write_around(&self, writer: SharedWriter, bytes: Vec<u8>) -> Result<()> {
         self.current()
             .request_around(AroundKind::Write { writer, bytes })
-    }
-
-    /// clear the live region and keep it from redrawing until the guard drops,
-    /// so a caller can write to the terminal itself
-    ///
-    /// gated like `write_around`, so it waits for the lease when another thread
-    /// holds it, giving up after the request bound, and fails when the calling
-    /// thread holds it
-    #[cfg(feature = "structured")]
-    pub(crate) fn hold(&self) -> Result<HoldGuard> {
-        let this = self.current();
-        let token = this.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let guard = HoldGuard {
-            coordinator: this.clone(),
-            token,
-        };
-        this.request_around(AroundKind::Hold { token })?;
-        Ok(guard)
     }
 
     #[cfg(feature = "structured")]
@@ -786,7 +967,7 @@ impl StatusCoordinator {
                     waiting:   Arc::clone(&waiting),
                 }
             },
-            |failure| Err(failure.into()),
+            |failure| Err(failure.into_error()),
             &waiting,
         )
     }
@@ -828,7 +1009,7 @@ impl StatusCoordinator {
         } else {
             self.request(
                 |reply| Command::Flush { reply },
-                |failure| Err(failure.into()),
+                |failure| Err(failure.into_error()),
             )
         };
         let Some(next) = self.inner.successor.get() else {
@@ -872,13 +1053,11 @@ impl StatusCoordinator {
     #[cfg(feature = "interactive")]
     fn acquire_lease(&self) -> result::Result<(), LeaseError> {
         let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let waiting = Arc::new(AtomicBool::new(false));
-        self.request_waiting(
+        self.request(
             |reply| {
                 Command::AcquireLease {
                     holder: thread::current().id(),
                     token,
-                    waiting: Arc::clone(&waiting),
                     reply,
                 }
             },
@@ -887,9 +1066,8 @@ impl StatusCoordinator {
                 // reply receiver drops, leaving a lease nobody
                 // releases
                 self.send(Command::CancelLease { token });
-                Err(LeaseError::Clear(failure.into()))
+                Err(LeaseError::Clear(failure.into_error()))
             },
-            &waiting,
         )
     }
 
@@ -930,19 +1108,6 @@ impl io::Write for TransientNotice {
 impl fmt::Debug for StatusCoordinator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatusCoordinator").finish_non_exhaustive()
-    }
-}
-
-#[cfg(feature = "structured")]
-pub(crate) struct HoldGuard {
-    coordinator: StatusCoordinator,
-    token:       u64,
-}
-
-#[cfg(feature = "structured")]
-impl Drop for HoldGuard {
-    fn drop(&mut self) {
-        self.coordinator.send(Command::Unhold { token: self.token });
     }
 }
 
@@ -1019,6 +1184,7 @@ fn is_permanent(error: &IoError) -> bool {
 struct ActorConfig {
     writer:   SharedWriter,
     stamp:    u64,
+    colors:   Option<bool>,
     width:    WidthSource,
     progress: Arc<AtomicU64>,
 }
@@ -1028,9 +1194,6 @@ enum AroundKind {
     Write {
         writer: SharedWriter,
         bytes:  Vec<u8>,
-    },
-    Hold {
-        token: u64,
     },
 }
 
@@ -1068,26 +1231,33 @@ struct Actor {
     lease:            Option<Lease>,
     #[cfg(feature = "structured")]
     deferred:         VecDeque<DeferredAround>,
-    #[cfg(feature = "structured")]
-    holds:            Vec<u64>,
-    #[cfg(feature = "interactive")]
-    leases_waiting:   VecDeque<PendingLease>,
     dead:             bool,
     errors:           ErrorLog,
     panicked:         BTreeMap<u64, Error>,
+}
+
+fn renderer_for(
+    writer: &SharedWriter,
+    columns: usize,
+    rows: Option<usize>,
+    colors: Option<bool>,
+) -> Renderer<SharedWriter> {
+    let mut renderer = Renderer::new(writer.clone()).width(columns);
+    if let Some(height) = rows {
+        renderer = renderer.height(height);
+    }
+    match colors {
+        Some(enabled) => renderer.colors(enabled),
+        None => renderer,
+    }
 }
 
 impl Actor {
     fn new(config: ActorConfig) -> Self {
         let width = config.width.resolved();
         let (columns, rows) = width.viewport();
-        let unbounded = Renderer::new(config.writer.clone()).width(columns);
-        let renderer = match rows {
-            Some(height) => unbounded.height(height),
-            None => unbounded,
-        };
         Self {
-            renderer,
+            renderer: renderer_for(&config.writer, columns, rows, config.colors),
             writer: config.writer,
             mode: mode_from_stamp(config.stamp),
             mode_stamp: config.stamp,
@@ -1105,10 +1275,6 @@ impl Actor {
             lease: None,
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
-            #[cfg(feature = "structured")]
-            holds: Vec::new(),
-            #[cfg(feature = "interactive")]
-            leases_waiting: VecDeque::new(),
             dead: false,
             errors: ErrorLog::default(),
             panicked: BTreeMap::new(),
@@ -1142,44 +1308,8 @@ impl Actor {
     fn grant(&mut self, write: DeferredAround) {
         let result = match write.kind {
             AroundKind::Write { writer, bytes } => self.write_around(writer, &bytes),
-            AroundKind::Hold { token } => {
-                self.holds.push(token);
-                self.clear_immediate()
-            },
         };
         drop(write.reply.send(result));
-    }
-
-    #[cfg(feature = "structured")]
-    fn unhold(&mut self, token: u64) {
-        self.holds.retain(|held| *held != token);
-        self.dirty = true;
-        #[cfg(feature = "interactive")]
-        if self.holds.is_empty() {
-            while let Some(lease) = self.leases_waiting.pop_front() {
-                self.acquire_lease(lease);
-            }
-        }
-    }
-
-    #[cfg(feature = "structured")]
-    const fn held(&self) -> bool {
-        !self.holds.is_empty()
-    }
-
-    #[cfg(not(feature = "structured"))]
-    const fn held(&self) -> bool {
-        false
-    }
-
-    #[cfg(feature = "interactive")]
-    fn request_lease(&mut self, lease: PendingLease, waiting: &AtomicBool) {
-        if self.held() && !self.leased() {
-            waiting.store(true, Ordering::Release);
-            self.leases_waiting.push_back(lease);
-        } else {
-            self.acquire_lease(lease);
-        }
     }
 
     #[cfg(feature = "interactive")]
@@ -1228,20 +1358,21 @@ impl Actor {
             self.dirty = true;
             let StatusEntry {
                 widget,
-                plain,
+                shared,
                 final_message,
                 failure_message,
             } = entry;
             self.discard_widget(id, widget);
+            let finale = shared.finale().or(final_message);
             let line = match (self.mode, success) {
-                (StatusMode::Plain, true) => Some(final_message.unwrap_or(plain)),
-                (StatusMode::Live, true) => final_message,
+                (StatusMode::Plain, true) => Some(finale.unwrap_or_else(|| shared.message())),
+                (StatusMode::Live, true) => finale,
                 (StatusMode::Plain | StatusMode::Live, false) => failure_message,
                 // `Auto` is resolved to `Live` or `Plain` before coordinators are built
                 (StatusMode::Silent | StatusMode::Auto, _) => None,
             };
             if let Some(text) = line {
-                self.enqueue(format!("{}\n", sanitised(&text)).into_bytes());
+                self.enqueue(format!("{}\n", screw::sanitised_line(&text)).into_bytes());
             }
             self.drain_pending();
         }
@@ -1260,6 +1391,11 @@ impl Actor {
                 drop(reply.send(self.report(panic)));
             },
             Command::MarkDirty => self.dirty = true,
+            Command::SetColors { colors } => {
+                self.clear_if_live();
+                self.renderer = renderer_for(&self.writer, self.columns, self.rows, colors);
+                self.dirty = true;
+            },
             Command::Stop { .. } => {},
             Command::Notice { bytes, reply } => {
                 self.enqueue(bytes);
@@ -1281,17 +1417,13 @@ impl Actor {
             Command::AcquireLease {
                 holder,
                 token,
-                waiting,
                 reply,
             } => {
-                self.request_lease(
-                    PendingLease {
-                        holder,
-                        token,
-                        reply,
-                    },
-                    &waiting,
-                );
+                self.acquire_lease(PendingLease {
+                    holder,
+                    token,
+                    reply,
+                });
             },
             #[cfg(feature = "interactive")]
             Command::ReleaseLease => self.release_lease(),
@@ -1304,26 +1436,21 @@ impl Actor {
                 {
                     self.release_lease();
                 }
-                self.leases_waiting.retain(|lease| lease.token != token);
             },
-            #[cfg(feature = "structured")]
-            Command::Unhold { token } => self.unhold(token),
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
-                    drop(reply.send(Ok(())));
+                    let _acknowledged = reply.send(());
                     return;
                 }
                 let mode = mode_from_stamp(stamp);
                 self.mode_stamp = stamp;
                 let clearing = self.mode == StatusMode::Live && mode != StatusMode::Live;
-                let result = if clearing {
-                    self.clear_immediate()
-                } else {
-                    Ok(())
-                };
+                if clearing && let Err(error) = self.clear_immediate() {
+                    self.errors.record(error);
+                }
                 self.mode = mode;
                 self.dirty = true;
-                drop(reply.send(result));
+                let _acknowledged = reply.send(());
             },
             Command::Flush { reply } => {
                 self.drain_pending();
@@ -1558,11 +1685,7 @@ impl Actor {
     }
 
     fn wants_periodic_ticks(&self) -> bool {
-        self.mode == StatusMode::Live
-            && !self.leased()
-            && !self.held()
-            && !self.dead
-            && !self.entries.is_empty()
+        self.mode == StatusMode::Live && !self.leased() && !self.dead && !self.entries.is_empty()
     }
 
     fn frame_interval(&self) -> Duration {
@@ -1662,13 +1785,6 @@ fn run_actor(config: ActorConfig, receiver: &Receiver<Command>) {
     }
 }
 
-fn sanitised(text: &str) -> String {
-    text.split('\n')
-        .map(screw::single_line)
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn collect_reports(errors: impl IntoIterator<Item = Error>) -> Result<()> {
     let mut remaining = errors.into_iter();
     remaining.next().map_or(Ok(()), |first| {
@@ -1756,7 +1872,7 @@ mod tests {
     fn entry(message: &str) -> StatusEntry {
         StatusEntry {
             widget:          widget(Text::new(message.to_owned())),
-            plain:           message.to_owned(),
+            shared:          Shared::new(message.to_owned(), 0),
             final_message:   None,
             failure_message: None,
         }
@@ -1789,13 +1905,13 @@ mod tests {
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Silent);
         let plain = Status::new("working", coordinator.clone())
             .widget(widget(Text::new("3 of 5")))
-            .root_widget();
+            .root_widget(&Shared::new("working".to_owned(), 0));
         assert_eq!(screw::render_plain(&plain), "3 of 5");
 
         let spinning = Status::new("working", coordinator)
             .spinner()
             .widget(widget(Text::new("3 of 5")))
-            .root_widget();
+            .root_widget(&Shared::new("working".to_owned(), 0));
         assert_eq!(screw::render_plain(&spinning), "/ 3 of 5");
     }
 
@@ -1898,7 +2014,7 @@ mod tests {
                     thread_coordinator.insert(
                         StatusEntry {
                             widget:          widget(Probe(thread_seen)),
-                            plain:           "working".to_owned(),
+                            shared:          Shared::new("working".to_owned(), 0),
                             final_message:   None,
                             failure_message: None,
                         },
@@ -1950,11 +2066,8 @@ mod tests {
                 .failure_message("failed \x07\x1b[2J")
                 .start(),
         );
-        wait_for(|| capture.text().ends_with("failed [2J\n"));
-        assert_eq!(
-            capture.text(),
-            "plain [31mred\nfirst\nsecond [31mred[0m\nfailed [2J\n"
-        );
+        wait_for(|| capture.text().ends_with("failed \n"));
+        assert_eq!(capture.text(), "plain red\nfirst second red\nfailed \n");
     }
 
     #[test]
@@ -2436,28 +2549,6 @@ mod tests {
         status.finish().unwrap();
     }
 
-    #[cfg(feature = "structured")]
-    #[test]
-    fn a_hold_clears_the_region_and_stops_redraws_until_it_drops() {
-        let capture = Capture::default();
-        let coordinator =
-            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
-        let status = Status::new("working", coordinator.clone())
-            .spinner()
-            .start();
-        wait_for(|| !capture.text().is_empty());
-
-        let guard = coordinator.hold().unwrap();
-        let cleared = capture.text().len();
-        coordinator.mark_dirty().unwrap();
-        thread::sleep(Duration::from_millis(200));
-        assert_eq!(capture.text().len(), cleared);
-
-        drop(guard);
-        wait_for(|| capture.text().len() > cleared);
-        status.finish().unwrap();
-    }
-
     #[test]
     fn a_notice_under_a_live_status_clears_the_region_before_it_is_written() {
         let capture = Capture::default();
@@ -2583,6 +2674,7 @@ mod tests {
         Actor::new(ActorConfig {
             writer: SharedWriter::new(Capture::default()),
             stamp: mode_to_u8(StatusMode::Live).into(),
+            colors: None,
             width,
             progress: Arc::new(AtomicU64::new(0)),
         })
@@ -2596,7 +2688,6 @@ mod tests {
         actor.apply(Command::AcquireLease {
             holder: thread::current().id(),
             token: 7,
-            waiting: Arc::new(AtomicBool::new(false)),
             reply,
         });
         assert!(actor.leased());
@@ -2896,7 +2987,8 @@ mod tests {
             .start();
         release.wait();
 
-        let error = coordinator.set_mode(StatusMode::Plain).unwrap_err();
+        coordinator.set_mode(StatusMode::Plain);
+        let error = coordinator.flush_transient().unwrap_err();
         assert!(
             error.to_string().contains("did not answer in time"),
             "{error}"
@@ -2942,65 +3034,6 @@ mod tests {
 
         wait_for(|| coordinator.notice(b"back\n").is_ok());
         status.finish().unwrap();
-    }
-
-    #[cfg(feature = "structured")]
-    #[test]
-    fn a_hold_that_timed_out_is_released() {
-        let capture = Capture::default();
-        let (coordinator, status) = slow_first_frame(&capture);
-
-        assert!(coordinator.hold().is_err());
-        wait_for(|| coordinator.notice(b"back\n").is_ok());
-        let drawn = capture.text().len();
-        wait_for(|| capture.text().len() > drawn);
-        status.finish().unwrap();
-    }
-
-    #[cfg(all(feature = "interactive", feature = "structured"))]
-    #[test]
-    fn a_hold_waits_for_a_prompt_another_thread_holds() {
-        let coordinator =
-            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
-        let prompt = coordinator.prompt_guard().unwrap();
-        let (sender, receiver) = mpsc::channel();
-
-        thread::scope(|scope| {
-            scope.spawn(|| sender.send(coordinator.hold().map(|_guard| ())).unwrap());
-            receiver
-                .recv_timeout(Duration::from_millis(200))
-                .unwrap_err();
-            drop(prompt);
-            receiver
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
-        });
-    }
-
-    #[cfg(all(feature = "interactive", feature = "structured"))]
-    #[test]
-    fn a_prompt_waits_for_an_active_hold() {
-        let coordinator =
-            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
-        let hold = coordinator.hold().unwrap();
-        let (sender, receiver) = mpsc::channel();
-
-        thread::scope(|scope| {
-            scope.spawn(|| {
-                sender
-                    .send(coordinator.prompt_guard().map(|_guard| ()))
-                    .unwrap();
-            });
-            receiver
-                .recv_timeout(Duration::from_millis(200))
-                .unwrap_err();
-            drop(hold);
-            receiver
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
-        });
     }
 
     #[cfg(all(feature = "interactive", feature = "structured"))]
@@ -3074,7 +3107,57 @@ mod tests {
     fn set_mode_does_not_start_the_actor() {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Auto);
-        coordinator.set_mode(StatusMode::Silent).unwrap();
+        coordinator.set_mode(StatusMode::Silent);
         assert!(coordinator.inner.channel.get().is_none());
+    }
+
+    #[test]
+    fn a_progress_line_fills_the_width_with_a_bar_and_a_count() {
+        let shared = Shared::new("get".to_owned(), 20);
+        shared.done.store(12, Ordering::Relaxed);
+        let line = StatusLine {
+            shared,
+            reserved: 0,
+        };
+        let mut surface = Surface::new();
+        line.render(
+            &RenderCtx::new().with_constraints(Some(30), None),
+            &mut surface,
+        );
+        let text = surface.plain_text();
+        assert!(text.starts_with("get ["), "{text}");
+        assert!(text.ends_with("] 12/20"), "{text}");
+        assert_eq!(text.chars().count(), 30);
+    }
+
+    #[test]
+    fn progress_stops_at_the_total() {
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Silent);
+        let progress = Status::new("work", coordinator).progress(5);
+        progress.inc(3).unwrap();
+        progress.inc(9).unwrap();
+        assert_eq!(progress.runtime.shared.done.load(Ordering::Relaxed), 5);
+        progress.set(2).unwrap();
+        assert_eq!(progress.runtime.shared.done.load(Ordering::Relaxed), 2);
+        progress.finish().unwrap();
+    }
+
+    #[test]
+    fn finish_with_and_set_message_decide_what_a_plain_status_prints() {
+        let capture = Capture::default();
+        let coordinator =
+            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Plain);
+        let status = Status::new("one", coordinator.clone())
+            .final_message("done")
+            .start();
+        status.set_message("two").unwrap();
+        status.finish_with("finished").unwrap();
+        assert_eq!(capture.text(), "finished\n");
+
+        let second = Status::new("one", coordinator).start();
+        second.set_message("two").unwrap();
+        second.finish().unwrap();
+        assert_eq!(capture.text(), "finished\ntwo\n");
     }
 }

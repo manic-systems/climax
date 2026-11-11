@@ -17,10 +17,14 @@ anyhow      = [ "dep:anyhow" ]
 complete    = [ "parse", "dep:caress" ]
 default     = [ "complete", "derive", "interactive", "parse", "render", "structured" ]
 derive      = [ "parse", "dep:climax-derive", "pound/derive" ]
-interactive = [ "dep:bang", "dep:unicode-segmentation" ]
+interactive = [ "dep:bang" ]
 parse       = [ "dep:pound" ]
 render      = [ "dep:screw" ]
 structured  = [ "dep:serde", "dep:serde_json" ]
+
+[[example]]
+name              = "pkg"
+required-features = [ "derive", "interactive", "render", "structured" ]
 
 [[example]]
 name              = "prompt"
@@ -31,15 +35,14 @@ name              = "status"
 required-features = [ "render" ]
 
 [dependencies]
-anyhow               = { workspace = true, optional = true }
-bang                 = { workspace = true, optional = true }
-caress               = { workspace = true, optional = true }
-climax-derive        = { workspace = true, optional = true }
-pound                = { workspace = true, optional = true, features = [ "std", "help", "unicode", "color" ] }
-screw                = { workspace = true, optional = true }
-serde                = { workspace = true, optional = true, features = [ "derive" ] }
-serde_json           = { workspace = true, optional = true }
-unicode-segmentation = { workspace = true, optional = true }
+anyhow        = { workspace = true, optional = true }
+bang          = { workspace = true, optional = true }
+caress        = { workspace = true, optional = true }
+climax-derive = { workspace = true, optional = true }
+pound         = { workspace = true, optional = true, features = [ "std", "help", "unicode", "color" ] }
+screw         = { workspace = true, optional = true }
+serde         = { workspace = true, optional = true, features = [ "derive" ] }
+serde_json    = { workspace = true, optional = true }
 
 [dev-dependencies]
 libc.workspace = true

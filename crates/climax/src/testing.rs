@@ -22,10 +22,10 @@ use std::{
 use bang::advanced::{
     Event,
     Key,
-    KeyEvent,
     ScriptCheck,
     checked_scripted_interaction,
     scripted_interaction,
+    widgets,
 };
 
 #[cfg(feature = "parse")] use crate::app::parse_completion;
@@ -99,7 +99,7 @@ pub struct Outcome {
 /// prompts than were shown or leaves part of an answer unread, and a prompt
 /// shown after the script ran out fails with `ErrorKind::InputEnded`
 ///
-/// without `interactive` only `Script::new` exists
+/// without `interactive` only `Script::new` and `Script::unavailable` exist
 ///
 /// ```
 /// # #[cfg(feature = "interactive")]
@@ -116,12 +116,33 @@ pub struct Outcome {
 /// # }
 /// ```
 #[derive(Clone, Debug, Default)]
-pub struct Script(#[cfg(feature = "interactive")] Vec<Vec<Event>>);
+pub struct Script {
+    #[cfg(feature = "interactive")]
+    steps:       Vec<Vec<Event>>,
+    #[cfg(feature = "interactive")]
+    unavailable: bool,
+}
 
 impl Script {
     /// empty script, for an application that shows no prompt
     #[must_use]
     pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// runs the application as if no terminal were attached, so
+    /// `interaction_available` is false and every prompt fails with
+    /// `ErrorKind::InteractionUnavailable`
+    #[must_use]
+    pub fn unavailable() -> Self {
+        #[cfg(feature = "interactive")]
+        {
+            Self {
+                unavailable: true,
+                ..Self::default()
+            }
+        }
+        #[cfg(not(feature = "interactive"))]
         Self::default()
     }
 
@@ -134,8 +155,8 @@ impl Script {
     pub fn select_nth(self, n: usize) -> Self {
         let mut script = self;
         script
-            .0
-            .push(vec![Event::Row(n), Event::Key(KeyEvent::new(Key::Enter))]);
+            .steps
+            .push(vec![Event::Row(n), Event::key(Key::Enter)]);
         script
     }
 
@@ -150,14 +171,14 @@ impl Script {
         let mut sorted: Vec<usize> = indices.into_iter().collect();
         sorted.sort_unstable();
         sorted.dedup();
-        let mut events = vec![Event::Key(KeyEvent::new(Key::Char('n')))];
+        let mut events = vec![Event::key(Key::Char('n'))];
         for index in sorted {
             events.push(Event::Row(index));
-            events.push(Event::Key(KeyEvent::new(Key::Char(' '))));
+            events.push(Event::key(Key::Char(' ')));
         }
-        events.push(Event::Key(KeyEvent::new(Key::Enter)));
+        events.push(Event::key(Key::Enter));
         let mut script = self;
-        script.0.push(events);
+        script.steps.push(events);
         script
     }
 
@@ -189,8 +210,8 @@ impl Script {
             Modifiers,
         };
 
-        let months = (i64::from(to.year) - i64::from(from.year)) * 12 + i64::from(to.month)
-            - i64::from(from.month);
+        let months = (i64::from(to.year()) - i64::from(from.year())) * 12 + i64::from(to.month())
+            - i64::from(from.month());
         let page = || {
             if months < 0 {
                 Key::PageUp
@@ -199,23 +220,23 @@ impl Script {
             }
         };
         let years = iter::repeat_n(
-            Event::Key(KeyEvent::with_modifiers(page(), Modifiers::SHIFT)),
+            Event::Key(KeyEvent::new(page(), Modifiers::SHIFT)),
             usize::try_from(months.unsigned_abs() / 12).unwrap_or(usize::MAX),
         );
         let rest = iter::repeat_n(
-            Event::Key(KeyEvent::new(page())),
+            Event::key(page()),
             usize::try_from(months.unsigned_abs() % 12).unwrap_or(usize::MAX),
         );
         let days = iter::repeat_n(
-            Event::Key(KeyEvent::new(Key::Right)),
-            usize::from(to.day.saturating_sub(1)),
+            Event::key(Key::Right),
+            usize::from(to.day().saturating_sub(1)),
         );
         let mut events: Vec<Event> = years.chain(rest).collect();
-        events.push(Event::Key(KeyEvent::new(Key::Home)));
+        events.push(Event::key(Key::Home));
         events.extend(days);
-        events.push(Event::Key(KeyEvent::new(Key::Enter)));
+        events.push(Event::key(Key::Enter));
         let mut script = self;
-        script.0.push(events);
+        script.steps.push(events);
         script
     }
 
@@ -235,7 +256,9 @@ impl Script {
                 keys.push(Key::End);
                 keys.extend(vec![Key::Backspace; typed]);
             }
-            typed = unicode_segmentation::UnicodeSegmentation::graphemes(attempt, true).count();
+            typed = widgets::TextInput::new("")
+                .with_value(attempt)
+                .cursor_grapheme_index();
             keys.extend(attempt.chars().map(Key::Char));
             keys.push(Key::Enter);
         }
@@ -268,11 +291,7 @@ impl Script {
     #[cfg(feature = "interactive")]
     #[must_use]
     pub fn keys(mut self, keys: impl IntoIterator<Item = Key>) -> Self {
-        self.0.push(
-            keys.into_iter()
-                .map(|key| Event::Key(KeyEvent::new(key)))
-                .collect(),
-        );
+        self.steps.push(keys.into_iter().map(Event::key).collect());
         self
     }
 
@@ -281,7 +300,7 @@ impl Script {
     #[cfg(feature = "interactive")]
     #[must_use]
     pub fn into_interaction(self) -> bang::Interaction {
-        scripted_interaction(self.0)
+        scripted_interaction(self.steps)
     }
 }
 
@@ -292,7 +311,10 @@ struct Check;
 
 #[cfg(feature = "interactive")]
 fn with_script(script: Script) -> (Context, Check) {
-    let (interaction, check) = checked_scripted_interaction(script.0);
+    let (interaction, check) = checked_scripted_interaction(script.steps);
+    if script.unavailable {
+        return (Context::new(), check);
+    }
     (Context::new().with_interaction(interaction), check)
 }
 
@@ -313,15 +335,16 @@ const fn leftover(_check: &Check) -> Option<String> {
     None
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "a fresh context is idle, so capability and writer changes apply"
+#[cfg_attr(
+    feature = "render",
+    expect(
+        clippy::expect_used,
+        reason = "a fresh context is idle, so writer changes apply"
+    )
 )]
 fn context(script: Script, stdout: &Capture, stderr: &Capture) -> (Context, Check) {
     let (scripted, check) = with_script(script);
-    let idle = scripted
-        .with_terminal_capabilities(TerminalCapabilities::new(false, false, false))
-        .expect("capabilities apply to an idle context");
+    let idle = scripted.with_terminal_capabilities(TerminalCapabilities::none());
     #[cfg(feature = "render")]
     let ready = idle
         .with_transient_writer(stderr.clone())
