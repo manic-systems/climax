@@ -28,8 +28,7 @@ const STATE_UNCERTAIN: u8 = 1 << 4;
 
 /// where a session draws
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum ScreenKind {
+pub(crate) enum ScreenKind {
     /// below the current cursor line, leaving scrollback intact
     #[default]
     Inline,
@@ -79,6 +78,26 @@ impl ScreenOptions {
             bracketed_paste:       false,
             clear_inline_on_leave: false,
         }
+    }
+
+    /// the bytes a leave writes after the last frame, in order, for a panic
+    /// hook that has to restore the terminal before the default hook prints
+    #[must_use]
+    pub fn leave_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        if self.kind == ScreenKind::Inline && self.clear_inline_on_leave {
+            bytes.extend_from_slice(CLEAR_INLINE);
+        }
+        if self.cursor == CursorPolicy::Hide {
+            bytes.extend_from_slice(SHOW_CURSOR);
+        }
+        if self.bracketed_paste {
+            bytes.extend_from_slice(DISABLE_BRACKETED_PASTE);
+        }
+        if self.kind == ScreenKind::Alternate {
+            bytes.extend_from_slice(LEAVE_ALTERNATE);
+        }
+        bytes
     }
 
     /// whether the cursor is hidden while the screen is held

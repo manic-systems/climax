@@ -6,6 +6,7 @@ use core::{
 };
 
 use screw::{
+    LayoutMode,
     LocalWidgetRef,
     RenderCtx,
     Role,
@@ -17,6 +18,7 @@ use screw::{
     ViewportReport,
     Widget as ScrewWidget,
     local_widget,
+    surface::Cell,
 };
 
 use crate::{
@@ -164,6 +166,14 @@ pub(super) struct ListRow {
 
 impl ScrewWidget for ListRow {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
+        render_ellipsised(ctx, out, |inner_ctx, inner_out| {
+            self.write(inner_ctx, inner_out);
+        });
+    }
+}
+
+impl ListRow {
+    fn write(&self, ctx: &RenderCtx, out: &mut Surface) {
         let theme = ctx.theme();
         let marker = theme.style(if self.selected {
             Role::Selected
@@ -215,7 +225,9 @@ pub(super) fn render_list(
     out: &mut Surface,
 ) {
     if !frame.header.is_empty() {
-        Spans::new(frame.header.iter().cloned()).render(ctx, out);
+        render_ellipsised(ctx, out, |inner_ctx, inner_out| {
+            Spans::new(frame.header.iter().cloned()).render(inner_ctx, inner_out);
+        });
         out.newline();
     }
     let offset = frame.window_offset;
@@ -232,6 +244,47 @@ pub(super) fn render_list(
     let report = viewport.report_handle();
     viewport.render(ctx, out);
     layout.record(&report.report(), offset);
+}
+
+/// draws through `draw`, and when rows are clipped to a known width ends an
+/// overlong row with an ellipsis instead of cutting it silently
+fn render_ellipsised(
+    ctx: &RenderCtx,
+    out: &mut Surface,
+    draw: impl FnOnce(&RenderCtx, &mut Surface),
+) {
+    let Some(columns) = ctx
+        .available_columns()
+        .filter(|_| ctx.layout_mode() == LayoutMode::Clip)
+    else {
+        draw(ctx, out);
+        return;
+    };
+    let mut drawn = Surface::new();
+    draw(ctx, &mut drawn);
+    for (index, row) in drawn.rows().iter().enumerate() {
+        if index > 0 {
+            out.newline();
+        }
+        let total: usize = row.cells().iter().map(Cell::width).sum();
+        if total <= columns {
+            for cell in row.cells() {
+                out.write(cell.text(), cell.style());
+            }
+            continue;
+        }
+        let mut used = 0;
+        let mut style = None;
+        for cell in row.cells() {
+            if used + cell.width() >= columns {
+                break;
+            }
+            used += cell.width();
+            style = Some(cell.style());
+            out.write(cell.text(), cell.style());
+        }
+        out.write("…", style.unwrap_or_default());
+    }
 }
 
 pub(super) fn visible_len(len: usize, page_size: usize) -> usize {

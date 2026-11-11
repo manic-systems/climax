@@ -25,7 +25,7 @@
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     let stdin = io::stdin();
-//!     let raw = TerminalModeGuard::activate(&stdin, RawModeOptions::blocking())?;
+//!     let raw = TerminalModeGuard::enter(&stdin, RawModeOptions::blocking())?;
 //!     let mut stdout = io::stdout();
 //!     let mut screen = ScreenGuard::enter(&mut stdout, ScreenOptions::full_screen())?;
 //!     let mut events = TerminalEvents::pollable(stdin)?;
@@ -40,6 +40,30 @@
 //! }
 //! ```
 //!
+//! a full-screen program that panics prints the message into the alternate
+//! screen, which the guard then leaves, so the message is lost, bang-terminal
+//! installs no panic hook of its own, a program that wants the message to
+//! survive restores the screen first from a hook of its own
+//!
+//! ```no_run
+//! use std::{
+//!     io::{
+//!         self,
+//!         Write as _,
+//!     },
+//!     panic,
+//! };
+//!
+//! use bang_terminal::ScreenOptions;
+//!
+//! let leave = ScreenOptions::full_screen().leave_bytes();
+//! let previous = panic::take_hook();
+//! panic::set_hook(Box::new(move |info| {
+//!     let _result = io::stdout().write_all(&leave);
+//!     previous(info);
+//! }));
+//! ```
+//!
 //! [`Decoder`] decodes bytes without any terminal at all
 
 #![warn(missing_docs)]
@@ -50,6 +74,9 @@
         reason = "terminal glyphs read better as themselves than as escapes"
     )
 )]
+
+#[cfg(not(unix))]
+compile_error!("bang-terminal supports unix targets only");
 
 extern crate alloc;
 
@@ -63,6 +90,12 @@ mod signal;
 #[doc(hidden)]
 pub mod testing;
 
+pub use bang_core::{
+    Event,
+    Key,
+    KeyEvent,
+    Modifiers,
+};
 pub use cleanup::{
     CleanupFailure,
     CleanupFailures,
@@ -81,7 +114,6 @@ pub use mode::{
 pub use screen::{
     CursorPolicy,
     ScreenGuard,
-    ScreenKind,
     ScreenOptions,
 };
 pub use signal::{

@@ -13,14 +13,14 @@ use crate::{
     Context,
     Event,
     FocusTarget,
+    InputWidget,
     Reaction,
     Value,
-    Widget,
 };
 
 /// runs one root widget and tracks whether it has finished and needs redrawing
 pub struct Session {
-    root:   Box<dyn Widget>,
+    root:   Box<dyn InputWidget>,
     status: SessionStatus,
     dirty:  bool,
 }
@@ -38,7 +38,7 @@ impl fmt::Debug for Session {
 impl Session {
     /// starts a session around `root`
     #[must_use]
-    pub fn new(root: impl Widget + 'static) -> Self {
+    pub fn new(root: impl InputWidget + 'static) -> Self {
         Self {
             root:   Box::new(root),
             status: SessionStatus::Running,
@@ -48,7 +48,7 @@ impl Session {
 
     /// starts a session around an already boxed `root`
     #[must_use]
-    pub fn boxed(root: Box<dyn Widget>) -> Self {
+    pub fn boxed(root: Box<dyn InputWidget>) -> Self {
         Self {
             root,
             status: SessionStatus::Running,
@@ -170,7 +170,7 @@ pub enum SessionReaction {
 impl SessionReaction {
     /// whether the event had any effect, everything except `Ignored`
     #[must_use]
-    pub fn changed(self) -> bool {
+    pub const fn changed(&self) -> bool {
         matches!(
             self,
             Self::Changed | Self::Submit(_) | Self::Cancel | Self::Focus(_)

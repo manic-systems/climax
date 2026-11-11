@@ -53,7 +53,7 @@ pub enum Reaction {
 impl Reaction {
     /// whether the event had any effect, everything except `Ignored`
     #[must_use]
-    pub fn changed(self) -> bool {
+    pub const fn changed(&self) -> bool {
         matches!(
             self,
             Self::Changed | Self::Submit(_) | Self::Action(_) | Self::Cancel | Self::Focus(_)
@@ -62,7 +62,7 @@ impl Reaction {
 }
 
 /// an interactive `screw` widget
-pub trait Widget: screw::Widget {
+pub trait InputWidget: screw::Widget {
     /// identifies the widget to drivers and actions
     fn id(&self) -> WidgetId;
     /// handles `event` and reports what happened

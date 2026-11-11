@@ -123,11 +123,14 @@ impl<R> TerminalEvents<R> {
     /// whenever the terminal behind `terminal` changes size after that,
     /// promptly on `SIGWINCH` when `signals` is set and on a 100
     /// millisecond poll otherwise
-    #[must_use]
-    pub fn resize_from(mut self, terminal: OwnedFd) -> Self {
-        self.resize = Some(terminal);
+    ///
+    /// # Errors
+    ///
+    /// fails when `terminal` cannot be duplicated
+    pub fn resize_from(mut self, terminal: &(impl AsFd + ?Sized)) -> io::Result<Self> {
+        self.resize = Some(terminal.as_fd().try_clone_to_owned()?);
         self.size_initialized = false;
-        self
+        Ok(self)
     }
 
     /// how long a pending Escape sequence waits for more bytes, counted from
@@ -344,10 +347,10 @@ where
 }
 
 /// the resize event reporting `size`, as [`TerminalEvents`] emits it
-pub fn resize_event(size: Viewport) -> Event {
+pub const fn resize_event(size: Viewport) -> Event {
     Event::Resize {
-        cols: u16::try_from(size.columns).unwrap_or(u16::MAX),
-        rows: u16::try_from(size.rows).unwrap_or(u16::MAX),
+        cols: size.columns,
+        rows: size.rows,
     }
 }
 
@@ -454,7 +457,9 @@ mod tests {
     #[test]
     fn initial_and_changed_sizes_are_emitted_without_input_policy() {
         let (master, slave) = pty(80, 24).unwrap();
-        let mut events = TerminalEvents::blocking(Cursor::new(b"x")).resize_from(slave);
+        let mut events = TerminalEvents::blocking(Cursor::new(b"x"))
+            .resize_from(&slave)
+            .unwrap();
         assert_eq!(
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize { cols: 80, rows: 24 }),
@@ -476,7 +481,7 @@ mod tests {
     #[test]
     fn signals_are_sideband_outcomes_not_input_events() {
         let _serial = serialise_signals();
-        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        let guard = SignalGuard::enter().unwrap();
         let mut events = TerminalEvents::blocking(Cursor::new(b"x")).signals(guard.poller());
         // SAFETY: raising a signal the guard has a handler for.
         assert_eq!(unsafe { libc::raise(libc::SIGTERM) }, 0);
@@ -631,13 +636,14 @@ mod tests {
     #[test]
     fn sigwinch_reports_a_resize_without_waiting_for_the_poll_tick() {
         let _serial = serialise_signals();
-        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        let guard = SignalGuard::enter().unwrap();
         let (master, slave) = pty(80, 24).unwrap();
         let (_peer, reader) = UnixStream::pair().unwrap();
         let mut events = TerminalEvents::pollable(reader)
             .unwrap()
             .signals(guard.poller())
-            .resize_from(slave);
+            .resize_from(&slave)
+            .unwrap();
         assert_eq!(
             events.next_event().unwrap(),
             TerminalPoll::Event(Event::Resize { cols: 80, rows: 24 }),

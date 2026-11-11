@@ -2,6 +2,7 @@
 
 use alloc::collections::BTreeMap;
 use core::{
+    error,
     fmt,
     str::FromStr,
 };
@@ -141,28 +142,17 @@ impl fmt::Display for Number {
 }
 
 /// a proleptic Gregorian calendar date
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Date {
-    /// the year, negative before year zero
-    pub year:  i32,
-    /// the month from 1 to 12
-    pub month: u8,
-    /// the day of the month from 1
-    pub day:   u8,
+    year:  i32,
+    month: u8,
+    day:   u8,
 }
 
 impl Date {
-    pub(crate) const MIN: Self = Self {
-        year:  i32::MIN,
-        month: 1,
-        day:   1,
-    };
+    pub(crate) const MIN: Self = Self::clamped(i32::MIN, 1, 1);
 
-    pub(crate) const MAX: Self = Self {
-        year:  i32::MAX,
-        month: 12,
-        day:   31,
-    };
+    pub(crate) const MAX: Self = Self::clamped(i32::MAX, 12, 31);
 
     /// the date, or `None` when the month or day is out of range for that year
     #[must_use]
@@ -175,6 +165,47 @@ impl Date {
             return None;
         }
         Some(Self { year, month, day })
+    }
+
+    pub(crate) const fn clamped(year: i32, month: u8, day: u8) -> Self {
+        let valid_month = if month < 1 {
+            1
+        } else if month > 12 {
+            12
+        } else {
+            month
+        };
+        let max_day = days_in_month(year, valid_month);
+        let valid_day = if day < 1 {
+            1
+        } else if day > max_day {
+            max_day
+        } else {
+            day
+        };
+        Self {
+            year,
+            month: valid_month,
+            day: valid_day,
+        }
+    }
+
+    /// the year, negative before year zero
+    #[must_use]
+    pub const fn year(self) -> i32 {
+        self.year
+    }
+
+    /// the month from 1 to 12
+    #[must_use]
+    pub const fn month(self) -> u8 {
+        self.month
+    }
+
+    /// the day of the month from 1
+    #[must_use]
+    pub const fn day(self) -> u8 {
+        self.day
     }
 
     /// the date `days` after 1970-01-01, negative for earlier dates, a year
@@ -197,11 +228,11 @@ impl Date {
         let year = (year_of_era + era * 400).saturating_add(i64::from(month <= 2));
         match i32::try_from(year) {
             Ok(fits) => {
-                Self {
-                    year:  fits,
-                    month: u8::try_from(month).unwrap_or(1),
-                    day:   u8::try_from(day).unwrap_or(1),
-                }
+                Self::clamped(
+                    fits,
+                    u8::try_from(month).unwrap_or(1),
+                    u8::try_from(day).unwrap_or(1),
+                )
             },
             Err(_) if year < 0 => Self::MIN,
             Err(_) => Self::MAX,
@@ -235,8 +266,21 @@ impl fmt::Display for Date {
     }
 }
 
+/// the error from parsing a [`Date`] that is not in the printed `YYYY-MM-DD`
+/// form
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParseDateError(String);
+
+impl fmt::Display for ParseDateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid date '{}', expected YYYY-MM-DD", self.0)
+    }
+}
+
+impl error::Error for ParseDateError {}
+
 impl FromStr for Date {
-    type Err = String;
+    type Err = ParseDateError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let (negative, unsigned) = value
@@ -269,8 +313,8 @@ impl FromStr for Date {
     }
 }
 
-fn invalid_date(value: &str) -> String {
-    format!("invalid date '{value}', expected YYYY-MM-DD")
+fn invalid_date(value: &str) -> ParseDateError {
+    ParseDateError(value.to_owned())
 }
 
 pub(crate) const fn days_in_month(year: i32, month: u8) -> u8 {
@@ -318,8 +362,8 @@ mod tests {
     fn extreme_years_saturate_instead_of_overflowing() {
         let late = Date::new(6_000_000, 3, 1).unwrap();
         assert_eq!(Date::from_unix_days(late.unix_days()), late);
-        assert_eq!(Date::from_unix_days(i64::MAX).year, i32::MAX);
-        assert_eq!(Date::from_unix_days(i64::MIN).year, i32::MIN);
+        assert_eq!(Date::from_unix_days(i64::MAX).year(), i32::MAX);
+        assert_eq!(Date::from_unix_days(i64::MIN).year(), i32::MIN);
     }
 
     #[test]

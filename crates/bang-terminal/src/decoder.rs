@@ -228,12 +228,7 @@ impl Decoder {
                 self.pending.skip(1);
                 return Some(Event::key(Key::Esc));
             },
-            Some(&byte) => {
-                Event::Key(KeyEvent::with_modifiers(
-                    Key::Char(char::from(byte)),
-                    Modifiers::ALT,
-                ))
-            },
+            Some(&byte) => Event::Key(KeyEvent::new(Key::Char(char::from(byte)), Modifiers::ALT)),
         };
         self.pending.clear();
         Some(event)
@@ -370,7 +365,7 @@ impl Decoder {
             return EscapeResult::Unknown(self.pending.take(1));
         }
         self.pending.skip(len);
-        EscapeResult::Event(Event::Key(KeyEvent::with_modifiers(key, modifiers)))
+        EscapeResult::Event(Event::Key(KeyEvent::new(key, modifiers)))
     }
 
     fn consume_key(&mut self, len: usize, key: Key) -> EscapeResult {
@@ -429,18 +424,19 @@ fn parse_parameters(bytes: &[u8]) -> Option<Vec<u16>> {
 }
 
 fn xterm_modifiers(parameter: u16) -> Option<Modifiers> {
-    let bits = match parameter {
-        1 => Modifiers::empty(),
-        2 => Modifiers::SHIFT,
-        3 => Modifiers::ALT,
-        4 => Modifiers::SHIFT | Modifiers::ALT,
-        5 => Modifiers::CONTROL,
-        6 => Modifiers::SHIFT | Modifiers::CONTROL,
-        7 => Modifiers::ALT | Modifiers::CONTROL,
-        8 => Modifiers::SHIFT | Modifiers::ALT | Modifiers::CONTROL,
-        _ => return None,
-    };
-    Some(bits)
+    let bits = parameter.checked_sub(1).filter(|bits| *bits < 16)?;
+    let mut modifiers = Modifiers::empty();
+    for (bit, modifier) in [
+        (1, Modifiers::SHIFT),
+        (2, Modifiers::ALT),
+        (4, Modifiers::CONTROL),
+        (8, Modifiers::SUPER),
+    ] {
+        if bits & bit != 0 {
+            modifiers |= modifier;
+        }
+    }
+    Some(modifiers)
 }
 
 fn tilde_key(parameter: u16) -> Option<Key> {
@@ -482,10 +478,7 @@ fn control_symbol(byte: u8) -> char {
 }
 
 const fn control_char(value: char) -> Event {
-    Event::Key(KeyEvent::with_modifiers(
-        Key::Char(value),
-        Modifiers::CONTROL,
-    ))
+    Event::Key(KeyEvent::new(Key::Char(value), Modifiers::CONTROL))
 }
 
 /// undecoded bytes, consuming advances `head` instead of shifting the tail once
@@ -613,7 +606,7 @@ mod tests {
     use super::*;
 
     fn modified(key: Key, modifiers: Modifiers) -> Event {
-        Event::Key(KeyEvent::with_modifiers(key, modifiers))
+        Event::Key(KeyEvent::new(key, modifiers))
     }
 
     fn decode_in_chunks(bytes: &[u8], chunk_size: usize) -> Vec<Event> {
@@ -670,12 +663,18 @@ mod tests {
                 Key::Delete,
                 Modifiers::ALT | Modifiers::CONTROL,
             ),
+            (b"\x1b[1;9A".as_slice(), Key::Up, Modifiers::SUPER),
+            (
+                b"\x1b[1;16D".as_slice(),
+                Key::Left,
+                Modifiers::SHIFT | Modifiers::ALT | Modifiers::CONTROL | Modifiers::SUPER,
+            ),
         ];
         for (bytes, key, modifiers) in cases {
             for chunk_size in 1..=bytes.len() {
                 assert_eq!(
                     decode_in_chunks(bytes, chunk_size),
-                    vec![modified(key.clone(), modifiers)],
+                    vec![modified(key, modifiers)],
                     "bytes={bytes:?}, chunk_size={chunk_size}",
                 );
             }
@@ -856,7 +855,7 @@ mod tests {
             for chunk_size in 1..=bytes.len() {
                 assert_eq!(
                     decode_in_chunks(bytes, chunk_size),
-                    vec![modified(key.clone(), modifiers)],
+                    vec![modified(key, modifiers)],
                     "bytes={bytes:?}, chunk_size={chunk_size}",
                 );
             }
@@ -948,7 +947,7 @@ mod tests {
             for chunk_size in 1..=bytes.len() {
                 assert_eq!(
                     decode_in_chunks(&bytes, chunk_size),
-                    vec![Event::key(key.clone()), Event::char('a')],
+                    vec![Event::key(key), Event::char('a')],
                     "byte={byte}, chunk_size={chunk_size}",
                 );
             }

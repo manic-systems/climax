@@ -19,9 +19,9 @@ pub enum Event {
     /// term resize
     Resize {
         /// new width in columns
-        cols: u16,
+        cols: usize,
         /// new height in rows
-        rows: u16,
+        rows: usize,
     },
     /// animation tick
     Tick,
@@ -35,7 +35,7 @@ impl Event {
     /// a key press with no modifiers
     #[must_use]
     pub const fn key(key: Key) -> Self {
-        Self::Key(KeyEvent::new(key))
+        Self::Key(KeyEvent::new(key, Modifiers::empty()))
     }
 
     /// a press of the character key `value` with no modifiers
@@ -43,10 +43,16 @@ impl Event {
     pub const fn char(value: char) -> Self {
         Self::key(Key::Char(value))
     }
+
+    /// one key press per character of `text`, for scripting typed input
+    pub fn text(text: &str) -> impl Iterator<Item = Self> + '_ {
+        text.chars().map(Self::char)
+    }
 }
 
 /// a key press together with the modifiers held
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub struct KeyEvent {
     /// the key that was pressed
     pub key:       Key,
@@ -55,24 +61,15 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
-    /// a press of `key` with no modifiers
-    #[must_use]
-    pub const fn new(key: Key) -> Self {
-        Self {
-            key,
-            modifiers: Modifiers::empty(),
-        }
-    }
-
     /// a press of `key` with `modifiers` held
     #[must_use]
-    pub const fn with_modifiers(key: Key, modifiers: Modifiers) -> Self {
+    pub const fn new(key: Key, modifiers: Modifiers) -> Self {
         Self { key, modifiers }
     }
 }
 
 /// usable keys
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum Key {
     /// a printable character

@@ -15,10 +15,10 @@ use crate::{
     Context,
     Date,
     Event,
+    InputWidget,
     Key,
     Reaction,
     Value,
-    Widget,
     WidgetId,
     value::days_in_month,
 };
@@ -95,11 +95,7 @@ impl DatePicker {
     }
 
     fn move_month_edge(&mut self, day: u8) -> Reaction {
-        let next = Date {
-            year:  self.selected.year,
-            month: self.selected.month,
-            day:   day.min(days_in_month(self.selected.year, self.selected.month)),
-        };
+        let next = Date::clamped(self.selected.year(), self.selected.month(), day);
         if next == self.selected {
             return Reaction::Ignored;
         }
@@ -115,19 +111,15 @@ impl DatePicker {
 impl screw::Widget for DatePicker {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let theme = ctx.theme();
-        let first = Date {
-            year:  self.selected.year,
-            month: self.selected.month,
-            day:   1,
-        };
+        let first = Date::clamped(self.selected.year(), self.selected.month(), 1);
         let start_offset = i32::from(weekday_monday0(first));
         let grid_start = add_days(first, -start_offset);
 
         out.write(
             format!(
                 "{} {}",
-                MONTHS[usize::from(self.selected.month - 1)],
-                self.selected.year
+                MONTHS[usize::from(self.selected.month() - 1)],
+                self.selected.year()
             ),
             theme.style(Role::Prompt),
         );
@@ -146,24 +138,24 @@ impl screw::Widget for DatePicker {
                     (">", Role::Selected)
                 } else if self.today == Some(date) {
                     ("*", Role::Success)
-                } else if date.month == self.selected.month {
+                } else if date.month() == self.selected.month() {
                     (" ", Role::Normal)
                 } else {
                     (".", Role::Dim)
                 };
-                out.write(format!("{marker}{:>2}", date.day), theme.style(role));
+                out.write(format!("{marker}{:>2}", date.day()), theme.style(role));
             }
         }
 
         out.newline();
         out.write(
-            "arrows move | pgup/pgdn month | home/end month edge | enter submit | esc cancel",
+            "arrows | pgup/pgdn month | [ ] year | home/end edge | enter submit | esc cancel",
             theme.style(Role::Dim),
         );
     }
 }
 
-impl Widget for DatePicker {
+impl InputWidget for DatePicker {
     fn id(&self) -> WidgetId {
         self.id.clone()
     }
@@ -189,7 +181,7 @@ impl Widget for DatePicker {
             Key::Down => self.move_days(7),
             Key::Home => self.move_month_edge(1),
             Key::End => {
-                self.move_month_edge(days_in_month(self.selected.year, self.selected.month))
+                self.move_month_edge(days_in_month(self.selected.year(), self.selected.month()))
             },
             Key::PageUp => {
                 if key.modifiers.contains(crate::Modifiers::SHIFT) {
@@ -209,6 +201,8 @@ impl Widget for DatePicker {
             Key::Char('l' | 'L') if no_modifiers(&key) => self.move_days(1),
             Key::Char('k' | 'K') if no_modifiers(&key) => self.move_days(-7),
             Key::Char('j' | 'J') if no_modifiers(&key) => self.move_days(7),
+            Key::Char('[') if no_modifiers(&key) => self.move_years(-1),
+            Key::Char(']') if no_modifiers(&key) => self.move_years(1),
             Key::Enter => self.submit(),
             Key::Esc => Reaction::Cancel,
             Key::Char(_)
@@ -226,46 +220,32 @@ impl Widget for DatePicker {
     }
 }
 
-const FIRST: Date = Date {
-    year:  1,
-    month: 1,
-    day:   1,
-};
+const FIRST: Date = Date::clamped(1, 1, 1);
 
-const LAST: Date = Date {
-    year:  9999,
-    month: 12,
-    day:   31,
-};
+const LAST: Date = Date::clamped(9999, 12, 31);
 
 fn clamp_date(date: Date) -> Date {
-    let year = date.year.clamp(FIRST.year, LAST.year);
-    let month = date.month.clamp(1, 12);
-    Date {
-        year,
-        month,
-        day: date.day.clamp(1, days_in_month(year, month)),
-    }
+    Date::clamped(
+        date.year().clamp(FIRST.year(), LAST.year()),
+        date.month(),
+        date.day(),
+    )
 }
 
 fn add_months(date: Date, months: i32) -> Date {
-    let total = i64::from(date.year) * 12 + i64::from(date.month) - 1 + i64::from(months);
+    let total = i64::from(date.year()) * 12 + i64::from(date.month()) - 1 + i64::from(months);
     let years = total.div_euclid(12);
-    if years < i64::from(FIRST.year) {
+    if years < i64::from(FIRST.year()) {
         return FIRST;
     }
     let Ok(year) = i32::try_from(years) else {
         return LAST;
     };
-    if year > LAST.year {
+    if year > LAST.year() {
         return LAST;
     }
     let month = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
-    Date {
-        year,
-        month,
-        day: date.day.min(days_in_month(year, month)),
-    }
+    Date::clamped(year, month, date.day())
 }
 
 fn add_days(date: Date, days: i32) -> Date {
@@ -347,10 +327,20 @@ mod tests {
 
         let mut leap_day = at(2024, 2, 29);
         leap_day.handle(
-            Event::Key(KeyEvent::with_modifiers(Key::PageDown, Modifiers::SHIFT)),
+            Event::Key(KeyEvent::new(Key::PageDown, Modifiers::SHIFT)),
             &mut Context::new(),
         );
         assert_eq!(leap_day.selected(), Date::new(2025, 2, 28).unwrap());
+    }
+
+    #[test]
+    fn the_bracket_keys_step_years() {
+        let mut picker = at(2024, 2, 29);
+        press(&mut picker, Key::Char(']'));
+        assert_eq!(picker.selected(), Date::new(2025, 2, 28).unwrap());
+        press(&mut picker, Key::Char('['));
+        press(&mut picker, Key::Char('['));
+        assert_eq!(picker.selected(), Date::new(2023, 2, 28).unwrap());
     }
 
     #[test]

@@ -162,10 +162,14 @@ impl SignalGuard {
     /// installs handlers for the conventional terminal signals, one guard at a
     /// time, the previous handlers are suspended until the guard is restored
     ///
+    /// the handlers only queue the signal, so until a [`SignalPoller`] is
+    /// handed to [`TerminalEvents::signals`](crate::TerminalEvents::signals)
+    /// the process no longer stops on SIGINT, SIGTERM or SIGHUP
+    ///
     /// # Errors
     ///
     /// fails when another guard is active or a handler cannot be installed
-    pub fn install_terminal_handlers() -> io::Result<Self> {
+    pub fn enter() -> io::Result<Self> {
         handlers::claim()?;
         let installed = install_terminal_handlers_exclusive();
         if installed.is_err() {
@@ -452,22 +456,19 @@ mod tests {
     #[test]
     fn terminal_signal_handlers_are_a_process_singleton() {
         let _serial = serialise_signals();
-        let guard = SignalGuard::install_terminal_handlers().unwrap();
-        let error = SignalGuard::install_terminal_handlers().unwrap_err();
+        let guard = SignalGuard::enter().unwrap();
+        let error = SignalGuard::enter().unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
         drop(guard);
 
-        SignalGuard::install_terminal_handlers()
-            .unwrap()
-            .restore()
-            .unwrap();
+        SignalGuard::enter().unwrap().restore().unwrap();
     }
 
     #[test]
     fn successive_guards_share_one_queue() {
         let _serial = serialise_signals();
         for signal in [libc::SIGTERM, libc::SIGHUP] {
-            let mut guard = SignalGuard::install_terminal_handlers().unwrap();
+            let mut guard = SignalGuard::enter().unwrap();
             raise(signal);
             assert_eq!(
                 guard.poll_signal().unwrap().map(Signal::as_raw),
@@ -481,11 +482,11 @@ mod tests {
     #[test]
     fn a_stale_handler_write_never_reaches_a_later_guard() {
         let _serial = serialise_signals();
-        let first = SignalGuard::install_terminal_handlers().unwrap();
+        let first = SignalGuard::enter().unwrap();
         let stale = handlers::generation();
         first.restore().unwrap();
 
-        let mut second = SignalGuard::install_terminal_handlers().unwrap();
+        let mut second = SignalGuard::enter().unwrap();
         let fd = handlers::write_fd();
         // SAFETY: the write end is never closed once published
         let write_fd = unsafe { BorrowedFd::borrow_raw(fd) };
@@ -500,7 +501,7 @@ mod tests {
     #[test]
     fn restore_polling_returns_a_signal_queued_before_release() {
         let _serial = serialise_signals();
-        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        let guard = SignalGuard::enter().unwrap();
         raise(libc::SIGTERM);
         let (result, late) = guard.restore_polling();
         result.unwrap();
@@ -510,7 +511,7 @@ mod tests {
     #[test]
     fn handlers_restart_interrupted_syscalls() {
         let _serial = serialise_signals();
-        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        let guard = SignalGuard::enter().unwrap();
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
             // SAFETY: a zeroed sigaction is valid storage for the query
             let mut current = unsafe { mem::zeroed::<libc::sigaction>() };
@@ -527,7 +528,7 @@ mod tests {
         let _serial = serialise_signals();
         // SAFETY: SIG_IGN is a valid disposition
         let before = unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
-        let mut guard = SignalGuard::install_terminal_handlers().unwrap();
+        let mut guard = SignalGuard::enter().unwrap();
 
         raise(libc::SIGHUP);
         assert_eq!(guard.poll_signal().unwrap(), None);

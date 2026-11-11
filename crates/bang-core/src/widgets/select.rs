@@ -21,10 +21,10 @@ use super::navigation::{
 use crate::{
     Context,
     Event,
+    InputWidget,
     Key,
     Reaction,
     Value,
-    Widget,
     WidgetId,
 };
 
@@ -74,6 +74,7 @@ pub struct Select {
     page_size: usize,
     layout:    PageLayout,
     wrap:      bool,
+    help:      Option<String>,
 }
 
 impl Select {
@@ -92,7 +93,15 @@ impl Select {
             page_size: navigation::DEFAULT_PAGE_SIZE,
             layout:    PageLayout::default(),
             wrap:      true,
+            help:      None,
         }
+    }
+
+    /// replaces the key help line under the list
+    #[must_use]
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
     }
 
     /// shows at most `page_size` rows at once
@@ -243,6 +252,7 @@ impl Select {
             })
             .collect();
 
+        let default_help = if checked.is_some() { MULTI_HELP } else { HELP };
         navigation::render_list(
             ListFrame {
                 header: &self.header,
@@ -251,7 +261,7 @@ impl Select {
                 selected: self.selected_index(),
                 top: self.top,
                 max_visible: self.page_size,
-                help: if checked.is_some() { MULTI_HELP } else { HELP },
+                help: self.help.as_deref().unwrap_or(default_help),
             },
             &self.layout,
             ctx,
@@ -259,11 +269,11 @@ impl Select {
         );
     }
 
-    fn react(&mut self, event: Event) -> Reaction {
+    fn react(&mut self, event: &Event) -> Reaction {
         let targets = self.layout.targets();
         let key = match event {
-            Event::Key(key) => key,
-            Event::Row(row) => return self.jump_to(row),
+            Event::Key(key) => *key,
+            Event::Row(row) => return self.jump_to(*row),
             Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
                 return Reaction::Ignored;
             },
@@ -314,7 +324,7 @@ impl screw::Widget for Select {
     }
 }
 
-impl Widget for Select {
+impl InputWidget for Select {
     fn id(&self) -> WidgetId {
         self.id.clone()
     }
@@ -329,7 +339,7 @@ impl Widget for Select {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
-        let reaction = self.react(event);
+        let reaction = self.react(&event);
         if reaction != Reaction::Ignored {
             self.layout.forget_targets();
         }
@@ -377,15 +387,25 @@ impl MultiSelect {
     /// shows `header` above the list
     #[must_use]
     pub fn with_header(mut self, header: impl Into<String>) -> Self {
-        self.select = self.select.with_header(header);
+        self.select.set_header(header);
         self
+    }
+
+    /// shows `header` above the list
+    pub fn set_header(&mut self, header: impl Into<String>) {
+        self.select.set_header(header);
     }
 
     /// shows styled `header` spans above the list
     #[must_use]
     pub fn with_header_spans(mut self, header: impl Into<Vec<Span>>) -> Self {
-        self.select = self.select.with_header_spans(header);
+        self.select.set_header_spans(header);
         self
+    }
+
+    /// shows styled `header` spans above the list
+    pub fn set_header_spans(&mut self, header: impl Into<Vec<Span>>) {
+        self.select.set_header_spans(header);
     }
 
     /// starts with the choice at `selected`, clamped to the last choice
@@ -458,7 +478,7 @@ impl screw::Widget for MultiSelect {
     }
 }
 
-impl Widget for MultiSelect {
+impl InputWidget for MultiSelect {
     fn id(&self) -> WidgetId {
         self.select.id()
     }

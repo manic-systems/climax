@@ -26,10 +26,11 @@ use super::{
 use crate::{
     Context,
     Event,
+    InputWidget,
+    InvalidConfiguration,
     Key,
     Reaction,
     Value,
-    Widget,
     WidgetId,
 };
 
@@ -271,38 +272,40 @@ impl ReviewList {
 
     /// replaces the extra action keys, any action turns on exit output
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// panics when an action is bound to a control character, to a key the list
+    /// fails when an action is bound to a control character, to a key the list
     /// already uses (see [`Self::is_reserved_key`]), or to a key another action
     /// has, whatever the case
-    #[must_use]
     pub fn with_custom_actions(
         mut self,
         actions: impl IntoIterator<Item = ReviewActionBinding>,
-    ) -> Self {
+    ) -> Result<Self, InvalidConfiguration> {
         self.custom_actions = actions.into_iter().collect();
         let mut seen = Vec::new();
         for action in &self.custom_actions {
-            assert!(
-                !action.key.is_control(),
-                "review action key {:?} is a control character",
-                action.key
-            );
-            assert!(
-                !Self::is_reserved_key(action.key),
-                "review action key {:?} is already used by the list",
-                action.key
-            );
+            if action.key.is_control() {
+                return Err(InvalidConfiguration::new(format!(
+                    "review action key {:?} is a control character",
+                    action.key
+                )));
+            }
+            if Self::is_reserved_key(action.key) {
+                return Err(InvalidConfiguration::new(format!(
+                    "review action key {:?} is already used by the list",
+                    action.key
+                )));
+            }
             let folded = Self::fold_key(action.key);
-            assert!(
-                !seen.contains(&folded),
-                "review action key {:?} is bound twice",
-                action.key
-            );
+            if seen.contains(&folded) {
+                return Err(InvalidConfiguration::new(format!(
+                    "review action key {:?} is bound twice",
+                    action.key
+                )));
+            }
             seen.push(folded);
         }
-        self
+        Ok(self)
     }
 
     /// whether the list takes `key` itself, which are space, j, k, r, y, c, x,
@@ -615,11 +618,11 @@ impl ReviewList {
 
     fn action_help(&self) -> String {
         let mut parts = vec![
-            "space cycle".to_owned(),
+            "space next".to_owned(),
             "y confirm".to_owned(),
             "x deny".to_owned(),
             "u unset".to_owned(),
-            "r removed".to_owned(),
+            "r remove".to_owned(),
             "enter submit".to_owned(),
         ];
         if self.exits() {
@@ -637,11 +640,11 @@ impl ReviewList {
         parts.join(" | ")
     }
 
-    fn react(&mut self, event: Event) -> Reaction {
+    fn react(&mut self, event: &Event) -> Reaction {
         let targets = self.layout.targets();
         let key = match event {
-            Event::Key(key) => key,
-            Event::Row(row) => return self.jump_to(row),
+            Event::Key(key) => *key,
+            Event::Row(row) => return self.jump_to(*row),
             Event::Paste(_) | Event::UnknownEscape(_) | Event::Resize { .. } | Event::Tick => {
                 return Reaction::Ignored;
             },
@@ -720,7 +723,7 @@ impl screw::Widget for ReviewList {
     }
 }
 
-impl Widget for ReviewList {
+impl InputWidget for ReviewList {
     fn id(&self) -> WidgetId {
         self.id.clone()
     }
@@ -735,7 +738,7 @@ impl Widget for ReviewList {
 
     fn handle(&mut self, event: Event, _cx: &mut Context) -> Reaction {
         self.layout.sync_top(&mut self.top);
-        let reaction = self.react(event);
+        let reaction = self.react(&event);
         if reaction != Reaction::Ignored {
             self.layout.forget_targets();
         }
@@ -762,6 +765,7 @@ mod tests {
             ReviewList::new("review", ["alpha"])
                 .with_exit_output(true)
                 .with_custom_actions([ReviewActionBinding::new('g', "regenerate")])
+                .unwrap()
         };
 
         assert_exit(review(), Event::key(Key::Enter), "submit", None);
@@ -785,6 +789,7 @@ mod tests {
 
         let actions_first = ReviewList::new("review", ["alpha"])
             .with_custom_actions([ReviewActionBinding::new('g', "regenerate")])
+            .unwrap()
             .with_exit_output(false);
         assert_exit(
             actions_first,
@@ -799,17 +804,22 @@ mod tests {
     fn a_custom_action_on_a_built_in_key_is_refused() {
         drop(
             ReviewList::new("review", ["alpha"])
-                .with_custom_actions([ReviewActionBinding::new('R', "regenerate")]),
+                .with_custom_actions([ReviewActionBinding::new('R', "regenerate")])
+                .unwrap(),
         );
     }
 
     #[test]
     #[should_panic(expected = "is bound twice")]
     fn a_custom_action_key_repeated_in_another_case_is_refused() {
-        drop(ReviewList::new("review", ["alpha"]).with_custom_actions([
-            ReviewActionBinding::new('é', "first"),
-            ReviewActionBinding::new('É', "second"),
-        ]));
+        drop(
+            ReviewList::new("review", ["alpha"])
+                .with_custom_actions([
+                    ReviewActionBinding::new('é', "first"),
+                    ReviewActionBinding::new('É', "second"),
+                ])
+                .unwrap(),
+        );
     }
 
     #[test]
@@ -817,14 +827,16 @@ mod tests {
     fn a_custom_action_on_a_control_character_is_refused() {
         drop(
             ReviewList::new("review", ["alpha"])
-                .with_custom_actions([ReviewActionBinding::new('\u{7}', "bell")]),
+                .with_custom_actions([ReviewActionBinding::new('\u{7}', "bell")])
+                .unwrap(),
         );
     }
 
     #[test]
     fn custom_keys_match_whatever_the_case_and_reserved_keys_are_listed() {
         let review = ReviewList::new("review", ["alpha"])
-            .with_custom_actions([ReviewActionBinding::new('é', "accent")]);
+            .with_custom_actions([ReviewActionBinding::new('é', "accent")])
+            .unwrap();
         assert_exit(review, Event::char('É'), "action", Some("accent"));
 
         for key in [
@@ -846,7 +858,8 @@ mod tests {
         let review = ReviewList::new("review", ["alpha"])
             .with_exit_output(true)
             .with_leave_output(false)
-            .with_custom_actions([ReviewActionBinding::new('g', "regenerate")]);
+            .with_custom_actions([ReviewActionBinding::new('g', "regenerate")])
+            .unwrap();
 
         let mut session = Session::new(review);
         session.handle(Event::key(Key::Esc));
@@ -894,12 +907,15 @@ mod tests {
             ReviewList::new("review", ["alpha"])
                 .with_exit_output(true)
                 .with_custom_actions([ReviewActionBinding::new('g', "regenerate")])
+                .unwrap()
         };
 
         let mut session = Session::new(
             Form::new("form")
                 .with_field("review", review())
-                .with_field("note", TextInput::new("note")),
+                .unwrap()
+                .with_field("note", TextInput::new("note"))
+                .unwrap(),
         );
         assert!(matches!(
             session.handle(Event::key(Key::Enter)),
@@ -910,7 +926,9 @@ mod tests {
         let mut action_session = Session::new(
             Form::new("form")
                 .with_field("review", review())
-                .with_field("note", TextInput::new("note")),
+                .unwrap()
+                .with_field("note", TextInput::new("note"))
+                .unwrap(),
         );
         match action_session.handle(Event::char('g')) {
             SessionReaction::Submit(Value::Object(output)) => {

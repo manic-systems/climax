@@ -31,9 +31,9 @@ use super::{
 use crate::{
     Context,
     Event,
+    InputWidget,
     Key,
     Reaction,
-    Widget,
     WidgetId,
 };
 
@@ -282,7 +282,7 @@ impl SearchSelect {
                 selected: self.selected_match_index(),
                 top: self.top,
                 max_visible: self.page_size,
-                help: "type filter | enter submit | esc cancel",
+                help: "type filter | up/down move | enter submit | esc cancel",
             },
             &self.layout,
             ctx,
@@ -378,7 +378,7 @@ impl screw::Widget for SearchSelect {
     }
 }
 
-impl Widget for SearchSelect {
+impl InputWidget for SearchSelect {
     fn id(&self) -> WidgetId {
         self.id.clone()
     }
@@ -464,7 +464,7 @@ mod tests {
     };
 
     fn ctrl(ch: char) -> Event {
-        Event::Key(KeyEvent::with_modifiers(Key::Char(ch), Modifiers::CONTROL))
+        Event::Key(KeyEvent::new(Key::Char(ch), Modifiers::CONTROL))
     }
 
     #[test]
@@ -475,7 +475,7 @@ mod tests {
         let mut lines = plain.lines();
 
         assert_eq!(lines.next(), Some("pick one"));
-        assert!(lines.next().unwrap().starts_with("search: "), "{plain}");
+        assert!(lines.next().unwrap().starts_with("search › "), "{plain}");
         assert!(lines.next().unwrap().contains("alpha"), "{plain}");
     }
 

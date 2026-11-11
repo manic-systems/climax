@@ -5,12 +5,13 @@ use alloc::collections::BTreeMap;
 use crate::{
     Context,
     Event,
+    InputWidget,
+    InvalidConfiguration,
     Key,
     KeyEvent,
     Modifiers,
     Reaction,
     Value,
-    Widget,
     WidgetId,
 };
 
@@ -37,16 +38,13 @@ impl ActionBinding {
     /// binds the plain character `key` to the action `name`
     #[must_use]
     pub fn char(key: char, name: impl Into<String>) -> Self {
-        Self::new(KeyEvent::new(Key::Char(key)), name)
+        Self::new(KeyEvent::new(Key::Char(key), Modifiers::empty()), name)
     }
 
     /// binds Control and the character `key` to the action `name`
     #[must_use]
     pub fn control_char(key: char, name: impl Into<String>) -> Self {
-        Self::new(
-            KeyEvent::with_modifiers(Key::Char(key), Modifiers::CONTROL),
-            name,
-        )
+        Self::new(KeyEvent::new(Key::Char(key), Modifiers::CONTROL), name)
     }
 
     /// sets the text shown for this action in the key help
@@ -113,37 +111,42 @@ impl<W> ActionLayer<W> {
 
     /// replaces the bound actions with `actions`
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// panics when an action is bound to a control character, or two actions
+    /// fails when an action is bound to a control character, or two actions
     /// share a key
-    #[must_use]
-    pub fn with_actions(mut self, actions: impl IntoIterator<Item = ActionBinding>) -> Self {
+    pub fn with_actions(
+        mut self,
+        actions: impl IntoIterator<Item = ActionBinding>,
+    ) -> Result<Self, InvalidConfiguration> {
         self.actions.clear();
         for action in actions {
-            self.push_action(action);
+            self.push_action(action)?;
         }
-        self
+        Ok(self)
     }
 
     /// binds one more action
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// panics when the action is bound to a control character, or to a key
+    /// fails when the action is bound to a control character, or to a key
     /// another action has
-    pub fn push_action(&mut self, action: ActionBinding) {
-        assert!(
-            !matches!(action.key.key, Key::Char(value) if value.is_control()),
-            "action key '{}' is a control character",
-            key_label(&action.key)
-        );
-        assert!(
-            self.actions.iter().all(|bound| bound.key != action.key),
-            "action key '{}' is already bound",
-            key_label(&action.key)
-        );
+    pub fn push_action(&mut self, action: ActionBinding) -> Result<(), InvalidConfiguration> {
+        if matches!(action.key.key, Key::Char(value) if value.is_control()) {
+            return Err(InvalidConfiguration::new(format!(
+                "action key '{}' is a control character",
+                key_label(&action.key)
+            )));
+        }
+        if self.actions.iter().any(|bound| bound.key == action.key) {
+            return Err(InvalidConfiguration::new(format!(
+                "action key '{}' is already bound",
+                key_label(&action.key)
+            )));
+        }
         self.actions.push(action);
+        Ok(())
     }
 
     /// the bound actions in the order they were added
@@ -161,7 +164,7 @@ impl<W> ActionLayer<W> {
 
 impl<W> screw::Widget for ActionLayer<W>
 where
-    W: Widget,
+    W: InputWidget,
 {
     fn render(&self, ctx: &screw::RenderCtx, out: &mut screw::Surface) {
         self.widget.render(ctx, out);
@@ -192,9 +195,9 @@ where
     }
 }
 
-impl<W> Widget for ActionLayer<W>
+impl<W> InputWidget for ActionLayer<W>
 where
-    W: Widget,
+    W: InputWidget,
 {
     fn id(&self) -> WidgetId {
         self.widget.id()
@@ -209,7 +212,7 @@ where
             || self
                 .actions
                 .iter()
-                .any(|action| action.key == KeyEvent::new(Key::Tab))
+                .any(|action| action.key == KeyEvent::new(Key::Tab, Modifiers::empty()))
     }
 
     fn offers_nothing(&self) -> bool {
@@ -246,11 +249,11 @@ fn key_label(key: &KeyEvent) -> String {
             parts.push(name.to_owned());
         }
     }
-    parts.push(key_name(&key.key));
+    parts.push(key_name(key.key));
     parts.join("-")
 }
 
-fn key_name(key: &Key) -> String {
+fn key_name(key: Key) -> String {
     match key {
         Key::Char(value) => value.to_string(),
         Key::Function(number) => format!("f{number}"),
@@ -304,12 +307,13 @@ mod tests {
     fn action_layer_submits_current_value_for_bound_control_key() {
         let mut session = Session::new(
             ActionLayer::new(TextInput::new("name").with_value("Ada"))
-                .with_actions([ActionBinding::control_char('s', "save")]),
+                .with_actions([ActionBinding::control_char('s', "save")])
+                .unwrap(),
         );
 
         assert_eq!(session.handle(Event::char('!')), SessionReaction::Changed);
         assert!(matches!(
-            session.handle(Event::Key(KeyEvent::with_modifiers(
+            session.handle(Event::Key(KeyEvent::new(
                 Key::Char('s'),
                 Modifiers::CONTROL
             ))),
@@ -339,10 +343,12 @@ mod tests {
 
     #[test]
     fn bound_actions_extend_the_key_help_line() {
-        let layer = ActionLayer::new(Select::new("choice", ["alpha"])).with_actions([
-            ActionBinding::control_char('s', "save"),
-            ActionBinding::char('g', "go").with_help("regenerate"),
-        ]);
+        let layer = ActionLayer::new(Select::new("choice", ["alpha"]))
+            .with_actions([
+                ActionBinding::control_char('s', "save"),
+                ActionBinding::char('g', "go").with_help("regenerate"),
+            ])
+            .unwrap();
         assert_eq!(
             help_line(&layer),
             "up/down move | enter submit | esc cancel | ctrl-s save | g regenerate"
@@ -352,7 +358,8 @@ mod tests {
     #[test]
     fn a_widget_without_key_help_gets_a_help_line_of_its_own() {
         let layer = ActionLayer::new(TextInput::new("name"))
-            .with_actions([ActionBinding::control_char('s', "save")]);
+            .with_actions([ActionBinding::control_char('s', "save")])
+            .unwrap();
         assert_eq!(help_line(&layer), "ctrl-s save");
         assert_eq!(help_line(&ActionLayer::new(TextInput::new("name"))), "");
     }
@@ -364,12 +371,15 @@ mod tests {
                 .with_field(
                     "name",
                     ActionLayer::new(TextInput::new("name").with_value("Ada"))
-                        .with_actions([ActionBinding::control_char('s', "save")]),
+                        .with_actions([ActionBinding::control_char('s', "save")])
+                        .unwrap(),
                 )
-                .with_field("note", TextInput::new("note")),
+                .unwrap()
+                .with_field("note", TextInput::new("note"))
+                .unwrap(),
         );
 
-        session.handle(Event::Key(KeyEvent::with_modifiers(
+        session.handle(Event::Key(KeyEvent::new(
             Key::Char('s'),
             Modifiers::CONTROL,
         )));
@@ -383,10 +393,12 @@ mod tests {
     #[should_panic(expected = "action key 'ctrl-s' is already bound")]
     fn a_repeated_action_key_is_refused() {
         drop(
-            ActionLayer::new(Select::new("choice", ["alpha"])).with_actions([
-                ActionBinding::control_char('s', "save"),
-                ActionBinding::control_char('s', "store"),
-            ]),
+            ActionLayer::new(Select::new("choice", ["alpha"]))
+                .with_actions([
+                    ActionBinding::control_char('s', "save"),
+                    ActionBinding::control_char('s', "store"),
+                ])
+                .unwrap(),
         );
     }
 
@@ -394,7 +406,9 @@ mod tests {
     #[should_panic(expected = "is a control character")]
     fn an_action_on_a_control_character_is_refused() {
         let mut layer = ActionLayer::new(Select::new("choice", ["alpha"]));
-        layer.push_action(ActionBinding::char('\u{7}', "bell"));
+        layer
+            .push_action(ActionBinding::char('\u{7}', "bell"))
+            .unwrap();
     }
 
     #[test]
@@ -404,7 +418,8 @@ mod tests {
                 SelectItem::from("alpha"),
                 SelectItem::from("bravo"),
             ]))
-            .with_actions([ActionBinding::control_char('s', "save")]),
+            .with_actions([ActionBinding::control_char('s', "save")])
+            .unwrap(),
         );
 
         assert_eq!(

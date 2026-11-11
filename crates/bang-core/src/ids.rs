@@ -26,9 +26,9 @@ impl WidgetId {
     }
 }
 
-impl From<&'static str> for WidgetId {
-    fn from(value: &'static str) -> Self {
-        Self::borrowed(value)
+impl From<&str> for WidgetId {
+    fn from(value: &str) -> Self {
+        Self::owned(value)
     }
 }
 

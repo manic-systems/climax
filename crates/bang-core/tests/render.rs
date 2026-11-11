@@ -9,12 +9,12 @@ use bang_core::{
     Context,
     Date,
     Event,
+    InputWidget as _,
     Key,
     KeyEvent,
     Modifiers,
     Reaction,
     Session,
-    Widget as _,
     widgets::{
         DatePicker,
         Form,
@@ -50,10 +50,7 @@ fn lines(widget: &impl Widget, rows: usize) -> Vec<String> {
 }
 
 const fn page_key(key: Key) -> Event {
-    Event::Key(KeyEvent {
-        key,
-        modifiers: Modifiers::empty(),
-    })
+    Event::key(key)
 }
 
 fn items(count: usize) -> Vec<String> {
@@ -134,26 +131,24 @@ fn form_cursor_follows_the_active_field() {
     let mut form = Form::new("form")
         .with_field(
             "name",
-            TextInput::new("name")
-                .with_prompt("Name: ")
-                .with_value("Ada"),
+            TextInput::new("name").with_prompt("Name").with_value("Ada"),
         )
+        .unwrap()
         .with_field(
             "note",
-            TextInput::new("note")
-                .with_prompt("Note: ")
-                .with_value("hi"),
-        );
+            TextInput::new("note").with_prompt("Note").with_value("hi"),
+        )
+        .unwrap();
 
     assert_eq!(
         draw(&form, None).cursor(),
-        Some(Position { row: 1, col: 9 })
+        Some(Position { row: 1, col: 10 })
     );
 
     form.set_active_index(1);
     assert_eq!(
         draw(&form, None).cursor(),
-        Some(Position { row: 3, col: 8 })
+        Some(Position { row: 3, col: 9 })
     );
 }
 
@@ -287,7 +282,9 @@ fn page_keys_after_unrendered_moves_scroll_by_the_page_size() {
 fn a_form_shows_the_active_list_in_full() {
     let mut form = Form::new("form")
         .with_field("first", Select::new("a", ["one", "two", "three"]))
-        .with_field("second", Select::new("b", ["four", "five", "six"]));
+        .unwrap()
+        .with_field("second", Select::new("b", ["four", "five", "six"]))
+        .unwrap();
 
     let first = lines(&form, 9);
 
@@ -303,6 +300,7 @@ fn a_form_shows_the_active_list_in_full() {
     assert!(!second.iter().any(|line| line.contains("one")));
 }
 
+#[expect(clippy::expect_used, reason = "the test fields have distinct names")]
 fn text_form(count: usize) -> Form {
     let mut form = Form::new("form");
     for index in 0..count {
@@ -311,7 +309,8 @@ fn text_form(count: usize) -> Form {
             TextInput::new(format!("f{index}"))
                 .with_prompt(format!("f{index}> "))
                 .with_value("v"),
-        );
+        )
+        .expect("test fields are distinct");
     }
     form
 }
@@ -352,8 +351,11 @@ fn a_list_field_in_a_form_keeps_rows_at_small_heights() {
     for height in 2..=24 {
         let mut form = Form::new("form")
             .with_field("name", TextInput::new("name").with_prompt("name> "))
+            .unwrap()
             .with_field("pick", Select::new("pick", items(30)))
-            .with_field("note", TextInput::new("note").with_prompt("note> "));
+            .unwrap()
+            .with_field("note", TextInput::new("note").with_prompt("note> "))
+            .unwrap();
         form.set_active_index(1);
         let shown = lines(&form, height);
         let context = format!("height {height}");
@@ -417,14 +419,18 @@ fn only_a_handled_event_forgets_the_rendered_page_layout() {
 
 #[test]
 fn a_chord_on_a_plain_key_is_ignored_by_every_widget() {
-    let widgets: Vec<Box<dyn bang_core::Widget>> = vec![
+    let widgets: Vec<Box<dyn bang_core::InputWidget>> = vec![
         Box::new(Select::new("select", items(3))),
         Box::new(MultiSelect::new("multi", items(3))),
         Box::new(SearchSelect::new("search", items(3))),
         Box::new(ReviewList::new("review", items(3))),
         Box::new(TextInput::new("text")),
         Box::new(DatePicker::new("when", date(1))),
-        Box::new(Form::new("form").with_field("text", TextInput::new("inner"))),
+        Box::new(
+            Form::new("form")
+                .with_field("text", TextInput::new("inner"))
+                .unwrap(),
+        ),
     ];
     let mut cx = Context::new();
 
@@ -440,7 +446,7 @@ fn a_chord_on_a_plain_key_is_ignored_by_every_widget() {
                 Key::Left,
                 Key::Right,
             ] {
-                let event = Event::Key(KeyEvent::with_modifiers(key.clone(), modifiers));
+                let event = Event::Key(KeyEvent::new(key, modifiers));
                 assert_eq!(
                     widget.handle(event, &mut cx),
                     Reaction::Ignored,
@@ -506,4 +512,20 @@ fn a_list_fills_a_terminal_that_grows_in_one_frame() {
     select.handle(Event::Resize { cols: 40, rows: 30 }, &mut cx);
 
     assert_eq!(lines(&select, 30).len(), 21);
+}
+
+#[test]
+fn an_overlong_header_and_label_end_in_an_ellipsis() {
+    let select =
+        Select::new("pick", ["x".repeat(128), "short".to_owned()]).with_header("h".repeat(100));
+    let shown = lines(&select, 9);
+
+    assert_eq!(shown[0].chars().count(), 40);
+    assert!(shown[0].ends_with('…'), "{shown:?}");
+    assert_eq!(shown[1].chars().count(), 40);
+    assert!(
+        shown[1].starts_with("> xxx") && shown[1].ends_with('…'),
+        "{shown:?}"
+    );
+    assert_eq!(shown[2], "  short");
 }

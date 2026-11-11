@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 
-use core::fmt;
+use core::{
+    cell::Cell,
+    fmt,
+};
 
 use screw::{
     RenderCtx,
@@ -21,12 +24,13 @@ use super::navigation::{
 use crate::{
     Context,
     Event,
+    InputWidget,
+    InvalidConfiguration,
     Key,
     KeyEvent,
     Modifiers,
     Reaction,
     Value,
-    Widget,
     WidgetId,
 };
 
@@ -42,6 +46,7 @@ pub struct TextInput {
     error:       Option<String>,
     validator:   Option<Box<Validator>>,
     mask:        Option<char>,
+    scroll:      Cell<usize>,
 }
 
 impl fmt::Debug for TextInput {
@@ -74,19 +79,31 @@ impl TextInput {
             error:       None,
             validator:   None,
             mask:        None,
+            scroll:      Cell::new(0),
         }
     }
 
-    /// shows `prompt` before the text
+    /// shows `prompt` before the text, followed by a separator, a trailing `:`
+    /// is dropped so a label that already carries one does not repeat it
     #[must_use]
     pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.set_prompt(prompt);
         self
     }
 
-    /// shows `prompt` before the text
+    /// shows `prompt` before the text, followed by a separator, a trailing `:`
+    /// is dropped so a label that already carries one does not repeat it
     pub fn set_prompt(&mut self, prompt: impl Into<String>) {
-        self.prompt = vec![Span::new(prompt).role(Role::Prompt)];
+        let text = prompt.into();
+        let label = text.trim().trim_end_matches(':').trim_end();
+        self.prompt = if label.is_empty() {
+            Vec::new()
+        } else {
+            vec![
+                Span::new(label).role(Role::Prompt),
+                Span::new(" › ").role(Role::Dim),
+            ]
+        };
     }
 
     /// shows styled `prompt` spans before the text
@@ -131,17 +148,17 @@ impl TextInput {
     /// renders every grapheme cluster of the value as `mask`, leaving the value
     /// itself untouched
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// panics when `mask` is a control character or takes no columns
-    #[must_use]
-    pub fn with_mask(mut self, mask: char) -> Self {
-        assert!(
-            !mask.is_control() && screw::width(mask.encode_utf8(&mut [0; 4])) > 0,
-            "text input mask {mask:?} must be a visible character"
-        );
+    /// fails when `mask` is a control character or takes no columns
+    pub fn with_mask(mut self, mask: char) -> Result<Self, InvalidConfiguration> {
+        if mask.is_control() || screw::width(mask.encode_utf8(&mut [0; 4])) == 0 {
+            return Err(InvalidConfiguration::new(format!(
+                "text input mask {mask:?} must be a visible character"
+            )));
+        }
         self.mask = Some(mask);
-        self
+        Ok(self)
     }
 
     /// the text typed so far
@@ -174,7 +191,19 @@ impl TextInput {
     }
 
     fn insert_str(&mut self, value: &str) -> Reaction {
-        let cleaned: String = value.chars().filter(|ch| !ch.is_control()).collect();
+        let cleaned: String = value
+            .trim_end_matches(['\r', '\n'])
+            .replace("\r\n", " ")
+            .chars()
+            .map(|ch| {
+                if matches!(ch, '\n' | '\r' | '\t') {
+                    ' '
+                } else {
+                    ch
+                }
+            })
+            .filter(|ch| !ch.is_control())
+            .collect();
         if cleaned.is_empty() {
             return Reaction::Ignored;
         }
@@ -334,6 +363,25 @@ impl TextInput {
         Reaction::Changed
     }
 
+    fn delete_to_start(&mut self) -> Reaction {
+        if self.cursor == 0 {
+            return Reaction::Ignored;
+        }
+        self.value.replace_range(..self.cursor, "");
+        self.cursor = 0;
+        self.error = None;
+        Reaction::Changed
+    }
+
+    fn delete_to_end(&mut self) -> Reaction {
+        if self.cursor == self.value.len() {
+            return Reaction::Ignored;
+        }
+        self.value.truncate(self.cursor);
+        self.error = None;
+        Reaction::Changed
+    }
+
     fn submit(&mut self) -> Reaction {
         if let Some(validator) = &self.validator {
             match validator(&self.value) {
@@ -349,6 +397,35 @@ impl TextInput {
         Reaction::Submit(Value::from(self.value.clone()))
     }
 
+    fn scroll_start(&self, value: &str, split: usize, budget: usize) -> usize {
+        if screw::width(value) < budget {
+            self.scroll.set(0);
+            return 0;
+        }
+        let cursor_cell = value[split..]
+            .graphemes(true)
+            .next()
+            .map_or(1, |cluster| screw::width(cluster).max(1));
+        let mut start = cluster_start(value, self.scroll.get().min(split));
+        let mut used = screw::width(&value[start..split]);
+        for cluster in value[start..split].graphemes(true) {
+            if used + cursor_cell <= budget {
+                break;
+            }
+            used -= screw::width(cluster);
+            start += cluster.len();
+        }
+        while start > 0 {
+            let earlier = previous_boundary(value, start);
+            if screw::width(&value[earlier..]) >= budget {
+                break;
+            }
+            start = earlier;
+        }
+        self.scroll.set(start);
+        start
+    }
+
     fn displayed_value(&self) -> String {
         self.mask.map_or_else(
             || self.value.clone(),
@@ -362,6 +439,9 @@ impl screw::Widget for TextInput {
         let theme = ctx.theme();
         Spans::new(self.prompt.iter().cloned()).render(ctx, out);
         let value = self.displayed_value();
+        let budget = ctx
+            .available_columns()
+            .map(|columns| columns.saturating_sub(out.current_col()).max(1));
         if value.is_empty() {
             out.set_cursor_here();
             if let Some(placeholder) = &self.placeholder {
@@ -372,9 +452,13 @@ impl screw::Widget for TextInput {
                 mask.len_utf8() * self.cursor_grapheme_index()
             });
             let style = theme.style(Role::Normal);
-            out.write(&value[..split], style);
+            let start = budget.map_or(0, |columns| self.scroll_start(&value, split, columns));
+            out.write(&value[start..split], style);
             out.set_cursor_here();
-            out.write(&value[split..], style);
+            let rest = &value[split..];
+            let room =
+                budget.map(|columns| columns.saturating_sub(screw::width(&value[start..split])));
+            out.write(room.map_or(rest, |columns| fit(rest, columns)), style);
         }
         if let Some(error) = &self.error {
             out.newline();
@@ -383,7 +467,7 @@ impl screw::Widget for TextInput {
     }
 }
 
-impl Widget for TextInput {
+impl InputWidget for TextInput {
     fn id(&self) -> WidgetId {
         self.id.clone()
     }
@@ -396,6 +480,14 @@ impl Widget for TextInput {
                     Key::Char('w') if key.modifiers == Modifiers::CONTROL => {
                         self.delete_word_left()
                     },
+                    Key::Char('a') if key.modifiers == Modifiers::CONTROL => self.move_home(),
+                    Key::Char('e') if key.modifiers == Modifiers::CONTROL => self.move_end(),
+                    Key::Char('b') if key.modifiers == Modifiers::CONTROL => self.move_left(),
+                    Key::Char('f') if key.modifiers == Modifiers::CONTROL => self.move_right(),
+                    Key::Char('u') if key.modifiers == Modifiers::CONTROL => self.delete_to_start(),
+                    Key::Char('k') if key.modifiers == Modifiers::CONTROL => self.delete_to_end(),
+                    Key::Char('b') if key.modifiers == Modifiers::ALT => self.move_word_left(),
+                    Key::Char('f') if key.modifiers == Modifiers::ALT => self.move_word_right(),
                     Key::Char('d') if key.modifiers == Modifiers::ALT => self.delete_word_right(),
                     Key::Backspace if key.modifiers == Modifiers::ALT => self.delete_word_left(),
                     Key::Delete if key.modifiers == Modifiers::CONTROL => self.delete_word_right(),
@@ -452,6 +544,17 @@ fn word_class(segment: &str) -> WordClass {
     }
 }
 
+fn fit(text: &str, columns: usize) -> &str {
+    let mut used = 0;
+    for (index, cluster) in text.grapheme_indices(true) {
+        used += screw::width(cluster);
+        if used > columns {
+            return &text[..index];
+        }
+    }
+    text
+}
+
 fn by_word(key: &KeyEvent) -> bool {
     key.modifiers == Modifiers::CONTROL || key.modifiers == Modifiers::ALT
 }
@@ -506,7 +609,7 @@ mod tests {
     fn type_str(widget: &mut TextInput, text: &str) {
         let mut cx = Context::new();
         for value in text.chars() {
-            widget.handle(Event::Key(crate::KeyEvent::new(Key::Char(value))), &mut cx);
+            widget.handle(Event::key(Key::Char(value)), &mut cx);
         }
     }
 
@@ -518,7 +621,7 @@ mod tests {
 
     #[test]
     fn a_masked_input_shows_the_mask_and_keeps_the_real_value() {
-        let mut widget = TextInput::new("secret").with_mask('*');
+        let mut widget = TextInput::new("secret").with_mask('*').unwrap();
         type_str(&mut widget, "hünter2");
 
         let surface = draw(&widget);
@@ -531,11 +634,11 @@ mod tests {
 
     #[test]
     fn the_cursor_counts_masked_characters_after_editing() {
-        let mut widget = TextInput::new("secret").with_mask('•');
+        let mut widget = TextInput::new("secret").with_mask('•').unwrap();
         type_str(&mut widget, "añb");
         let mut cx = Context::new();
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Left)), &mut cx);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Backspace)), &mut cx);
+        widget.handle(Event::key(Key::Left), &mut cx);
+        widget.handle(Event::key(Key::Backspace), &mut cx);
 
         let surface = draw(&widget);
 
@@ -547,7 +650,7 @@ mod tests {
     #[test]
     fn an_insertion_that_merges_clusters_leaves_the_cursor_on_a_boundary() {
         let mut cx = Context::new();
-        let left = Event::Key(crate::KeyEvent::new(Key::Left));
+        let left = Event::key(Key::Left);
 
         let mut widget = TextInput::new("t").with_value("\u{1f469}\u{1f4bb}");
         widget.handle(left.clone(), &mut cx);
@@ -566,7 +669,7 @@ mod tests {
         assert_eq!(combining.cursor_byte_index(), "e\u{301}".len());
 
         let mut leading = TextInput::new("t").with_value("\u{301}");
-        leading.handle(Event::Key(crate::KeyEvent::new(Key::Home)), &mut cx);
+        leading.handle(Event::key(Key::Home), &mut cx);
         type_str(&mut leading, "e");
         assert_eq!(leading.value(), "e\u{301}");
         assert_eq!(leading.cursor_byte_index(), leading.value().len());
@@ -579,32 +682,32 @@ mod tests {
         let merged = "\u{1f1e6}\u{1f1e7}";
 
         let mut widget = TextInput::new("t").with_value(flags);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Left)), &mut cx);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Backspace)), &mut cx);
+        widget.handle(Event::key(Key::Left), &mut cx);
+        widget.handle(Event::key(Key::Backspace), &mut cx);
         assert_eq!(widget.value(), merged);
         assert_eq!(widget.cursor_byte_index(), merged.len());
 
         let mut forward = TextInput::new("t").with_value(flags);
-        forward.handle(Event::Key(crate::KeyEvent::new(Key::Home)), &mut cx);
-        forward.handle(Event::Key(crate::KeyEvent::new(Key::Right)), &mut cx);
-        forward.handle(Event::Key(crate::KeyEvent::new(Key::Delete)), &mut cx);
+        forward.handle(Event::key(Key::Home), &mut cx);
+        forward.handle(Event::key(Key::Right), &mut cx);
+        forward.handle(Event::key(Key::Delete), &mut cx);
         assert_eq!(forward.value(), merged);
         assert_eq!(forward.cursor_byte_index(), merged.len());
     }
 
     #[test]
     fn editing_and_masking_work_on_grapheme_clusters() {
-        let mut widget = TextInput::new("secret").with_mask('*');
+        let mut widget = TextInput::new("secret").with_mask('*').unwrap();
         type_str(&mut widget, "ae\u{301}\u{1f468}\u{200d}\u{1f469}");
         assert_eq!(draw(&widget).plain_text(), "***");
         assert_eq!(widget.cursor_grapheme_index(), 3);
 
         let mut cx = Context::new();
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Left)), &mut cx);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Backspace)), &mut cx);
+        widget.handle(Event::key(Key::Left), &mut cx);
+        widget.handle(Event::key(Key::Backspace), &mut cx);
         assert_eq!(widget.value(), "a\u{1f468}\u{200d}\u{1f469}");
 
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Delete)), &mut cx);
+        widget.handle(Event::key(Key::Delete), &mut cx);
         assert_eq!(widget.value(), "a");
         assert_eq!(draw(&widget).cursor(), Some(Position { row: 0, col: 1 }));
     }
@@ -612,13 +715,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "must be a visible character")]
     fn a_newline_mask_is_refused() {
-        drop(TextInput::new("secret").with_mask('\n'));
+        drop(TextInput::new("secret").with_mask('\n').unwrap());
     }
 
     #[test]
     #[should_panic(expected = "must be a visible character")]
     fn a_zero_width_mask_is_refused() {
-        drop(TextInput::new("secret").with_mask('\u{200b}'));
+        drop(TextInput::new("secret").with_mask('\u{200b}').unwrap());
     }
 
     #[test]
@@ -630,7 +733,7 @@ mod tests {
 
     fn chord(widget: &mut TextInput, key: Key, modifiers: Modifiers) -> Reaction {
         widget.handle(
-            Event::Key(KeyEvent::with_modifiers(key, modifiers)),
+            Event::Key(KeyEvent::new(key, modifiers)),
             &mut Context::new(),
         )
     }
@@ -720,6 +823,7 @@ mod tests {
     fn a_masked_value_is_one_word() {
         let mut widget = TextInput::new("secret")
             .with_mask('*')
+            .unwrap()
             .with_value("two words");
         chord(&mut widget, Key::Left, Modifiers::CONTROL);
         assert_eq!(widget.cursor_byte_index(), 0);
@@ -740,17 +844,17 @@ mod tests {
     #[test]
     fn the_cursor_converts_scalars_to_display_columns() {
         let mut widget = TextInput::new("input")
-            .with_prompt("> ")
+            .with_prompt("input")
             .with_value("a界z")
             .with_validator(|_value| Err("try again".to_owned()));
         let mut cx = Context::new();
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Left)), &mut cx);
-        widget.handle(Event::Key(crate::KeyEvent::new(Key::Enter)), &mut cx);
+        widget.handle(Event::key(Key::Left), &mut cx);
+        widget.handle(Event::key(Key::Enter), &mut cx);
 
         let surface = draw(&widget);
 
-        assert_eq!(surface.plain_text(), "> a界z\ntry again");
-        assert_eq!(surface.cursor(), Some(Position { row: 0, col: 5 }));
+        assert_eq!(surface.plain_text(), "input › a界z\ntry again");
+        assert_eq!(surface.cursor(), Some(Position { row: 0, col: 11 }));
         assert_eq!(
             surface.rows()[1].cells()[0].style(),
             Theme::default().style(Role::Error)
@@ -765,7 +869,71 @@ mod tests {
 
         let surface = draw(&widget);
 
-        assert_eq!(surface.plain_text(), "search: type to filter");
-        assert_eq!(surface.cursor(), Some(Position { row: 0, col: 8 }));
+        assert_eq!(surface.plain_text(), "search › type to filter");
+        assert_eq!(surface.cursor(), Some(Position { row: 0, col: 9 }));
+    }
+
+    #[test]
+    fn a_label_that_carries_its_own_colon_is_not_doubled() {
+        for prompt in ["name", "name:", "name: "] {
+            let widget = TextInput::new("t").with_prompt(prompt);
+            assert_eq!(draw(&widget).plain_text(), "name › ");
+        }
+    }
+
+    #[test]
+    fn a_long_value_scrolls_to_keep_the_cursor_in_view() {
+        let mut widget = TextInput::new("url").with_prompt("url");
+        type_str(&mut widget, "0123456789abcdefghijklmnopqrst");
+        let render = |input: &TextInput| {
+            let mut surface = Surface::new();
+            let ctx = RenderCtx::new().with_constraints(Some(20), None);
+            screw::Widget::render(input, &ctx, &mut surface);
+            surface
+        };
+
+        let end = render(&widget);
+        assert_eq!(end.plain_text(), "url › hijklmnopqrst");
+        assert_eq!(end.cursor(), Some(Position { row: 0, col: 19 }));
+
+        chord(&mut widget, Key::Char('a'), Modifiers::CONTROL);
+        let start = render(&widget);
+        assert_eq!(start.plain_text(), "url › 0123456789abcd");
+        assert_eq!(start.cursor(), Some(Position { row: 0, col: 6 }));
+    }
+
+    #[test]
+    fn readline_keys_move_and_kill() {
+        let mut widget = TextInput::new("line");
+        type_str(&mut widget, "foo bar");
+        let control =
+            |target: &mut TextInput, key| chord(target, Key::Char(key), Modifiers::CONTROL);
+
+        control(&mut widget, 'a');
+        assert_eq!(widget.cursor_byte_index(), 0);
+        control(&mut widget, 'e');
+        assert_eq!(widget.cursor_byte_index(), 7);
+        control(&mut widget, 'b');
+        control(&mut widget, 'b');
+        control(&mut widget, 'f');
+        assert_eq!(widget.cursor_byte_index(), 6);
+        control(&mut widget, 'k');
+        assert_eq!(widget.value(), "foo ba");
+        chord(&mut widget, Key::Char('b'), Modifiers::ALT);
+        assert_eq!(widget.cursor_byte_index(), 4);
+        chord(&mut widget, Key::Char('f'), Modifiers::ALT);
+        assert_eq!(widget.cursor_byte_index(), 6);
+        control(&mut widget, 'u');
+        assert_eq!(widget.value(), "");
+    }
+
+    #[test]
+    fn a_multi_line_paste_joins_lines_with_spaces() {
+        let mut widget = TextInput::new("line");
+        widget.handle(
+            Event::Paste("foo bar\nbaz\tqux\r\n".to_owned()),
+            &mut Context::new(),
+        );
+        assert_eq!(widget.value(), "foo bar baz qux");
     }
 }

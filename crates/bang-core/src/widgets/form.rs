@@ -27,10 +27,11 @@ use crate::{
     Context,
     Event,
     FocusTarget,
+    InputWidget,
+    InvalidConfiguration,
     Key,
     Reaction,
     Value,
-    Widget,
     WidgetId,
 };
 
@@ -76,42 +77,59 @@ impl Form {
     }
 
     /// adds a field called `name` that edits through `widget`
-    #[must_use]
-    pub fn with_field(mut self, name: impl Into<String>, widget: impl Widget + 'static) -> Self {
-        self.push_field(name, widget);
-        self
+    ///
+    /// # Errors
+    ///
+    /// fails as [`Self::push_field`] does
+    pub fn with_field(
+        mut self,
+        name: impl Into<String>,
+        widget: impl InputWidget + 'static,
+    ) -> Result<Self, InvalidConfiguration> {
+        self.push_field(name, widget)?;
+        Ok(self)
     }
 
     /// adds a field called `name` that edits through `widget`
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// panics when a field called `name` already exists, when `widget` has the
+    /// fails when a field called `name` already exists, when `widget` has the
     /// id of an existing field, or when `widget` offers nothing to pick
-    pub fn push_field(&mut self, name: impl Into<String>, widget: impl Widget + 'static) {
+    pub fn push_field(
+        &mut self,
+        name: impl Into<String>,
+        widget: impl InputWidget + 'static,
+    ) -> Result<(), InvalidConfiguration> {
         let owned = name.into();
-        assert!(
-            self.fields.iter().all(|field| field.name != owned),
-            "form field name '{owned}' is already used"
-        );
-        assert!(
-            !widget.offers_nothing(),
-            "form field '{owned}' has nothing to pick"
-        );
+        if self.fields.iter().any(|field| field.name == owned) {
+            return Err(InvalidConfiguration::new(format!(
+                "form field name '{owned}' is already used"
+            )));
+        }
+        if widget.offers_nothing() {
+            return Err(InvalidConfiguration::new(format!(
+                "form field '{owned}' has nothing to pick"
+            )));
+        }
         let widget_id = widget.id();
-        assert!(
-            self.fields
-                .iter()
-                .all(|field| field.widget.id() != widget_id),
-            "form widget id '{}' is already used",
-            widget_id.as_str()
-        );
+        if self
+            .fields
+            .iter()
+            .any(|field| field.widget.id() == widget_id)
+        {
+            return Err(InvalidConfiguration::new(format!(
+                "form widget id '{}' is already used",
+                widget_id.as_str()
+            )));
+        }
         self.fields.push(FormField {
             name:     owned,
             widget:   Box::new(widget),
             accepted: None,
         });
         self.active = self.active.min(self.fields.len().saturating_sub(1));
+        Ok(())
     }
 
     /// how many fields the form has
@@ -385,7 +403,7 @@ fn wrapped_rows(help: &str, ctx: &RenderCtx) -> usize {
     }
 }
 
-impl Widget for Form {
+impl InputWidget for Form {
     fn id(&self) -> WidgetId {
         self.id.clone()
     }
@@ -423,13 +441,13 @@ impl Widget for Form {
 
 struct FormField {
     name:     String,
-    widget:   Box<dyn Widget>,
+    widget:   Box<dyn InputWidget>,
     accepted: Option<Value>,
 }
 
 struct FieldBlock<'a> {
     name:     &'a str,
-    widget:   &'a dyn Widget,
+    widget:   &'a dyn InputWidget,
     focused:  bool,
     labelled: bool,
     rows:     Option<usize>,
@@ -471,6 +489,7 @@ mod tests {
     use crate::{
         ActionLayer,
         KeyEvent,
+        Modifiers,
         widgets::{
             SearchSelect,
             Select,
@@ -479,7 +498,10 @@ mod tests {
     };
 
     fn press(form: &mut Form, key: Key) -> Reaction {
-        form.handle(Event::Key(KeyEvent::new(key)), &mut Context::new())
+        form.handle(
+            Event::Key(KeyEvent::new(key, Modifiers::empty())),
+            &mut Context::new(),
+        )
     }
 
     #[test]
@@ -488,7 +510,9 @@ mod tests {
         drop(
             Form::new("form")
                 .with_field("who", TextInput::new("first"))
-                .with_field("who", TextInput::new("second")),
+                .unwrap()
+                .with_field("who", TextInput::new("second"))
+                .unwrap(),
         );
     }
 
@@ -498,29 +522,43 @@ mod tests {
         drop(
             Form::new("form")
                 .with_field("first", TextInput::new("same"))
-                .with_field("second", TextInput::new("same")),
+                .unwrap()
+                .with_field("second", TextInput::new("same"))
+                .unwrap(),
         );
     }
 
     #[test]
     #[should_panic(expected = "form field 'pick' has nothing to pick")]
     fn an_empty_select_is_refused() {
-        drop(Form::new("form").with_field("pick", Select::new("pick", Vec::<String>::new())));
+        drop(
+            Form::new("form")
+                .with_field("pick", Select::new("pick", Vec::<String>::new()))
+                .unwrap(),
+        );
     }
 
     #[test]
     #[should_panic(expected = "form field 'pick' has nothing to pick")]
     fn an_empty_search_select_is_refused() {
-        drop(Form::new("form").with_field("pick", SearchSelect::new("pick", Vec::<String>::new())));
+        drop(
+            Form::new("form")
+                .with_field("pick", SearchSelect::new("pick", Vec::<String>::new()))
+                .unwrap(),
+        );
     }
 
     #[test]
     #[should_panic(expected = "form field 'pick' has nothing to pick")]
     fn an_empty_select_under_an_action_layer_is_refused() {
-        drop(Form::new("form").with_field(
-            "pick",
-            ActionLayer::new(Select::new("pick", Vec::<String>::new())),
-        ));
+        drop(
+            Form::new("form")
+                .with_field(
+                    "pick",
+                    ActionLayer::new(Select::new("pick", Vec::<String>::new())),
+                )
+                .unwrap(),
+        );
     }
 
     fn required(id: &'static str) -> TextInput {
@@ -537,7 +575,9 @@ mod tests {
     fn tab_does_not_skip_a_validator_at_the_final_submit() {
         let mut form = Form::new("form")
             .with_field("name", required("name"))
-            .with_field("nick", TextInput::new("nick"));
+            .unwrap()
+            .with_field("nick", TextInput::new("nick"))
+            .unwrap();
         press(&mut form, Key::Tab);
 
         let reaction = press(&mut form, Key::Enter);
@@ -561,7 +601,9 @@ mod tests {
 
     #[test]
     fn a_refusing_last_field_stays_focused() {
-        let mut form = Form::new("form").with_field("name", required("name"));
+        let mut form = Form::new("form")
+            .with_field("name", required("name"))
+            .unwrap();
         assert_eq!(press(&mut form, Key::Enter), Reaction::Changed);
     }
 
@@ -573,7 +615,7 @@ mod tests {
         fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {}
     }
 
-    impl Widget for Hopper {
+    impl InputWidget for Hopper {
         fn id(&self) -> WidgetId {
             WidgetId::from("hopper")
         }
@@ -604,7 +646,9 @@ mod tests {
     fn an_edit_answered_with_focus_invalidates_the_accepted_value() {
         let mut form = Form::new("form")
             .with_field("hop", Hopper { value: "old" })
-            .with_field("nick", TextInput::new("nick"));
+            .unwrap()
+            .with_field("nick", TextInput::new("nick"))
+            .unwrap();
         press(&mut form, Key::Enter);
         press(&mut form, Key::Backtab);
         press(&mut form, Key::Char('x'));
@@ -625,7 +669,7 @@ mod tests {
         fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {}
     }
 
-    impl Widget for Answers {
+    impl InputWidget for Answers {
         fn id(&self) -> WidgetId {
             WidgetId::from("answers")
         }
@@ -652,7 +696,7 @@ mod tests {
         fn render(&self, _ctx: &RenderCtx, _out: &mut Surface) {}
     }
 
-    impl Widget for Once {
+    impl InputWidget for Once {
         fn id(&self) -> WidgetId {
             WidgetId::from(self.id)
         }
@@ -680,10 +724,12 @@ mod tests {
                 id:   "first",
                 done: false,
             })
+            .unwrap()
             .with_field("second", Once {
                 id:   "second",
                 done: false,
-            });
+            })
+            .unwrap();
         press(&mut form, Key::Enter);
         assert_eq!(
             press(&mut form, Key::Enter),
@@ -706,7 +752,7 @@ mod tests {
         }
     }
 
-    impl Widget for Animated {
+    impl InputWidget for Animated {
         fn id(&self) -> WidgetId {
             WidgetId::from("animated")
         }
@@ -731,7 +777,9 @@ mod tests {
     fn a_tick_does_not_clear_an_accepted_value() {
         let mut form = Form::new("form")
             .with_field("spin", Animated { done: false })
-            .with_field("nick", TextInput::new("nick"));
+            .unwrap()
+            .with_field("nick", TextInput::new("nick"))
+            .unwrap();
         press(&mut form, Key::Enter);
         press(&mut form, Key::Backtab);
         assert_eq!(
@@ -763,7 +811,7 @@ mod tests {
         }
     }
 
-    impl Widget for Counter {
+    impl InputWidget for Counter {
         fn id(&self) -> WidgetId {
             WidgetId::from(self.id)
         }
@@ -799,7 +847,9 @@ mod tests {
                 count: 0,
                 asked: 0,
             })
-            .with_field("nick", TextInput::new("nick"));
+            .unwrap()
+            .with_field("nick", TextInput::new("nick"))
+            .unwrap();
         press(&mut form, Key::Enter);
         press(&mut form, Key::Backtab);
         form.handle(Event::Tick, &mut Context::new());
@@ -822,11 +872,13 @@ mod tests {
                 count: 0,
                 asked: 0,
             })
+            .unwrap()
             .with_field("b", Counter {
                 id:    "b",
                 count: 0,
                 asked: 0,
-            });
+            })
+            .unwrap();
         assert_eq!(
             form.handle(Event::Tick, &mut Context::new()),
             Reaction::Changed
@@ -848,22 +900,32 @@ mod tests {
             widgets::ReviewList,
         };
 
-        let mut review = Form::new("form").with_field(
-            "review",
-            ReviewList::new("review", ["alpha"])
-                .with_leave_output(true)
-                .with_exit_output(true),
-        );
+        let mut review = Form::new("form")
+            .with_field(
+                "review",
+                ReviewList::new("review", ["alpha"])
+                    .with_leave_output(true)
+                    .with_exit_output(true),
+            )
+            .unwrap();
         assert!(matches!(press(&mut review, Key::Esc), Reaction::Action(_)));
 
-        let mut bound = Form::new("form").with_field(
-            "bound",
-            ActionLayer::new(TextInput::new("bound"))
-                .with_actions([ActionBinding::new(KeyEvent::new(Key::Esc), "stop")]),
-        );
+        let mut bound = Form::new("form")
+            .with_field(
+                "bound",
+                ActionLayer::new(TextInput::new("bound"))
+                    .with_actions([ActionBinding::new(
+                        KeyEvent::new(Key::Esc, Modifiers::empty()),
+                        "stop",
+                    )])
+                    .unwrap(),
+            )
+            .unwrap();
         assert!(matches!(press(&mut bound, Key::Esc), Reaction::Action(_)));
 
-        let mut plain = Form::new("form").with_field("plain", TextInput::new("plain"));
+        let mut plain = Form::new("form")
+            .with_field("plain", TextInput::new("plain"))
+            .unwrap();
         assert_eq!(press(&mut plain, Key::Esc), Reaction::Cancel);
     }
 
@@ -873,7 +935,9 @@ mod tests {
 
         let mut pick = Form::new("form")
             .with_field("pick", MultiSelect::new("pick", ["alpha"]))
-            .with_field("note", TextInput::new("note"));
+            .unwrap()
+            .with_field("note", TextInput::new("note"))
+            .unwrap();
         assert_eq!(press(&mut pick, Key::Tab), Reaction::Changed);
         assert_eq!(pick.active_index(), 0);
         assert_eq!(
@@ -886,13 +950,15 @@ mod tests {
 
         let mut plain = Form::new("form")
             .with_field("a", TextInput::new("a"))
-            .with_field("b", TextInput::new("b"));
+            .unwrap()
+            .with_field("b", TextInput::new("b"))
+            .unwrap();
         press(&mut plain, Key::Tab);
         assert_eq!(plain.active_index(), 1);
     }
 
-    fn help_under(widget: impl Widget + 'static) -> String {
-        let form = Form::new("form").with_field("field", widget);
+    fn help_under(widget: impl InputWidget + 'static) -> String {
+        let form = Form::new("form").with_field("field", widget).unwrap();
         let mut surface = Surface::new();
         screw::Widget::render(
             &form,
@@ -940,7 +1006,11 @@ mod tests {
         assert_eq!(
             help_under(
                 ActionLayer::new(TextInput::new("text"))
-                    .with_actions([ActionBinding::new(KeyEvent::new(Key::Function(1)), "help")])
+                    .with_actions([ActionBinding::new(
+                        KeyEvent::new(Key::Function(1), Modifiers::empty()),
+                        "help"
+                    )])
+                    .unwrap()
             ),
             "tab next | shift-tab previous | enter accept | esc cancel"
         );
@@ -950,10 +1020,14 @@ mod tests {
     fn a_nested_form_cannot_move_the_outer_focus() {
         let inner = Form::new("inner")
             .with_field("one", TextInput::new("one"))
-            .with_field("two", TextInput::new("shared"));
+            .unwrap()
+            .with_field("two", TextInput::new("shared"))
+            .unwrap();
         let mut outer = Form::new("outer")
             .with_field("first", TextInput::new("shared"))
-            .with_field("inner", inner);
+            .unwrap()
+            .with_field("inner", inner)
+            .unwrap();
         outer.set_active_index(1);
 
         assert_eq!(
@@ -967,7 +1041,9 @@ mod tests {
     fn a_field_edited_after_acceptance_is_validated_again() {
         let mut form = Form::new("form")
             .with_field("name", required("name"))
-            .with_field("nick", TextInput::new("nick"));
+            .unwrap()
+            .with_field("nick", TextInput::new("nick"))
+            .unwrap();
         press(&mut form, Key::Char('a'));
         press(&mut form, Key::Enter);
         press(&mut form, Key::Backtab);
@@ -982,7 +1058,7 @@ mod tests {
 
     #[test]
     fn a_submitted_value_survives_without_current_value() {
-        let mut form = Form::new("form").with_field("custom", Answers);
+        let mut form = Form::new("form").with_field("custom", Answers).unwrap();
         assert_eq!(
             press(&mut form, Key::Enter),
             Reaction::Submit(Value::Object(BTreeMap::from([(

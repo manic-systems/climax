@@ -64,7 +64,7 @@ impl TerminalModeGuard {
     ///
     /// fails when `input` is not a terminal or its settings cannot be read or
     /// written
-    pub fn activate(input: &(impl AsFd + ?Sized), options: RawModeOptions) -> io::Result<Self> {
+    pub fn enter(input: &(impl AsFd + ?Sized), options: RawModeOptions) -> io::Result<Self> {
         activate_fd(input, options)
     }
 
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn raw_mode_keeps_output_post_processing() {
         let (_master, slave) = pty(80, 24).unwrap();
-        let guard = TerminalModeGuard::activate(&slave, RawModeOptions::blocking()).unwrap();
+        let guard = TerminalModeGuard::enter(&slave, RawModeOptions::blocking()).unwrap();
 
         let raw = tcgetattr(&slave).unwrap();
         assert!(
