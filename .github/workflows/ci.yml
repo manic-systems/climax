@@ -37,6 +37,16 @@ jobs:
       test: true
       test-command: cargo test --locked ${{ matrix.scope }} --all-features
 
+  msrv:
+    name: MSRV
+    uses: manic-systems/workflows/.github/workflows/rust-checks.yml@02fcd089a850e25bc6eff55f74db80c12b54391e # v2.3.4
+    with:
+      os: ubuntu-latest
+      flake-check: false
+      rust-toolchain: "1.89"
+      test: true
+      test-command: cargo check --locked --workspace --all-targets --all-features
+
   actions:
     name: Actions Lint
     uses: manic-systems/workflows/.github/workflows/actions-lint.yml@02fcd089a850e25bc6eff55f74db80c12b54391e # v2.3.4
@@ -46,6 +56,7 @@ jobs:
     if: always()
     needs:
       - checks
+      - msrv
       - actions
     runs-on: ubuntu-latest
     steps:

@@ -23,7 +23,8 @@ use bang::screw;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum InteractionMode {
-    /// interact only when stdin and the transient stream are terminals
+    /// interact only when stdin and the transient stream are terminals and
+    /// `TERM` is not `dumb`
     #[default]
     Auto,
     /// interact regardless of detection

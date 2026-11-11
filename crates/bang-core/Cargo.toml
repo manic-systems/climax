@@ -3,7 +3,7 @@ name                   = "bang-core"
 version                = "0.1.0"
 authors.workspace      = true
 categories             = [ "command-line-interface" ]
-description            = "Widgets and session state behind the bang prompts, rendered with screw"
+description            = "widgets and session state behind the bang prompts, rendered with screw"
 edition.workspace      = true
 keywords               = [ "cli", "input", "terminal", "widgets" ]
 license.workspace      = true
@@ -17,3 +17,7 @@ unicode-segmentation.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = [ "--cfg", "docsrs" ]

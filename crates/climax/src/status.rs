@@ -465,9 +465,7 @@ struct StatusEntry {
 /// stream writes to a stdout that shares the terminal wait for a reply, so a
 /// blocked stdout stalls status drawing until it drains. one requested while a
 /// prompt holds the lease waits for it to end, giving up after the bound
-/// without counting as a stall, and fails if the requesting thread holds it. a
-/// hold is gated the same way, and a prompt requested during a hold waits for
-/// it
+/// without counting as a stall, and fails if the requesting thread holds it
 ///
 /// every request gives up after `REQUEST_TIMEOUT` when a widget blocks the
 /// thread, and later requests fail at once until the thread answers again. the

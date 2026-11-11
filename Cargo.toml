@@ -69,7 +69,6 @@ pound             = { path = "crates/pound", version = "0.6.1", default-features
 pound-derive      = { path = "crates/pound-derive", version = "=0.6.1" }
 pound-derive-impl = { path = "crates/pound-derive-impl", version = "=0.6.1" }
 screw             = { path = "crates/screw", version = "=0.1.0" }
-screw-pty         = { path = "crates/screw-pty", version = "=0.1.0" }
 
 libc                 = "0.2.191"
 proc-macro2          = "1.0.107"

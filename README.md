@@ -10,6 +10,8 @@ five libraries, each usable on its own
 - `climax` is the application facade over `pound`, `screw` and `bang`
 - `caress` answers shell completion and renders completion scripts and man pages
 
+`bang-run` is the `bang` command line tool, the 0.0.1 `bang` command is now `cargo install bang-run`
+
 depend on `climax` alone, it re-exports each component whole behind its feature
 
 ## The climax application path
@@ -38,7 +40,9 @@ a cancelled prompt resolves to `PromptOutcome::Leave`, and `or_cancel` turns tha
 with `derive`, a struct deriving `climax::Parse` is the command, and `climax::main` parses,
 runs the handler and picks the exit code
 
-```rust
+```rust,no_run
+use std::process::ExitCode;
+
 use climax::prelude::*;
 
 #[climax::serde(Serialize)]
@@ -56,15 +60,25 @@ struct Args {
     shell: Shell,
 }
 
-climax::try_run_from(["--shell", "zsh"], |context, args: Args| {
-    context
-        .output()
+fn main() -> ExitCode {
+    climax::main(run)
+}
+
+fn run(cx: Context, args: Args) -> climax::Result<()> {
+    cx.output()
         .result(&args.shell)
         .text(|shell| format!("{shell:?}"))
         .emit()
-})?;
-# Ok::<(), climax::Error>(())
+}
 ```
+
+`crates/climax/examples/pkg.rs` is a larger derived app with subcommands, `--json`, `--color`,
+progress and a confirm
+
+an error from another crate converts with `?` when it is an `io::Error`, a `String`, a `&str` or a
+`Box<dyn Error + Send + Sync>`. any other error type needs `ResultExt::app_err` or
+`ResultExt::context`, and the `anyhow` feature adds `From<anyhow::Error>`. an i/o error anywhere
+in the source chain keeps its kind, so a wrapped `BrokenPipe` still exits 141
 
 exit codes, output formats, status lines and testing are in the crate docs
 

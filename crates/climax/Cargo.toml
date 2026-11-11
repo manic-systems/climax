@@ -3,7 +3,7 @@ name                   = "climax"
 version                = "0.1.0"
 authors.workspace      = true
 categories             = [ "command-line-interface", "command-line-utilities" ]
-description            = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
+description            = "batteries-included cli crate tying together argument parsing, terminal rendering and prompts"
 edition.workspace      = true
 exclude                = [ "tests/dependency_fixtures.rs", "tests/workspace_pins.rs" ]
 keywords               = [ "cli", "terminal", "prompts", "args", "tui" ]
@@ -50,3 +50,7 @@ toml.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = [ "--cfg", "docsrs" ]
