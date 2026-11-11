@@ -5,7 +5,6 @@ use core::{
     fmt,
 };
 use std::{
-    env,
     fs::File,
     io::{
         self,
@@ -19,9 +18,9 @@ use std::{
 };
 
 use bang_core::{
+    InputWidget as BangWidget,
     Session,
     Value,
-    Widget as BangWidget,
 };
 use bang_terminal::{
     CleanupFailure,
@@ -55,8 +54,10 @@ impl<'a, W> ScrewSessionRenderer<'a, W>
 where
     W: Write,
 {
-    fn with_initial_size(writer: &'a mut W, size: Option<Viewport>) -> Self {
-        let mut renderer = Renderer::new(writer).cursor_visibility(CursorVisibility::FromSurface);
+    fn with_initial_size(writer: &'a mut W, size: Option<Viewport>, colors: bool) -> Self {
+        let mut renderer = Renderer::new(writer)
+            .cursor_visibility(CursorVisibility::FromSurface)
+            .colors(colors);
         if let Some(measured) = size {
             renderer = renderer.width(measured.columns);
         }
@@ -198,26 +199,24 @@ impl error::Error for LiveSessionError {
 /// `TERM` is not `dumb`
 pub(crate) fn run_live_session(
     widget: impl BangWidget + 'static,
+    colors: bool,
 ) -> Result<Value, LiveSessionError> {
     let missing = match (io::stdin().is_terminal(), io::stderr().is_terminal()) {
         (false, false) => Some("stdin and stderr are not terminals"),
         (false, true) => Some("stdin is not a terminal"),
         (true, false) => Some("stderr is not a terminal"),
-        (true, true) => is_dumb().then_some("TERM is dumb"),
+        (true, true) => screw::is_dumb_terminal().then_some("TERM is dumb"),
     };
     if let Some(reason) = missing {
         return Err(LiveSessionError::Unavailable(reason));
     }
-    run_live_session_forced(widget)
-}
-
-fn is_dumb() -> bool {
-    env::var_os("TERM").is_some_and(|term| term == "dumb")
+    run_live_session_forced(widget, colors)
 }
 
 /// run a session without first applying terminal capability policy
 pub(crate) fn run_live_session_forced(
     widget: impl BangWidget + 'static,
+    colors: bool,
 ) -> Result<Value, LiveSessionError> {
     let stdin = io::stdin().lock();
     let stderr = io::stderr();
@@ -226,7 +225,7 @@ pub(crate) fn run_live_session_forced(
         .try_clone_to_owned()
         .map_err(LiveSessionError::TerminalIo)?;
     let mut locked = stderr.lock();
-    run_live_session_forced_with(widget, stdin, &mut locked, resize)
+    run_live_session_forced_with(widget, colors, stdin, &mut locked, resize)
 }
 
 /// run a session on a caller-owned terminal handle such as `/dev/tty`, checking
@@ -237,6 +236,7 @@ pub(crate) fn run_live_session_forced(
 pub(crate) fn run_live_session_on(
     widget: impl BangWidget + 'static,
     handle: impl Into<OwnedFd>,
+    colors: bool,
 ) -> Result<Value, LiveSessionError> {
     let owned = handle.into();
     if !owned.is_terminal() {
@@ -244,10 +244,10 @@ pub(crate) fn run_live_session_on(
             "the handle is not a terminal",
         ));
     }
-    if is_dumb() {
+    if screw::is_dumb_terminal() {
         return Err(LiveSessionError::Unavailable("TERM is dumb"));
     }
-    run_live_session_forced_on(widget, owned)
+    run_live_session_forced_on(widget, owned, colors)
 }
 
 /// run a session on a caller-owned terminal handle without checking terminal
@@ -255,6 +255,7 @@ pub(crate) fn run_live_session_on(
 pub(crate) fn run_live_session_forced_on(
     widget: impl BangWidget + 'static,
     handle: impl Into<OwnedFd>,
+    colors: bool,
 ) -> Result<Value, LiveSessionError> {
     let file = File::from(handle.into());
     let mut writer = &file;
@@ -262,11 +263,12 @@ pub(crate) fn run_live_session_forced_on(
         .as_fd()
         .try_clone_to_owned()
         .map_err(LiveSessionError::TerminalIo)?;
-    run_live_session_forced_with(widget, &file, &mut writer, resize)
+    run_live_session_forced_with(widget, colors, &file, &mut writer, resize)
 }
 
 fn run_live_session_forced_with<I, O>(
     widget: impl BangWidget + 'static,
+    colors: bool,
     input: I,
     output: &mut O,
     resize: OwnedFd,
@@ -275,9 +277,8 @@ where
     I: io::Read + AsFd,
     O: Write,
 {
-    let signals = bang_terminal::SignalGuard::install_terminal_handlers()
-        .map_err(LiveSessionError::Signals)?;
-    let terminal = match bang_terminal::TerminalModeGuard::activate(
+    let signals = bang_terminal::SignalGuard::enter().map_err(LiveSessionError::Signals)?;
+    let terminal = match bang_terminal::TerminalModeGuard::enter(
         &input,
         bang_terminal::RawModeOptions::blocking(),
     ) {
@@ -299,7 +300,8 @@ where
             },
         };
     let initial_size = Viewport::of(&resize).ok();
-    let mut renderer = ScrewSessionRenderer::with_initial_size(screen.writer(), initial_size);
+    let mut renderer =
+        ScrewSessionRenderer::with_initial_size(screen.writer(), initial_size, colors);
     let outcome = drive_tty_session(
         widget,
         input,

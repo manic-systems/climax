@@ -5,11 +5,11 @@
 use bang::{
     advanced::{
         Event,
+        InputWidget,
         Key,
         KeyEvent,
         Reaction,
         Value,
-        Widget,
         WidgetContext,
         WidgetId,
         replay_events,
@@ -32,7 +32,7 @@ impl ScreenWidget for Echo {
     }
 }
 
-impl Widget for Echo {
+impl InputWidget for Echo {
     fn id(&self) -> WidgetId {
         WidgetId::from("echo")
     }
@@ -66,9 +66,9 @@ fn a_widget_is_implementable_through_advanced_and_screw() {
             typed: String::new(),
         },
         [
-            Event::Key(KeyEvent::new(Key::Char('h'))),
-            Event::Key(KeyEvent::new(Key::Char('i'))),
-            Event::Key(KeyEvent::new(Key::Enter)),
+            Event::key(Key::Char('h')),
+            Event::key(Key::Char('i')),
+            Event::key(Key::Enter),
         ],
     )
     .unwrap();

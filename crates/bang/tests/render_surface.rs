@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "terminal glyphs read better as themselves than as escapes"
+)]
+
 use bang::advanced::widgets::TextInput;
 use screw::{
     Position,
@@ -18,8 +23,8 @@ fn a_widget_renders_into_a_screw_surface() {
 
     widget.render(&RenderCtx::new(), &mut surface);
 
-    assert_eq!(surface.plain_text(), "name: ");
-    assert_eq!(surface.cursor(), Some(Position { row: 0, col: 6 }));
+    assert_eq!(surface.plain_text(), "name › ");
+    assert_eq!(surface.cursor(), Some(Position { row: 0, col: 7 }));
 }
 
 #[test]
@@ -30,7 +35,7 @@ fn a_widget_continues_the_row_it_is_rendered_onto() {
 
     widget.render(&RenderCtx::new(), &mut surface);
 
-    assert_eq!(surface.plain_text(), "[name: ");
+    assert_eq!(surface.plain_text(), "[name › ");
 }
 
 #[test]

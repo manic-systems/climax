@@ -16,11 +16,11 @@ use bang_core::{
     Context,
     Date,
     Event,
+    InputWidget,
     Key,
     Modifiers,
     Reaction,
     Value,
-    Widget,
     WidgetId,
     widgets::{
         DatePicker,
@@ -42,7 +42,6 @@ use screw::{
 };
 
 use crate::{
-    Configurable,
     Error,
     Interaction,
     PromptOutcome,
@@ -87,7 +86,6 @@ where
     NumberPrompt::new(prompt)
 }
 
-/// builder methods shared by [`PasswordPrompt`] and [`PasswordConfig`]
 macro_rules! password_options {
     ($($base:ident).*) => {
         /// set the widget id. defaults to `password`
@@ -101,6 +99,13 @@ macro_rules! password_options {
         #[must_use]
         pub fn summary(mut self, summary: bool) -> Self {
             self$(.$base)*.text = self$(.$base)*.text.summary(summary);
+            self
+        }
+
+        /// start with `value` already typed
+        #[must_use]
+        pub fn default(mut self, value: impl Into<String>) -> Self {
+            self$(.$base)*.text = self$(.$base)*.text.value(value);
             self
         }
 
@@ -130,9 +135,8 @@ macro_rules! password_options {
     };
 }
 
-/// presentation settings for [`PasswordPrompt`]
 #[derive(Clone, Debug)]
-pub struct PasswordConfig {
+struct PasswordConfig {
     text: TextConfig,
     mask: char,
 }
@@ -144,10 +148,6 @@ impl Default for PasswordConfig {
             mask: DEFAULT_MASK,
         }
     }
-}
-
-impl PasswordConfig {
-    password_options!();
 }
 
 /// a prompt that reads a line of text without echoing it
@@ -188,14 +188,6 @@ impl PasswordPrompt {
     /// `ErrorKind::Terminal`, and with `ErrorKind::InvalidConfiguration` when
     /// the mask is a control character or takes no columns
     pub fn interact(self) -> Result<PromptOutcome<String>> {
-        let mask = self.config.mask;
-        if mask.is_control() || screw::width(mask.encode_utf8(&mut [0; 4])) == 0 {
-            return Err(self
-                .interaction
-                .rejected(Error::invalid_configuration(format!(
-                    "password mask {mask:?} must be a visible character"
-                ))));
-        }
         let prompt = self.prompt.clone();
         let summary = self.config.text.summary;
         let hidden = self.config.mask.to_string().repeat(SECRET_SUMMARY_WIDTH);
@@ -204,7 +196,8 @@ impl PasswordPrompt {
             self.config.text,
             "password",
             Some(self.config.mask),
-        );
+        )
+        .map_err(|error| self.interaction.rejected(error))?;
         resolve_prompt(
             self.interaction.interact_named(
                 Some(&prompt),
@@ -214,15 +207,6 @@ impl PasswordPrompt {
             ),
             resolve_text,
         )
-    }
-}
-
-impl Configurable for PasswordPrompt {
-    type Config = PasswordConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.config = config;
-        self
     }
 }
 
@@ -252,12 +236,8 @@ macro_rules! confirm_options {
     };
 }
 
-/// presentation settings for [`ConfirmPrompt`]
-///
-/// its `default` builder shadows [`Default::default`], so start from
-/// [`ConfirmConfig::new`]
 #[derive(Clone, Debug)]
-pub struct ConfirmConfig {
+struct ConfirmConfig {
     id:      String,
     default: bool,
     summary: Option<bool>,
@@ -271,20 +251,6 @@ impl Default for ConfirmConfig {
             summary: None,
         }
     }
-}
-
-#[expect(
-    clippy::same_name_method,
-    reason = "default is a builder setter, not Default::default"
-)]
-impl ConfirmConfig {
-    /// a config with every setting at its default
-    #[must_use]
-    pub fn new() -> Self {
-        <Self as Default>::default()
-    }
-
-    confirm_options!();
 }
 
 /// a yes or no prompt
@@ -301,7 +267,7 @@ impl ConfirmPrompt {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
             prompt:      prompt.into(),
-            config:      ConfirmConfig::new(),
+            config:      ConfirmConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -331,6 +297,7 @@ impl ConfirmPrompt {
             SelectItem::new("No", "no"),
         ])
         .with_header(self.prompt.clone())
+        .with_help("y yes | n no | up/down move | enter submit | esc cancel")
         .with_selected_index(usize::from(!self.config.default));
         let widget = YesNoKeys(select);
         let summary = Summary::new(self.config.summary, &|value| {
@@ -354,17 +321,6 @@ impl ConfirmPrompt {
     }
 }
 
-impl Configurable for ConfirmPrompt {
-    type Config = ConfirmConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.config = config;
-        self
-    }
-}
-
-/// builder methods shared by [`DatePrompt`] and [`DateConfig`]. `$base` is the
-/// path from `self` to the `DateConfig`, empty when `self` is one
 macro_rules! date_options {
     ($($base:ident).*) => {
         /// set the widget id. defaults to `date`
@@ -390,12 +346,8 @@ macro_rules! date_options {
     };
 }
 
-/// presentation settings for [`DatePrompt`]
-///
-/// its `default` builder shadows [`Default::default`], so start from
-/// [`DateConfig::new`]
 #[derive(Clone, Debug)]
-pub struct DateConfig {
+struct DateConfig {
     id:      String,
     default: Option<Date>,
     summary: Option<bool>,
@@ -409,20 +361,6 @@ impl Default for DateConfig {
             summary: None,
         }
     }
-}
-
-#[expect(
-    clippy::same_name_method,
-    reason = "default is a builder setter, not Default::default"
-)]
-impl DateConfig {
-    /// a config with every setting at its default
-    #[must_use]
-    pub fn new() -> Self {
-        <Self as Default>::default()
-    }
-
-    date_options!();
 }
 
 /// a calendar date prompt
@@ -439,7 +377,7 @@ impl DatePrompt {
     pub fn new(prompt: impl Into<String>) -> Self {
         Self {
             prompt:      prompt.into(),
-            config:      DateConfig::new(),
+            config:      DateConfig::default(),
             interaction: Interaction::default(),
         }
     }
@@ -479,19 +417,8 @@ impl DatePrompt {
     }
 }
 
-impl Configurable for DatePrompt {
-    type Config = DateConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.config = config;
-        self
-    }
-}
-
 type NumberCheck<T> = dyn Fn(&T) -> result::Result<(), String> + 'static;
 
-/// builder methods shared by [`NumberPrompt`] and [`NumberConfig`]. `$base` is
-/// the path from `self` to the `NumberConfig`, empty when `self` is one
 macro_rules! number_options {
     ($($base:ident).*) => {
         /// set the widget id. defaults to `number`
@@ -531,25 +458,16 @@ macro_rules! number_value_option {
     ($($base:ident).*) => {
         /// start with `value` already typed
         #[must_use]
-        pub fn value(mut self, value: T) -> Self {
+        pub fn default(mut self, value: T) -> Self {
             self$(.$base)*.text = self$(.$base)*.text.value(value.to_string());
             self
         }
     };
 }
 
-/// presentation settings for [`NumberPrompt`]
-pub struct NumberConfig<T> {
+struct NumberConfig<T> {
     text:  TextConfig,
     check: Option<Rc<NumberCheck<T>>>,
-}
-
-impl<T> NumberConfig<T> {
-    number_options!();
-}
-
-impl<T: fmt::Display> NumberConfig<T> {
-    number_value_option!();
 }
 
 impl<T> Default for NumberConfig<T> {
@@ -629,7 +547,7 @@ where
         let summary = Summary::new(text.summary, &|value| {
             value.as_str().map(|raw| raw.trim().to_owned())
         });
-        let widget = text_widget(self.prompt, text, "number", None);
+        let widget = text_widget(self.prompt, text, "number", None)?;
         resolve_prompt(
             self.interaction
                 .interact_named(Some(&prompt), widget, [], summary),
@@ -643,19 +561,6 @@ where
 
 impl<T: fmt::Display> NumberPrompt<T> {
     number_value_option!(config);
-}
-
-impl<T> Configurable for NumberPrompt<T>
-where
-    T: FromStr + 'static,
-    T::Err: fmt::Display,
-{
-    type Config = NumberConfig<T>;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.config = config;
-        self
-    }
 }
 
 impl<T> Clone for NumberPrompt<T> {
@@ -691,7 +596,7 @@ where
 /// answers a yes or no `Select` immediately on `y` or `n`
 struct YesNoKeys<W>(W);
 
-impl<W: Widget> screw::Widget for YesNoKeys<W> {
+impl<W: InputWidget> screw::Widget for YesNoKeys<W> {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         self.0.render(ctx, out);
     }
@@ -705,7 +610,7 @@ impl<W: Widget> screw::Widget for YesNoKeys<W> {
     }
 }
 
-impl<W: Widget> Widget for YesNoKeys<W> {
+impl<W: InputWidget> InputWidget for YesNoKeys<W> {
     fn id(&self) -> WidgetId {
         self.0.id()
     }
@@ -766,7 +671,7 @@ impl<W> Headed<W> {
     }
 }
 
-impl<W: Widget> screw::Widget for Headed<W> {
+impl<W: InputWidget> screw::Widget for Headed<W> {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let children: Vec<LocalWidgetRef<'_>> = vec![
             local_widget(Spans::new([self.prompt.clone()])),
@@ -784,7 +689,7 @@ impl<W: Widget> screw::Widget for Headed<W> {
     }
 }
 
-impl<W: Widget> Widget for Headed<W> {
+impl<W: InputWidget> InputWidget for Headed<W> {
     fn id(&self) -> WidgetId {
         self.inner.id()
     }
@@ -856,9 +761,7 @@ mod tests {
     use crate::advanced::scripted_interaction;
 
     fn keys(keys: impl IntoIterator<Item = Key>) -> Vec<Event> {
-        keys.into_iter()
-            .map(|key| Event::Key(KeyEvent::new(key)))
-            .collect()
+        keys.into_iter().map(Event::key).collect()
     }
 
     fn typed(text: &str) -> Vec<Event> {
@@ -965,7 +868,7 @@ mod tests {
 
     #[test]
     fn confirm_ignores_y_and_n_held_with_a_control_chord() {
-        let chord = Event::Key(KeyEvent::with_modifiers(Key::Char('y'), Modifiers::CONTROL));
+        let chord = Event::Key(KeyEvent::new(Key::Char('y'), Modifiers::CONTROL));
         let interaction = scripted_interaction([vec![chord, enter()]]);
 
         let outcome = confirm("sure?")
@@ -1017,49 +920,42 @@ mod tests {
         };
 
         assert_eq!(
-            Date::new(picked.year, picked.month, picked.day),
+            Date::new(picked.year(), picked.month(), picked.day()),
             Some(picked)
         );
     }
 
     #[test]
-    fn every_input_prompt_takes_a_config() {
-        let mut script = typed("pw");
-        script.push(enter());
+    fn every_input_prompt_starts_from_its_default() {
         let password = password("secret: ")
-            .with_config(PasswordConfig::default().id("pw").mask('#'))
-            .interaction(scripted_interaction([script]))
+            .default("pw")
+            .mask('#')
+            .interaction(scripted_interaction([vec![enter()]]))
             .interact()
             .unwrap();
         assert_eq!(password, PromptOutcome::Submit("pw".to_owned()));
 
-        let confirmed = confirm("sure?")
-            .with_config(ConfirmConfig::new().default(false))
-            .interaction(scripted_interaction([vec![enter()]]))
-            .interact()
-            .unwrap();
-        assert_eq!(confirmed, PromptOutcome::Submit(false));
-
         let picked = Date::new(2026, 7, 4).unwrap();
         let dated = date("when?")
-            .with_config(DateConfig::new().default(picked))
+            .default(picked)
             .interaction(scripted_interaction([vec![enter()]]))
             .interact()
             .unwrap();
         assert_eq!(dated, PromptOutcome::Submit(picked));
 
         let numbered = number::<i64>("count: ")
-            .with_config(NumberConfig::default().value(7_i64).validator(|count| {
-                if *count > 0 {
-                    Ok(())
-                } else {
-                    Err("positive".to_owned())
-                }
-            }))
+            .default(7)
             .interaction(scripted_interaction([vec![enter()]]))
             .interact()
             .unwrap();
         assert_eq!(numbered, PromptOutcome::Submit(7));
+
+        let text = crate::text("name: ")
+            .default("ada")
+            .interaction(scripted_interaction([vec![enter()]]))
+            .interact()
+            .unwrap();
+        assert_eq!(text, PromptOutcome::Submit("ada".to_owned()));
     }
 
     #[test]
@@ -1110,7 +1006,7 @@ mod tests {
     #[test]
     fn number_starts_from_a_given_value() {
         let outcome = number::<u16>("port: ")
-            .value(8080)
+            .default(8080)
             .interaction(scripted_interaction([vec![enter()]]))
             .interact()
             .unwrap();

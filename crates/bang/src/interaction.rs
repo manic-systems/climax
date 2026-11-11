@@ -8,8 +8,6 @@ use core::{
     any::Any,
     cell::RefCell,
     fmt,
-    iter::Peekable,
-    str::Chars,
 };
 use std::{
     fs::{
@@ -29,10 +27,9 @@ use bang_core::{
     ActionLayer,
     Context,
     Event,
-    Key,
+    InputWidget,
     Reaction,
     Value,
-    Widget,
     WidgetId,
 };
 use screw::{
@@ -54,17 +51,17 @@ use crate::{
     },
 };
 
-type Runner = dyn Fn(Box<dyn Widget>) -> Result<Value>;
+type Runner = dyn Fn(Box<dyn InputWidget>, bool) -> Result<Value>;
 type GuardFactory = dyn Fn() -> Result<Box<dyn Any>>;
-type SummarySink = dyn Fn(&str) -> io::Result<()>;
+type SummarySink = dyn Fn(&str, bool) -> io::Result<()>;
 type SummaryAnswer<'a> = &'a dyn Fn(&Value) -> Option<String>;
 type Abandon = dyn Fn();
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
-fn write_summary_line(mut out: impl io::Write, line: &str) -> io::Result<()> {
-    if screw::colors_enabled() {
+fn write_summary_line(mut out: impl io::Write, line: &str, colors: bool) -> io::Result<()> {
+    if colors {
         writeln!(out, "{DIM}{line}{RESET}")?;
     } else {
         writeln!(out, "{line}")?;
@@ -73,22 +70,22 @@ fn write_summary_line(mut out: impl io::Write, line: &str) -> io::Result<()> {
 }
 
 fn stderr_sink() -> Rc<SummarySink> {
-    Rc::new(|line| {
+    Rc::new(|line, colors| {
         let stderr = io::stderr();
         if !stderr.is_terminal() {
             return Ok(());
         }
-        write_summary_line(stderr.lock(), line)
+        write_summary_line(stderr.lock(), line, colors)
     })
 }
 
 fn handle_sink(handle: &OwnedFd) -> io::Result<Rc<SummarySink>> {
     let file = File::from(handle.try_clone()?);
-    Ok(Rc::new(move |line| {
+    Ok(Rc::new(move |line, colors| {
         if !file.is_terminal() {
             return Ok(());
         }
-        write_summary_line(&file, line)
+        write_summary_line(&file, line, colors)
     }))
 }
 
@@ -110,6 +107,7 @@ pub struct Interaction {
     guards:       Vec<Rc<GuardFactory>>,
     summary_sink: Option<Rc<SummarySink>>,
     summaries:    bool,
+    colors:       bool,
     abandon:      Option<Rc<Abandon>>,
 }
 
@@ -121,8 +119,8 @@ impl Interaction {
     /// ends, so another thread printing to stderr waits for the answer
     #[must_use]
     pub fn live() -> Self {
-        Self::from_runner(|widget| {
-            run_live_session(InteractionWidget::new(widget)).map_err(Error::from_live)
+        Self::from_colour_runner(|widget, colors| {
+            run_live_session(InteractionWidget::new(widget), colors).map_err(Error::from_live)
         })
         .with_summary_sink(stderr_sink())
     }
@@ -131,8 +129,9 @@ impl Interaction {
     /// the stdin and stderr locks as [`Self::live`] does
     #[must_use]
     pub fn forced() -> Self {
-        Self::from_runner(|widget| {
-            run_live_session_forced(InteractionWidget::new(widget)).map_err(Error::from_live)
+        Self::from_colour_runner(|widget, colors| {
+            run_live_session_forced(InteractionWidget::new(widget), colors)
+                .map_err(Error::from_live)
         })
         .with_summary_sink(stderr_sink())
     }
@@ -162,9 +161,10 @@ impl Interaction {
     pub fn live_on(handle: impl Into<OwnedFd>) -> Self {
         let owned = handle.into();
         let sink = handle_sink(&owned);
-        Self::from_runner(move |widget| {
+        Self::from_colour_runner(move |widget, colors| {
             let duplicate = owned.try_clone().map_err(Error::terminal)?;
-            run_live_session_on(InteractionWidget::new(widget), duplicate).map_err(Error::from_live)
+            run_live_session_on(InteractionWidget::new(widget), duplicate, colors)
+                .map_err(Error::from_live)
         })
         .with_optional_summary_sink(sink.ok())
     }
@@ -175,9 +175,9 @@ impl Interaction {
     pub fn forced_on(handle: impl Into<OwnedFd>) -> Self {
         let owned = handle.into();
         let sink = handle_sink(&owned);
-        Self::from_runner(move |widget| {
+        Self::from_colour_runner(move |widget, colors| {
             let duplicate = owned.try_clone().map_err(Error::terminal)?;
-            run_live_session_forced_on(InteractionWidget::new(widget), duplicate)
+            run_live_session_forced_on(InteractionWidget::new(widget), duplicate, colors)
                 .map_err(Error::from_live)
         })
         .with_optional_summary_sink(sink.ok())
@@ -209,13 +209,24 @@ impl Interaction {
     /// whether a submitted prompt leaves a one-line summary in the scrollback
     /// such as `Deploy to prod? › no`, on by default
     ///
-    /// only live terminal drivers write summaries, dimmed unless `NO_COLOR` is
-    /// set or `CLICOLOR` is `0`. leaving writes nothing, and neither does a
-    /// prompt with no header or prompt text to label the answer. a prompt's own
-    /// `summary` setting wins
+    /// only live terminal drivers write summaries, dimmed unless colours are
+    /// off, see [`Self::with_colors`]. leaving writes nothing, and neither does
+    /// a prompt with no header or prompt text to label the answer. a
+    /// prompt's own `summary` setting wins
     #[must_use]
     pub const fn with_summaries(mut self, summaries: bool) -> Self {
         self.summaries = summaries;
+        self
+    }
+
+    /// whether prompts and summary lines are drawn with colour, following
+    /// [`screw::colors_enabled`] by default
+    ///
+    /// only this driver is affected, so contexts running side by side can
+    /// differ
+    #[must_use]
+    pub const fn with_colors(mut self, colors: bool) -> Self {
+        self.colors = colors;
         self
     }
 
@@ -236,7 +247,7 @@ impl Interaction {
         summary: Summary<'_>,
     ) -> Result<Value>
     where
-        W: Widget + 'static,
+        W: InputWidget + 'static,
     {
         let heading = prompt.map(summary_label).filter(|text| !text.is_empty());
         let line = |value: &Value| {
@@ -247,7 +258,7 @@ impl Interaction {
             } else {
                 format!("{label} › {answer}")
             };
-            Some(sanitised_line(&line))
+            Some(screw::sanitised_line(&line))
         };
         let enabled = summary.enabled.unwrap_or(self.summaries);
         let answer_line: SummaryAnswer<'_> = &line;
@@ -260,12 +271,21 @@ impl Interaction {
             })
     }
 
-    pub(crate) fn from_runner(runner: impl Fn(Box<dyn Widget>) -> Result<Value> + 'static) -> Self {
+    pub(crate) fn from_runner(
+        runner: impl Fn(Box<dyn InputWidget>) -> Result<Value> + 'static,
+    ) -> Self {
+        Self::from_colour_runner(move |widget, _colors| runner(widget))
+    }
+
+    fn from_colour_runner(
+        runner: impl Fn(Box<dyn InputWidget>, bool) -> Result<Value> + 'static,
+    ) -> Self {
         Self {
             runner:       Rc::new(runner),
             guards:       Vec::new(),
             summary_sink: None,
             summaries:    true,
+            colors:       screw::colors_enabled(),
             abandon:      None,
         }
     }
@@ -293,7 +313,7 @@ impl Interaction {
         actions: impl IntoIterator<Item = ActionBinding>,
     ) -> Result<Value>
     where
-        W: Widget + 'static,
+        W: InputWidget + 'static,
     {
         self.run(widget, actions, None)
     }
@@ -305,48 +325,27 @@ impl Interaction {
         summary: Option<SummaryAnswer<'_>>,
     ) -> Result<Value>
     where
-        W: Widget + 'static,
+        W: InputWidget + 'static,
     {
         let bindings = actions.into_iter().collect::<Vec<_>>();
-        check_actions(&bindings).map_err(|error| self.rejected(error))?;
+        let layered = ActionLayer::new(widget)
+            .with_actions(bindings)
+            .map_err(|error| self.rejected(error.into()))?;
         let mut guards = GuardStack(Vec::with_capacity(self.guards.len()));
         for factory in &self.guards {
             guards
                 .0
                 .push(factory().map_err(|error| self.rejected(error))?);
         }
-        let layered = ActionLayer::new(widget).with_actions(bindings);
-        let result = (self.runner)(Box::new(layered));
+        let result = (self.runner)(Box::new(layered), self.colors);
         if let (Ok(value), Some(answer), Some(sink)) = (&result, summary, &self.summary_sink)
             && let Some(line) = answer(value)
         {
-            drop(sink(&line));
+            drop(sink(&line, self.colors));
         }
         drop(guards);
         result
     }
-}
-
-fn check_actions(actions: &[ActionBinding]) -> Result<()> {
-    for (index, action) in actions.iter().enumerate() {
-        if matches!(action.key_event().key, Key::Char(value) if value.is_control()) {
-            return Err(Error::invalid_configuration(format!(
-                "action '{}' is bound to a control character",
-                action.name()
-            )));
-        }
-        if let Some(earlier) = actions[..index]
-            .iter()
-            .find(|earlier| earlier.key_event() == action.key_event())
-        {
-            return Err(Error::invalid_configuration(format!(
-                "actions '{}' and '{}' share a key",
-                earlier.name(),
-                action.name()
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -362,56 +361,6 @@ pub(crate) struct Summary<'a> {
 impl<'a> Summary<'a> {
     pub(crate) const fn new(enabled: Option<bool>, answer: SummaryAnswer<'a>) -> Self {
         Self { enabled, answer }
-    }
-}
-
-pub(crate) fn sanitised_line(text: &str) -> String {
-    let mut plain = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\x1b' => skip_escape(&mut chars),
-            '\u{9b}' => skip_csi(&mut chars),
-            '\u{90}' | '\u{98}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => skip_string(&mut chars),
-            '\u{2028}' | '\u{2029}' => plain.push(' '),
-            '\u{61c}'
-            | '\u{200b}'
-            | '\u{200e}'
-            | '\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206f}'
-            | '\u{feff}' => {},
-            _ => plain.push(ch),
-        }
-    }
-    screw::single_line(&plain).into_owned()
-}
-
-fn skip_escape(chars: &mut Peekable<Chars<'_>>) {
-    match chars.next() {
-        Some('[') => skip_csi(chars),
-        Some(']' | 'P' | 'X' | '^' | '_') => skip_string(chars),
-        Some(' '..='/') => {
-            while chars.next_if(|ch| matches!(ch, ' '..='/')).is_some() {}
-            chars.next_if(|ch| matches!(ch, '0'..='~'));
-        },
-        _ => {},
-    }
-}
-
-fn skip_csi(chars: &mut Peekable<Chars<'_>>) {
-    while chars.next_if(|ch| matches!(ch, ' '..='?')).is_some() {}
-    chars.next_if(|ch| matches!(ch, '@'..='~'));
-}
-
-fn skip_string(chars: &mut Peekable<Chars<'_>>) {
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\x07' | '\u{9c}' => return,
-            '\x1b' if chars.next_if_eq(&'\\').is_some() => return,
-            _ => {},
-        }
     }
 }
 
@@ -434,10 +383,10 @@ impl fmt::Debug for Interaction {
 }
 
 /// a type-erased widget supplied to an advanced interaction runner
-pub struct InteractionWidget(Box<dyn Widget>);
+pub struct InteractionWidget(Box<dyn InputWidget>);
 
 impl InteractionWidget {
-    pub(crate) fn new(widget: Box<dyn Widget>) -> Self {
+    pub(crate) fn new(widget: Box<dyn InputWidget>) -> Self {
         Self(widget)
     }
 }
@@ -456,7 +405,7 @@ impl screw::Widget for InteractionWidget {
     }
 }
 
-impl Widget for InteractionWidget {
+impl InputWidget for InteractionWidget {
     fn id(&self) -> WidgetId {
         self.0.id()
     }
@@ -594,7 +543,7 @@ mod tests {
         let lines = Rc::new(RefCell::new(Vec::new()));
         let sink_lines = Rc::clone(&lines);
         let interaction = Interaction::from_runner(|_widget| Ok(Value::from("done")))
-            .with_summary_sink(Rc::new(move |line| {
+            .with_summary_sink(Rc::new(move |line, _colors| {
                 sink_lines.borrow_mut().push(line.to_owned());
                 Ok(())
             }));
@@ -613,27 +562,30 @@ mod tests {
     }
 
     #[test]
-    fn summary_lines_drop_every_escape_family_and_hiding_format_characters() {
-        for (raw, plain) in [
-            ("a\x1b[31mb", "ab"),
-            ("a\x1b[?25;1:2 qb", "ab"),
-            ("a\x1b]0;t\x07b", "ab"),
-            ("a\x1b]8;;http://x\x1b\\b\x1b]8;;\x1b\\c", "abc"),
-            ("a\x1bPq#0\x1b\\b", "ab"),
-            ("a\x1b(Bb", "ab"),
-            ("a\x1bcb", "ab"),
-            ("a\u{9b}31mb", "ab"),
-            ("a\u{9d}0;t\u{9c}b", "ab"),
-            ("a\u{202e}b\u{2066}c\u{2069}d", "abcd"),
-            ("a\u{200b}b\u{feff}c\u{200e}d", "abcd"),
-            ("a\u{2028}b\u{2029}c", "a b c"),
-            (
-                "a\u{1f469}\u{200d}\u{1f4bb}b",
-                "a\u{1f469}\u{200d}\u{1f4bb}b",
-            ),
-        ] {
-            assert_eq!(sanitised_line(raw), plain, "{raw:?}");
+    fn with_colors_reaches_the_summary_sink() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink_seen = Rc::clone(&seen);
+        let interaction = Interaction::from_runner(|_widget| Ok(Value::from("done")))
+            .with_summary_sink(Rc::new(move |_line, colors| {
+                sink_seen.borrow_mut().push(colors);
+                Ok(())
+            }));
+        let answer = |_: &Value| Some("yes".to_owned());
+
+        for colors in [false, true] {
+            interaction
+                .clone()
+                .with_colors(colors)
+                .interact_named(
+                    Some("Pick"),
+                    TextInput::new("w"),
+                    [],
+                    Summary::new(None, &answer),
+                )
+                .unwrap();
         }
+
+        assert_eq!(*seen.borrow(), [false, true]);
     }
 
     #[test]
@@ -645,14 +597,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "0 unused scripts and 1 unused events")]
     fn dropping_a_scripted_interaction_with_unread_events_panics() {
-        let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
+        let submit = Event::key(bang_core::Key::Enter);
         let interaction = scripted([[submit.clone(), submit]]);
         interaction.interact(TextInput::new("w"), []).unwrap();
     }
 
     #[test]
     fn a_fully_consumed_scripted_interaction_drops_quietly() {
-        let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
+        let submit = Event::key(bang_core::Key::Enter);
         scripted([[submit]])
             .interact(TextInput::new("w"), [])
             .unwrap();
@@ -691,7 +643,7 @@ mod tests {
 
     #[test]
     fn a_checked_script_reports_what_it_left_instead_of_panicking() {
-        let submit = Event::Key(bang_core::KeyEvent::new(bang_core::Key::Enter));
+        let submit = Event::key(bang_core::Key::Enter);
         let (interaction, check) =
             scripted_checked([vec![submit.clone(), submit.clone()], vec![submit]]);
 

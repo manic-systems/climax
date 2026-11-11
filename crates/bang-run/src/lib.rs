@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 //! bang-run: command-line bridge from argv or a config file to a bang prompt
+//!
+//! this library exists for the `bang` binary and is not a stable interface
+
+#[cfg(not(unix))]
+compile_error!("bang-run supports unix targets only");
 
 extern crate alloc;
 
@@ -26,8 +31,8 @@ use bang::{
 use bang_core::{
     ActionBinding,
     ActionLayer,
+    InputWidget,
     Value,
-    Widget,
     widgets::{
         DatePicker,
         Form,
@@ -56,6 +61,7 @@ use pound::{
 
 /// failure from [`run`]
 #[derive(Debug)]
+#[doc(hidden)]
 pub enum CliError {
     /// invalid invocation or widget configuration
     Usage(String),
@@ -138,6 +144,7 @@ impl StdError for CliError {}
 /// run a single bang widget, or a widget config file, as a terminal prompt
 #[derive(Debug, Parse)]
 #[pound(name = "bang", version = env!("CARGO_PKG_VERSION"))]
+#[doc(hidden)]
 pub struct Cli {
     /// path to a widget config file, instead of a subcommand, exit 1 when it
     /// cannot be read
@@ -152,6 +159,7 @@ pub struct Cli {
 
 /// bytes to replay instead of reading input
 #[derive(Debug, Parse)]
+#[doc(hidden)]
 pub struct Replay {
     /// bytes to replay instead of reading input, with \n \r \t \e \\ and \xHH
     /// escapes
@@ -161,6 +169,7 @@ pub struct Replay {
 
 /// key bindings that submit the value so far under a name
 #[derive(Debug, Parse)]
+#[doc(hidden)]
 pub struct Bindings {
     /// bind a key to a result as key:name, may be repeated
     ///
@@ -173,33 +182,39 @@ pub struct Bindings {
     action: Vec<String>,
 }
 
+/// what every list subcommand takes
+#[doc(hidden)]
+#[derive(Debug, Parse)]
+pub struct ListArgs {
+    /// option label/value, may be repeated
+    #[pound(long)]
+    option:    Vec<String>,
+    /// heading shown above the options, also names the prompt in errors
+    #[pound(long)]
+    prompt:    Option<String>,
+    #[pound(flatten)]
+    replay:    Replay,
+    /// visible result rows
+    #[pound(long, default = "9", min = "1")]
+    page_size: usize,
+}
+
+#[doc(hidden)]
 #[derive(Debug, Parse)]
 pub enum Command {
     /// choose one option
     Select {
-        /// option label/value, may be repeated
-        #[pound(long)]
-        option:    Vec<String>,
         #[pound(flatten)]
-        replay:    Replay,
-        /// visible result rows
-        #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        list:     ListArgs,
         #[pound(flatten)]
-        bindings:  Bindings,
+        bindings: Bindings,
     },
     /// choose zero or more options
     MultiSelect {
-        /// option label/value, may be repeated
-        #[pound(long)]
-        option:    Vec<String>,
         #[pound(flatten)]
-        replay:    Replay,
-        /// visible result rows
-        #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        list:     ListArgs,
         #[pound(flatten)]
-        bindings:  Bindings,
+        bindings: Bindings,
     },
     /// edit and submit text
     Text {
@@ -209,34 +224,22 @@ pub enum Command {
         #[pound(long, default = "")]
         value:    String,
         /// text shown before the input, also names the prompt in errors
-        #[pound(long, default = "text: ")]
+        #[pound(long, default = "text")]
         prompt:   String,
         #[pound(flatten)]
         bindings: Bindings,
     },
     /// filter options and choose one
     Search {
-        /// option label/value, may be repeated
-        #[pound(long)]
-        option:    Vec<String>,
         #[pound(flatten)]
-        replay:    Replay,
-        /// visible result rows
-        #[pound(long, default = "9", min = "1")]
-        page_size: usize,
+        list:     ListArgs,
         #[pound(flatten)]
-        bindings:  Bindings,
+        bindings: Bindings,
     },
     /// review options with confirmed/denied/unconfirmed row state
     ReviewList {
-        /// option label/value, may be repeated
-        #[pound(long)]
-        option:        Vec<String>,
         #[pound(flatten)]
-        replay:        Replay,
-        /// visible result rows
-        #[pound(long, default = "9", min = "1")]
-        page_size:     usize,
+        list:          ListArgs,
         /// return a structured exit and rows, and bind g, s and a as the
         /// regen, search and add actions, needed by --action
         ///
@@ -255,6 +258,7 @@ pub enum Command {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[doc(hidden)]
 pub enum OutputFormat {
     Text,
     Json,
@@ -275,6 +279,7 @@ impl From<OutputFormat> for CoreOutputFormat {
 ///
 /// fails with a [`CliError`] when the invocation or config is invalid, the
 /// prompt is cancelled or interrupted, or the terminal or config file fails
+#[doc(hidden)]
 pub fn run(cli: Cli) -> Result<String, CliError> {
     let output = cli.output;
     let result = match (cli.config, cli.command) {
@@ -300,47 +305,37 @@ pub fn run(cli: Cli) -> Result<String, CliError> {
     Ok(format_output(&result, output.into()))
 }
 
+fn list_spec(
+    kind: WidgetKind,
+    list: ListArgs,
+    actions: Vec<String>,
+) -> Result<(FieldConfig, Option<String>), String> {
+    Ok((
+        FieldConfig {
+            options: choice_items(list.option)?,
+            prompt: list.prompt,
+            page_size: Some(list.page_size),
+            actions: action_bindings(actions)?,
+            ..FieldConfig::new(kind)
+        },
+        list.replay.input_bytes,
+    ))
+}
+
 fn command_spec(command: Command) -> Result<(FieldConfig, Option<String>), String> {
-    Ok(match command {
-        Command::Select {
-            option,
-            replay,
-            page_size,
-            bindings,
-        } => {
-            (
-                FieldConfig {
-                    options: choice_items(option)?,
-                    page_size: Some(page_size),
-                    actions: action_bindings(bindings.action)?,
-                    ..FieldConfig::new(WidgetKind::Select)
-                },
-                replay.input_bytes,
-            )
+    match command {
+        Command::Select { list, bindings } => list_spec(WidgetKind::Select, list, bindings.action),
+        Command::MultiSelect { list, bindings } => {
+            list_spec(WidgetKind::MultiSelect, list, bindings.action)
         },
-        Command::MultiSelect {
-            option,
-            replay,
-            page_size,
-            bindings,
-        } => {
-            (
-                FieldConfig {
-                    options: choice_items(option)?,
-                    page_size: Some(page_size),
-                    actions: action_bindings(bindings.action)?,
-                    ..FieldConfig::new(WidgetKind::MultiSelect)
-                },
-                replay.input_bytes,
-            )
-        },
+        Command::Search { list, bindings } => list_spec(WidgetKind::Search, list, bindings.action),
         Command::Text {
             replay,
             value,
             prompt,
             bindings,
         } => {
-            (
+            Ok((
                 FieldConfig {
                     prompt: Some(prompt),
                     value: Some(value),
@@ -348,46 +343,27 @@ fn command_spec(command: Command) -> Result<(FieldConfig, Option<String>), Strin
                     ..FieldConfig::new(WidgetKind::Text)
                 },
                 replay.input_bytes,
-            )
-        },
-        Command::Search {
-            option,
-            replay,
-            page_size,
-            bindings,
-        } => {
-            (
-                FieldConfig {
-                    options: choice_items(option)?,
-                    page_size: Some(page_size),
-                    actions: action_bindings(bindings.action)?,
-                    ..FieldConfig::new(WidgetKind::Search)
-                },
-                replay.input_bytes,
-            )
+            ))
         },
         Command::ReviewList {
-            option,
-            replay,
-            page_size,
+            list,
             action_output,
             action,
         } => {
-            (
+            let (spec, input_bytes) = list_spec(WidgetKind::ReviewList, list, Vec::new())?;
+            Ok((
                 FieldConfig {
-                    options: choice_items(option)?,
-                    page_size: Some(page_size),
                     action_output: Some(action_output),
                     review_actions: action
                         .iter()
                         .map(|binding| parse_review_action_binding(binding))
                         .collect::<Result<_, _>>()?,
-                    ..FieldConfig::new(WidgetKind::ReviewList)
+                    ..spec
                 },
-                replay.input_bytes,
-            )
+                input_bytes,
+            ))
         },
-    })
+    }
 }
 
 fn run_command(command: Command) -> Result<Value, CliError> {
@@ -424,7 +400,7 @@ fn run_spec(
 trait WidgetSink {
     type Out;
 
-    fn accept(self, widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Self::Out;
+    fn accept(self, widget: impl InputWidget + 'static, actions: Vec<ActionBinding>) -> Self::Out;
 }
 
 struct RunSink {
@@ -435,7 +411,7 @@ struct RunSink {
 impl WidgetSink for RunSink {
     type Out = Result<Value, CliError>;
 
-    fn accept(self, widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Self::Out {
+    fn accept(self, widget: impl InputWidget + 'static, actions: Vec<ActionBinding>) -> Self::Out {
         run_widget(&self.name, widget, self.input_bytes, actions)
     }
 }
@@ -446,14 +422,22 @@ struct FieldSink<'form> {
 }
 
 impl WidgetSink for FieldSink<'_> {
-    type Out = ();
+    type Out = Result<(), String>;
 
-    fn accept(self, widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Self::Out {
+    fn accept(self, widget: impl InputWidget + 'static, actions: Vec<ActionBinding>) -> Self::Out {
         if actions.is_empty() {
-            self.form.push_field(self.name, widget);
+            self.form
+                .push_field(self.name, widget)
+                .map_err(|error| error.to_string())
         } else {
             self.form
-                .push_field(self.name, ActionLayer::new(widget).with_actions(actions));
+                .push_field(
+                    self.name,
+                    ActionLayer::new(widget)
+                        .with_actions(actions)
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())
         }
     }
 }
@@ -463,13 +447,13 @@ fn push_form_field(form: &mut Form, field: FieldConfig) -> Result<(), String> {
         form,
         name: field.name.clone(),
     };
-    build(field, true, sink)
+    build(field, true, sink)?
 }
 
 fn headed<S: WidgetSink>(
     sink: S,
     prompt: Option<String>,
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     actions: Vec<ActionBinding>,
 ) -> S::Out {
     match prompt {
@@ -510,7 +494,7 @@ fn build<S: WidgetSink>(spec: FieldConfig, in_form: bool, sink: S) -> Result<S::
             sink.accept(widget, spec.actions)
         },
         WidgetKind::Text => {
-            let prompt = spec.prompt.unwrap_or_else(|| format!("{id}: "));
+            let prompt = spec.prompt.unwrap_or_else(|| id.clone());
             let mut widget = TextInput::new(id).with_prompt(prompt);
             if let Some(placeholder) = spec.placeholder {
                 widget = widget.with_placeholder(placeholder);
@@ -553,7 +537,8 @@ fn build<S: WidgetSink>(spec: FieldConfig, in_form: bool, sink: S) -> Result<S::
                 .with_states(spec.review_states)
                 .with_show_removed(spec.show_removed.unwrap_or(true))
                 .with_exit_output(action_output)
-                .with_custom_actions(review_actions(spec.review_actions, action_output)?);
+                .with_custom_actions(review_actions(spec.review_actions, action_output)?)
+                .map_err(|error| error.to_string())?;
             if in_form {
                 widget = widget.with_leave_output(false);
             }
@@ -631,12 +616,14 @@ fn review_actions(
 
 fn run_widget(
     name: &str,
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     input_bytes: Option<String>,
     actions: Vec<ActionBinding>,
 ) -> Result<Value, CliError> {
     if let Some(escaped) = input_bytes {
-        let layered = ActionLayer::new(widget).with_actions(actions);
+        let layered = ActionLayer::new(widget)
+            .with_actions(actions)
+            .map_err(|error| CliError::Usage(error.to_string()))?;
         let bytes = decode_escaped(&escaped).map_err(CliError::Usage)?;
         let mut decoder = Decoder::new();
         let events = decoder.feed(&bytes).into_iter().chain(decoder.flush());

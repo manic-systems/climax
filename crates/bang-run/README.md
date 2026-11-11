@@ -3,14 +3,20 @@
 command-line tool that runs one `bang` prompt and prints the answer, installed as `bang`
 
 ```text
-bang select --option bash --option zsh
+bang select --prompt "pick a shell" --option bash --option zsh
 bang --output json text --value ada
 bang --config prompt.toml
 ```
 
-`-o` is `--output`, `text` or `json`, and `--option` has no short flag. exit codes are 0 on success,
+`-o` is `--output`, `text` or `json`, and `--option` has no short flag. `--prompt` sets the heading
+above the options of `select`, `multi-select`, `search` and `review-list`, and the label ahead of the
+input for `text`. exit codes are 0 on success,
 2 for usage or config errors, 130 on cancellation, 128 plus the signal number on a signal, 141 when
 stdout is a closed pipe and 1 otherwise, an unreadable config file included
+
+a `--config` run with `type = "form"` prints json even without `-o json`, with the keys sorted by
+name rather than in the order the fields are declared. a `multi-select` prints one pick per line in
+text mode, so an option containing a newline is ambiguous, and `-o json` avoids that
 
 the prompt uses stdin and stderr, and opens `/dev/tty` instead when either is redirected and the
 process has a controlling terminal

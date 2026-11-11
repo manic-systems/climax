@@ -15,13 +15,13 @@ use std::{
 
 use bang_core::{
     Event,
+    InputWidget,
     Key,
     Modifiers,
     Session,
     SessionReaction,
     SessionStatus,
     Value,
-    Widget,
 };
 use bang_terminal::{
     Signal,
@@ -104,7 +104,7 @@ impl SessionOptions {
 /// already be active. `input` is polled for bytes with an escape deadline, and
 /// ctrl-c and ctrl-d end the session only when the widget ignores them
 pub(crate) fn drive_tty_session(
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     input: impl Read + AsFd,
     renderer: &mut impl SessionRenderer,
     options: SessionOptions,
@@ -114,13 +114,13 @@ pub(crate) fn drive_tty_session(
         events = events.signals(signals);
     }
     if let Some(terminal) = options.resize {
-        events = events.resize_from(terminal);
+        events = events.resize_from(&terminal)?;
     }
     drive(widget, &mut events, renderer)
 }
 
 fn drive<R: Read>(
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     events: &mut TerminalEvents<R>,
     renderer: &mut impl SessionRenderer,
 ) -> io::Result<RunOutcome> {
@@ -158,8 +158,8 @@ fn drive<R: Read>(
 fn tick_interval(interest: TickInterest) -> Option<Duration> {
     match interest {
         TickInterest::Never => None,
-        TickInterest::EveryFrame => Some(FRAME_INTERVAL),
         TickInterest::Every(interval) => Some(interval.max(FRAME_INTERVAL)),
+        TickInterest::EveryFrame | _ => Some(FRAME_INTERVAL),
     }
 }
 
@@ -180,8 +180,8 @@ fn handle_event(
 
     if let Event::Resize { cols, rows } = &event {
         renderer.resize(Viewport {
-            columns: usize::from(*cols),
-            rows:    usize::from(*rows),
+            columns: *cols,
+            rows:    *rows,
         })?;
     }
     let reaction = session.handle(event);
@@ -305,7 +305,9 @@ mod tests {
             rows:    24,
         };
         let (_master, slave) = pty(80, 24).unwrap();
-        let mut events = TerminalEvents::blocking(Cursor::new(b"ab\r")).resize_from(slave);
+        let mut events = TerminalEvents::blocking(Cursor::new(b"ab\r"))
+            .resize_from(&slave)
+            .unwrap();
         let mut renderer = FakeRenderer::default();
 
         let outcome = drive(
@@ -324,7 +326,10 @@ mod tests {
                 .all(|viewport| *viewport == Some(size))
         );
         assert_eq!(renderer.frames, [
-            "name: ", "name: a", "name: ab", "name: ab"
+            "name › ",
+            "name › a",
+            "name › ab",
+            "name › ab"
         ]);
     }
 
@@ -353,7 +358,7 @@ mod tests {
         );
 
         let _serial = serialise_signals();
-        let guard = SignalGuard::install_terminal_handlers().unwrap();
+        let guard = SignalGuard::enter().unwrap();
         let mut signal_events =
             TerminalEvents::blocking(Cursor::new(b"ignored")).signals(guard.poller());
         // SAFETY: raising a signal the guard has a handler for
@@ -380,7 +385,7 @@ mod tests {
             }
         }
 
-        impl Widget for ClaimsControlC {
+        impl InputWidget for ClaimsControlC {
             fn id(&self) -> WidgetId {
                 WidgetId::borrowed("claims")
             }
@@ -423,7 +428,7 @@ mod tests {
             }
         }
 
-        impl Widget for SeenKeys {
+        impl InputWidget for SeenKeys {
             fn id(&self) -> WidgetId {
                 WidgetId::borrowed("seen")
             }
@@ -464,7 +469,7 @@ mod tests {
             }
         }
 
-        impl Widget for SubmitsOnResize {
+        impl InputWidget for SubmitsOnResize {
             fn id(&self) -> WidgetId {
                 WidgetId::borrowed("resize")
             }

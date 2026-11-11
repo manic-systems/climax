@@ -97,6 +97,27 @@ fn select_without_a_terminal_names_the_prompt_and_a_remedy() {
 }
 
 #[test]
+fn every_list_subcommand_takes_a_prompt_that_names_it_in_errors() {
+    for command in ["select", "multi-select", "search", "review-list"] {
+        let output = run(&[
+            command,
+            "--prompt",
+            "Pick one",
+            "--option",
+            "a",
+            "--input-bytes",
+            "\\x04",
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("input ended before \"Pick one\" was answered"),
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn text_ctrl_d_before_typed_input_ends_input() {
     let output = run(&["text", "--input-bytes", "\\x04abc\\r"]);
     assert_eq!(output.status.code(), Some(1));

@@ -7,13 +7,11 @@ use core::{
 };
 use std::io;
 
+use bang_core::InvalidConfiguration;
 use bang_terminal::Signal;
 
 use crate::{
-    interaction::{
-        sanitised_line,
-        summary_label,
-    },
+    interaction::summary_label,
     live::LiveSessionError,
 };
 
@@ -55,8 +53,9 @@ pub enum ErrorKind {
 
 /// error returned by a bang prompt
 ///
-/// the underlying cause is available through [`error::Error::source`]
-#[derive(Debug)]
+/// the underlying cause of an [`ErrorKind::Interrupted`] or
+/// [`ErrorKind::Terminal`] error is available through [`error::Error::source`],
+/// other kinds say everything in their message
 pub struct Error {
     kind:    ErrorKind,
     message: String,
@@ -161,7 +160,7 @@ impl Error {
     /// asked
     #[must_use]
     pub fn naming_prompt(mut self, prompt: &str) -> Self {
-        let trimmed = summary_label(&sanitised_line(prompt));
+        let trimmed = summary_label(&screw::sanitised_line(prompt));
         if trimmed.is_empty() {
             return self;
         }
@@ -277,8 +276,24 @@ impl fmt::Display for Error {
     }
 }
 
+impl From<InvalidConfiguration> for Error {
+    fn from(error: InvalidConfiguration) -> Self {
+        Self::invalid_configuration(error.message())
+    }
+}
+
+impl fmt::Debug for Error {
+    // std prints an error returned from main through Debug
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        if !matches!(self.kind, ErrorKind::Interrupted | ErrorKind::Terminal) {
+            return None;
+        }
         self.source
             .as_deref()
             .map(|source| -> &(dyn error::Error + 'static) { source })

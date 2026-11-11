@@ -4,7 +4,10 @@
 //!
 //! each prompt is a builder made by a free function such as [`select`],
 //! [`text`] or [`confirm`], and its `interact` method runs it on the terminal
-//! and returns a [`PromptOutcome`]
+//! and returns a [`PromptOutcome`]. the others are [`multi_select`],
+//! [`search`], [`review`], [`password`], [`number`] and [`date`]. a starting
+//! value is `default` on the input prompts, `selected` on the list prompts and
+//! `checked` on [`multi_select`]
 //!
 //! ```no_run
 //! use bang::{
@@ -49,6 +52,9 @@
     )
 )]
 
+#[cfg(not(unix))]
+compile_error!("bang supports unix targets only");
+
 extern crate alloc;
 
 mod error;
@@ -82,13 +88,9 @@ pub use error::{
     Result,
 };
 pub use input::{
-    ConfirmConfig,
     ConfirmPrompt,
-    DateConfig,
     DatePrompt,
-    NumberConfig,
     NumberPrompt,
-    PasswordConfig,
     PasswordPrompt,
     confirm,
     date,
@@ -97,21 +99,15 @@ pub use input::{
 };
 pub use interaction::Interaction;
 pub use prompt::{
-    Configurable,
-    MultiSelectConfig,
     MultiSelectPrompt,
     PromptOutcome,
-    ReviewConfig,
     ReviewExit,
     ReviewOutcome,
     ReviewPrompt,
     ReviewPromptWithActions,
     Reviewed,
-    SearchConfig,
     SearchPrompt,
-    SelectConfig,
     SelectPrompt,
-    TextConfig,
     TextPrompt,
     multi_select,
     review,

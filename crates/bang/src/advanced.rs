@@ -3,8 +3,8 @@
 //! advanced: widgets, sessions and replay, for what the typed prompt builders
 //! do not cover
 //!
-//! a [`Widget`] adds input handling to a `screw` widget, so implement
-//! `screw::Widget` to draw into a `Surface` and then [`Widget`] to handle
+//! an [`InputWidget`] adds input handling to a `screw` widget, so implement
+//! `screw::Widget` to draw into a `Surface` and then [`InputWidget`] to handle
 //! events. a built-in widget renders into a `Surface` like any other `screw`
 //! widget. the terminal toolkit is in [`crate::terminal`]
 
@@ -15,6 +15,7 @@ pub use bang_core::{
     Date,
     Event,
     FocusTarget,
+    InputWidget,
     Key,
     KeyEvent,
     Modifiers,
@@ -25,7 +26,6 @@ pub use bang_core::{
     SessionReaction,
     SessionStatus,
     Value,
-    Widget,
     WidgetId,
     format_output,
     widgets,
@@ -59,7 +59,7 @@ pub use crate::{
 ///
 /// fails when the live session cannot start or ends without a value
 pub fn interact_widget(
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     actions: impl IntoIterator<Item = ActionBinding>,
 ) -> Result<Value> {
     Interaction::live().interact(widget, actions)
@@ -115,7 +115,7 @@ pub fn interaction_from_runner(
     reason = "the session enums are non-exhaustive"
 )]
 pub fn replay_events(
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     events: impl IntoIterator<Item = Event>,
 ) -> Result<Value> {
     let mut session = Session::new(widget);
@@ -172,10 +172,7 @@ mod tests {
     use super::*;
 
     fn control(value: char) -> Event {
-        Event::Key(KeyEvent::with_modifiers(
-            Key::Char(value),
-            Modifiers::CONTROL,
-        ))
+        Event::Key(KeyEvent::new(Key::Char(value), Modifiers::CONTROL))
     }
 
     #[test]
@@ -197,7 +194,8 @@ mod tests {
     #[test]
     fn an_action_binding_can_claim_a_reserved_key() {
         let widget = ActionLayer::new(TextInput::new("value"))
-            .with_actions([ActionBinding::control_char('c', "copy")]);
+            .with_actions([ActionBinding::control_char('c', "copy")])
+            .unwrap();
 
         let value = replay_events(widget, [control('c')]).unwrap();
 
@@ -210,7 +208,7 @@ mod tests {
     #[test]
     fn a_row_past_the_last_choice_fails_instead_of_wrapping() {
         let select = || Select::new("pick", ["a", "b", "c"]);
-        let enter = Event::Key(KeyEvent::new(Key::Enter));
+        let enter = Event::key(Key::Enter);
 
         assert_eq!(
             replay_events(select(), [Event::Row(2), enter.clone()]).unwrap(),

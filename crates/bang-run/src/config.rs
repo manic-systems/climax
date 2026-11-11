@@ -493,7 +493,7 @@ pub(crate) fn push_unique_action(
             format_action_key_event(action.key_event())
         ));
     }
-    seen.push(action.key_event().clone());
+    seen.push(*action.key_event());
     Ok(action)
 }
 
@@ -557,7 +557,7 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
         .or_else(|| normalized.strip_prefix("control-"))
     {
         let key = parse_control_action_key(stripped, value)?;
-        return Ok(KeyEvent::with_modifiers(Key::Char(key), Modifiers::CONTROL));
+        return Ok(KeyEvent::new(Key::Char(key), Modifiers::CONTROL));
     }
 
     let key = match normalized.as_str() {
@@ -577,7 +577,7 @@ fn parse_action_key_event(value: &str) -> Result<KeyEvent, String> {
         "page-down" | "pagedown" => Key::PageDown,
         _ => Key::Char(parse_action_key(value, "action")?),
     };
-    Ok(KeyEvent::new(key))
+    Ok(KeyEvent::new(key, Modifiers::empty()))
 }
 
 fn parse_control_action_key(key: &str, original: &str) -> Result<char, String> {

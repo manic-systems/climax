@@ -1,10 +1,10 @@
 use bang_core::{
     ActionBinding,
+    InputWidget,
     Session,
     SessionReaction,
     SessionStatus,
     Value,
-    Widget,
     widgets::{
         MultiSelect,
         SearchSelect,
@@ -297,7 +297,10 @@ impl TextPrompt {
     }
 }
 
-pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) -> Result<Value> {
+pub fn run_widget(
+    widget: impl InputWidget + 'static,
+    actions: Vec<ActionBinding>,
+) -> Result<Value> {
     ::bang::advanced::interact_widget(widget, actions).map_err(Error::from)
 }
 
@@ -307,7 +310,7 @@ pub fn run_widget(widget: impl Widget + 'static, actions: Vec<ActionBinding>) ->
     reason = "the session enums are non-exhaustive"
 )]
 pub fn replay_events(
-    widget: impl Widget + 'static,
+    widget: impl InputWidget + 'static,
     events: impl IntoIterator<Item = bang_core::Event>,
 ) -> Result<Value> {
     let mut session = Session::new(widget);

@@ -3,6 +3,7 @@ pub use bang_core::{
     ActionBinding,
     Date,
     Event,
+    InputWidget,
     Key,
     KeyEvent,
     Modifiers,
@@ -11,7 +12,6 @@ pub use bang_core::{
     Session,
     SessionStatus,
     Value,
-    Widget,
     widgets::{
         DatePicker,
         Form,

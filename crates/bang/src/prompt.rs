@@ -30,22 +30,6 @@ use crate::{
 
 const DEFAULT_PAGE_SIZE: usize = 9;
 
-/// apply a prompt-specific configuration object to a typed prompt builder
-///
-/// every config setting is also a builder method, so build one to share between
-/// prompts
-pub trait Configurable: Sized {
-    /// the configuration object for this prompt
-    type Config;
-
-    /// replace the prompt's presentation settings with `config`
-    ///
-    /// the text given to the entry point stays as the header or prompt unless
-    /// `config` sets its own
-    #[must_use]
-    fn with_config(self, config: Self::Config) -> Self;
-}
-
 /// ask the user to pick one of several choices under `header`
 #[must_use]
 pub fn select<T>(header: impl Into<String>) -> SelectPrompt<T> {
@@ -104,15 +88,9 @@ impl ListConfig {
             ..Self::default()
         }
     }
-
-    fn inherit_header(&mut self, previous: Option<String>) {
-        if self.header.is_none() {
-            self.header = previous;
-        }
-    }
 }
 
-/// builder methods shared by every list prompt and its config
+/// builder methods shared by every list prompt
 macro_rules! list_options {
     ($selected_doc:literal, $($list:ident).+) => {
         /// set the header shown above the list
@@ -152,93 +130,38 @@ macro_rules! list_options {
     };
 }
 
-/// presentation settings for [`SelectPrompt`]
 #[derive(Clone, Debug, Default)]
-pub struct SelectConfig {
+struct SelectConfig {
     list: ListConfig,
 }
 
-impl SelectConfig {
-    list_options!(
-        "highlight the choice at `selected`, counting from zero",
-        list
-    );
-}
-
-/// presentation settings for [`MultiSelectPrompt`]
 #[derive(Clone, Debug, Default)]
-pub struct MultiSelectConfig {
+struct MultiSelectConfig {
     list:    ListConfig,
     checked: Vec<usize>,
 }
 
-impl MultiSelectConfig {
-    list_options!(
-        "highlight the choice at `selected`, counting from zero",
-        list
-    );
-
-    /// start with the choice at `index` checked. repeat to check several
-    #[must_use]
-    pub fn checked(mut self, index: usize) -> Self {
-        self.checked.push(index);
-        self
-    }
-
-    /// start with exactly the choices in `indices` checked, discarding any
-    /// earlier [`checked`](Self::checked) calls
-    #[must_use]
-    pub fn checked_indices(mut self, indices: impl IntoIterator<Item = usize>) -> Self {
-        self.checked = indices.into_iter().collect();
-        self
-    }
-}
-
-/// presentation settings for [`SearchPrompt`]
 #[derive(Clone, Debug, Default)]
-pub struct SearchConfig {
+struct SearchConfig {
     list:        ListConfig,
     prompt:      Option<String>,
     placeholder: Option<String>,
 }
 
-impl SearchConfig {
-    list_options!(
-        "highlight the choice at `selected`, counting from zero, with the query starting empty",
-        list
-    );
-
-    /// set the text shown before the query
-    #[must_use]
-    pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.prompt = Some(prompt.into());
-        self
-    }
-
-    /// set the hint shown while the query is empty
-    #[must_use]
-    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
-        self.placeholder = Some(placeholder.into());
-        self
-    }
-}
-
 type Validator = dyn Fn(&str) -> result::Result<(), String> + 'static;
 
-/// presentation settings for [`TextPrompt`]
 #[derive(Clone, Default)]
 #[expect(
     clippy::field_scoped_visibility_modifiers,
     reason = "the prompt modules read the summary choice directly"
 )]
-pub struct TextConfig {
+pub(crate) struct TextConfig {
     id:                 Option<String>,
     value:              Option<String>,
     placeholder:        Option<String>,
     validator:          Option<Rc<Validator>>,
     pub(crate) summary: Option<bool>,
 }
-
 impl TextConfig {
     /// whether submitting leaves a summary line, overriding the interaction
     #[must_use]
@@ -291,9 +214,8 @@ impl fmt::Debug for TextConfig {
     }
 }
 
-/// presentation settings for [`ReviewPrompt`] and [`ReviewPromptWithActions`]
 #[derive(Clone, Debug)]
-pub struct ReviewConfig {
+struct ReviewConfig {
     list:         ListConfig,
     show_removed: bool,
 }
@@ -304,17 +226,6 @@ impl Default for ReviewConfig {
             list:         ListConfig::default(),
             show_removed: true,
         }
-    }
-}
-
-impl ReviewConfig {
-    list_options!("highlight the item at `selected`, counting from zero", list);
-
-    /// choose whether removed items stay in view. defaults to `true`
-    #[must_use]
-    pub const fn show_removed(mut self, show_removed: bool) -> Self {
-        self.show_removed = show_removed;
-        self
     }
 }
 
@@ -489,10 +400,20 @@ macro_rules! choice_option {
     };
 }
 
-fn require_choices(kind: &str, count: usize) -> Result<()> {
+fn require_list(kind: &str, count: usize, list: &ListConfig) -> Result<()> {
     if count == 0 {
         return Err(Error::invalid_configuration(format!(
             "{kind} prompt needs at least one choice"
+        )));
+    }
+    if list.page_size == 0 {
+        return Err(Error::invalid_configuration(format!(
+            "{kind} prompt needs a page size of at least 1"
+        )));
+    }
+    if let Some(selected) = list.selected.filter(|selected| *selected >= count) {
+        return Err(Error::invalid_configuration(format!(
+            "{kind} prompt selects choice {selected} but has {count}"
         )));
     }
     Ok(())
@@ -520,17 +441,11 @@ impl<T> ReviewPromptCore<T> {
         }
     }
 
-    fn with_config(&mut self, config: ReviewConfig) {
-        let header = self.config.list.header.take();
-        self.config = config;
-        self.config.list.inherit_header(header);
-    }
-
     fn into_widget<A>(
         self,
         actions: &[ReviewPromptAction<A>],
     ) -> Result<(ReviewList, Vec<ReviewChoice<T>>)> {
-        require_choices("review", self.choices.len())?;
+        require_list("review", self.choices.len(), &self.config.list)?;
         let items = self
             .choices
             .iter()
@@ -545,7 +460,7 @@ impl<T> ReviewPromptCore<T> {
             .with_custom_actions(actions.iter().enumerate().map(|(index, action)| {
                 ReviewActionBinding::new(action.key, index.to_string())
                     .with_help(action.help.clone())
-            }));
+            }))?;
         if let Some(header) = self.config.list.header {
             widget = widget.with_header(header);
         }
@@ -672,15 +587,6 @@ impl<T> ReviewPrompt<T> {
     }
 }
 
-impl<T> Configurable for ReviewPrompt<T> {
-    type Config = ReviewConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.core.with_config(config);
-        self
-    }
-}
-
 /// a review prompt with one or more typed intrinsic actions
 ///
 /// it is reached through [`ReviewPrompt::action`]. the prompt needs at least
@@ -741,15 +647,6 @@ impl<T, A> ReviewPromptWithActions<T, A> {
             },
             Err(error) => Err(error),
         }
-    }
-}
-
-impl<T, A> Configurable for ReviewPromptWithActions<T, A> {
-    type Config = ReviewConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.core.with_config(config);
-        self
     }
 }
 
@@ -848,7 +745,7 @@ impl<T> SelectPrompt<T> {
     }
 
     fn into_widget(self) -> Result<(Select, Vec<Choice<T>>)> {
-        require_choices("select", self.choices.len())?;
+        require_list("select", self.choices.len(), &self.config.list)?;
         let items = choice_items(&self.choices);
         let mut widget = Select::new(self.id, items)
             .with_page_size(self.config.list.page_size)
@@ -860,17 +757,6 @@ impl<T> SelectPrompt<T> {
             widget = widget.with_selected_index(selected);
         }
         Ok((widget, self.choices))
-    }
-}
-
-impl<T> Configurable for SelectPrompt<T> {
-    type Config = SelectConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        let header = self.config.list.header.take();
-        self.config = config;
-        self.config.list.inherit_header(header);
-        self
     }
 }
 
@@ -952,7 +838,18 @@ impl<T> MultiSelectPrompt<T> {
     }
 
     fn into_widget(self) -> Result<(MultiSelect, Vec<Choice<T>>)> {
-        require_choices("multi-select", self.choices.len())?;
+        require_list("multi-select", self.choices.len(), &self.config.list)?;
+        if let Some(index) = self
+            .config
+            .checked
+            .iter()
+            .find(|index| **index >= self.choices.len())
+        {
+            return Err(Error::invalid_configuration(format!(
+                "multi-select prompt checks choice {index} but has {}",
+                self.choices.len()
+            )));
+        }
         let mut widget = MultiSelect::new(self.id, choice_items(&self.choices))
             .with_page_size(self.config.list.page_size)
             .with_wrap(self.config.list.wrap)
@@ -964,17 +861,6 @@ impl<T> MultiSelectPrompt<T> {
             widget = widget.with_selected_index(selected);
         }
         Ok((widget, self.choices))
-    }
-}
-
-impl<T> Configurable for MultiSelectPrompt<T> {
-    type Config = MultiSelectConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        let header = self.config.list.header.take();
-        self.config = config;
-        self.config.list.inherit_header(header);
-        self
     }
 }
 
@@ -1055,7 +941,7 @@ impl<T> SearchPrompt<T> {
     }
 
     fn into_widget(self) -> Result<(SearchSelect, Vec<Choice<T>>)> {
-        require_choices("search", self.choices.len())?;
+        require_list("search", self.choices.len(), &self.config.list)?;
         let mut widget = SearchSelect::new(self.id, choice_items(&self.choices))
             .with_page_size(self.config.list.page_size)
             .with_wrap(self.config.list.wrap);
@@ -1072,17 +958,6 @@ impl<T> SearchPrompt<T> {
             widget = widget.with_selected_match_index(selected);
         }
         Ok((widget, self.choices))
-    }
-}
-
-impl<T> Configurable for SearchPrompt<T> {
-    type Config = SearchConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        let header = self.config.list.header.take();
-        self.config = config;
-        self.config.list.inherit_header(header);
-        self
     }
 }
 
@@ -1121,7 +996,7 @@ impl TextPrompt {
 
     /// start with `value` already typed
     #[must_use]
-    pub fn value(mut self, value: impl Into<String>) -> Self {
+    pub fn default(mut self, value: impl Into<String>) -> Self {
         self.config = self.config.value(value);
         self
     }
@@ -1161,7 +1036,7 @@ impl TextPrompt {
     pub fn interact(self) -> Result<PromptOutcome<String>> {
         let prompt = self.prompt.clone();
         let summary = self.config.summary;
-        let widget = text_widget(self.prompt, self.config, "text", None);
+        let widget = text_widget(self.prompt, self.config, "text", None)?;
         resolve_prompt(
             self.interaction.interact_named(
                 Some(&prompt),
@@ -1179,7 +1054,7 @@ pub(crate) fn text_widget(
     config: TextConfig,
     default_id: &str,
     mask: Option<char>,
-) -> TextInput {
+) -> Result<TextInput> {
     let mut widget =
         TextInput::new(config.id.unwrap_or_else(|| default_id.to_owned())).with_prompt(prompt);
     if let Some(placeholder) = config.placeholder {
@@ -1192,9 +1067,9 @@ pub(crate) fn text_widget(
         widget = widget.with_validator(move |value| validator(value));
     }
     if let Some(symbol) = mask {
-        widget = widget.with_mask(symbol);
+        widget = widget.with_mask(symbol)?;
     }
-    widget
+    Ok(widget)
 }
 
 pub(crate) fn resolve_text(value: Value) -> Result<String> {
@@ -1207,15 +1082,6 @@ pub(crate) fn resolve_text(value: Value) -> Result<String> {
         | Value::List(_)
         | Value::Object(_)
         | _ => Err(Error::unexpected("text")),
-    }
-}
-
-impl Configurable for TextPrompt {
-    type Config = TextConfig;
-
-    fn with_config(mut self, config: Self::Config) -> Self {
-        self.config = config;
-        self
     }
 }
 
@@ -1409,75 +1275,6 @@ mod tests {
 
     use super::*;
     use crate::advanced::scripted_interaction;
-
-    #[test]
-    fn prompt_specific_configs_cover_normal_presentation_state() {
-        let select = select::<()>("select").with_config(
-            SelectConfig::default()
-                .header("choose")
-                .wrap(false)
-                .page_size(4)
-                .selected(2),
-        );
-        assert_eq!(select.config.list.header.as_deref(), Some("choose"));
-        assert!(!select.config.list.wrap);
-        assert_eq!(select.config.list.page_size, 4);
-        assert_eq!(select.config.list.selected, Some(2));
-
-        let multi = multi_select::<()>("multi").with_config(
-            MultiSelectConfig::default()
-                .header("choose several")
-                .wrap(false)
-                .page_size(5)
-                .selected(1)
-                .checked_indices([0, 2]),
-        );
-        assert_eq!(multi.config.list.selected, Some(1));
-        assert_eq!(multi.config.checked, [0, 2]);
-
-        let search = search::<()>("search").with_config(
-            SearchConfig::default()
-                .header("find one")
-                .wrap(false)
-                .page_size(6)
-                .prompt("query: ")
-                .placeholder("type here")
-                .selected(3),
-        );
-        assert_eq!(search.config.list.header.as_deref(), Some("find one"));
-        assert_eq!(search.config.prompt.as_deref(), Some("query: "));
-        assert_eq!(search.config.placeholder.as_deref(), Some("type here"));
-        assert_eq!(search.config.list.selected, Some(3));
-
-        let text = text("value: ").with_config(
-            TextConfig::default()
-                .id("value")
-                .value("initial")
-                .placeholder("required")
-                .validator(|value| {
-                    (!value.is_empty())
-                        .then_some(())
-                        .ok_or_else(|| "empty".to_owned())
-                }),
-        );
-        assert_eq!(text.config.id.as_deref(), Some("value"));
-        assert_eq!(text.config.value.as_deref(), Some("initial"));
-        assert!(text.config.validator.is_some());
-
-        let review = review::<()>("review").with_config(
-            ReviewConfig::default()
-                .header("review")
-                .wrap(false)
-                .page_size(7)
-                .selected(2)
-                .show_removed(false),
-        );
-        assert_eq!(review.core.config.list.header.as_deref(), Some("review"));
-        assert!(!review.core.config.list.wrap);
-        assert_eq!(review.core.config.list.page_size, 7);
-        assert_eq!(review.core.config.list.selected, Some(2));
-        assert!(!review.core.config.show_removed);
-    }
 
     #[test]
     fn typed_choice_is_recovered() {
@@ -1741,7 +1538,7 @@ mod tests {
 
     #[test]
     fn cancellation_leaves_the_review_prompts() {
-        let control_c = bang_core::Event::Key(bang_core::KeyEvent::with_modifiers(
+        let control_c = bang_core::Event::Key(bang_core::KeyEvent::new(
             bang_core::Key::Char('c'),
             bang_core::Modifiers::CONTROL,
         ));
@@ -1854,20 +1651,6 @@ mod tests {
     }
 
     #[test]
-    fn with_config_keeps_the_entry_point_header_unless_overridden() {
-        let kept = select::<()>("original").with_config(SelectConfig::default().page_size(3));
-        assert_eq!(kept.config.list.header.as_deref(), Some("original"));
-        assert_eq!(kept.config.list.page_size, 3);
-
-        let replaced =
-            review::<()>("original").with_config(ReviewConfig::default().header("replacement"));
-        assert_eq!(
-            replaced.core.config.list.header.as_deref(),
-            Some("replacement")
-        );
-    }
-
-    #[test]
     fn every_list_prompt_rejects_zero_choices() {
         let kinds = [
             select::<i32>("x").interact().unwrap_err().kind(),
@@ -1884,6 +1667,31 @@ mod tests {
             kinds
                 .iter()
                 .all(|kind| *kind == crate::ErrorKind::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn list_prompts_reject_a_zero_page_and_out_of_range_indices() {
+        let kinds = [
+            select::<u8>("x").choice("a", 1).page_size(0),
+            select::<u8>("x").choice("a", 1).selected(1),
+        ]
+        .map(|prompt| prompt.interact().unwrap_err().kind());
+        let multi = multi_select::<u8>("x").choice("a", 1).checked(1);
+        let search = search::<u8>("x").choice("a", 1).selected(1);
+        let review = review::<u8>("x")
+            .item("a", 1, ReviewState::Unconfirmed)
+            .selected(1);
+
+        assert!(
+            kinds
+                .into_iter()
+                .chain([
+                    multi.interact().unwrap_err().kind(),
+                    search.interact().unwrap_err().kind(),
+                    review.interact().unwrap_err().kind(),
+                ])
+                .all(|kind| kind == crate::ErrorKind::InvalidConfiguration)
         );
     }
 }

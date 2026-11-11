@@ -17,10 +17,10 @@ use std::{
 use bang::{
     advanced::{
         Event,
+        InputWidget,
         Key,
         KeyEvent,
         Reaction,
-        Widget,
         WidgetContext,
         WidgetId,
     },
@@ -73,7 +73,7 @@ impl ScreenWidget for Tall {
     }
 }
 
-impl Widget for Tall {
+impl InputWidget for Tall {
     fn id(&self) -> WidgetId {
         WidgetId::from("tall")
     }

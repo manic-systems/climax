@@ -17,7 +17,6 @@ use bang::{
         Decoder,
         RawModeOptions,
         ScreenGuard,
-        ScreenKind,
         ScreenOptions,
         TerminalEvents,
         TerminalPoll,
@@ -48,7 +47,6 @@ fn a_screen_guard_enters_and_leaves_through_bang() {
     let options = ScreenOptions::full_screen()
         .cursor(CursorPolicy::Preserve)
         .bracketed_paste(true);
-    assert_eq!(ScreenKind::default(), ScreenKind::Inline);
     let guard = ScreenGuard::enter(&mut output, options).expect("enter");
     guard.leave().expect("leave");
     let written = String::from_utf8(output).expect("escape sequences are text");

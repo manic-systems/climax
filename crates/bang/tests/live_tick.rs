@@ -13,9 +13,9 @@ use std::{
 use bang::{
     advanced::{
         Event,
+        InputWidget,
         Reaction,
         Value,
-        Widget,
         WidgetContext,
         WidgetId,
     },
@@ -45,7 +45,7 @@ impl ScreenWidget for Countdown {
     }
 }
 
-impl Widget for Countdown {
+impl InputWidget for Countdown {
     fn id(&self) -> WidgetId {
         WidgetId::from("countdown")
     }
