@@ -3,7 +3,7 @@ name                   = "bang"
 version                = "0.1.0"
 authors.workspace      = true
 categories             = [ "command-line-interface" ]
-description            = "Typed interactive terminal prompts such as select, search, review and text input"
+description            = "typed interactive terminal prompts such as select, search, review and text input"
 edition.workspace      = true
 keywords               = [ "cli", "input", "terminal", "prompts" ]
 license.workspace      = true
@@ -22,3 +22,7 @@ bang-terminal = { workspace = true, features = [ "testing" ] }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = [ "--cfg", "docsrs" ]

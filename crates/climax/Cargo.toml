@@ -3,7 +3,7 @@ name                   = "climax"
 version                = "0.1.0"
 authors.workspace      = true
 categories             = [ "command-line-interface", "command-line-utilities" ]
-description            = "Batteries-included CLI crate tying together argument parsing, terminal rendering, and prompts"
+description            = "batteries-included cli crate tying together argument parsing, terminal rendering and prompts"
 edition.workspace      = true
 exclude                = [ "tests/dependency_fixtures.rs", "tests/workspace_pins.rs" ]
 keywords               = [ "cli", "terminal", "prompts", "args", "tui" ]
@@ -64,3 +64,7 @@ question_mark_used             = "allow"
 redundant_pub_crate            = "allow"
 single_call_fn                 = "allow"
 single_char_lifetime_names     = "allow"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = [ "--cfg", "docsrs" ]
