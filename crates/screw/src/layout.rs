@@ -5,10 +5,8 @@ use core::fmt;
 use crate::{
     InputAnchor,
     Line,
-    LocalWidgetRef,
     Stack,
     WidgetRef,
-    local_widget,
     widget,
 };
 
@@ -58,32 +56,6 @@ impl Default for LayoutBuilder<WidgetRef> {
     }
 }
 
-impl<'a> LayoutBuilder<LocalWidgetRef<'a>> {
-    /// empty builder for widgets that stay on the current thread
-    pub fn new_local() -> Self {
-        Self { rows: Vec::new() }
-    }
-
-    /// adds a row whose children are laid out side by side
-    #[must_use]
-    pub fn line(mut self, children: impl Into<Vec<LocalWidgetRef<'a>>>) -> Self {
-        self.rows.push(local_widget(Line::new(children)));
-        self
-    }
-
-    /// adds a row that places the terminal cursor
-    #[must_use]
-    pub fn input(mut self, input: InputAnchor) -> Self {
-        self.rows.push(local_widget(input));
-        self
-    }
-
-    /// builds the stack and erases it into a local widget
-    pub fn into_widget(self) -> LocalWidgetRef<'a> {
-        local_widget(self.build())
-    }
-}
-
 impl<H> LayoutBuilder<H> {
     /// adds a widget as its own row
     #[must_use]
@@ -103,16 +75,8 @@ pub fn layout() -> LayoutBuilder {
     LayoutBuilder::new()
 }
 
-/// starts a layout whose erased widgets stay on the current thread
-pub fn local_layout<'a>() -> LayoutBuilder<LocalWidgetRef<'a>> {
-    LayoutBuilder::new_local()
-}
-
 #[cfg(test)]
 mod tests {
-    use alloc::rc::Rc;
-    use core::cell::RefCell;
-
     use super::*;
     use crate::{
         Looping,
@@ -122,7 +86,6 @@ mod tests {
         Surface,
         Text,
         WindowedLines,
-        render_plain_with_frame,
     };
 
     fn render_cursor(widget: &impl crate::Widget) -> Option<crate::Position> {
@@ -150,33 +113,12 @@ mod tests {
             .build();
 
         assert_eq!(
-            render_plain_with_frame(&app, 0),
+            crate::render_plain(&app),
             "/ building\none\ntwo\n[\u{2501}\u{2501}\u{2500}\u{2500}]\n> "
         );
         assert_eq!(
             render_cursor(&app),
             Some(crate::Position { row: 4, col: 2 })
         );
-    }
-
-    struct LocalText(Rc<RefCell<String>>);
-
-    impl crate::Widget for LocalText {
-        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-            out.write(&*self.0.borrow(), Style::PLAIN);
-        }
-    }
-
-    #[test]
-    fn local_builder_composes_rc_refcell_widgets() {
-        let value = Rc::new(RefCell::new("before".to_owned()));
-        let app = local_layout()
-            .line(vec![local_widget(LocalText(Rc::clone(&value)))])
-            .widget(local_widget("tail"))
-            .build();
-
-        assert_eq!(crate::render_plain(&app), "before\ntail");
-        *value.borrow_mut() = "after".to_owned();
-        assert_eq!(crate::render_plain(&app), "after\ntail");
     }
 }

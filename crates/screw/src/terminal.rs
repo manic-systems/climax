@@ -12,6 +12,13 @@ pub(crate) fn stderr_size() -> (usize, Option<usize>) {
     })
 }
 
+/// columns and rows of standard error, `None` off a terminal
+pub(crate) fn stderr_viewport() -> Option<(usize, usize)> {
+    Viewport::of(&io::stderr())
+        .ok()
+        .map(|size| (size.columns, size.rows))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::File;

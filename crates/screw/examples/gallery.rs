@@ -37,7 +37,6 @@ use screw::{
     Surface,
     Table,
     Text,
-    TextInput,
     Widget,
     WidgetRef,
     WindowedLines,
@@ -148,11 +147,14 @@ impl DraftInput {
 
 impl Widget for DraftInput {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        let value = self.value.lock().unwrap_or_else(PoisonError::into_inner);
-        TextInput::new("filter: ", value.as_str())
-            .cursor(value.chars().count())
-            .roles(Role::Prompt, Role::Normal)
-            .render(ctx, out);
+        let value = self
+            .value
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        out.write("filter: ", ctx.theme().style(Role::Prompt));
+        out.write(value, Style::new());
+        out.set_cursor_here();
     }
 }
 
@@ -293,7 +295,7 @@ impl Gallery {
 
 fn main() -> io::Result<()> {
     let gallery = Gallery::new();
-    let runtime = Runtime::stderr_auto(Arc::clone(&gallery.root))
+    let runtime = Runtime::stderr(Arc::clone(&gallery.root))
         .fps(12)
         .final_widget(Gallery::final_summary())
         .start();

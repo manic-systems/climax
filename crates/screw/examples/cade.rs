@@ -92,7 +92,7 @@ impl Demo {
 
 fn main() -> io::Result<()> {
     let demo = Demo::new();
-    let runtime = Runtime::stderr_auto(demo.root).fps(12).start();
+    let runtime = Runtime::stderr(demo.root).fps(12).start();
 
     linger(&runtime)?;
 

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+//! floating widgets composited over a base, and the geometry they are placed
+//! with
+
 use core::{
     fmt,
     iter,
@@ -10,13 +13,14 @@ use core::{
     },
 };
 
-use crate::{
-    CursorMerge,
-    Fill,
+pub use crate::geometry::{
     Insets,
     Rect,
-    RenderCtx,
     Size,
+};
+use crate::{
+    RenderCtx,
+    Style,
     Surface,
     TickInterest,
     VerticalSize,
@@ -25,6 +29,30 @@ use crate::{
     surface::append_surface,
     widget::combine_tick_interest,
 };
+
+/// how an overlaid widget treats the cells it covers
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum Fill {
+    /// cells the source never wrote show the base underneath, a written space
+    /// still hides it
+    Transparent,
+    /// the whole destination is blanked with this style before the source is
+    /// drawn
+    Opaque(Style),
+}
+
+/// how an overlay combines its cursor with the base cursor
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CursorMerge {
+    /// keep the base cursor
+    PreserveBase,
+    /// use the overlay cursor when it has one and it lands on the canvas
+    PreferOverlay,
+    /// remove the cursor
+    Hide,
+}
 
 /// a set of edges of a canvas, combined with `|`
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -118,13 +146,13 @@ struct FloatingChild<H> {
 }
 
 /// a base widget with floating children composited over it
-pub struct Layers<'a, B, H = Box<dyn Widget + Send + Sync + 'a>> {
+pub struct Layers<'a, B> {
     base:     B,
-    floating: Vec<FloatingChild<H>>,
+    floating: Vec<FloatingChild<Box<dyn Widget + Send + Sync + 'a>>>,
     lifetime: PhantomData<&'a ()>,
 }
 
-impl<B, H> fmt::Debug for Layers<'_, B, H> {
+impl<B> fmt::Debug for Layers<'_, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Layers")
             .field("floating", &self.floating.len())
@@ -156,34 +184,9 @@ impl<'a, B> Layers<'a, B> {
     }
 }
 
-impl<'a, B> Layers<'a, B, Box<dyn Widget + 'a>> {
-    /// creates a layer stack whose floating widgets may borrow local data
-    pub const fn local(base: B) -> Self {
-        Self {
-            base,
-            floating: Vec::new(),
-            lifetime: PhantomData,
-        }
-    }
-
-    /// adds a floating child drawn above the base and earlier children
-    #[must_use]
-    pub fn float<W>(mut self, child: W, policy: Floating) -> Self
-    where
-        W: Widget + 'a,
-    {
-        self.floating.push(FloatingChild {
-            widget: Box::new(child),
-            policy,
-        });
-        self
-    }
-}
-
-impl<B, H> Widget for Layers<'_, B, H>
+impl<B> Widget for Layers<'_, B>
 where
     B: Widget,
-    H: Widget,
 {
     fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
         let area = ctx.with_constraints(
@@ -320,14 +323,8 @@ fn resolve_axis(
 
 #[cfg(test)]
 mod tests {
-    use alloc::{
-        rc::Rc,
-        sync::Arc,
-    };
-    use core::{
-        cell::RefCell,
-        time::Duration,
-    };
+    use alloc::sync::Arc;
+    use core::time::Duration;
     use std::sync::Mutex;
 
     use super::*;
@@ -432,31 +429,6 @@ mod tests {
         let wrapped = layout_surface(surface, Some(4), LayoutMode::Wrap);
         assert_eq!(wrapped.rows()[0].cells().len(), 3);
         assert_eq!(wrapped.rows()[1].cells()[0].text, "X");
-    }
-
-    struct LocalOverlay(Rc<RefCell<String>>);
-
-    impl Widget for LocalOverlay {
-        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-            out.write(&*self.0.borrow(), Style::PLAIN);
-        }
-    }
-
-    #[test]
-    fn local_layers_accept_rc_refcell_widgets() {
-        let value = Rc::new(RefCell::new("x".to_owned()));
-        let layers = Layers::local("base").float(
-            LocalOverlay(Rc::clone(&value)),
-            Floating::new(Edge::TOP | Edge::RIGHT),
-        );
-        let mut surface = Surface::new();
-        layers.render(&context(8, 2), &mut surface);
-        assert_eq!(surface.plain_text(), "base   x");
-
-        *value.borrow_mut() = "yz".to_owned();
-        let mut updated = Surface::new();
-        layers.render(&context(8, 2), &mut updated);
-        assert_eq!(updated.plain_text(), "base  yz");
     }
 
     struct BorrowedOverlay<'a>(&'a str);

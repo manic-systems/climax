@@ -19,18 +19,22 @@ use std::{
 };
 
 use crate::{
-    Cell,
     Position,
     RenderCtx,
     Style,
     Surface,
     Theme,
     Widget,
+    surface::{
+        Cell,
+        RowBreak,
+    },
     terminal::stderr_size,
 };
 
 /// counters describing one draw
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct RenderStats {
     /// rows rewritten, zero when the frame matched the previous one
     pub changed_rows: usize,
@@ -38,6 +42,7 @@ pub struct RenderStats {
 
 /// how a surface wider than the terminal is fitted
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum LayoutMode {
     /// cut each row at the terminal width
     #[default]
@@ -49,16 +54,21 @@ pub enum LayoutMode {
 /// whether terminal cursor visibility is left alone or derived from the
 /// surface's cursor anchor
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum CursorVisibility {
     /// emit no cursor visibility controls
     #[default]
     Preserve,
-    /// show the cursor when the surface has an anchor, hide it otherwise
+    /// show the cursor when the surface has an anchor, hide it otherwise, a
+    /// signal that ends the process leaves it hidden
     FromSurface,
 }
 
 /// draws widgets to a terminal stream, writing only the rows that changed since
 /// the last draw
+///
+/// it writes escape sequences, [`Renderer::terminal`] turns them off for a
+/// writer that is not a terminal
 #[expect(
     clippy::struct_excessive_bools,
     reason = "each flag tracks an independent part of the terminal state"
@@ -88,6 +98,11 @@ pub struct Renderer<W> {
 pub fn colors_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| colors_from(|name| env::var_os(name).filter(|value| !value.is_empty())))
+}
+
+/// whether `TERM` is `dumb`, read on every call
+pub fn is_dumb_terminal() -> bool {
+    env::var_os("TERM").is_some_and(|term| term == "dumb")
 }
 
 fn colors_from(var: impl Fn(&str) -> Option<OsString>) -> bool {
@@ -131,10 +146,14 @@ where
     ///
     /// the first frame on a terminal starts at column 0 of the current row and
     /// clears it, text already on that row is erased. a writer that is not a
-    /// terminal gets no leading carriage return
+    /// terminal gets plain rows with no styles, `ESC [ K` or carriage returns,
+    /// and colours go off unless [`Renderer::colors`] comes after
     #[must_use]
     pub const fn terminal(mut self, terminal: bool) -> Self {
         self.terminal = terminal;
+        if !terminal {
+            self.colors = false;
+        }
         self
     }
 
@@ -146,13 +165,18 @@ where
     }
 
     /// terminal width in columns, rows are clipped or wrapped to it
+    ///
+    /// widgets get one column fewer, so the last column stays free and a full
+    /// row never wraps
     #[must_use]
     pub const fn width(mut self, width: usize) -> Self {
         self.width = Some(width);
         self
     }
 
-    /// terminal height in rows, the frame is clipped to it
+    /// terminal height in rows, a live frame is clipped to it
+    ///
+    /// [`Renderer::finish`] draws without the clip
     #[must_use]
     pub const fn height(mut self, height: usize) -> Self {
         self.height = Some(height);
@@ -212,6 +236,37 @@ where
     where
         T: Widget + ?Sized,
     {
+        let next = self.render_widget(widget);
+        self.draw_surface(next)
+    }
+
+    /// draws `widget` as the last frame, then moves to a fresh line when the
+    /// writer is a terminal
+    ///
+    /// the frame is not clipped to the height, so a frame taller than the
+    /// terminal scrolls and stays in the scrollback
+    ///
+    /// # Errors
+    ///
+    /// fails when the frame cannot be written or flushed
+    pub fn finish<T>(&mut self, widget: &T) -> io::Result<RenderStats>
+    where
+        T: Widget + ?Sized,
+    {
+        let next = self.render_widget(widget);
+        let physical = self.layout_surface_clipped(next, false);
+        if self.height.is_some_and(|rows| physical.height() > rows) {
+            self.force_full = true;
+        }
+        let stats = self.commit(physical)?;
+        self.end_line()?;
+        Ok(stats)
+    }
+
+    fn render_widget<T>(&mut self, widget: &T) -> Surface
+    where
+        T: Widget + ?Sized,
+    {
         let mut next = Surface::new();
         widget.render(
             &RenderCtx::new()
@@ -222,7 +277,7 @@ where
             &mut next,
         );
         self.frame = self.frame.wrapping_add(1);
-        self.draw_surface(next)
+        next
     }
 
     /// writes an already rendered surface after fitting it to the width and
@@ -233,7 +288,10 @@ where
     /// fails when the frame cannot be written or flushed
     pub fn draw_surface(&mut self, next_logical: Surface) -> io::Result<RenderStats> {
         let next_physical = self.layout_surface(next_logical);
+        self.commit(next_physical)
+    }
 
+    fn commit(&mut self, next_physical: Surface) -> io::Result<RenderStats> {
         if !self.force_full && self.previous.as_ref() == Some(&next_physical) {
             self.previous = Some(next_physical);
             return Ok(RenderStats::default());
@@ -260,7 +318,69 @@ where
         Ok(())
     }
 
+    fn write_stream(&mut self, next_physical: &Surface) -> io::Result<RenderStats> {
+        let mut stats = RenderStats::default();
+        if self.previous.is_some() {
+            self.writer.write_all(b"\n")?;
+        }
+        for (index, row) in next_physical.rows().iter().enumerate() {
+            if index > 0 {
+                self.writer.write_all(b"\n")?;
+            }
+            for cell in row.cells() {
+                self.writer.write_all(cell.text.as_bytes())?;
+            }
+            stats.changed_rows += 1;
+        }
+        self.force_full = false;
+        self.resync = false;
+        self.flush_retrying_interrupts()?;
+        Ok(stats)
+    }
+
+    fn end_line(&mut self) -> io::Result<()> {
+        if !self.terminal {
+            return Ok(());
+        }
+        let Some(previous) = self.previous.take() else {
+            return Ok(());
+        };
+        let at = final_position(&previous);
+        let mut cursor = Cursor {
+            row:   at.row,
+            col:   at.col,
+            style: Style::default(),
+        };
+        cursor.move_to(&mut self.writer, Position {
+            row: allocated_bottom(&previous),
+            col: 0,
+        })?;
+        self.writer.write_all(b"\n")?;
+        self.flush_retrying_interrupts()
+    }
+
+    /// erases the frame and writes `line` where it was, the next draw starts
+    /// on the row below the line
+    ///
+    /// # Errors
+    ///
+    /// fails when the erase or the line cannot be written or flushed
+    pub fn print_above(&mut self, line: &str) -> io::Result<()> {
+        if self.terminal {
+            self.clear()?;
+        } else if self.previous.take().is_some() {
+            self.writer.write_all(b"\n")?;
+        }
+        self.writer.write_all(line.as_bytes())?;
+        self.writer
+            .write_all(if self.terminal { b"\r\n" } else { b"\n" })?;
+        self.flush_retrying_interrupts()
+    }
+
     fn write_frame(&mut self, next_physical: &Surface) -> io::Result<RenderStats> {
+        if !self.terminal {
+            return self.write_stream(next_physical);
+        }
         self.settle_rendition()?;
         let mut cursor = Cursor::default();
         let mut stats = RenderStats::default();
@@ -395,12 +515,16 @@ where
     }
 
     fn layout_surface(&self, logical: Surface) -> Surface {
+        self.layout_surface_clipped(logical, true)
+    }
+
+    fn layout_surface_clipped(&self, logical: Surface, clip_height: bool) -> Surface {
         let mut physical =
             layout_surface(logical, self.width.map(usable_columns), self.layout_mode);
         if !self.colors {
             physical.drop_colors();
         }
-        if let Some(height) = self.height {
+        if let (true, Some(height)) = (clip_height, self.height) {
             physical.fit_height(height);
         }
         physical
@@ -553,9 +677,9 @@ fn wrap_surface(surface: &Surface, max_columns: usize) -> Surface {
     let mut first_physical_row = true;
     let mut physical_cursor = None;
 
-    let mut previous_break = crate::RowBreak::None;
+    let mut previous_break = RowBreak::None;
     for (logical_row, row) in surface.rows().iter().enumerate() {
-        if !first_physical_row && previous_break != crate::RowBreak::Soft {
+        if !first_physical_row && previous_break != RowBreak::Soft {
             out.newline();
         }
         first_physical_row = false;
@@ -954,20 +1078,22 @@ mod tests {
 
     use crate::{
         Color,
-        CursorMerge,
         CursorVisibility,
-        Edge,
-        Fill,
-        Floating,
-        Insets,
-        Layers,
         LayoutMode,
         Position,
         Renderer,
-        Size,
         Style,
         Surface,
         Widget,
+        layers::{
+            CursorMerge,
+            Edge,
+            Fill,
+            Floating,
+            Insets,
+            Layers,
+            Size,
+        },
         renderer::layout_surface,
     };
 
@@ -994,6 +1120,15 @@ mod tests {
         logical.write("c", Style::default());
         let laid_out = layout_surface(logical, Some(20), LayoutMode::Wrap);
         assert_eq!(laid_out.plain_text(), "ab\nc");
+    }
+
+    #[test]
+    fn a_writer_that_is_not_a_terminal_gets_plain_rows() {
+        let mut renderer = Renderer::new(Vec::new()).terminal(false).width(20);
+        renderer
+            .draw(&crate::Text::new("hi\nrow").style(Style::new().bold()))
+            .unwrap();
+        assert_eq!(renderer.into_inner(), b"hi\nrow");
     }
 
     #[test]

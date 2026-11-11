@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
+//! the surface widgets draw into, and the rows and cells it is made of
+
 use core::{
     iter,
     mem,
@@ -9,8 +11,12 @@ use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::{
-    Rect,
     Style,
+    layers::{
+        CursorMerge,
+        Fill,
+        Rect,
+    },
     measure::{
         JOIN_CELL_LIMIT,
         Segment,
@@ -20,30 +26,9 @@ use crate::{
     },
 };
 
-/// how an overlaid widget treats the cells it covers
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Fill {
-    /// cells the source never wrote show the base underneath, a written space
-    /// still hides it
-    Transparent,
-    /// the whole destination is blanked with this style before the source is
-    /// drawn
-    Opaque(Style),
-}
-
-/// how an overlay combines its cursor with the base cursor
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CursorMerge {
-    /// keep the base cursor
-    PreserveBase,
-    /// use the overlay cursor when it has one and it lands on the canvas
-    PreferOverlay,
-    /// remove the cursor
-    Hide,
-}
-
 /// what separates a row from the next one
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RowBreak {
     /// the row is the last or no break was recorded
     #[default]

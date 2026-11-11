@@ -8,15 +8,17 @@
 use std::io;
 
 use screw::{
-    CursorMerge,
-    Edge,
-    Fill,
-    Floating,
-    Insets,
-    Layers,
     Renderer,
-    Size,
     Style,
+    layers::{
+        CursorMerge,
+        Edge,
+        Fill,
+        Floating,
+        Insets,
+        Layers,
+        Size,
+    },
 };
 
 fn main() -> io::Result<()> {
@@ -32,6 +34,6 @@ fn main() -> io::Result<()> {
             .cursor(CursorMerge::PreserveBase),
     );
 
-    Renderer::stderr().height(10).draw(&frame)?;
+    Renderer::stderr().height(10).finish(&frame)?;
     Ok(())
 }

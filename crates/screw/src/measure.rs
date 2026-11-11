@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 use alloc::borrow::Cow;
-use core::iter;
+use core::{
+    iter,
+    iter::Peekable,
+    str::Chars,
+};
 
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
@@ -283,6 +287,63 @@ pub fn single_line(text: &str) -> Cow<'_, str> {
     Cow::Owned(line)
 }
 
+/// [`single_line`] after removing escape sequences, string controls and
+/// invisible formatting characters, so text from outside shows as it reads
+///
+/// ```
+/// assert_eq!(screw::sanitised_line("a\x1b[31mb\x1b]0;t\x07\nc"), "ab c");
+/// ```
+#[must_use]
+pub fn sanitised_line(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x1b' => skip_escape(&mut chars),
+            '\u{9b}' => skip_csi(&mut chars),
+            '\u{90}' | '\u{98}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => skip_string(&mut chars),
+            '\u{2028}' | '\u{2029}' => plain.push(' '),
+            '\u{61c}'
+            | '\u{200b}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206f}'
+            | '\u{feff}' => {},
+            _ => plain.push(ch),
+        }
+    }
+    single_line(&plain).into_owned()
+}
+
+fn skip_escape(chars: &mut Peekable<Chars<'_>>) {
+    match chars.next() {
+        Some('[') => skip_csi(chars),
+        Some(']' | 'P' | 'X' | '^' | '_') => skip_string(chars),
+        Some(' '..='/') => {
+            while chars.next_if(|ch| matches!(ch, ' '..='/')).is_some() {}
+            chars.next_if(|ch| matches!(ch, '0'..='~'));
+        },
+        _ => {},
+    }
+}
+
+fn skip_csi(chars: &mut Peekable<Chars<'_>>) {
+    while chars.next_if(|ch| matches!(ch, ' '..='?')).is_some() {}
+    chars.next_if(|ch| matches!(ch, '@'..='~'));
+}
+
+fn skip_string(chars: &mut Peekable<Chars<'_>>) {
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\x07' | '\u{9c}' => return,
+            '\x1b' if chars.next_if_eq(&'\\').is_some() => return,
+            _ => {},
+        }
+    }
+}
+
 /// `missing` columns of padding split into the amounts before and after text
 pub(crate) const fn split_padding(missing: usize, align: Align) -> (usize, usize) {
     match align {
@@ -402,6 +463,30 @@ mod tests {
         assert_eq!(truncate(text, 3), text);
         assert_eq!(pad(text, 5, Align::Left), format!("{text}  "));
         assert_eq!(pad(text, 5, Align::Right), format!("  {text}"));
+    }
+
+    #[test]
+    fn sanitised_lines_drop_every_escape_family_and_hiding_format_characters() {
+        for (raw, plain) in [
+            ("a\x1b[31mb", "ab"),
+            ("a\x1b[?25;1:2 qb", "ab"),
+            ("a\x1b]0;t\x07b", "ab"),
+            ("a\x1b]8;;http://x\x1b\\b\x1b]8;;\x1b\\c", "abc"),
+            ("a\x1bPq#0\x1b\\b", "ab"),
+            ("a\x1b(Bb", "ab"),
+            ("a\x1bcb", "ab"),
+            ("a\u{9b}31mb", "ab"),
+            ("a\u{9d}0;t\u{9c}b", "ab"),
+            ("a\u{202e}b\u{2066}c\u{2069}d", "abcd"),
+            ("a\u{200b}b\u{feff}c\u{200e}d", "abcd"),
+            ("a\u{2028}b\u{2029}c", "a b c"),
+            (
+                "a\u{1f469}\u{200d}\u{1f4bb}b",
+                "a\u{1f469}\u{200d}\u{1f4bb}b",
+            ),
+        ] {
+            assert_eq!(sanitised_line(raw), plain, "{raw:?}");
+        }
     }
 
     #[test]

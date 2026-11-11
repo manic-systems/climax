@@ -22,6 +22,7 @@ use crate::{
 
 /// the result of allocating logical children into a physical viewport
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ViewportReport {
     /// children with at least one rendered row
     pub visible:       Range<usize>,

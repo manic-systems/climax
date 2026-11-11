@@ -65,13 +65,20 @@
 //! a thread. a [`Role`] resolved by a [`Theme`] recolours widgets without
 //! touching them, and [`screw!`] and [`layout`] build a [`Stack`] of [`Line`]s
 //!
-//! the `examples` directory has `cade`, `gallery` and `layers`
+//! [`layers`] composites floating widgets over a base, [`surface`] holds the
+//! cell and row types a [`Surface`] is made of
+//!
+//! screw is unix only. the `examples` directory has `cade`, `gallery` and
+//! `layers`
 
 #![warn(missing_docs)]
 #![expect(
     clippy::non_ascii_literal,
     reason = "terminal glyphs read better as themselves than as escapes"
 )]
+
+#[cfg(not(unix))]
+compile_error!("screw supports unix targets only");
 
 extern crate alloc;
 
@@ -80,48 +87,36 @@ extern crate alloc;
 struct ReadmeDoctests;
 
 mod geometry;
-mod layers;
+pub mod layers;
 mod layout;
 mod measure;
 mod plain;
 mod renderer;
 mod runtime;
 mod style;
-mod surface;
+pub mod surface;
 mod sync;
 mod template;
 mod terminal;
 mod viewport;
 mod widget;
 
-pub use geometry::{
-    Insets,
-    Rect,
-    Size,
-    Viewport,
-};
-pub use layers::{
-    Edge,
-    Floating,
-    Layers,
-};
+pub use geometry::Viewport;
 pub use layout::{
     LayoutBuilder,
     layout,
-    local_layout,
 };
 pub use measure::{
     Align,
     pad,
+    sanitised_line,
     single_line,
     truncate,
     width,
 };
 pub use plain::{
     render_plain,
-    render_plain_with_frame,
-    render_plain_with_frame_and_theme,
-    write_plain,
+    render_plain_with,
 };
 pub use renderer::{
     CursorVisibility,
@@ -129,6 +124,7 @@ pub use renderer::{
     RenderStats,
     Renderer,
     colors_enabled,
+    is_dumb_terminal,
 };
 pub use runtime::{
     AutoRuntime,
@@ -145,17 +141,11 @@ pub use style::{
     Theme,
 };
 pub use surface::{
-    Cell,
-    CursorMerge,
-    Fill,
     Position,
-    Row,
-    RowBreak,
     Surface,
 };
 pub use template::{
     TemplateError,
-    local_template,
     template,
 };
 pub use viewport::{
@@ -178,7 +168,6 @@ pub use widget::{
     Stateful,
     Table,
     Text,
-    TextInput,
     TickInterest,
     VerticalSize,
     Widget,
@@ -217,18 +206,5 @@ macro_rules! screw {
             &[$((stringify!($name), $crate::widget($widget))),*],
         )
         .expect("invalid screw! template")
-    }};
-}
-
-/// [`screw!`] for widgets that stay on the current thread, the result is a
-/// local [`Stack`]
-#[macro_export]
-macro_rules! local_screw {
-    ($template:literal $(, $name:ident = $widget:expr)* $(,)?) => {{
-        $crate::local_template(
-            $template,
-            &[$((stringify!($name), $crate::local_widget($widget))),*],
-        )
-        .expect("invalid local_screw! template")
     }};
 }

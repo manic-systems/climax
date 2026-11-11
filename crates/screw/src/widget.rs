@@ -42,6 +42,7 @@ use crate::{
 
 /// how a widget takes vertical space inside a [`Stack`]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum VerticalSize {
     /// measured from its content before flexible space is allocated
     #[default]
@@ -52,6 +53,7 @@ pub enum VerticalSize {
 
 /// how often a widget needs a redraw without being marked dirty
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum TickInterest {
     /// changes only when the application marks the runtime dirty
     Never,
@@ -119,7 +121,8 @@ impl RenderCtx {
         self.frame
     }
 
-    /// columns this widget may use, `None` when the width is unknown
+    /// columns this widget may use, one fewer than the terminal width, `None`
+    /// when the width is unknown
     pub const fn available_columns(self) -> Option<usize> {
         self.columns
     }
@@ -449,8 +452,11 @@ pub struct List {
 
 impl List {
     /// list showing every row with the first one selected
-    pub fn new(rows: impl Into<Vec<String>>) -> Self {
-        let owned = rows.into();
+    pub fn new(rows: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        let owned: Vec<String> = rows
+            .into_iter()
+            .map(|row| row.as_ref().to_owned())
+            .collect();
         let height = owned.len().max(1);
         Self {
             rows: owned.into(),
@@ -531,6 +537,7 @@ pub struct Table {
 
 /// what a [`Table`] does with a cell wider than its shrunk column
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum CellOverflow {
     /// cuts the cell and ends it with an ellipsis
     #[default]
@@ -836,70 +843,6 @@ impl Widget for InputAnchor {
     fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
         out.write(&self.prompt, self.style);
         out.set_cursor_here();
-    }
-}
-
-/// prompt followed by editable text with the terminal cursor placed inside it
-#[derive(Clone, Debug)]
-pub struct TextInput {
-    prompt:      String,
-    value:       String,
-    cursor:      usize,
-    prompt_role: Role,
-    value_role:  Role,
-}
-
-impl TextInput {
-    /// input showing `prompt` and `value` with the cursor at the start
-    pub fn new(prompt: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
-            prompt:      prompt.into(),
-            value:       value.into(),
-            cursor:      0,
-            prompt_role: Role::Prompt,
-            value_role:  Role::Normal,
-        }
-    }
-
-    /// places the cursor at char index `cursor`, clamped to the end and moved
-    /// past a split cluster
-    #[must_use]
-    pub const fn cursor(mut self, cursor: usize) -> Self {
-        self.cursor = cursor;
-        self
-    }
-
-    /// sets the roles of the prompt and of the value
-    #[must_use]
-    pub const fn roles(mut self, prompt: Role, value: Role) -> Self {
-        self.prompt_role = prompt;
-        self.value_role = value;
-        self
-    }
-}
-
-impl Widget for TextInput {
-    fn render(&self, ctx: &RenderCtx, out: &mut Surface) {
-        use unicode_segmentation::UnicodeSegmentation as _;
-
-        let value_style = ctx.theme().style(self.value_role);
-        out.write(&self.prompt, ctx.theme().style(self.prompt_role));
-        let char_index = self
-            .value
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.value.len(), |(index, _)| index);
-        let split = self
-            .value
-            .grapheme_indices(true)
-            .map(|(index, _)| index)
-            .chain([self.value.len()])
-            .find(|&index| index >= char_index)
-            .unwrap_or(self.value.len());
-        let (before, after) = self.value.split_at(split);
-        out.write(before, value_style);
-        out.set_cursor_here();
-        out.write(after, value_style);
     }
 }
 
@@ -1394,25 +1337,6 @@ mod tests {
     }
 
     #[test]
-    fn text_input_cursor_follows_tab_stops_from_the_prompt() {
-        let mut surface = Surface::new();
-        TextInput::new("> ", "a\tb")
-            .cursor(2)
-            .render(&RenderCtx::new(), &mut surface);
-        assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 8 }));
-    }
-
-    #[test]
-    fn text_input_cursor_inside_a_cluster_moves_past_it() {
-        let mut surface = Surface::new();
-        TextInput::new("", "\u{2764}\u{fe0f}x")
-            .cursor(1)
-            .render(&RenderCtx::new(), &mut surface);
-        assert_eq!(surface.cursor(), Some(crate::Position { row: 0, col: 2 }));
-        assert_eq!(surface.plain_text(), "\u{2764}\u{fe0f}x");
-    }
-
-    #[test]
     fn table_keeps_emitted_rows_within_the_fitted_widths_for_clusters() {
         for overflow in [CellOverflow::Truncate, CellOverflow::Wrap] {
             let table = Table::new([
@@ -1506,7 +1430,7 @@ mod tests {
         debuggable(&Stateful::<u8>::new(0));
         debuggable(&crate::layout());
         debuggable(&crate::VerticalViewport::<WidgetRef>::new(Vec::new()));
-        debuggable(&crate::Layers::new("base"));
+        debuggable(&crate::layers::Layers::new("base"));
         debuggable(&crate::Renderer::new(Vec::new()));
         debuggable(&crate::Runtime::new(Vec::new(), "root"));
     }

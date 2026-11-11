@@ -9,16 +9,15 @@ use core::{
 
 use crate::{
     Line,
-    LocalWidgetRef,
     Stack,
     Text,
     WidgetRef,
-    local_widget,
     widget,
 };
 
 /// why a template failed to parse
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum TemplateError {
     /// a slot written as `{}`
     EmptySlotName,
@@ -55,18 +54,6 @@ impl Error for TemplateError {}
 /// in `slots`
 pub fn template(source: &str, slots: &[(&str, WidgetRef)]) -> Result<Stack, TemplateError> {
     template_with(source, slots, widget, widget)
-}
-
-/// parses a template whose slots and result stay local to the current thread
-///
-/// # Errors
-///
-/// fails for the same reasons as [`template`]
-pub fn local_template<'a>(
-    source: &str,
-    slots: &[(&str, LocalWidgetRef<'a>)],
-) -> Result<Stack<LocalWidgetRef<'a>>, TemplateError> {
-    template_with(source, slots, local_widget, local_widget)
 }
 
 fn template_with<H, T, L>(
@@ -154,37 +141,4 @@ fn flush_text<H>(rows: &mut [Vec<H>], text: &mut String, wrap: &impl Fn(Text) ->
 const fn current_row_mut<H>(rows: &mut [Vec<H>]) -> &mut Vec<H> {
     rows.last_mut()
         .expect("template parser always keeps a current row")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::local_template;
-    use crate::{
-        RenderCtx,
-        Style,
-        Surface,
-        Widget,
-        local_widget,
-        render_plain,
-    };
-
-    struct BorrowedText<'a>(&'a str);
-
-    impl Widget for BorrowedText<'_> {
-        fn render(&self, _ctx: &RenderCtx, out: &mut Surface) {
-            out.write(self.0, Style::PLAIN);
-        }
-    }
-
-    #[test]
-    #[expect(
-        clippy::literal_string_with_formatting_args,
-        reason = "template slots are named by braces, not format arguments"
-    )]
-    fn local_template_retains_borrowed_slots() {
-        let value = String::from("borrowed");
-        let slot = local_widget(BorrowedText(&value));
-        let rendered = local_template("{value}/{value}", &[("value", slot)]).unwrap();
-        assert_eq!(render_plain(&rendered), "borrowed/borrowed");
-    }
 }

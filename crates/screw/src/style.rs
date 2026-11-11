@@ -83,6 +83,7 @@ impl Color {
     reason = "each attribute is an independent SGR flag"
 )]
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub struct Style {
     /// foreground colour, the terminal default when `None`
     pub fg:            Option<Color>,
@@ -104,6 +105,7 @@ pub struct Style {
 
 /// a semantic text role, resolved to a [`Style`] through a [`Theme`]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
 pub enum Role {
     /// prompt and heading text
     Prompt,
