@@ -37,8 +37,10 @@ mod tests {
 
     #[test]
     fn direct_dependency_types_unify_with_climax() {
-        let context = climax::Context::new()
-            .with_interaction(scripted_interaction([[Event::key(Key::Enter)]]));
-        run(&context, &Args { name: None }).unwrap();
+        climax::run_with((), |mut context, ()| {
+            context.set_interaction(scripted_interaction([[Event::key(Key::Enter)]]));
+            run(&context, &Args { name: None })
+        })
+        .unwrap();
     }
 }

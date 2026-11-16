@@ -98,7 +98,10 @@ mod tests {
     #[test]
     fn a_scripted_prompt_drives_the_application() {
         let interaction = scripted_interaction([[Event::key(Key::Enter)]]);
-        let context = Context::new().with_interaction(interaction);
-        run(&context, &Args { shell: None }).unwrap();
+        climax::run_with((), |mut context, ()| {
+            context.set_interaction(interaction);
+            run(&context, &Args { shell: None })
+        })
+        .unwrap();
     }
 }
