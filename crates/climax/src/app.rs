@@ -77,29 +77,24 @@ where
     complete(parse_env::<C>(), application).report()
 }
 
-/// runs an application that takes no arguments and reports its process outcome
-///
-/// errors are reported and exit codes chosen as in `main`. with `parse`,
-/// `--help` prints a usage line and any other argument fails with exit 2, and
-/// without it arguments are ignored
-///
-/// ```no_run
-/// use climax::prelude::*;
-///
-/// fn main() -> std::process::ExitCode {
-///     climax::main_with(|cx: Context| -> climax::Result<()> {
-///         cx.output().write_message("hello")
-///     })
-/// }
-/// ```
+/// names the package a [`main_with!`](crate::main_with) expansion runs in
+#[doc(hidden)]
+pub trait Package {
+    const NAME: &'static str;
+    const VERSION: &'static str;
+    const HASH: Option<&'static str>;
+}
+
+#[doc(hidden)]
 #[must_use]
-pub fn main_with<F>(application: F) -> ExitCode
+pub fn main_with<P, F>(application: F) -> ExitCode
 where
+    P: Package,
     F: FnOnce(Context) -> Result<()>,
 {
     #[cfg(feature = "parse")]
     {
-        complete(parse_env::<NoArguments>(), |context, NoArguments| {
+        complete(parse_env::<NoArguments<P>>(), |context, NoArguments(_)| {
             application(context)
         })
         .report()
@@ -109,20 +104,20 @@ where
 }
 
 #[cfg(feature = "parse")]
-struct NoArguments;
+struct NoArguments<P>(PhantomData<P>);
 
 #[cfg(feature = "parse")]
-const NO_ARGUMENTS: pound::CommandSpec = pound::CommandSpec::new("").invoked_name();
-
-#[cfg(feature = "parse")]
-impl pound::Parse for NoArguments {
-    const SPEC: &'static pound::CommandSpec = &NO_ARGUMENTS;
+impl<P: Package> pound::Parse for NoArguments<P> {
+    const SPEC: &'static pound::CommandSpec = &pound::CommandSpec::new(P::NAME)
+        .invoked_name()
+        .version(P::VERSION)
+        .hash_opt(P::HASH);
 
     fn from_matches(
         _: &'static pound::CommandSpec,
         _: &pound::Matches<'_>,
     ) -> result::Result<Self, pound::Error> {
-        Ok(Self)
+        Ok(Self(PhantomData))
     }
 
     fn update_from_matches(
@@ -1592,11 +1587,26 @@ mod tests {
     fn main_with_answers_help_and_refuses_other_arguments() {
         use pound::Parse as _;
 
-        let help = NoArguments::try_parse_from(["--help"]).err().unwrap();
+        struct Fixture;
+        impl Package for Fixture {
+            const HASH: Option<&'static str> = None;
+            const NAME: &'static str = "fixture";
+            const VERSION: &'static str = "4.5.6";
+        }
+        type Empty = NoArguments<Fixture>;
+
+        let help = Empty::try_parse_from(["--help"]).err().unwrap();
         assert!(help.is_exit());
-        assert!(NoArguments::try_parse_from(["--bogus"]).is_err());
-        assert!(NoArguments::try_parse_from(["extra"]).is_err());
-        NoArguments::try_parse_from(Vec::<&str>::new()).unwrap();
+        let version = Empty::try_parse_from(["--version"]).err().unwrap();
+        assert!(version.is_exit());
+        assert!(
+            version
+                .render(pound::Term::new(None, false))
+                .contains("4.5.6")
+        );
+        assert!(Empty::try_parse_from(["--bogus"]).is_err());
+        assert!(Empty::try_parse_from(["extra"]).is_err());
+        Empty::try_parse_from(Vec::<&str>::new()).unwrap();
     }
 
     #[test]

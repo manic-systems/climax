@@ -3,7 +3,7 @@
 //! testing: runs an application in-process with scripted input and captured
 //! output
 //!
-//! `run` and `run_with` do what `climax::main` and `climax::main_with` do
+//! `run` and `run_with` do what `climax::main` and `climax::main_with!` do
 //! without touching the process. prompts read from a `Script`, results and
 //! diagnostics land in [`Capture`] buffers, and the exit code and error come
 //! back in an [`Outcome`], reported and mapped by the code `main` uses
@@ -406,7 +406,7 @@ fn assert_consumed(check: &Check, failure: Option<&crate::Error>) {
     }
 }
 
-/// runs an application without arguments like `climax::main_with`, with
+/// runs an application without arguments like `climax::main_with!`, with
 /// `script` answering its prompts
 ///
 /// ```

@@ -7,7 +7,7 @@ use std::{
 };
 
 fn main() -> ExitCode {
-    climax::main_with(|cx| {
+    climax::main_with!(|cx| {
         let progress = cx
             .status("downloading")
             .spinner()

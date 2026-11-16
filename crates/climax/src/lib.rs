@@ -50,9 +50,43 @@ pub mod status;
 /// crate
 #[cfg(feature = "structured")]
 pub use ::serde;
+/// runs an application that takes no arguments and reports its process outcome
+///
+/// errors are reported and exit codes chosen as in `main`. with `parse`,
+/// `--help` and `--version` answer with the calling package's version and any
+/// other argument fails with exit 2, and without it arguments are ignored
+///
+/// ```no_run
+/// use climax::prelude::*;
+///
+/// fn main() -> std::process::ExitCode {
+///     climax::main_with!(|cx: Context| -> climax::Result<()> {
+///         cx.output().write_message("hello")
+///     })
+/// }
+/// ```
+#[macro_export]
+macro_rules! main_with {
+    ($application:expr $(,)?) => {{
+        struct __ClimaxPackage;
+        impl $crate::__private::Package for __ClimaxPackage {
+            const HASH: ::core::option::Option<&'static str> =
+                ::core::option_env!("POUND_GIT_HASH");
+            const NAME: &'static str = ::core::env!("CARGO_PKG_NAME");
+            const VERSION: &'static str = ::core::env!("CARGO_PKG_VERSION");
+        }
+        $crate::__private::main_with::<__ClimaxPackage, _>($application)
+    }};
+}
+#[doc(hidden)]
+pub mod __private {
+    pub use crate::app::{
+        Package,
+        main_with,
+    };
+}
 pub use app::{
     Context,
-    main_with,
     run_with,
 };
 #[cfg(feature = "parse")]

@@ -128,7 +128,7 @@ impl Error {
     }
 
     #[must_use]
-    /// exit code `climax::main` and `climax::main_with` use for this error
+    /// exit code `climax::main` and `climax::main_with!` use for this error
     ///
     /// a cancellation with an explicit code stays silent, any other kind is
     /// still reported on stderr, and a code of 0 is stored as 1

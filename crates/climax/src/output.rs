@@ -239,7 +239,7 @@ impl Output {
         ResultBuilder {
             output: self.clone(),
             value,
-            text: None,
+            text: DisplayText,
             mode: EmissionMode::Finite,
         }
     }
@@ -261,7 +261,7 @@ impl Output {
         ResultBuilder {
             output: self.clone(),
             value,
-            text: None,
+            text: DisplayText,
             mode: EmissionMode::Stream,
         }
     }
@@ -434,17 +434,51 @@ enum EmissionMode {
     Stream,
 }
 
+/// the text form of a result that prints the value's `Display`
 #[cfg(feature = "structured")]
-type Projection<'a, T> = Box<dyn FnOnce(&'a T) -> String + 'a>;
+#[derive(Clone, Copy, Debug)]
+pub struct DisplayText;
+
+#[cfg(feature = "structured")]
+mod text_form {
+    use core::fmt;
+
+    #[diagnostic::on_unimplemented(
+        message = "`{T}` has no text form",
+        note = "add `.text(..)` before `.emit()`, or implement `Display` for `{T}`"
+    )]
+    pub trait TextForm<'a, T: ?Sized + 'a> {
+        fn render(self, value: &'a T) -> String;
+    }
+
+    impl<'a, T: fmt::Display + ?Sized + 'a> TextForm<'a, T> for super::DisplayText {
+        fn render(self, value: &'a T) -> String {
+            value.to_string()
+        }
+    }
+
+    impl<'a, T, F, D> TextForm<'a, T> for F
+    where
+        T: ?Sized + 'a,
+        F: FnOnce(&'a T) -> D,
+        D: fmt::Display,
+    {
+        fn render(self, value: &'a T) -> String {
+            self(value).to_string()
+        }
+    }
+}
 
 /// result or stream value being built, optionally given a text projection with
 /// [`ResultBuilder::text`], then written with [`ResultBuilder::emit`]
+///
+/// text output prints the value's `Display` unless a projection is given
 #[cfg(feature = "structured")]
 #[must_use]
-pub struct ResultBuilder<'a, T: ?Sized> {
+pub struct ResultBuilder<'a, T: ?Sized, S = DisplayText> {
     output: Output,
     value:  &'a T,
-    text:   Option<Projection<'a, T>>,
+    text:   S,
     mode:   EmissionMode,
 }
 
@@ -454,45 +488,59 @@ where
     T: Serialize + ?Sized,
 {
     /// human-readable projection of the value
-    pub fn text<F, D>(mut self, text: F) -> Self
+    pub fn text<F, D>(self, text: F) -> ResultBuilder<'a, T, F>
     where
-        F: FnOnce(&'a T) -> D + 'a,
+        F: FnOnce(&'a T) -> D,
         D: fmt::Display,
     {
-        self.text = Some(Box::new(move |value| text(value).to_string()));
-        self
+        ResultBuilder {
+            output: self.output,
+            value: self.value,
+            text,
+            mode: self.mode,
+        }
     }
+}
 
-    /// encode the projection and register or write it
+#[cfg(feature = "structured")]
+impl<'a, T, S> ResultBuilder<'a, T, S>
+where
+    T: Serialize + ?Sized,
+{
+    /// encode the value and register or write it
     ///
-    /// text output without a projection is the JSON line, see
-    /// [`Self::display`] for a `Display` value
+    /// text output prints the projection given to [`ResultBuilder::text`], or
+    /// the value's `Display`, which is a compile error for a value without
+    /// one
+    ///
+    /// ```compile_fail
+    /// use climax::prelude::*;
+    ///
+    /// #[derive(climax::serde::Serialize)]
+    /// #[serde(crate = "climax::serde")]
+    /// struct Report;
+    ///
+    /// fn report(cx: &Context) -> climax::Result<()> {
+    ///     cx.output().result(&Report).emit()
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
     /// fails with `ErrorKind::Output` when the value cannot be encoded or
     /// written
-    pub fn emit(self) -> Result<()> {
-        let bytes = match (self.output.format, self.text) {
-            (Format::Text, Some(text)) => format_text(text(self.value)).into_bytes(),
-            (Format::Text | Format::Json, _) => {
+    pub fn emit(self) -> Result<()>
+    where
+        S: text_form::TextForm<'a, T>,
+    {
+        let bytes = match self.output.format {
+            Format::Text => format_text(self.text.render(self.value)).into_bytes(),
+            Format::Json => {
                 json::to_line(self.value)
                     .map_err(|error| Error::with_source(ErrorKind::Output, error))?
             },
         };
         self.output.register(self.mode, bytes)
-    }
-}
-
-#[cfg(feature = "structured")]
-impl<T> ResultBuilder<'_, T>
-where
-    T: Serialize + fmt::Display + ?Sized,
-{
-    /// text output prints the value with its `Display`
-    pub fn display(mut self) -> Self {
-        self.text = Some(Box::new(ToString::to_string));
-        self
     }
 }
 
@@ -976,17 +1024,17 @@ mod tests {
 
     #[cfg(feature = "structured")]
     #[test]
-    fn a_result_without_text_prints_its_json_and_display_prints_the_value() {
+    fn a_result_without_text_prints_its_display_in_text_mode_and_json_in_json_mode() {
         let capture = Capture::default();
         let output = Output::new(Format::Text).with_writer(capture.clone());
         output.result(&"abc").emit().unwrap();
         output.commit().unwrap();
-        assert_eq!(capture.text(), "\"abc\"\n");
+        assert_eq!(capture.text(), "abc\n");
 
-        let shown = Capture::default();
-        let displayed = Output::new(Format::Text).with_writer(shown.clone());
-        displayed.result(&"abc").display().emit().unwrap();
-        displayed.commit().unwrap();
-        assert_eq!(shown.text(), "abc\n");
+        let json = Capture::default();
+        let encoded = Output::new(Format::Json).with_writer(json.clone());
+        encoded.result(&"abc").emit().unwrap();
+        encoded.commit().unwrap();
+        assert_eq!(json.text(), "\"abc\"\n");
     }
 }

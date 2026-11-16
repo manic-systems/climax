@@ -14,20 +14,20 @@ the family (`climax`, `climax-derive`, `screw`, `bang`, `bang-core`, `bang-termi
 
 - application facade that re-exports each component whole, `climax::pound` under `parse`, `climax::bang` under `interactive`, `climax::screw` under `render`, `climax::caress` under `complete` and `climax::serde` under `structured`
 - exact pins between the climax family crates, `pound` and `caress` at the caret range climax was tested against and `climax-derive` taking `pound-derive-impl` at a caret range, and the dev edge from `pound-derive` to `pound` is path-only
-- `main` and `main_with` report and return an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
+- `main` and the `main_with!` macro report and return an `ExitCode`, help and version exit 0, parse failures 2, application errors 1, cancellation 130 and an interrupting signal 128 plus its number
 - `try_run`, `try_run_from` and `run_with` skip the reporting
 - `main` exits 141 on a closed stdout pipe everywhere, including a `BrokenPipe` i/o error the handler returns unless `with_exit_code` sets a code, prints a parse error as pound's full report and prints the cause chain of an application error
 - a final report that cannot be written keeps its intended exit code, except that a closed stdout exits 141
 - `Result<T, E = Error>` alias
 - `Error::application`, `application_context`, `ResultExt` and the boxed and `anyhow` conversions give an error with an i/o error anywhere in its source chain the kind `Io`, so a wrapped `BrokenPipe` exits 141 like a bare one
 - `Output::write_message` writes to the handle's destination, so `testing::run` captures it, and with `render` and `structured` fails instead of drawing into a prompt after ten seconds
-- `main_with` answers `--help` and exits 2 on any other argument under `parse`
+- `main_with!` answers `--help` and `--version` with the calling package's version and exits 2 on any other argument under `parse`
 - removing a status while the status thread is stalled still takes effect once the thread answers, so the status stops drawing
 - `Status::widget` reports a panicking widget once through `finish`
 - minimum Rust version 1.89
 - typed prompts on `Context` returning `PromptOutcome`, with the review types re-exported
 - structured output through `Context::output` with `result`, `stream` and `notice`, and `Context::diagnostic` for a second handle
-- `.emit()` without `.text` prints the value as a json line in text mode, and `.display()` prints it with `Display`
+- `.emit()` without `.text` prints the value with its `Display` in text mode, and does not compile for a value without one
 - json output writes a non-finite float as the string `"NaN"`, `"Infinity"` or `"-Infinity"`, as `bang` does
 - `Context::status` coordinator, `Status::during`, `Status::widget` and `StatusMode`
 - `Status::progress` draws a counted bar and `set_message` and `finish_with` change the message of a running status

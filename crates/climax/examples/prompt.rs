@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    climax::main_with(|context| {
+    climax::main_with!(|context| {
         let shell = context
             .select("shell")
             .choice("bash", "bash")

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 fn main() -> std::process::ExitCode {
-    climax::main_with(|context| {
+    climax::main_with!(|context| {
         match context
             .select("shell")
             .choice("bash", "bash")

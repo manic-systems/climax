@@ -22,7 +22,7 @@ derive with `climax::Parse` and `climax::ValueEnum`. the derives under `climax::
 
 ## Lifecycle
 
-`main` and `main_with` own parse errors, diagnostics and the exit code. `try_run` and
+`main` and `main_with!` own parse errors, diagnostics and the exit code. `try_run` and
 `try_run_from` report nothing, for embedding and tests, though with `complete` `try_run` still
 answers a completion request and exits the process. `run_with` starts from a command you already
 built

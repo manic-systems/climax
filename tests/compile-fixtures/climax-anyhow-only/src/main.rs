@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 
 fn main() -> std::process::ExitCode {
-    climax::main_with(|_context| Err(anyhow::anyhow!("fixture failure").into()))
+    climax::main_with!(|_context| Err(anyhow::anyhow!("fixture failure").into()))
 }
 
 #[cfg(test)]

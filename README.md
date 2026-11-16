@@ -18,7 +18,7 @@ depend on `climax` alone, it re-exports each component whole behind its feature
 
 ```rust,no_run
 fn main() -> std::process::ExitCode {
-    climax::main_with(|cx| {
+    climax::main_with!(|cx| {
         let shell = cx
             .select("Shell")
             .choice("bash", "bash")
