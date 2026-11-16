@@ -22,10 +22,7 @@ use std::{
     time::Instant,
 };
 
-use climax::{
-    Context,
-    terminal::StatusMode,
-};
+use climax::terminal::StatusMode;
 
 const ROWS: u16 = 10;
 
@@ -96,17 +93,18 @@ fn largest_upward_move(bytes: &[u8]) -> usize {
 #[test]
 fn a_stack_taller_than_the_terminal_never_moves_the_cursor_past_the_top() {
     let (mut master, slave) = open_pty();
-    let context = Context::new()
-        .with_terminal(slave)
-        .expect("with_terminal")
-        .with_status_mode(StatusMode::Live)
-        .expect("live mode");
-
-    let statuses: Vec<_> = (0..30)
-        .map(|index| context.status(format!("status {index}")).spinner().start())
-        .collect();
-    let bytes = drain(&mut master);
-    drop(statuses);
+    let mut bytes = Vec::new();
+    climax::run_with((), |cx, ()| {
+        let mut context = cx.with_terminal(slave)?;
+        context.set_status_mode(StatusMode::Live);
+        let statuses: Vec<_> = (0..30)
+            .map(|index| context.status(format!("status {index}")).spinner().start())
+            .collect();
+        bytes = drain(&mut master);
+        drop(statuses);
+        Ok(())
+    })
+    .expect("the application ran");
 
     let move_up = largest_upward_move(&bytes);
     assert!(

@@ -4,6 +4,7 @@
 
 #[cfg(feature = "parse")]
 pub use crate::pound::{
+    ArgValue as _,
     FromArg,
     Parse as _,
     ValueError,

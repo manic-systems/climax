@@ -11,6 +11,7 @@ use std::{
     },
     os::fd::{
         FromRawFd as _,
+        OwnedFd,
         RawFd,
     },
     thread,
@@ -32,49 +33,58 @@ fn with_terminal_shows_a_status_and_resolves_a_select_prompt_without_touching_st
     let (mut master, slave) = open_pty();
     let captured_stderr = StderrCapture::install();
 
-    let context = Context::new()
-        .with_terminal(slave)
-        .expect("with_terminal")
-        .with_interaction_mode(InteractionMode::Force);
+    on_terminal(slave, |context| {
+        let status = context.status("loading").start();
+        let status_bytes = read_until(&mut master, b"loading");
+        status.finish().expect("finish status");
+        assert!(
+            contains(&status_bytes, b"loading"),
+            "status text must render on the terminal handle: {status_bytes:?}"
+        );
 
-    let status = context.status("loading").start();
-    let status_bytes = read_until(&mut master, b"loading");
-    status.finish().expect("finish status");
-    assert!(
-        contains(&status_bytes, b"loading"),
-        "status text must render on the terminal handle: {status_bytes:?}"
-    );
+        // `Context` is not `Send`, so only the pty write moves to a thread, and
+        // `master` stays open here because on Linux closing the last master
+        // hangs up the slave before raw mode activates
+        let mut write_handle = master
+            .try_clone()
+            .expect("clone master for the writer thread");
+        let writer = thread::spawn(move || {
+            write_handle
+                .write_all(b"\r")
+                .expect("submit the highlighted choice");
+            write_handle.flush().expect("flush PTY input");
+        });
 
-    // `Context` is not `Send`, so only the pty write moves to a thread, and
-    // `master` stays open here because on Linux closing the last master
-    // hangs up the slave before raw mode activates
-    let mut write_handle = master
-        .try_clone()
-        .expect("clone master for the writer thread");
-    let writer = thread::spawn(move || {
-        write_handle
-            .write_all(b"\r")
-            .expect("submit the highlighted choice");
-        write_handle.flush().expect("flush PTY input");
+        let outcome = context
+            .select::<&str>("choice")
+            .choice("first", "first")
+            .choice("second", "second")
+            .interact();
+        writer.join().expect("writer thread panicked");
+        drop(master);
+        let stderr_bytes = captured_stderr.restore();
+
+        assert_eq!(
+            outcome.expect("select prompt resolved"),
+            climax::PromptOutcome::Submit("first")
+        );
+        assert!(
+            stderr_bytes.is_empty(),
+            "nothing should leak to process stderr: {stderr_bytes:?}"
+        );
     });
+}
 
-    let outcome = context
-        .select::<&str>("choice")
-        .choice("first", "first")
-        .choice("second", "second")
-        .interact();
-    writer.join().expect("writer thread panicked");
-    drop(master);
-    let stderr_bytes = captured_stderr.restore();
-
-    assert_eq!(
-        outcome.expect("select prompt resolved"),
-        climax::PromptOutcome::Submit("first")
-    );
-    assert!(
-        stderr_bytes.is_empty(),
-        "nothing should leak to process stderr: {stderr_bytes:?}"
-    );
+fn on_terminal<T>(terminal: impl Into<OwnedFd>, body: impl FnOnce(&Context) -> T) -> T {
+    let mut result = None;
+    climax::run_with((), |cx, ()| {
+        let mut context = cx.with_terminal(terminal)?;
+        context.set_interaction_mode(InteractionMode::Force);
+        result = Some(body(&context));
+        Ok(())
+    })
+    .expect("the application ran");
+    result.expect("the handler ran")
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {

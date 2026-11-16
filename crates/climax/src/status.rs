@@ -58,32 +58,8 @@ use crate::{
     Result,
     error::ErrorKind,
     output::SharedWriter,
-    terminal::{
-        StatusMode,
-        TerminalCapabilities,
-    },
+    terminal::StatusMode,
 };
-
-/// standalone status for use without a [`crate::Context`]
-///
-/// uses its own process-wide stderr coordinator, so don't mix it with
-/// `Context::status`
-#[must_use]
-pub fn message(message: impl Into<String>) -> Status {
-    static COORDINATOR: OnceLock<StatusCoordinator> = OnceLock::new();
-    let coordinator = COORDINATOR.get_or_init(|| {
-        let capabilities = TerminalCapabilities::detect();
-        StatusCoordinator::new(
-            SharedWriter::stderr(),
-            if capabilities.live_status_available() {
-                StatusMode::Live
-            } else {
-                StatusMode::Silent
-            },
-        )
-    });
-    Status::new(message, coordinator.clone())
-}
 
 /// transient status line, configured with builders and then started
 pub struct Status {
@@ -514,10 +490,9 @@ enum Command {
     },
     #[cfg(feature = "interactive")]
     AcquireLease {
-        holder:  ThreadId,
-        token:   u64,
-        waiting: Arc<AtomicBool>,
-        reply:   Sender<std::result::Result<(), LeaseError>>,
+        holder: ThreadId,
+        token:  u64,
+        reply:  Sender<std::result::Result<(), LeaseError>>,
     },
     #[cfg(feature = "interactive")]
     ReleaseLease,
@@ -525,13 +500,9 @@ enum Command {
     CancelLease {
         token: u64,
     },
-    #[cfg(feature = "structured")]
-    Unhold {
-        token: u64,
-    },
     SetMode {
         stamp: u64,
-        reply: Sender<Result<()>>,
+        reply: Sender<()>,
     },
     Flush {
         reply: Sender<Result<()>>,
@@ -564,24 +535,24 @@ enum Failure {
     OnActor,
 }
 
-impl From<Failure> for Error {
-    fn from(failure: Failure) -> Self {
-        match failure {
-            Failure::Stopped => actor_stopped(),
-            Failure::TimedOut | Failure::Stalled => {
+impl Failure {
+    fn into_error(self) -> Error {
+        match self {
+            Self::Stopped => actor_stopped(),
+            Self::TimedOut | Self::Stalled => {
                 output_error(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     "the transient actor did not answer in time, a status widget may be blocking \
                      it",
                 ))
             },
-            Failure::Prompt => {
+            Self::Prompt => {
                 output_error(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     "gave up waiting for a prompt to release the terminal, the request was dropped",
                 ))
             },
-            Failure::OnActor => {
+            Self::OnActor => {
                 output_error(std::io::Error::other(
                     "a status widget called into the transient actor it runs on, which would wait \
                      on itself",
@@ -664,16 +635,15 @@ impl StatusCoordinator {
         }
     }
 
-    pub(crate) fn set_mode(&self, mode: StatusMode) -> Result<()> {
+    /// publishes `mode` and waits for the actor to apply it, bounded by the
+    /// request timeout. a stall or a failed clear is not reported here, the
+    /// next `flush_transient` reports it
+    pub(crate) fn set_mode(&self, mode: StatusMode) {
         let this = self.current();
         let stamp = this.inner.publish_mode(mode);
-        if this.inner.channel.get().is_none() {
-            return Ok(());
+        if this.inner.channel.get().is_some() {
+            this.request(|reply| Command::SetMode { stamp, reply }, drop);
         }
-        this.request(
-            |reply| Command::SetMode { stamp, reply },
-            |failure| Err(failure.into()),
-        )
     }
 
     fn insert(&self, entry: StatusEntry, fps: u16) -> u64 {
@@ -697,7 +667,7 @@ impl StatusCoordinator {
                         reply: mpsc::channel().0,
                     });
                 }
-                Err(failure.into())
+                Err(failure.into_error())
             },
         )
     }
@@ -726,7 +696,7 @@ impl StatusCoordinator {
                     reply,
                 }
             },
-            |failure| Err(failure.into()),
+            |failure| Err(failure.into_error()),
         )
     }
 
@@ -739,24 +709,6 @@ impl StatusCoordinator {
     pub(crate) fn write_around(&self, writer: SharedWriter, bytes: Vec<u8>) -> Result<()> {
         self.current()
             .request_around(AroundKind::Write { writer, bytes })
-    }
-
-    /// clear the live region and keep it from redrawing until the guard drops,
-    /// so a caller can write to the terminal itself
-    ///
-    /// gated like `write_around`, so it waits for the lease when another thread
-    /// holds it, giving up after the request bound, and fails when the calling
-    /// thread holds it
-    #[cfg(feature = "structured")]
-    pub(crate) fn hold(&self) -> Result<HoldGuard> {
-        let this = self.current();
-        let token = this.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let guard = HoldGuard {
-            coordinator: this.clone(),
-            token,
-        };
-        this.request_around(AroundKind::Hold { token })?;
-        Ok(guard)
     }
 
     #[cfg(feature = "structured")]
@@ -775,7 +727,7 @@ impl StatusCoordinator {
                     waiting:   Arc::clone(&waiting),
                 }
             },
-            |failure| Err(failure.into()),
+            |failure| Err(failure.into_error()),
             &waiting,
         )
     }
@@ -817,7 +769,7 @@ impl StatusCoordinator {
         } else {
             self.request(
                 |reply| Command::Flush { reply },
-                |failure| Err(failure.into()),
+                |failure| Err(failure.into_error()),
             )
         };
         let Some(next) = self.inner.successor.get() else {
@@ -891,13 +843,11 @@ impl StatusCoordinator {
     #[cfg(feature = "interactive")]
     fn acquire_lease(&self) -> std::result::Result<(), LeaseError> {
         let token = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
-        let waiting = Arc::new(AtomicBool::new(false));
-        self.request_waiting(
+        self.request(
             |reply| {
                 Command::AcquireLease {
                     holder: thread::current().id(),
                     token,
-                    waiting: Arc::clone(&waiting),
                     reply,
                 }
             },
@@ -906,9 +856,8 @@ impl StatusCoordinator {
                 // reply receiver drops, leaving a lease nobody
                 // releases
                 self.send(Command::CancelLease { token });
-                Err(LeaseError::Clear(failure.into()))
+                Err(LeaseError::Clear(failure.into_error()))
             },
-            &waiting,
         )
     }
 
@@ -921,19 +870,6 @@ impl StatusCoordinator {
 impl fmt::Debug for StatusCoordinator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StatusCoordinator").finish_non_exhaustive()
-    }
-}
-
-#[cfg(feature = "structured")]
-pub(crate) struct HoldGuard {
-    coordinator: StatusCoordinator,
-    token:       u64,
-}
-
-#[cfg(feature = "structured")]
-impl Drop for HoldGuard {
-    fn drop(&mut self) {
-        self.coordinator.send(Command::Unhold { token: self.token });
     }
 }
 
@@ -1020,9 +956,6 @@ enum AroundKind {
         writer: SharedWriter,
         bytes:  Vec<u8>,
     },
-    Hold {
-        token: u64,
-    },
 }
 
 #[cfg(feature = "structured")]
@@ -1059,10 +992,6 @@ struct Actor {
     lease:            Option<Lease>,
     #[cfg(feature = "structured")]
     deferred:         VecDeque<DeferredAround>,
-    #[cfg(feature = "structured")]
-    holds:            Vec<u64>,
-    #[cfg(feature = "interactive")]
-    leases_waiting:   VecDeque<PendingLease>,
     dead:             bool,
     errors:           ErrorLog,
     panicked:         BTreeMap<u64, Error>,
@@ -1096,10 +1025,6 @@ impl Actor {
             lease: None,
             #[cfg(feature = "structured")]
             deferred: VecDeque::new(),
-            #[cfg(feature = "structured")]
-            holds: Vec::new(),
-            #[cfg(feature = "interactive")]
-            leases_waiting: VecDeque::new(),
             dead: false,
             errors: ErrorLog::default(),
             panicked: BTreeMap::new(),
@@ -1133,44 +1058,8 @@ impl Actor {
     fn grant(&mut self, write: DeferredAround) {
         let result = match write.kind {
             AroundKind::Write { writer, bytes } => self.write_around(writer, &bytes),
-            AroundKind::Hold { token } => {
-                self.holds.push(token);
-                self.clear_immediate()
-            },
         };
         let _ = write.reply.send(result);
-    }
-
-    #[cfg(feature = "structured")]
-    fn unhold(&mut self, token: u64) {
-        self.holds.retain(|held| *held != token);
-        self.dirty = true;
-        #[cfg(feature = "interactive")]
-        if self.holds.is_empty() {
-            while let Some(lease) = self.leases_waiting.pop_front() {
-                self.acquire_lease(lease);
-            }
-        }
-    }
-
-    #[cfg(feature = "structured")]
-    const fn held(&self) -> bool {
-        !self.holds.is_empty()
-    }
-
-    #[cfg(not(feature = "structured"))]
-    const fn held(&self) -> bool {
-        false
-    }
-
-    #[cfg(feature = "interactive")]
-    fn request_lease(&mut self, lease: PendingLease, waiting: &AtomicBool) {
-        if self.held() && !self.leased() {
-            waiting.store(true, Ordering::Release);
-            self.leases_waiting.push_back(lease);
-        } else {
-            self.acquire_lease(lease);
-        }
     }
 
     #[cfg(feature = "interactive")]
@@ -1274,17 +1163,13 @@ impl Actor {
             Command::AcquireLease {
                 holder,
                 token,
-                waiting,
                 reply,
             } => {
-                self.request_lease(
-                    PendingLease {
-                        holder,
-                        token,
-                        reply,
-                    },
-                    &waiting,
-                );
+                self.acquire_lease(PendingLease {
+                    holder,
+                    token,
+                    reply,
+                });
             },
             #[cfg(feature = "interactive")]
             Command::ReleaseLease => self.release_lease(),
@@ -1297,26 +1182,21 @@ impl Actor {
                 {
                     self.release_lease();
                 }
-                self.leases_waiting.retain(|lease| lease.token != token);
             },
-            #[cfg(feature = "structured")]
-            Command::Unhold { token } => self.unhold(token),
             Command::SetMode { stamp, reply } => {
                 if stamp <= self.mode_stamp {
-                    let _ = reply.send(Ok(()));
+                    let _ = reply.send(());
                     return;
                 }
                 let mode = mode_from_stamp(stamp);
                 self.mode_stamp = stamp;
                 let clearing = self.mode == StatusMode::Live && mode != StatusMode::Live;
-                let result = if clearing {
-                    self.clear_immediate()
-                } else {
-                    Ok(())
-                };
+                if clearing && let Err(error) = self.clear_immediate() {
+                    self.errors.record(error);
+                }
                 self.mode = mode;
                 self.dirty = true;
-                let _ = reply.send(result);
+                let _ = reply.send(());
             },
             Command::Flush { reply } => {
                 self.drain_pending();
@@ -1550,11 +1430,7 @@ impl Actor {
     }
 
     fn wants_periodic_ticks(&self) -> bool {
-        self.mode == StatusMode::Live
-            && !self.leased()
-            && !self.held()
-            && !self.dead
-            && !self.entries.is_empty()
+        self.mode == StatusMode::Live && !self.leased() && !self.dead && !self.entries.is_empty()
     }
 
     fn frame_interval(&self) -> Duration {
@@ -2442,28 +2318,6 @@ mod tests {
         status.finish().unwrap();
     }
 
-    #[cfg(feature = "structured")]
-    #[test]
-    fn a_hold_clears_the_region_and_stops_redraws_until_it_drops() {
-        let capture = Capture::default();
-        let coordinator =
-            StatusCoordinator::new(SharedWriter::new(capture.clone()), StatusMode::Live);
-        let status = Status::new("working", coordinator.clone())
-            .spinner()
-            .start();
-        wait_for(|| !capture.text().is_empty());
-
-        let guard = coordinator.hold().unwrap();
-        let cleared = capture.text().len();
-        coordinator.mark_dirty().unwrap();
-        std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(capture.text().len(), cleared);
-
-        drop(guard);
-        wait_for(|| capture.text().len() > cleared);
-        status.finish().unwrap();
-    }
-
     #[test]
     fn a_notice_under_a_live_status_clears_the_region_before_it_is_written() {
         let capture = Capture::default();
@@ -2598,7 +2452,6 @@ mod tests {
         actor.apply(Command::AcquireLease {
             holder: thread::current().id(),
             token: 7,
-            waiting: Arc::new(AtomicBool::new(false)),
             reply,
         });
         assert!(actor.leased());
@@ -2898,7 +2751,8 @@ mod tests {
             .start();
         release.wait();
 
-        let error = coordinator.set_mode(StatusMode::Plain).unwrap_err();
+        coordinator.set_mode(StatusMode::Plain);
+        let error = coordinator.flush_transient().unwrap_err();
         assert!(
             error.to_string().contains("did not answer in time"),
             "{error}"
@@ -2944,65 +2798,6 @@ mod tests {
 
         wait_for(|| coordinator.notice(b"back\n").is_ok());
         status.finish().unwrap();
-    }
-
-    #[cfg(feature = "structured")]
-    #[test]
-    fn a_hold_that_timed_out_is_released() {
-        let capture = Capture::default();
-        let (coordinator, status) = slow_first_frame(&capture);
-
-        assert!(coordinator.hold().is_err());
-        wait_for(|| coordinator.notice(b"back\n").is_ok());
-        let drawn = capture.text().len();
-        wait_for(|| capture.text().len() > drawn);
-        status.finish().unwrap();
-    }
-
-    #[cfg(all(feature = "interactive", feature = "structured"))]
-    #[test]
-    fn a_hold_waits_for_a_prompt_another_thread_holds() {
-        let coordinator =
-            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
-        let prompt = coordinator.prompt_guard().unwrap();
-        let (sender, receiver) = mpsc::channel();
-
-        std::thread::scope(|scope| {
-            scope.spawn(|| sender.send(coordinator.hold().map(|_guard| ())).unwrap());
-            receiver
-                .recv_timeout(Duration::from_millis(200))
-                .unwrap_err();
-            drop(prompt);
-            receiver
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
-        });
-    }
-
-    #[cfg(all(feature = "interactive", feature = "structured"))]
-    #[test]
-    fn a_prompt_waits_for_an_active_hold() {
-        let coordinator =
-            StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Plain);
-        let hold = coordinator.hold().unwrap();
-        let (sender, receiver) = mpsc::channel();
-
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                sender
-                    .send(coordinator.prompt_guard().map(|_guard| ()))
-                    .unwrap();
-            });
-            receiver
-                .recv_timeout(Duration::from_millis(200))
-                .unwrap_err();
-            drop(hold);
-            receiver
-                .recv_timeout(Duration::from_secs(5))
-                .unwrap()
-                .unwrap();
-        });
     }
 
     #[cfg(all(feature = "interactive", feature = "structured"))]
@@ -3076,7 +2871,7 @@ mod tests {
     fn set_mode_does_not_start_the_actor() {
         let coordinator =
             StatusCoordinator::new(SharedWriter::new(Capture::default()), StatusMode::Auto);
-        coordinator.set_mode(StatusMode::Silent).unwrap();
+        coordinator.set_mode(StatusMode::Silent);
         assert!(coordinator.inner.channel.get().is_none());
     }
 }

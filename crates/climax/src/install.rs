@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 //! install: shell completion scripts and man pages
 
 use caress::man::pages;

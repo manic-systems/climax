@@ -14,6 +14,7 @@ use std::os::fd::AsFd;
 
 /// whether prompts use detected terminal capabilities
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum InteractionMode {
     /// interact only when stdin and the transient stream are terminals
     #[default]
@@ -26,6 +27,7 @@ pub enum InteractionMode {
 
 /// how transient status is presented
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum StatusMode {
     /// animate on a suitable terminal and otherwise remain silent
     #[default]

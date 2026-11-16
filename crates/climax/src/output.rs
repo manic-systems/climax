@@ -26,6 +26,7 @@ use crate::{
 /// how output is written, chosen with
 /// [`Context::set_output_format`](crate::Context::set_output_format)
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum Format {
     /// plain text
     #[default]
@@ -146,23 +147,21 @@ impl Output {
         self
     }
 
-    /// write a message in the configured format
+    /// write a message in the configured format to the destination of this
+    /// handle, stdout or the writer set on the context, and stderr for a
+    /// [`crate::Context::diagnostic`] handle
     ///
     /// a live status is cleared first and redrawn after when this handle writes
-    /// to a terminal stdout, and a prompt held by another thread is waited out
-    pub fn write_message(&self, mut writer: impl Write, message: impl fmt::Display) -> Result<()> {
-        #[cfg(all(feature = "render", feature = "structured"))]
-        let _hold = match &self.route {
-            PresentationRoute::Around(coordinator) => coordinator.hold().ok(),
-            PresentationRoute::Direct | PresentationRoute::Queued(_) => None,
-        };
-        writer
-            .write_all(self.format_message(message).as_bytes())
-            .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-        writer
-            .flush()
-            .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
-        Ok(())
+    /// to a terminal stdout. with `render` and `structured` on, a prompt held
+    /// by another thread is waited out, and the write fails and is dropped
+    /// after ten seconds, as for `stream`
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::Output` when the destination rejects the message
+    /// or cannot flush, or when a prompt held the terminal past the wait
+    pub fn write_message(&self, message: impl fmt::Display) -> Result<()> {
+        self.write_bytes(self.format_message(message).as_bytes())
     }
 
     /// write human-facing context that stays out of the application result
@@ -181,14 +180,14 @@ impl Output {
     /// register the invocation's single finite result
     ///
     /// the projection is buffered until the handler succeeds
-    pub const fn result<'a, T>(&'a self, value: &'a T) -> ResultBuilder<'a, T, MissingText>
+    pub fn result<'a, T>(&self, value: &'a T) -> ResultBuilder<'a, T>
     where
         T: Serialize + ?Sized,
     {
         ResultBuilder {
-            output: self,
+            output: self.clone(),
             value,
-            text: MissingText,
+            text: DisplayText,
             mode: EmissionMode::Finite,
         }
     }
@@ -200,14 +199,14 @@ impl Output {
     /// notice. any other write that must wait for a prompt on the calling
     /// thread fails after ten seconds and is dropped, so a thread holding
     /// the terminal must not join a streaming worker
-    pub const fn stream<'a, T>(&'a self, value: &'a T) -> ResultBuilder<'a, T, MissingText>
+    pub fn stream<'a, T>(&self, value: &'a T) -> ResultBuilder<'a, T>
     where
         T: Serialize + ?Sized,
     {
         ResultBuilder {
-            output: self,
+            output: self.clone(),
             value,
-            text: MissingText,
+            text: DisplayText,
             mode: EmissionMode::Stream,
         }
     }
@@ -218,7 +217,7 @@ impl Output {
         let message = message.to_string();
         match self.format {
             Format::Text => format!("{message}\n"),
-            Format::Json => format!("\"{}\"\n", escape_json(&message)),
+            Format::Json => json_string(&message),
         }
     }
 
@@ -312,9 +311,8 @@ impl Output {
     )]
     pub(crate) const fn discard(&self) {}
 
-    #[cfg(feature = "structured")]
     fn write_bytes(&self, bytes: &[u8]) -> Result<()> {
-        #[cfg(feature = "render")]
+        #[cfg(all(feature = "render", feature = "structured"))]
         match &self.route {
             PresentationRoute::Direct => self.write_bytes_direct(bytes),
             PresentationRoute::Around(coordinator) => {
@@ -322,11 +320,10 @@ impl Output {
             },
             PresentationRoute::Queued(coordinator) => coordinator.notice(bytes),
         }
-        #[cfg(not(feature = "render"))]
+        #[cfg(not(all(feature = "render", feature = "structured")))]
         self.write_bytes_direct(bytes)
     }
 
-    #[cfg(feature = "structured")]
     fn write_bytes_direct(&self, bytes: &[u8]) -> Result<()> {
         self.writer
             .clone()
@@ -384,28 +381,61 @@ enum EmissionMode {
     Stream,
 }
 
+/// the text form of a result that prints the value's `Display`
 #[cfg(feature = "structured")]
-#[doc(hidden)]
-pub struct MissingText;
+#[derive(Clone, Copy, Debug)]
+pub struct DisplayText;
 
 #[cfg(feature = "structured")]
+mod text_form {
+    use core::fmt;
+
+    #[diagnostic::on_unimplemented(
+        message = "`{T}` has no text form",
+        note = "add `.text(..)` before `.emit()`, or implement `Display` for `{T}`"
+    )]
+    pub trait TextForm<'a, T: ?Sized + 'a> {
+        fn render(self, value: &'a T) -> String;
+    }
+
+    impl<'a, T: fmt::Display + ?Sized + 'a> TextForm<'a, T> for super::DisplayText {
+        fn render(self, value: &'a T) -> String {
+            value.to_string()
+        }
+    }
+
+    impl<'a, T, F, D> TextForm<'a, T> for F
+    where
+        T: ?Sized + 'a,
+        F: FnOnce(&'a T) -> D,
+        D: fmt::Display,
+    {
+        fn render(self, value: &'a T) -> String {
+            self(value).to_string()
+        }
+    }
+}
+
+/// result or stream value being built, optionally given a text projection with
+/// [`ResultBuilder::text`], then written with [`ResultBuilder::emit`]
+///
+/// text output prints the value's `Display` unless a projection is given
+#[cfg(feature = "structured")]
 #[must_use]
-/// result or stream value being built, supply [`ResultBuilder::text`] then call
-/// [`ResultBuilder::emit`]
-pub struct ResultBuilder<'a, T: ?Sized, F> {
-    output: &'a Output,
+pub struct ResultBuilder<'a, T: ?Sized, S = DisplayText> {
+    output: Output,
     value:  &'a T,
-    text:   F,
+    text:   S,
     mode:   EmissionMode,
 }
 
 #[cfg(feature = "structured")]
-impl<'a, T> ResultBuilder<'a, T, MissingText>
+impl<'a, T> ResultBuilder<'a, T>
 where
     T: Serialize + ?Sized,
 {
     /// human-readable projection of the value
-    pub const fn text<F, D>(self, text: F) -> ResultBuilder<'a, T, F>
+    pub fn text<F, D>(self, text: F) -> ResultBuilder<'a, T, F>
     where
         F: FnOnce(&'a T) -> D,
         D: fmt::Display,
@@ -420,18 +450,38 @@ where
 }
 
 #[cfg(feature = "structured")]
-impl<'a, T, F> ResultBuilder<'a, T, F>
+impl<'a, T, S> ResultBuilder<'a, T, S>
 where
     T: Serialize + ?Sized,
 {
-    /// encode the projection and register or write it
-    pub fn emit<D>(self) -> Result<()>
+    /// encode the value and register or write it
+    ///
+    /// text output prints the projection given to [`ResultBuilder::text`], or
+    /// the value's `Display`, which is a compile error for a value without
+    /// one
+    ///
+    /// ```compile_fail
+    /// use climax::prelude::*;
+    ///
+    /// #[derive(climax::serde::Serialize)]
+    /// #[serde(crate = "climax::serde")]
+    /// struct Report;
+    ///
+    /// fn report(cx: &Context) -> climax::Result<()> {
+    ///     cx.output().result(&Report).emit()
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// fails with `ErrorKind::Output` when the value cannot be encoded or
+    /// written
+    pub fn emit(self) -> Result<()>
     where
-        F: FnOnce(&'a T) -> D,
-        D: fmt::Display,
+        S: text_form::TextForm<'a, T>,
     {
         let bytes = match self.output.format {
-            Format::Text => format_text((self.text)(self.value)).into_bytes(),
+            Format::Text => format_text(self.text.render(self.value)).into_bytes(),
             Format::Json => {
                 let mut bytes = serde_json::to_vec(self.value)
                     .map_err(|error| Error::with_source(ErrorKind::Output, error))?;
@@ -511,18 +561,33 @@ impl Write for SharedWriter {
     }
 }
 
+#[cfg(feature = "structured")]
+fn json_string(value: &str) -> String {
+    format!("{}\n", serde_json::Value::from(value))
+}
+
+#[cfg(not(feature = "structured"))]
+fn json_string(value: &str) -> String {
+    format!("\"{}\"\n", escape_json(value))
+}
+
+#[cfg(not(feature = "structured"))]
 fn escape_json(value: &str) -> String {
     value
         .chars()
-        .flat_map(|value| {
-            match value {
+        .flat_map(|ch| {
+            match ch {
                 '"' => "\\\"".chars().collect::<Vec<_>>(),
                 '\\' => "\\\\".chars().collect(),
                 '\n' => "\\n".chars().collect(),
                 '\r' => "\\r".chars().collect(),
                 '\t' => "\\t".chars().collect(),
-                value if value.is_control() => format!("\\u{:04x}", value as u32).chars().collect(),
-                value => vec![value],
+                '\u{08}' => "\\b".chars().collect(),
+                '\u{0C}' => "\\f".chars().collect(),
+                control if control.is_control() => {
+                    format!("\\u{:04x}", u32::from(control)).chars().collect()
+                },
+                other => vec![other],
             }
         })
         .collect()
@@ -877,10 +942,10 @@ mod tests {
         }
         let before = capture.text().len();
 
-        let output = Output::new(Format::Text).with_route(PresentationRoute::Around(coordinator));
-        output
-            .write_message(capture.clone(), "via write_message")
-            .unwrap();
+        let output = Output::new(Format::Text)
+            .with_shared_writer(SharedWriter::new(capture.clone()))
+            .with_route(PresentationRoute::Around(coordinator));
+        output.write_message("via write_message").unwrap();
         let appended = capture.text()[before..].to_owned();
         assert!(appended.ends_with("via write_message\n"), "{appended:?}");
         assert!(
@@ -911,5 +976,21 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert_eq!(capture.text(), "heads up\n");
+    }
+
+    #[cfg(feature = "structured")]
+    #[test]
+    fn a_result_without_text_prints_its_display_in_text_mode_and_json_in_json_mode() {
+        let capture = Capture::default();
+        let output = Output::new(Format::Text).with_writer(capture.clone());
+        output.result(&"abc").emit().unwrap();
+        output.commit().unwrap();
+        assert_eq!(capture.text(), "abc\n");
+
+        let json = Capture::default();
+        let encoded = Output::new(Format::Json).with_writer(json.clone());
+        encoded.result(&"abc").emit().unwrap();
+        encoded.commit().unwrap();
+        assert_eq!(json.text(), "\"abc\"\n");
     }
 }
