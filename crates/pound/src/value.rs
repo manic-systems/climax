@@ -331,9 +331,10 @@ pub(crate) const fn const_eq(left: &str, right: &str) -> bool {
 macro_rules! from_str {
     ($($t:ty),+ $(,)?) => {$(
         impl $crate::FromArg for $t {
+            // through the generic impl, so an `Infallible` (`!`) error is not
+            // an unreachable `map_err` in the caller's crate
             fn from_arg(raw: &str) -> ::core::result::Result<Self, $crate::ValueError> {
-                <$t as ::core::str::FromStr>::from_str(raw)
-                    .map_err(|error| $crate::ValueError::new(raw, error))
+                <$crate::Infer<$t> as $crate::ViaFromStr<$t>>::from_arg(raw)
             }
         }
     )+};

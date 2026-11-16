@@ -1060,12 +1060,15 @@ impl Emitter {
     }
 
     // `ViaFromStr` has to be in scope for `Infer` to fall back to it, and a
-    // field whose type has `FromArg` never touches the import
+    // field whose type has `FromArg` never touches the import, so it is
+    // allowed to go unused. rustc reports it at the derive's call site, which
+    // reads as an unused `Parse` in the user's code
     fn infer(&self, ty: &FieldType, name: &str) -> TokenStream {
         let (root, inner) = (&self.root, &ty.inner);
         let item = Ident::new(name, ty.span);
 
         quote_spanned! {ty.span=> {
+            #[allow(unused_imports)]
             use #root::ViaFromStr as _;
             #root::Infer::<#inner>::#item
         }}
