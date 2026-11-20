@@ -228,6 +228,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// |--------------------------|------------------------------------------------------------------------------------------|
 /// | `default = ...`          | the value used when the arg is not given, see the three forms below                      |
 /// | `env = "VAR"`            | read `VAR` when the arg is not given. with the `std` feature only                        |
+/// | `env = EnvVars::VAR`     | the same, naming the variable with any const `&'static str` expression                   |
 /// | `default_missing = "v"`  | the value of an option written with no value, so `--color` alone means `--color=v`       |
 /// | `negate`                 | on a flag, also accept `--no-<long>` to switch it off. `negate = "off"` or `"--off"` names it |
 ///
@@ -258,6 +259,12 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///
 /// const SYSTEM_PROFILE: &str = "system";
 ///
+/// struct EnvVars;
+///
+/// impl EnvVars {
+///     const ZONE: &'static str = "SHIPIT_POUND_DOC_ZONE";
+/// }
+///
 /// #[derive(Parse)]
 /// struct Run {
 ///     #[pound(long, default = "auto")]
@@ -268,6 +275,8 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 ///     profile: String,
 ///     #[pound(long, env = "SHIPIT_POUND_DOC_REGION")]
 ///     region:  Option<String>,
+///     #[pound(long, env = EnvVars::ZONE)]
+///     zone:    Option<String>,
 ///     #[pound(long, default_missing = "always")]
 ///     color:   Option<String>,
 ///     #[pound(long, negate, default = "true")]
@@ -279,6 +288,7 @@ const OPTIONS: Options = Options::new("::pound", cfg!(feature = "help"));
 /// assert_eq!(run.speed, "fast");
 /// assert_eq!(run.profile, "system");
 /// assert_eq!(run.region, None);
+/// assert_eq!(run.zone, None);
 /// assert_eq!(run.color.as_deref(), Some("always"));
 /// assert!(!run.cache);
 /// ```
