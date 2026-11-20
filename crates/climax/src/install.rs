@@ -1,5 +1,4 @@
-//! what a package installs beside the binary, its shell completion scripts and
-//! man pages
+//! install: shell completion scripts and man pages
 
 use caress::man::pages;
 pub use caress::{
@@ -8,8 +7,7 @@ pub use caress::{
 };
 use pound::Parse;
 
-/// an mdoc page for `C` and every visible subcommand below it. `date` goes on
-/// each page as written, e.g. `October 11, 2026`.
+/// mdoc pages for `C` and its visible subcommands, stamped with `date`
 #[must_use]
 pub fn manual<C: Parse>(date: &str) -> Vec<Page> {
     pages(C::SPEC, date)

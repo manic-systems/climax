@@ -1,9 +1,14 @@
+// SPDX-License-Identifier: EUPL-1.2
+
 extern crate alloc;
 
 use alloc::sync::Arc;
 use core::time::Duration;
 use std::{
-    io,
+    io::{
+        self,
+        IsTerminal as _,
+    },
     thread,
 };
 
@@ -87,7 +92,7 @@ impl Demo {
 
 fn main() -> io::Result<()> {
     let demo = Demo::new();
-    let runtime = Runtime::stderr_auto(demo.root).fps(12).start();
+    let runtime = Runtime::stderr(demo.root).fps(12).start();
 
     linger(&runtime)?;
 
@@ -115,7 +120,7 @@ fn linger<W>(runtime: &screw::AutoRuntime<W>) -> io::Result<()>
 where
     W: io::Write + Send + 'static,
 {
-    if !screw::stderr_is_terminal() {
+    if !io::stderr().is_terminal() {
         return Ok(());
     }
 
