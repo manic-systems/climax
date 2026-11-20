@@ -1044,7 +1044,7 @@ pub struct Arg {
     pub group_refs:      Vec<Ident>,
     pub default:         Option<Text>,
     pub default_missing: Option<String>,
-    pub env:             Option<String>,
+    pub env:             Option<TokenStream>,
     pub negate:          Option<String>,
     pub value_name:      String,
     pub help:            String,

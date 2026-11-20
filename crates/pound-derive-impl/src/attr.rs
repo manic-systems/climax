@@ -116,7 +116,8 @@ pub(crate) struct Pound {
     pub default:         Option<Text>,
     /// value an option takes when written with no `=value`
     pub default_missing: Option<String>,
-    pub env:             Option<String>,
+    /// a string literal or any const `&'static str` expression
+    pub env:             Option<TokenStream>,
     /// `None` absent, `Inferred` bare `negate`, which infers `no-<long>`
     pub negate:          Option<Spelling<String>>,
     pub value_name:      Option<String>,
@@ -225,7 +226,7 @@ impl Pound {
             },
             "default"         => self.default         = Some(text(key, span, seg)?),
             "default_missing" => self.default_missing = Some(needed(key, span, value)?),
-            "env"             => self.env             = Some(needed(key, span, value)?),
+            "env"             => self.env             = Some(env_name(key, span, seg)?),
             "value_name"      => self.value_name      = Some(needed(key, span, value)?),
             "help"            => self.help            = Some(needed(key, span, value)?),
             "long_help"       => self.long_help       = Some(needed(key, span, value)?),
@@ -505,6 +506,7 @@ const EXPR_KEYS: &[&str] = &[
     "version",
     "long_version",
     "default",
+    "env",
     "parse",
     "validate",
     "complete",
@@ -565,6 +567,20 @@ fn text(key: &str, span: Span, seg: &[TokenTree]) -> Result<Text, Error> {
             Err(Error::new_at_span(span, braces_hint(key)))
         },
     }
+}
+
+/// Reads the value of an `env` key as tokens.
+///
+/// The value is a string literal or any const `&'static str` expression, such
+/// as `EnvVars::HOME`.
+///
+/// # Errors
+///
+/// Returns an error at `span` when the key has no `= value`.
+fn env_name(key: &str, span: Span, seg: &[TokenTree]) -> Result<TokenStream, Error> {
+    expr(seg)
+        .map(TokenStream::from_iter)
+        .ok_or_else(|| Error::new_at_span(span, format!("pound: `{key}` needs a value")))
 }
 
 fn is_constant_name(word: &str) -> bool {
