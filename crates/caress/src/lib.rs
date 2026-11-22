@@ -31,7 +31,7 @@
 //! | zsh        | `COMPLETE=zsh grab > ~/.zfunc/_grab`, with it in `fpath`                                               |
 //! | fish       | `COMPLETE=fish grab \| source`                                                                         |
 //! | nu         | `COMPLETE=nu grab \| save grab.nu`, then `source` it                                                   |
-//! | elvish     | `eval (COMPLETE=elvish grab \| slurp)`                                                                 |
+//! | elvish     | `eval (env COMPLETE=elvish grab \| slurp)`                                                             |
 //! | powershell | `$env:COMPLETE='powershell'; grab \| Out-String \| Invoke-Expression`, then `Remove-Item Env:COMPLETE` |
 //!
 //! packagers can write the same scripts at build time with [`Shell::script`]
