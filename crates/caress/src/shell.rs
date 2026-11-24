@@ -304,11 +304,21 @@ complete -c @PROGRAM@ -f -a '(__caress_@IDENT@)'
 const NU: &str = r#"$env.config.completions.external.enable = true
 $env.config.completions.external.completer = do {
     let previous = $env.config.completions.external.completer?
-    {|spans|
-        if ($spans | first) == "@PROGRAM@" {
-            COMPLETE=nu ^@PROGRAM@ -- ...($spans | skip 1) | from json
-        } else if $previous != null {
-            do $previous $spans
+    if (version).major > 0 or (version).minor >= 116 {
+        {|place|
+            if ($place.command | first) == "@PROGRAM@" {
+                COMPLETE=nu ^@PROGRAM@ -- ...($place.command | skip 1) | from json
+            } else if $previous != null {
+                do $previous $place
+            }
+        }
+    } else {
+        {|spans|
+            if ($spans | first) == "@PROGRAM@" {
+                COMPLETE=nu ^@PROGRAM@ -- ...($spans | skip 1) | from json
+            } else if $previous != null {
+                do $previous $spans
+            }
         }
     }
 }
