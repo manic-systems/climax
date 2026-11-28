@@ -3,15 +3,16 @@ name                 = "screw-pty"
 version              = "0.0.1"
 authors.workspace    = true
 categories           = [ "command-line-interface" ]
-description          = "PTY screen adapter for screw surfaces"
+description          = "A strict model of the terminal output screw emits, for testing screw"
 edition.workspace    = true
-keywords             = [ "terminal", "pty", "renderer", "tui" ]
+keywords             = [ "terminal", "renderer", "tui", "testing" ]
 license.workspace    = true
+publish              = false
 readme               = "README.md"
 repository.workspace = true
 
 [dependencies]
-screw.workspace = true
+screw = { path = "../screw", version = "=0.0.1" }
 
 [lints]
 workspace = true

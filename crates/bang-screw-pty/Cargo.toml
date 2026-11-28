@@ -15,7 +15,6 @@ bang-core.workspace     = true
 bang-screw.workspace    = true
 bang-terminal.workspace = true
 screw.workspace         = true
-screw-pty.workspace     = true
 
 [lints]
 workspace = true
