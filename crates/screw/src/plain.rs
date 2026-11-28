@@ -1,51 +1,25 @@
-use std::io::{
-    self,
-    Write,
-};
+// SPDX-License-Identifier: EUPL-1.2
 
 use crate::{
     RenderCtx,
     Surface,
-    Theme,
     Widget,
 };
 
+/// renders a widget to unstyled text at frame zero with the default theme
 pub fn render_plain<T>(widget: &T) -> String
 where
     T: Widget + ?Sized,
 {
-    render_plain_with_frame(widget, 0)
+    render_plain_with(widget, &RenderCtx::new())
 }
 
-pub fn render_plain_with_frame<T>(widget: &T, frame: u64) -> String
-where
-    T: Widget + ?Sized,
-{
-    render_plain_with_frame_and_theme(widget, frame, Theme::default())
-}
-
-pub fn render_plain_with_frame_and_theme<T>(widget: &T, frame: u64, theme: Theme) -> String
+/// [`render_plain`] with an explicit context, for the frame, theme and size
+pub fn render_plain_with<T>(widget: &T, ctx: &RenderCtx) -> String
 where
     T: Widget + ?Sized,
 {
     let mut surface = Surface::new();
-    widget.render(
-        &RenderCtx {
-            frame,
-            width: None,
-            theme,
-        },
-        &mut surface,
-    );
+    widget.render(ctx, &mut surface);
     surface.plain_text()
-}
-
-/// # Errors
-///
-/// fails when the frame cannot be written to `writer`.
-pub fn write_plain<T>(writer: &mut impl Write, widget: &T) -> io::Result<()>
-where
-    T: Widget + ?Sized,
-{
-    writer.write_all(render_plain(widget).as_bytes())
 }

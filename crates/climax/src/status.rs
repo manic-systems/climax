@@ -54,7 +54,7 @@ impl Status {
 
     pub fn start(self) -> StatusRuntime {
         let root = self.root_widget();
-        let mut builder = Runtime::stderr_auto(root).fps(self.fps);
+        let mut builder = Runtime::stderr(root).fps(self.fps);
         if let Some(final_message) = self.final_message {
             builder = builder.final_widget(widget(Text::new(final_message)));
         }
