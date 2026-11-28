@@ -26,7 +26,7 @@ nixpkgs = "nixpkgs"
 [inputs]
 
 [inputs.nixpkgs]
-url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
+url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst"
 
 [inputs.fenix]
 url = "github:nix-community/fenix"

@@ -1,7 +1,7 @@
 {
   "$declared": {
     "fenix": "github:nix-community/fenix",
-    "nixpkgs": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz"
+    "nixpkgs": "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst"
   },
   "fenix": {
     "type": "github",
@@ -13,9 +13,9 @@
   },
   "nixpkgs": {
     "type": "tarball",
-    "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1093333.fe13242281a6/nixexprs.tar.xz?rev=fe13242281a67641c0102cdb1087f0ebe586c7df&lastModified=1792094642",
-    "rev": "fe13242281a67641c0102cdb1087f0ebe586c7df",
-    "narHash": "sha256-LPFRbrCWWyNsdQLO3SX1B/5UMkFK0hfe7bZR6lENvpc=",
-    "lastModified": 1792094642
+    "url": "https://releases.nixos.org/nixos/unstable/nixos-26.11pre1113206.f4a03c008967/nixexprs.tar.zst?rev=f4a03c008967841f2a0b3cb7c436fc6fc31671f6&lastModified=1794042290",
+    "rev": "f4a03c008967841f2a0b3cb7c436fc6fc31671f6",
+    "narHash": "sha256-VZ8WvA9m3XN36juXyg/GwbDRU2OezOHJlXpJCXkccv0=",
+    "lastModified": 1794042290
   }
 }
